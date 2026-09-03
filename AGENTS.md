@@ -9,10 +9,10 @@ Go-приложение, которое опрашивает solar-инверт�
 | IP | Модель | Статус опроса (проверено 2026-09-03) |
 |---|---|---|
 | 192.168.13.76 | **Sofar K-TLX** (LSW-3) | РАБОТАЕТ: отвечает 205-380 байт (3-4 кадра), внутри — Modbus-ответ func 03 со ВСЕМИ 40 регистрами 0x0000-0x0027 (bytecount 80, CRC валидный) + дубль 16 регистров в отдельном кадре. SN логгера = `95b4d768`. |
-| 192.168.13.91 | Deye | Возвращает только heartbeat-кадр 29 байт (control 0x1510, payload 16: frameType 02, status 01, uptime, SN, счётчики, 2×00). Данные регистров НЕ приходят. SN = `0924c169`. |
-| 192.168.13.70 | Deye | То же, что .91. SN = `86d9b0af`. |
+| 192.168.13.91 | Deye (string) | РАБОТАЕТ: отдаёт данные по Solarman V5-кадру с 15-байтным datafield и реальным SN логгера. LoggerSN = **1774265353** (`69c12409`). |
+| 192.168.13.70 | Deye (string) | То же, что .91. LoggerSN = **2947602822** (`afb0d986`). |
 
-Требование: опрашивать **192.168.13.91, .70** (Deye) и **.76** (Sofar) раз в 10 секунд, парсить и сохранять в JSON. Deye отдают только heartbeat, реальные данные даёт Sofar .76 (в `targets` в main.go). UDP-слушатель удалён (это было старое решение, не работает: даталоггеры не шлют push-датаграммы по UDP).
+Требование: опрашивать **192.168.13.91, .70** (Deye) и **.76** (Sofar) раз в 10 секунд, парсить и сохранять в JSON.
 
 ## Протокол Solarman V5 — выводы из реверса (важно, Sofar_LSW3.py устарел)
 
@@ -55,20 +55,34 @@ A5 | PayloadLen u16 LE | Control 10 45 (LE 0x4510) | Serial u16 LE | DeviceSN u3
 
 Значения регистров — int16 (знаковые, two's complement); для положительных величин обычно unsigned.
 
-### Deye (.91, .70) — НЕ РАБОТАЕТ по классике
-На любой запрос (func 03/04, любой SN, любой диапазон) возвращают только heartbeat-кадр 29 байт. Payload heartbeat: `02 01 <uptime u32 LE> <counter u32 LE> <SN u32 LE> 06 00` — похоже на Deye-логгер с другой политикой локального режима (возможно, требует другой control code или handshake-кадр первым, либо локальный modbus отключён и работает только push на cloud). Не решать это перебором — для Deye нужен отдельный ресивер их push-телеметрии или отдельный research.
+### Deye (.91, .70) — как читать (решено 2026-09-03)
+Deye-логгеры (LSE, rebrand Solarman) понимают Solarman V5-кадр, НО с двумя обязательными отличиями от Sofar:
+1. **15-байтный datafield-заголовок** (НЕ 12): `02` + 14 нулей (`02000000 00000000 00000000 0000`). PayloadLen = 15 + (6 для PDU + 2 CRC) = **23** (`17 00` LE). Если слать 14-байтный заголовок — логгер отвечает 0x05.
+2. **Реальный SN даталоггера** в DeviceSN (bin LE), НЕ 0. Если SN не совпадает — логгер отвечает heartbeat с кодом ошибки **0x06** ("serial number does not match").
+Запрос: по сути наш `BuildReadFrame`, но строка datafield длиной 15 байт и SN логгера. Реализован как `solarman.BuildDeyeReadFrame(deviceSN, unit, startReg, regCount)` и `client.ReadRegistersDeye(start, count, unit)`.
+Ответ: Modbus-ответ func 03 лежит в payload с offset 14 (после 15-байтного заголовка... на практике парсится поиском `01 03 <vlen>` через `ParseModbusPDU`).
+Коды ошибок логгера в 29-байтном heartbeat (payload[14]): **0x05** = "Modbus device address does not match", **0x06** = "Logger Serial Number does not match". Проверено: inverter SN (2405018274 для .70) даёт 0x06, logger SN (2947602822) проходит и данные читаются.
+Маппинг регистров Deye string (в `deyeRegMap` в main.go):
+- 0x3C Production today ×0.1 kWh, 0x3E Uptime min, 0x3F-0x40 Total production (32 бит, LW first) ×0.1 kWh
+- 0x46/0x47/0x48 Grid L12/L23/L31 V ×0.1, 0x49/0x4A/0x4B L1/L2/L3 V ×0.1, 0x4C/0x4D/0x4E L1/L2/L3 I ×0.1
+- 0x4F AC Freq ×0.01 Hz, 0x50 Operating power ×0.1 W, 0x52 DC total power ×0.1 W, 0x54 AC apparent power ×0.1 W, 0x56-0x57 AC active power (32) ×0.1 W, 0x58 AC reactive power ×0.1 W
+- 0x5A Radiator temp ×0.1 −100 offset, 0x5B IGBT temp ×0.1 −100 offset
+- 0x6D/0x6E PV1 V/I ×0.1, 0x6F/0x70 PV2 V/I ×0.1
+- 0xC6-0xC7 Load power (32, signed) ×1 W, 0xC8 Daily load ×0.01 kWh, 0xC9-0xCA Total load (32) ×0.1 kWh
+- 0xCB-0xCC Grid power (32) ×1 W, 0xCD Daily sold ×0.01 kWh, 0xCE-0xCF Total sold (32) ×0.1 kWh, 0xD0 Daily bought ×0.01 kWh, 0xD1-0xD2 Total bought (32) ×0.1 kWh
+Регистры 0x005B IGBT temp не подключён (0 регистр → −100). Логгеры отвечают стабильно и быстро (~8 с на оба диапазона).
 
 ## Текущее состояние кода
-- `solarman/` — пакет-клиент Solarman V5: `BuildReadFrame`, `SplitFrames` (длина кадра = **11** + PayloadLen + 2, префикс A5+len+control+serial+SN), `ParseModbusPDU` (01 03/04 | bytecount | data | crc16 LE), `Checksum8` (sum[1:len-2] mod 256), `CRC16Modbus` (стандартный, в PDU пишется LE).
-- `main.go` — poller: каждые 10 с параллельно (goroutine) TCP-опрос 192.168.13.91, .70 и .76 (порт 8899, SN=0 — логгеры не требуют свой SN в запросе). Маппинг регистров Sofar в `regMap` (см. «Маппинг регистров» выше). Выбор PDU: первый с CRC=CRCCalc и >=40 регистров, иначе самый большой. `int16val` = каст к int16 (two's complement). JSON: на каждый инвертор отдельный файл `data/<YYYY-MM-DD>/<IP>-<HHMMSS>.json` (дата в имени директории, время опроса и IP — в имени файла; IP внутри нет). Файл пишется только при успешном чтении данных (`HasData`); при `heartbeat_only`/`no data`/ошибке не сохраняется. Структура файла: `{timestamp, device_sn, values, raw_registers}`.
-- `probe/main.go` — диагностический инструмент: `go run ./probe <ip> 8899 <sn hex> <start hex> <count hex>` — строит кадр (пакет solarman), шлёт, дробит ответ (`SplitFrames`), печатает регистры (`ParseModbusPDU`, все PDU). Собственных копий CRC/checksum/сборки кадра больше нет.
+- `solarman/` — пакет-клиент Solarman V5: `BuildReadFrame` (12-байтный datafield, для Sofar), `BuildDeyeReadFrame` (15-байтный datafield + реальный SN, для Deye), `SplitFrames` (длина кадра = **11** + PayloadLen + 2, префикс A5+len+control+serial+SN), `ParseModbusPDU` (01 03/04 | bytecount | data | crc16 LE), `Checksum8` (sum[1:len-2] mod 256), `CRC16Modbus` (стандартный, в PDU пишется LE).
+- `main.go` — poller: каждые 10 с параллельно (goroutine) TCP-опрос 192.168.13.91, .70 и .76 (порт 8899). Целевые инверторы — в `targets []invTarget` {IP, LoggerSN, Kind}: Deye требуют реальный SN даталоггера (`ReadRegistersDeye`), Sofar — SN=0 (`ReadRegisters`). Маппинг регистров Sofar в `regMap`, Deye string в `deyeRegMap` (см. выше). JSON: на каждый инвертор отдельный файл `data/<YYYY-MM-DD>/<IP>-<HHMMSS>.json` (дата в директории, время опроса и IP — в имени файла; внутри IP нет). Файл пишется только при успешном чтении данных (`HasData`); при `heartbeat_only`/`no data`/ошибке не сохраняется. Структура: `{timestamp, device_sn, values, raw_registers}`.
+- `probe/main.go` — диагностический инструмент: `go run ./probe <ip> 8899 <sn hex32> [sn2...] <start hex> <count hex>` — строит Deye-кадр (`BuildDeyeReadFrame`) с каждым SN по очереди, шлёт, дробит ответ (`SplitFrames`), печатает регистры (`ParseModbusPDU`) и код Deye-ошибки (`DeyeErrorCode`, 0x05/0x06). Перебор unit-адресов — через env `PROBE_UNITS=1,2,...`. Собственных копий CRC/checksum/сборки кадра нет.
 - UDP-слушатель и `received/` — старое решение, можно удалить `received/`.
 
 ## Поведение живых логгеров (проверено 2026-09-03, важно)
-- **Логгеры шлют данные МЕДЛЕННО и ПУТЬ (pacing)**: полный ответ 40 регистров (~300-400 байт) приходит частями на протяжении 15-30 секунд; при коротком read-deadline теряются кадры с данными (остаются heartbeat + placeholder). В клиенте — цикл чтения до «тишины» 4 с, общий дедлайн 15 с.
-- **Sofar .76**: на любой запрос (func 03, 04, любой диапазон, любой SN, включая 0) возвращает ВЕСЬ блок 0x0000-0x0027 (40 регистров), плюс heartbeat-кадр (plen 16) и пустой placeholder-кадр (plen 99/137, data-область нулями). Данные приходят в 1-2 PDU: первый — 40 регистров (bytecount 80), второй (в отдельном кадре plen 51) — дубль регистров 0x0010-0x001F (bytecount 32). CRC в PDU — валидный Modbus.
-- PDU лежит в payload на offset **14** (после 14-байтного заголовка), но padding перед PDU бывает больше — парсить нужно поиском `01 03 <vlen>`, а не по фиксированному смещению.
-- **Deye .91/.70**: на любой запрос только heartbeat-кадр (29 байт, payload 16: `02 01 <uptime u32 LE> <cnt u32 LE> <SN u32 LE> 06 00`). Данные регистров локальным modbus не отдаются — это поведение Deye-логгера (push только на cloud). Poller для них файл не пишет (только `heartbeat_only` в лог).
+- **Логгеры шлют данные МЕДЛЕННО и ПУТЬ (pacing)**: полный ответ (~300-400 байт) приходит частями на протяжении 15-30 секунд; при коротком read-deadline теряются кадры с данными (остаются heartbeat + placeholder). В клиенте — цикл чтения до «тишины» 4 с, общий дедлайн 15 с.
+- **Sofar .76**: на любой запрос (func 03, 04, любой диапазон, любой SN, включая 0) возвращает ВЕСЬ блок 0x0000-0x0027 (40 регистров), плюс heartbeat-кадр (plen 16) и пустой placeholder-кадр (plen 99/137, data-область нулями). Данные в 1-2 PDU. CRC валидный.
+- **Deye .91/.70**: отвечают данными ТОЛЬКО на Solarman-кадр с 15-байтным datafield и реальным SN даталоггера (~8 с на оба диапазона). При неверном SN — 29-байтный heartbeat с кодом 0x06, при 14-байтном datafield — код 0x05. Реализовано в `main.go`.
+- PDU в payload — поиском `01 03 <vlen>`, а не по фиксированному смещению (padding/заголовки бывают разными).
 
 ## Находки по CRC (почему Sofar_LSW3.py несовместим с эталоном)
 - `libscrc.modbus` в Sofar_LSW3.py — это стандартный CRC16-Modbus (init 0xFFFF, poly 0xA001 отражённый, без invert); моя `CRC16Modbus` в `solarman/frame.go` — то же самое, проверено: CRC всех PDU живых ответов сходятся при вычислении по `01 03 <vlen> <data>` (vlen = bytecount) и записи LE.
@@ -79,8 +93,9 @@ A5 | PayloadLen u16 LE | Control 10 45 (LE 0x4510) | Serial u16 LE | DeviceSN u3
 
 ## План реализации
 1. ~~solarman/ пакет~~ — готово.
-2. ~~poller 10s + JSON~~ — готово. `targets` включает Sofar .76, для Deye пишется `heartbeat_only`.
-3. Дальнейшее: реальный мониторинг Deye возможен только через их push-телеметрию (отдельный research) или другой local-mode. Для Sofar `.76` poller уже получает данные.
+2. ~~poller 10s + JSON~~ — готово. `targets` включает все три инвертора.
+3. ~~Deye string: чтение регистров~~ — готово (BuildDeyeReadFrame + deyeRegMap + poller).
+4. Дальнейшее (по желанию): чтение настроек/др. диапазонов Deye, мониторинг microinverters, тесты.
 
 ## Окружение
 - Репо: github.com/galiy/sunReceiver (remote git@github.com:galiy/sunReceiver.git, branch main).

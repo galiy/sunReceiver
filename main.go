@@ -21,7 +21,26 @@ const (
 	outDir     = "data"
 )
 
-var targets = []string{"192.168.13.91", "192.168.13.70", "192.168.13.76"}
+type targetKind int
+
+const (
+	kindSofar targetKind = iota
+	kindDeyeString
+)
+
+// invTarget — целевой инвертор. LoggerSN — серийный номер даталоггера,
+// обязателен для Deye (иначе логгер отвечает кодом 0x06 "serial number not match").
+type invTarget struct {
+	IP       string
+	LoggerSN uint32
+	Kind     targetKind
+}
+
+var targets = []invTarget{
+	{IP: "192.168.13.91", LoggerSN: 1774265353, Kind: kindDeyeString},
+	{IP: "192.168.13.70", LoggerSN: 2947602822, Kind: kindDeyeString},
+	{IP: "192.168.13.76", LoggerSN: 0, Kind: kindSofar},
+}
 
 type regDef struct {
 	Name  string
@@ -133,11 +152,10 @@ func faultNames(mask uint16) []string {
 }
 
 // mapRegisters строит человекочитаемые значения из блока регистров 0x0000-0x0027.
-func mapRegisters(regs []uint16) map[string]any {
+func mapRegisters(regs map[uint16]uint16) map[string]any {
 	out := map[string]any{}
 	get := func(addr uint16) *uint16 {
-		if int(addr) < len(regs) {
-			v := regs[addr]
+		if v, ok := regs[addr]; ok {
 			return &v
 		}
 		return nil
@@ -197,16 +215,140 @@ func mapRegisters(regs []uint16) map[string]any {
 	return out
 }
 
-func pollDevice(ip string) DeviceResult {
+// deyeSensors — маппинг регистров Deye string/grid-tie инвертора
+// (из kbialek/deye-inverter-mqtt, диапазоны 0x3C-0x74 и 0xC6-0xD2).
+type deyeSensor struct {
+	Name   string
+	Ratio  float64
+	Unit   string
+	Signed bool
+	Offset float64
+	Double bool // 32-бит (2 регистра), low word first
+}
+
+var deyeRegMap = map[uint16]deyeSensor{
+	0x3C: {"production_today", 0.1, "kWh", false, 0, false},
+	0x3E: {"uptime", 1, "min", false, 0, false},
+	0x3F: {"total_production", 0.1, "kWh", false, 0, true},
+	0x46: {"grid_l12_voltage", 0.1, "V", false, 0, false},
+	0x47: {"grid_l23_voltage", 0.1, "V", false, 0, false},
+	0x48: {"grid_l31_voltage", 0.1, "V", false, 0, false},
+	0x49: {"l1_voltage", 0.1, "V", false, 0, false},
+	0x4A: {"l2_voltage", 0.1, "V", false, 0, false},
+	0x4B: {"l3_voltage", 0.1, "V", false, 0, false},
+	0x4C: {"l1_current", 0.1, "A", false, 0, false},
+	0x4D: {"l2_current", 0.1, "A", false, 0, false},
+	0x4E: {"l3_current", 0.1, "A", false, 0, false},
+	0x4F: {"ac_frequency", 0.01, "Hz", false, 0, false},
+	0x50: {"operating_power", 0.1, "W", false, 0, false},
+	0x52: {"dc_total_power", 0.1, "W", false, 0, false},
+	0x54: {"ac_apparent_power", 0.1, "W", false, 0, false},
+	0x56: {"ac_active_power", 0.1, "W", false, 0, true},
+	0x58: {"ac_reactive_power", 0.1, "W", false, 0, false},
+	0x5A: {"radiator_temperature", 0.1, "C", false, -100, false},
+	0x5B: {"igbt_temperature", 0.1, "C", false, -100, false},
+	0x6D: {"pv1_voltage", 0.1, "V", false, 0, false},
+	0x6E: {"pv1_current", 0.1, "A", false, 0, false},
+	0x6F: {"pv2_voltage", 0.1, "V", false, 0, false},
+	0x70: {"pv2_current", 0.1, "A", false, 0, false},
+	0xC6: {"load_power", 1, "W", true, 0, true},
+	0xC8: {"daily_load_consumption", 0.01, "kWh", false, 0, false},
+	0xC9: {"total_load_consumption", 0.1, "kWh", false, 0, true},
+	0xCB: {"grid_power", 1, "W", false, 0, true},
+	0xCD: {"daily_energy_sold", 0.01, "kWh", false, 0, false},
+	0xCE: {"total_energy_sold", 0.1, "kWh", false, 0, true},
+	0xD0: {"daily_energy_bought", 0.01, "kWh", false, 0, false},
+	0xD1: {"total_energy_bought", 0.1, "kWh", false, 0, true},
+}
+
+// mapDeyeRegisters строит человекочитаемые значения Deye string-инвертора
+// из набора регистров (по абсолютному адресу).
+func mapDeyeRegisters(regs map[uint16]uint16) map[string]any {
+	out := map[string]any{}
+	for addr, def := range deyeRegMap {
+		if !def.Double {
+			v, ok := regs[addr]
+			if !ok {
+				continue
+			}
+			iv := int(int16(v))
+			if def.Signed {
+				out[def.Name] = float64(iv)*def.Ratio + def.Offset
+			} else {
+				out[def.Name] = float64(v)*def.Ratio + def.Offset
+			}
+			continue
+		}
+		// 32-бит, low word first (addr = low, addr+1 = high)
+		lo, ok1 := regs[addr]
+		hi, ok2 := regs[addr+1]
+		if !ok1 || !ok2 {
+			continue
+		}
+		val := uint32(hi)<<16 | uint32(lo)
+		if def.Signed {
+			out[def.Name] = float64(int32(val))*def.Ratio + def.Offset
+		} else {
+			out[def.Name] = float64(val)*def.Ratio + def.Offset
+		}
+	}
+	return out
+}
+
+func pollDevice(t invTarget) DeviceResult {
 	res := DeviceResult{OK: true}
-	client := solarman.NewClient(ip+":"+port, 0, timeout)
-	pdus, frames, err := client.ReadRegisters(0x0000, 0x0028)
-	if err != nil {
-		res.OK = false
-		return res
+	client := solarman.NewClient(t.IP+":"+port, t.LoggerSN, timeout)
+
+	var regsByAddr map[uint16]uint16
+	var frames []solarman.Frame
+
+	switch t.Kind {
+	case kindDeyeString:
+		result := map[uint16]uint16{}
+		for _, r := range [][2]uint16{{0x3C, 0x39}, {0xC6, 0x0D}} {
+			pdus, fr, err := client.ReadRegistersDeye(r[0], r[1], 1)
+			if err != nil {
+				continue
+			}
+			frames = append(frames, fr...)
+			for _, p := range pdus {
+				if p.CRC != p.CRCCalc {
+					continue
+				}
+				for k := 0; k < len(p.Values); k++ {
+					result[r[0]+uint16(k)] = p.Values[k]
+				}
+			}
+		}
+		if len(result) > 0 {
+			res.HasData = true
+			res.Values = mapDeyeRegisters(result)
+		}
+		regsByAddr = result
+
+	case kindSofar:
+		pdus, fr, err := client.ReadRegisters(0x0000, 0x0028)
+		if err != nil {
+			res.OK = false
+			return res
+		}
+		frames = fr
+		result := map[uint16]uint16{}
+		for _, p := range pdus {
+			if p.CRC != p.CRCCalc {
+				continue
+			}
+			for k := 0; k < len(p.Values); k++ {
+				result[uint16(k)] = p.Values[k]
+			}
+		}
+		if len(result) > 0 {
+			res.HasData = true
+			res.Values = mapRegisters(result)
+		}
+		regsByAddr = result
 	}
 
-	// серийник логгера из ответа
 	for _, f := range frames {
 		if f.DeviceSN != 0 {
 			res.DeviceSN = fmt.Sprintf("%08x", f.DeviceSN)
@@ -214,33 +356,12 @@ func pollDevice(ip string) DeviceResult {
 		}
 	}
 
-	// данные регистров: prefer PDU с валидным CRC и >= 40 регистрами;
-	// иначе — самый большой PDU.
-	var best *solarman.ModbusPDU
-	for i := range pdus {
-		p := &pdus[i]
-		if p.ByteCount < 80 {
-			continue
-		}
-		if p.CRC == p.CRCCalc && best == nil {
-			best = p
-			break
-		}
-		if best == nil || p.ByteCount > best.ByteCount {
-			best = p
-		}
+	if regsByAddr == nil {
+		return res
 	}
-	if best != nil {
-		res.HasData = best.CRC == best.CRCCalc
-		if len(best.Values) >= 40 {
-			res.Values = mapRegisters(best.Values[:40])
-		} else {
-			res.Values = mapRegisters(best.Values)
-		}
-		res.RawRegs = make(map[string]uint16, len(best.Values))
-		for k, v := range best.Values {
-			res.RawRegs[fmt.Sprintf("0x%04X", k)] = v
-		}
+	res.RawRegs = make(map[string]uint16, len(regsByAddr))
+	for addr, v := range regsByAddr {
+		res.RawRegs[fmt.Sprintf("0x%04X", addr)] = v
 	}
 	return res
 }
@@ -259,14 +380,14 @@ func main() {
 		now := time.Now()
 		results := make([]DeviceResult, len(targets))
 		var wg sync.WaitGroup
-		for i, ip := range targets {
+		for i, t := range targets {
 			wg.Add(1)
-			go func(i int, ip string) {
+			go func(i int, t invTarget) {
 				defer wg.Done()
 				t0 := time.Now()
-				results[i] = pollDevice(ip)
-				log.Printf("%s: %s (%s)", ip, describeResult(results[i]), time.Since(t0).Round(time.Millisecond))
-			}(i, ip)
+				results[i] = pollDevice(t)
+				log.Printf("%s: %s (%s)", t.IP, describeResult(results[i]), time.Since(t0).Round(time.Millisecond))
+			}(i, t)
 		}
 		wg.Wait()
 
@@ -289,10 +410,10 @@ func main() {
 			}
 			b, err := json.MarshalIndent(snap, "", "  ")
 			if err != nil {
-				log.Printf("marshal %s: %v", targets[i], err)
+				log.Printf("marshal %s: %v", targets[i].IP, err)
 				continue
 			}
-			path := filepath.Join(dayDir, targets[i]+"-"+now.Format("150405")+".json")
+			path := filepath.Join(dayDir, targets[i].IP+"-"+now.Format("150405")+".json")
 			if err := os.WriteFile(path, b, 0o644); err != nil {
 				log.Printf("write %s: %v", path, err)
 				continue
