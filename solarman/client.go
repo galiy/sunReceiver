@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// Client — TCP-клиент Solarman V5.
 type Client struct {
 	Address    string
 	DeviceSN   uint32
@@ -37,19 +38,23 @@ func (c *Client) Exchange(req []byte) ([]Frame, []byte, error) {
 	if _, err := conn.Write(req); err != nil {
 		return nil, nil, fmt.Errorf("write: %w", err)
 	}
-	idle := c.IdleWindow
-	if idle <= 0 {
-		idle = 4 * time.Second
-	}
 
 	var raw []byte
 	buf := make([]byte, 1024)
+	firstByte := true
 	for {
+		// Первый байт может прийти через 8-15 с (pacing логгера) — ждём Timeout.
+		// Дальше — тишина IdleWindow означает конец ответа.
+		idle := c.IdleWindow
+		if firstByte {
+			idle = c.Timeout
+		}
 		if err := conn.SetReadDeadline(time.Now().Add(idle)); err != nil {
 			break
 		}
 		n, _ := conn.Read(buf)
 		if n > 0 {
+			firstByte = false
 			raw = append(raw, buf[:n]...)
 			if len(raw) > 4096 {
 				break
