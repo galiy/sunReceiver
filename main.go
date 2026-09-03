@@ -97,27 +97,22 @@ var countries = map[uint16]string{
 	26: "Philippines", 27: "New Zealand",
 }
 
-type Heartbeat struct {
-	DeliveryTime uint32 `json:"delivery_time"`
-	PowerOnTime  uint32 `json:"power_on_time"`
-	OffsetTime   uint32 `json:"offset_time"`
-}
-
+// DeviceResult — результат опроса одного инвертора. Поля для JSON-файла
+// отдельные (см. deviceSnapshot): имя файла содержит IP, внутри он не нужен.
 type DeviceResult struct {
-	IP          string            `json:"ip"`
-	OK          bool              `json:"ok"`
-	Error       string            `json:"error,omitempty"`
-	DeviceSN    string            `json:"device_sn,omitempty"`
-	Frames      int               `json:"frames"`
-	HasData     bool              `json:"register_data"`
-	Heartbeat   *Heartbeat        `json:"heartbeat,omitempty"`
-	Values      map[string]any    `json:"values,omitempty"`
-	RawRegs     map[string]uint16 `json:"raw_registers,omitempty"`
+	OK       bool
+	HasData  bool
+	DeviceSN string
+	Values   map[string]any
+	RawRegs  map[string]uint16
 }
 
-type PollResult struct {
-	Timestamp string         `json:"timestamp"`
-	Devices   map[string]any `json:"devices"`
+// deviceSnapshot — упрощённая структура, сохраняемая в JSON-файл инвертора.
+type deviceSnapshot struct {
+	Timestamp string            `json:"timestamp"`
+	DeviceSN  string            `json:"device_sn,omitempty"`
+	Values    map[string]any    `json:"values"`
+	RawRegs   map[string]uint16 `json:"raw_registers"`
 }
 
 func int16val(v uint16) int {
@@ -203,32 +198,19 @@ func mapRegisters(regs []uint16) map[string]any {
 }
 
 func pollDevice(ip string) DeviceResult {
-	res := DeviceResult{IP: ip, OK: true}
+	res := DeviceResult{OK: true}
 	client := solarman.NewClient(ip+":"+port, 0, timeout)
 	pdus, frames, err := client.ReadRegisters(0x0000, 0x0028)
 	if err != nil {
 		res.OK = false
-		res.Error = err.Error()
 		return res
 	}
-	res.Frames = len(frames)
 
 	// серийник логгера из ответа
 	for _, f := range frames {
 		if f.DeviceSN != 0 {
 			res.DeviceSN = fmt.Sprintf("%08x", f.DeviceSN)
 			break
-		}
-	}
-
-	// heartbeat: заголовок первого кадра
-	if len(frames) > 0 {
-		if h, ok := solarman.ParseResponseHeader(frames[0].Payload); ok {
-			res.Heartbeat = &Heartbeat{
-				DeliveryTime: h.DeliveryTime,
-				PowerOnTime:  h.PowerOnTime,
-				OffsetTime:   h.OffsetTime,
-			}
 		}
 	}
 
@@ -250,7 +232,11 @@ func pollDevice(ip string) DeviceResult {
 	}
 	if best != nil {
 		res.HasData = best.CRC == best.CRCCalc
-		res.Values = mapRegisters(best.Values[:40])
+		if len(best.Values) >= 40 {
+			res.Values = mapRegisters(best.Values[:40])
+		} else {
+			res.Values = mapRegisters(best.Values)
+		}
 		res.RawRegs = make(map[string]uint16, len(best.Values))
 		for k, v := range best.Values {
 			res.RawRegs[fmt.Sprintf("0x%04X", k)] = v
@@ -271,11 +257,6 @@ func main() {
 
 	doPoll := func() {
 		now := time.Now()
-		result := PollResult{
-			Timestamp: now.Format(time.RFC3339),
-			Devices:   map[string]any{},
-		}
-
 		results := make([]DeviceResult, len(targets))
 		var wg sync.WaitGroup
 		for i, ip := range targets {
@@ -289,26 +270,35 @@ func main() {
 		}
 		wg.Wait()
 
-		for _, res := range results {
-			result.Devices[res.IP] = res
-		}
-
 		dayDir := filepath.Join(outDir, now.Format("2006-01-02"))
 		if err := os.MkdirAll(dayDir, 0o755); err != nil {
 			log.Printf("mkdir %s: %v", dayDir, err)
 			return
 		}
-		path := filepath.Join(dayDir, now.Format("150405")+".json")
-		b, err := json.MarshalIndent(result, "", "  ")
-		if err != nil {
-			log.Printf("marshal: %v", err)
-			return
+		ts := now.Format(time.RFC3339)
+		for i, res := range results {
+			if !res.OK || !res.HasData {
+				// heartbeat_only / no data / ошибка — файл не сохраняем
+				continue
+			}
+			snap := deviceSnapshot{
+				Timestamp: ts,
+				DeviceSN:  res.DeviceSN,
+				Values:    res.Values,
+				RawRegs:   res.RawRegs,
+			}
+			b, err := json.MarshalIndent(snap, "", "  ")
+			if err != nil {
+				log.Printf("marshal %s: %v", targets[i], err)
+				continue
+			}
+			path := filepath.Join(dayDir, targets[i]+"-"+now.Format("150405")+".json")
+			if err := os.WriteFile(path, b, 0o644); err != nil {
+				log.Printf("write %s: %v", path, err)
+				continue
+			}
+			log.Printf("saved %s", path)
 		}
-		if err := os.WriteFile(path, b, 0o644); err != nil {
-			log.Printf("write %s: %v", path, err)
-			return
-		}
-		log.Printf("saved %s", path)
 	}
 
 	doPoll()
@@ -325,10 +315,10 @@ func main() {
 
 func describeResult(res DeviceResult) string {
 	if !res.OK {
-		return "error: " + res.Error
+		return "error"
 	}
 	if res.HasData {
-		return fmt.Sprintf("frames=%d data=OK registers", res.Frames)
+		return "data=OK registers"
 	}
-	return fmt.Sprintf("frames=%d heartbeat_only", res.Frames)
+	return "heartbeat_only"
 }
