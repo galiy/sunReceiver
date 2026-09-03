@@ -78,6 +78,50 @@ func BuildReadFrame(deviceSN uint32, startReg, regCount uint16) []byte {
 	return frame
 }
 
+// BuildDeyeReadFrame — кадр чтения регистров для Deye-даталоггеров (Solarman V5,
+// но 14-байтный datafield-заголовок, как в kbialek/deye-inverter-mqtt).
+// deviceSN — реальный SN логгера; unit — Modbus-адрес устройства (обычно 0x01).
+func BuildDeyeReadFrame(deviceSN, unit uint32, startReg, regCount uint16) []byte {
+	pdu := make([]byte, 8)
+	pdu[0] = byte(unit)
+	pdu[1] = 0x03
+	binary.BigEndian.PutUint16(pdu[2:4], startReg)
+	binary.BigEndian.PutUint16(pdu[4:6], regCount)
+	crc := CRC16Modbus(pdu[:6])
+	pdu[6] = byte(crc)
+	pdu[7] = byte(crc >> 8)
+
+	// datafield 15 байт: 02 + 14 нулей (в kbialek/deye-inverter-mqtt)
+	datafield := make([]byte, 15)
+	datafield[0] = 0x02
+	payload := append(datafield, pdu...)
+
+	frame := make([]byte, 0, framePrefixLen+len(payload)+frameTailLen)
+	frame = append(frame, StartMarker)
+	frame = append(frame, byte(len(payload)), byte(len(payload)>>8))
+	frame = append(frame, byte(ReqControlCode&0xFF), byte(ReqControlCode>>8))
+	frame = append(frame, 0x00, 0x00)
+	var sn [4]byte
+	binary.LittleEndian.PutUint32(sn[:], deviceSN)
+	frame = append(frame, sn[:]...)
+	frame = append(frame, payload...)
+	frame = append(frame, Checksum8(frame[1:]))
+	frame = append(frame, EndMarker)
+	return frame
+}
+
+// DeyeErrorCode возвращает код ошибки из 29-байтного heartbeat-ответа логгера
+// (payload 16: frameType, status, uptime u32, cnt u32, sn u32, 06 00).
+// 0x00 — нет ошибки (обычный heartbeat), 0x05 — адрес устройства, 0x06 — SN не совпадает.
+func DeyeErrorCode(frame Frame) (byte, bool) {
+	if frame.ControlCode != ResControlCode || len(frame.Payload) != 16 || frame.Payload[0] != 0x02 {
+		return 0, false
+	}
+	// payload 16: 02 01 <uptime u32> <cnt u32> <sn u32> <код_ошибки> 00 — код на offset 14
+	// (wire offset 25 = 11 заголовка + 14 в payload).
+	return frame.Payload[14], true
+}
+
 // SplitFrames дробит сырой TCP-ответ на кадры.
 // Длина кадра = 11 + PayloadLen + 2.
 func SplitFrames(raw []byte) []Frame {
