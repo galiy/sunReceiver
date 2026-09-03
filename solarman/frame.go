@@ -152,7 +152,7 @@ func SplitFrames(raw []byte) []Frame {
 			ControlCode: binary.LittleEndian.Uint16(raw[i+3 : i+5]),
 			Serial:      binary.BigEndian.Uint16(raw[i+5 : i+7]),
 			DeviceSN:    binary.LittleEndian.Uint32(raw[i+7 : i+11]),
-			Payload:     append([]byte{}, raw[i+framePrefixLen:i+framePrefixLen+plen]...),
+			Payload:     raw[i+framePrefixLen : i+framePrefixLen+plen : i+framePrefixLen+plen],
 		}
 		f.ChecksumOK = raw[i+framePrefixLen+plen] == Checksum8(raw[i+1:i+framePrefixLen+plen])
 		f.Valid = f.ChecksumOK && raw[i+total-1] == EndMarker && f.ControlCode == ResControlCode

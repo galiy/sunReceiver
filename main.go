@@ -155,6 +155,7 @@ func needsRounding(tag string) bool {
 	return strings.HasSuffix(tag, "voltage") ||
 		strings.HasSuffix(tag, "current") ||
 		strings.HasSuffix(tag, "power") ||
+		strings.HasSuffix(tag, "frequency") ||
 		strings.Contains(tag, "energy") ||
 		strings.Contains(tag, "temperature")
 }
@@ -220,11 +221,11 @@ type DeviceResult struct {
 
 // deviceSnapshot — структура, сохраняемая в JSON-файл инвертора.
 type deviceSnapshot struct {
-	Name     string         `json:"name"`
-	IP       string         `json:"ip"`
-	Timestamp string        `json:"timestamp"`
-	DeviceSN string         `json:"device_sn,omitempty"`
-	Values   valuesContract `json:"values"`
+	Name      string         `json:"name"`
+	IP        string         `json:"ip"`
+	Timestamp string         `json:"timestamp"`
+	DeviceSN  string         `json:"device_sn,omitempty"`
+	Values    valuesContract `json:"values"`
 }
 
 func int16val(v uint16) int {
@@ -318,10 +319,10 @@ func mapSofarRegisters(regs map[uint16]uint16) valuesContract {
 	putSofarSimple(out, regs, 0x0014, "l3_current", 0.01)
 
 	// Энергия (kWh) и время
-	putSofarU32(out, regs, 0x0015, 0x0016, "energy_total", 1)         // 32 бит, уже kWh
-	putSofarU32(out, regs, 0x0017, 0x0018, "time_total", 1)            // 32 бит, h
-	putSofarSimple(out, regs, 0x0019, "energy_today", 0.01)            // ×10 Wh → kWh
-	putSofarSimple(out, regs, 0x001A, "time_today", 1)                 // min
+	putSofarU32(out, regs, 0x0015, 0x0016, "energy_total", 1) // 32 бит, уже kWh
+	putSofarU32(out, regs, 0x0017, 0x0018, "time_total", 1)   // 32 бит, h
+	putSofarSimple(out, regs, 0x0019, "energy_today", 0.01)   // ×10 Wh → kWh
+	putSofarSimple(out, regs, 0x001A, "time_today", 1)        // min
 
 	// Температуры (C), шина
 	putSofarSimple(out, regs, 0x001B, "temperature_module", 1)
@@ -437,9 +438,35 @@ func mapDeyeRegisters(regs map[uint16]uint16) valuesContract {
 	return out
 }
 
+// clients — пул TCP-клиентов на инвертор. Соединение переиспользуется между опросами:
+// логгеры отвечают медленно (pacing), переподъём сокета каждые 10 с не нужен.
+// Опрос одного инвертора всегда идёт из одной горутины, поэтому сокет и порядковый
+// номер кадра не гоняются между опросами.
+var (
+	clientsMu    sync.Mutex
+	clientsByKey = map[string]*solarman.Client{}
+)
+
+func clientFor(ip string, sn uint32) *solarman.Client {
+	key := ip + ":" + port
+	clientsMu.Lock()
+	defer clientsMu.Unlock()
+	if c, ok := clientsByKey[key]; ok {
+		return c
+	}
+	c := &solarman.Client{
+		Address:    key,
+		DeviceSN:   sn,
+		IdleWindow: 4 * time.Second,
+		Timeout:    timeout,
+	}
+	clientsByKey[key] = c
+	return c
+}
+
 func pollDevice(t invTarget) DeviceResult {
 	res := DeviceResult{OK: true}
-	client := solarman.NewClient(t.IP+":"+port, t.LoggerSN, timeout)
+	client := clientFor(t.IP, t.LoggerSN)
 	// Sofar LSW-3 шлёт кадры с паузами до ~6.5 с (pacing) — окно тишины шире.
 	if t.Kind == kindSofar {
 		client.IdleWindow = 8 * time.Second
