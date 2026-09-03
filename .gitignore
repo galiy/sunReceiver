@@ -1,0 +1,6 @@
+# runtime-данные poller'а
+data/
+
+# бинарники сборки
+sunReceiver
+solarman-probe
