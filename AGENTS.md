@@ -12,7 +12,7 @@ Go-приложение, которое опрашивает solar-инверт�
 | 192.168.13.91 | Deye | Возвращает только heartbeat-кадр 29 байт (control 0x1510, payload 16: frameType 02, status 01, uptime, SN, счётчики, 2×00). Данные регистров НЕ приходят. SN = `0924c169`. |
 | 192.168.13.70 | Deye | То же, что .91. SN = `86d9b0af`. |
 
-Требование: опрашивать **192.168.13.91 и 192.168.13.70** (Deye) раз в 10 секунд, парсить и сохранять в JSON. Sofar на .76 — эталон для отладки протокола. UDP-слушатель удалён (это было старое решение, не работает: даталоггеры не шлют push-датаграммы по UDP).
+Требование: опрашивать **192.168.13.91, .70** (Deye) и **.76** (Sofar) раз в 10 секунд, парсить и сохранять в JSON. Deye отдают только heartbeat, реальные данные даёт Sofar .76 (в `targets` в main.go). UDP-слушатель удалён (это было старое решение, не работает: даталоггеры не шлют push-датаграммы по UDP).
 
 ## Протокол Solarman V5 — выводы из реверса (важно, Sofar_LSW3.py устарел)
 
@@ -60,8 +60,8 @@ A5 | PayloadLen u16 LE | Control 10 45 (LE 0x4510) | Serial u16 LE | DeviceSN u3
 
 ## Текущее состояние кода
 - `solarman/` — пакет-клиент Solarman V5: `BuildReadFrame`, `SplitFrames` (длина кадра = **11** + PayloadLen + 2, префикс A5+len+control+serial+SN), `ParseModbusPDU` (01 03/04 | bytecount | data | crc16 LE), `Checksum8` (sum[1:len-2] mod 256), `CRC16Modbus` (стандартный, в PDU пишется LE).
-- `main.go` — poller: каждые 10 с параллельно (goroutine) TCP-опрос 192.168.13.91 и 192.168.13.70 (порт 8899, SN=0 — логгеры не требуют свой SN в запросе). Выбор PDU: первый с CRC=CRCCalc и >=40 регистров, иначе самый большой. JSON: `data/<YYYY-MM-DD>/<HHMMSS>.json` с `{timestamp, devices: {ip: {ok, device_sn, frames, register_data, heartbeat, values, raw_registers}}}`.
-- `probe/main.go` — диагностический инструмент: `go run ./probe <ip> 8899 <sn hex> <start hex> <count hex>` — строит кадр, шлёт, дробит ответ, печатает регистры.
+- `main.go` — poller: каждые 10 с параллельно (goroutine) TCP-опрос 192.168.13.91, .70 и .76 (порт 8899, SN=0 — логгеры не требуют свой SN в запросе). Маппинг регистров Sofar в `regMap` (см. «Маппинг регистров» выше). Выбор PDU: первый с CRC=CRCCalc и >=40 регистров, иначе самый большой. `int16val` = каст к int16 (two's complement). JSON: `data/<YYYY-MM-DD>/<HHMMSS>.json` с `{timestamp, devices: {ip: {ok, device_sn, frames, register_data, heartbeat, values, raw_registers}}}`.
+- `probe/main.go` — диагностический инструмент: `go run ./probe <ip> 8899 <sn hex> <start hex> <count hex>` — строит кадр (пакет solarman), шлёт, дробит ответ (`SplitFrames`), печатает регистры (`ParseModbusPDU`, все PDU). Собственных копий CRC/checksum/сборки кадра больше нет.
 - UDP-слушатель и `received/` — старое решение, можно удалить `received/`.
 
 ## Поведение живых логгеров (проверено 2026-09-03, важно)
@@ -79,8 +79,8 @@ A5 | PayloadLen u16 LE | Control 10 45 (LE 0x4510) | Serial u16 LE | DeviceSN u3
 
 ## План реализации
 1. ~~solarman/ пакет~~ — готово.
-2. ~~poller 10s + JSON~~ — готово (heartbeat_only для Deye).
-3. Дальнейшее: реальный мониторинг Deye возможен только через их push-телеметрию (отдельный research) или другой local-mode. Для Sofar `.76` парсер уже готов — достаточно добавить адрес в `targets` в main.go.
+2. ~~poller 10s + JSON~~ — готово. `targets` включает Sofar .76, для Deye пишется `heartbeat_only`.
+3. Дальнейшее: реальный мониторинг Deye возможен только через их push-телеметрию (отдельный research) или другой local-mode. Для Sofar `.76` poller уже получает данные.
 
 ## Окружение
 - Репо: github.com/galiy/sunReceiver (remote git@github.com:galiy/sunReceiver.git, branch main).

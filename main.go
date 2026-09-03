@@ -21,7 +21,7 @@ const (
 	outDir     = "data"
 )
 
-var targets = []string{"192.168.13.91", "192.168.13.70"}
+var targets = []string{"192.168.13.91", "192.168.13.70", "192.168.13.76"}
 
 type regDef struct {
 	Name  string
@@ -121,10 +121,7 @@ type PollResult struct {
 }
 
 func int16val(v uint16) int {
-	if v&0x8000 != 0 {
-		return int(int32(v)) - 0x10000
-	}
-	return int(v)
+	return int(int16(v))
 }
 
 func faultNames(mask uint16) []string {
