@@ -36,11 +36,59 @@ type invTarget struct {
 	Kind     targetKind
 }
 
-var targets = []invTarget{
-	{IP: "192.168.13.91", LoggerSN: 1774265353, Kind: kindDeyeString},
-	{IP: "192.168.13.70", LoggerSN: 2947602822, Kind: kindDeyeString},
-	{IP: "192.168.13.76", LoggerSN: 0, Kind: kindSofar},
+// configTarget — запись инвертора в config.json.
+type configTarget struct {
+	IP       string `json:"ip"`
+	Type     string `json:"type"`
+	LoggerSN uint32 `json:"logger_sn"`
 }
+
+type configFile struct {
+	Targets []configTarget `json:"targets"`
+}
+
+// configPath — config.json в каталоге исполняемого файла.
+func configPath() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "config.json"
+	}
+	return filepath.Join(filepath.Dir(exe), "config.json")
+}
+
+// loadConfig читает и проверяет config.json, возвращает список целей.
+func loadConfig(path string) ([]invTarget, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read config %s: %w", path, err)
+	}
+	var cf configFile
+	if err := json.Unmarshal(b, &cf); err != nil {
+		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	if len(cf.Targets) == 0 {
+		return nil, fmt.Errorf("config %s: пустой список targets", path)
+	}
+	targets := make([]invTarget, 0, len(cf.Targets))
+	for _, t := range cf.Targets {
+		var kind targetKind
+		switch t.Type {
+		case "deye":
+			kind = kindDeyeString
+		case "sofar":
+			kind = kindSofar
+		default:
+			return nil, fmt.Errorf("config %s: неизвестный тип %q для %s", path, t.Type, t.IP)
+		}
+		if t.IP == "" {
+			return nil, fmt.Errorf("config %s: пустой ip (type=%s)", path, t.Type)
+		}
+		targets = append(targets, invTarget{IP: t.IP, LoggerSN: t.LoggerSN, Kind: kind})
+	}
+	return targets, nil
+}
+
+var targets []invTarget
 
 type regDef struct {
 	Name  string
@@ -96,8 +144,8 @@ var statusNames = map[uint16]string{
 }
 
 var faultBits = []struct {
-	Bit   uint16
-	Name  string
+	Bit  uint16
+	Name string
 }{
 	{1, "grid_over_voltage"}, {2, "grid_under_voltage"}, {4, "grid_over_frequency"},
 	{8, "grid_under_frequency"}, {16, "pv_under_voltage"}, {32, "grid_low_voltage_ride_through"},
@@ -251,6 +299,10 @@ var deyeRegMap = map[uint16]deyeSensor{
 	0x6E: {"pv1_current", 0.1, "A", false, 0, false},
 	0x6F: {"pv2_voltage", 0.1, "V", false, 0, false},
 	0x70: {"pv2_current", 0.1, "A", false, 0, false},
+	0x71: {"pv3_voltage", 0.1, "V", false, 0, false},
+	0x72: {"pv3_current", 0.1, "A", false, 0, false},
+	0x73: {"pv4_voltage", 0.1, "V", false, 0, false},
+	0x74: {"pv4_current", 0.1, "A", false, 0, false},
 	0xC6: {"load_power", 1, "W", true, 0, true},
 	0xC8: {"daily_load_consumption", 0.01, "kWh", false, 0, false},
 	0xC9: {"total_load_consumption", 0.1, "kWh", false, 0, true},
@@ -295,9 +347,43 @@ func mapDeyeRegisters(regs map[uint16]uint16) map[string]any {
 	return out
 }
 
+// buildRawRegNames строит таблицу «адрес регистра → имя» для raw_registers.
+// Имена берутся из regMap (Sofar) / deyeRegMap (Deye). Для 32-битных значений
+// (Sofar: hi/lo уже раздельно в regMap; Deye: Double) low word получает
+// «<имя>_lo», high word — «<имя>_hi». Адреса без имени (недокументированные
+// пробелы в диапазоне) остаются hex-адресом.
+func buildRawRegNames(kind targetKind) map[uint16]string {
+	names := map[uint16]string{}
+	switch kind {
+	case kindSofar:
+		for addr, def := range regMap {
+			names[addr] = def.Name
+		}
+	case kindDeyeString:
+		for addr, def := range deyeRegMap {
+			if def.Double {
+				names[addr] = def.Name + "_lo"
+				names[addr+1] = def.Name + "_hi"
+			} else {
+				names[addr] = def.Name
+			}
+		}
+	}
+	return names
+}
+
+var (
+	sofarRawRegNames = buildRawRegNames(kindSofar)
+	deyeRawRegNames  = buildRawRegNames(kindDeyeString)
+)
+
 func pollDevice(t invTarget) DeviceResult {
 	res := DeviceResult{OK: true}
 	client := solarman.NewClient(t.IP+":"+port, t.LoggerSN, timeout)
+	// Sofar LSW-3 шлёт кадры с паузами до ~6.5 с (pacing) — окно тишины шире.
+	if t.Kind == kindSofar {
+		client.IdleWindow = 8 * time.Second
+	}
 
 	var regsByAddr map[uint16]uint16
 	var frames []solarman.Frame
@@ -333,13 +419,24 @@ func pollDevice(t invTarget) DeviceResult {
 			return res
 		}
 		frames = fr
-		result := map[uint16]uint16{}
-		for _, p := range pdus {
+		// Sofar LSW-3 возвращает весь блок 0x0000-0x0027 (40 рег., bytecount 80)
+		// И «дубль» — 16 рег. 0x0010-0x001F в отдельном кадре (bytecount 32).
+		// Если слить все PDU от базы 0, дубль затирает 0x0000-0x000F (битый статус/
+		// PV/частота). Берём только самую большую валидную PDU — полный блок от 0x0000.
+		var best *solarman.ModbusPDU
+		for i := range pdus {
+			p := pdus[i]
 			if p.CRC != p.CRCCalc {
 				continue
 			}
-			for k := 0; k < len(p.Values); k++ {
-				result[uint16(k)] = p.Values[k]
+			if best == nil || len(p.Values) > len(best.Values) {
+				best = &pdus[i]
+			}
+		}
+		result := map[uint16]uint16{}
+		if best != nil {
+			for k := 0; k < len(best.Values); k++ {
+				result[uint16(k)] = best.Values[k]
 			}
 		}
 		if len(result) > 0 {
@@ -359,16 +456,34 @@ func pollDevice(t invTarget) DeviceResult {
 	if regsByAddr == nil {
 		return res
 	}
+	names := sofarRawRegNames
+	if t.Kind == kindDeyeString {
+		names = deyeRawRegNames
+	}
 	res.RawRegs = make(map[string]uint16, len(regsByAddr))
 	for addr, v := range regsByAddr {
-		res.RawRegs[fmt.Sprintf("0x%04X", addr)] = v
+		key := names[addr]
+		if key == "" {
+			key = fmt.Sprintf("0x%04X", addr)
+		}
+		res.RawRegs[key] = v
 	}
 	return res
 }
 
 func main() {
 	log.SetFlags(log.Ltime)
-	log.Printf("poller started: targets=%v period=%s", targets, pollPeriod)
+	cfgPath := configPath()
+	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
+		// `go run .`: бинарник во временном каталоге go-сборки — ищем config.json в CWD.
+		cfgPath = "config.json"
+	}
+	var err error
+	targets, err = loadConfig(cfgPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("poller started: config=%s targets=%v period=%s", cfgPath, targets, pollPeriod)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)

@@ -2,17 +2,20 @@
 
 Go-приложение, которое опрашивает solar-инверторы через их WiFi-даталоггеры (Solarman LSW-3/LSE, порт 8899, TCP) и сохраняет распарсенные данные в JSON.
 
-Язык/команды: Go 1.26, `go run .` — запуск, `go vet ./...` — проверки. Коммиты писать по-русски, как в истории репо.
+Язык/команды: Go 1.26, `go run .` — запуск, `go vet ./...` — проверки. Коммиты писать по-русски, как в истории репо. После каждого тестового запуска чистить папку `data/` (`rm -rf data`, в .gitignore она уже есть).
 
 ## Устройство: даталоггеры, адреса, модели
 
 | IP | Модель | Статус опроса (проверено 2026-09-03) |
 |---|---|---|
-| 192.168.13.76 | **Sofar K-TLX** (LSW-3) | РАБОТАЕТ: отвечает 205-380 байт (3-4 кадра), внутри — Modbus-ответ func 03 со ВСЕМИ 40 регистрами 0x0000-0x0027 (bytecount 80, CRC валидный) + дубль 16 регистров в отдельном кадре. SN логгера = `95b4d768`. |
+| 192.168.13.76 | **Sofar K-TLX** (LSW-3) | РАБОТАЕТ: отвечает 205-380 байт (3-4 кадра), внутри — Modbus-ответ func 03 со ВСЕМИ 40 регистрами 0x0000-0x0027 (bytecount 80, CRC валидный) + дубль 16 регистров в отдельном кадре. LoggerSN = **1758966933** (`68d7b495`, hex-строка логгера `95b4d768`). |
 | 192.168.13.91 | Deye (string) | РАБОТАЕТ: отдаёт данные по Solarman V5-кадру с 15-байтным datafield и реальным SN логгера. LoggerSN = **1774265353** (`69c12409`). |
 | 192.168.13.70 | Deye (string) | То же, что .91. LoggerSN = **2947602822** (`afb0d986`). |
+| 192.168.13.79 | Deye (string) | РАБОТАЕТ (проверено 2026-09-03, ~8 с на оба диапазона). LoggerSN = **2947000147** (`afa7a753`). |
+| 192.168.13.92 | Deye (string) | РАБОТАЕТ (проверено 2026-09-03, ~8 с). LoggerSN = **1774585911** (`69c60837`). |
+| 192.168.13.93 | Deye (string) | РАБОТАЕТ (проверено 2026-09-03, ~8 с). LoggerSN = **1766715945** (`694df229`). |
 
-Требование: опрашивать **192.168.13.91, .70** (Deye) и **.76** (Sofar) раз в 10 секунд, парсить и сохранять в JSON.
+Список опрашиваемых инверторов задаётся в **`config.json` рядом с исполняемым файлом** (`os.Executable()`; при `go run .` — fallback в CWD): `{"targets": [{"ip", "type": "deye"|"sofar", "logger_sn": uint32}]}`. Опрос раз в 10 секунд, парсинг и сохранение в JSON.
 
 ## Протокол Solarman V5 — выводы из реверса (важно, Sofar_LSW3.py устарел)
 
@@ -55,7 +58,7 @@ A5 | PayloadLen u16 LE | Control 10 45 (LE 0x4510) | Serial u16 LE | DeviceSN u3
 
 Значения регистров — int16 (знаковые, two's complement); для положительных величин обычно unsigned.
 
-### Deye (.91, .70) — как читать (решено 2026-09-03)
+### Deye (.91, .70, .79, .92, .93) — как читать (решено 2026-09-03)
 Deye-логгеры (LSE, rebrand Solarman) понимают Solarman V5-кадр, НО с двумя обязательными отличиями от Sofar:
 1. **15-байтный datafield-заголовок** (НЕ 12): `02` + 14 нулей (`02000000 00000000 00000000 0000`). PayloadLen = 15 + (6 для PDU + 2 CRC) = **23** (`17 00` LE). Если слать 14-байтный заголовок — логгер отвечает 0x05.
 2. **Реальный SN даталоггера** в DeviceSN (bin LE), НЕ 0. Если SN не совпадает — логгер отвечает heartbeat с кодом ошибки **0x06** ("serial number does not match").
@@ -67,21 +70,22 @@ Deye-логгеры (LSE, rebrand Solarman) понимают Solarman V5-кад�
 - 0x46/0x47/0x48 Grid L12/L23/L31 V ×0.1, 0x49/0x4A/0x4B L1/L2/L3 V ×0.1, 0x4C/0x4D/0x4E L1/L2/L3 I ×0.1
 - 0x4F AC Freq ×0.01 Hz, 0x50 Operating power ×0.1 W, 0x52 DC total power ×0.1 W, 0x54 AC apparent power ×0.1 W, 0x56-0x57 AC active power (32) ×0.1 W, 0x58 AC reactive power ×0.1 W
 - 0x5A Radiator temp ×0.1 −100 offset, 0x5B IGBT temp ×0.1 −100 offset
-- 0x6D/0x6E PV1 V/I ×0.1, 0x6F/0x70 PV2 V/I ×0.1
+- 0x6D/0x6E PV1 V/I ×0.1, 0x6F/0x70 PV2 V/I ×0.1, 0x71/0x72 PV3 V/I ×0.1, 0x73/0x74 PV4 V/I ×0.1 (на наших 2-цепных 1-фазных — 0, но часть string-маппинга kbialek)
 - 0xC6-0xC7 Load power (32, signed) ×1 W, 0xC8 Daily load ×0.01 kWh, 0xC9-0xCA Total load (32) ×0.1 kWh
 - 0xCB-0xCC Grid power (32) ×1 W, 0xCD Daily sold ×0.01 kWh, 0xCE-0xCF Total sold (32) ×0.1 kWh, 0xD0 Daily bought ×0.01 kWh, 0xD1-0xD2 Total bought (32) ×0.1 kWh
+Пробелы в диапазоне чтения (не задокументированы в kbialek string-группе): 0x3D, 0x41-0x45, 0x51, 0x53, 0x55, 0x59, 0x5C-0x6C. Проверял mxbode/Deye-SUN-SG05LP3-EU-SM2-Modbus-TSV — это карта ГИБРИДНОЙ модели SG05LP3, не нашей string: её адреса противоречат нашим живым значениям (у них 0x6D = «Max A Charge», у нас 0x6D = PV1 voltage 212V), поэтому её имена для нашего диапазона не использовал. Из неё лишь совпадение по адресу: у них 0x3D = Fernsperre (дистанционный замок) и 0x51 = SchalterModus (режим работы) — у нас оба = 0, согласуется, но НЕ верифицировано, в JSON оставлены hex. Единственный непустой на всех 5 логгерах — 0x5D = 1000 (константа; вероятно ограничение мощности 100% ×10, не подтверждено). В `raw_registers` остаются под hex-адресом.
 Регистры 0x005B IGBT temp не подключён (0 регистр → −100). Логгеры отвечают стабильно и быстро (~8 с на оба диапазона).
 
 ## Текущее состояние кода
 - `solarman/` — пакет-клиент Solarman V5: `BuildReadFrame` (12-байтный datafield, для Sofar), `BuildDeyeReadFrame` (15-байтный datafield + реальный SN, для Deye), `SplitFrames` (длина кадра = **11** + PayloadLen + 2, префикс A5+len+control+serial+SN), `ParseModbusPDU` (01 03/04 | bytecount | data | crc16 LE), `Checksum8` (sum[1:len-2] mod 256), `CRC16Modbus` (стандартный, в PDU пишется LE).
-- `main.go` — poller: каждые 10 с параллельно (goroutine) TCP-опрос 192.168.13.91, .70 и .76 (порт 8899). Целевые инверторы — в `targets []invTarget` {IP, LoggerSN, Kind}: Deye требуют реальный SN даталоггера (`ReadRegistersDeye`), Sofar — SN=0 (`ReadRegisters`). Маппинг регистров Sofar в `regMap`, Deye string в `deyeRegMap` (см. выше). JSON: на каждый инвертор отдельный файл `data/<YYYY-MM-DD>/<IP>-<HHMMSS>.json` (дата в директории, время опроса и IP — в имени файла; внутри IP нет). Файл пишется только при успешном чтении данных (`HasData`); при `heartbeat_only`/`no data`/ошибке не сохраняется. Структура: `{timestamp, device_sn, values, raw_registers}`.
+- `main.go` — poller: каждые 10 с параллельно (goroutine) TCP-опрос целей из `config.json` (порт 8899). Список целей читается из **`config.json` рядом с бинарником** (`os.Executable()`; при `go run .` — fallback в CWD) через `loadConfig` в `targets []invTarget` {IP, LoggerSN, Kind}: `type` "deye"→`kindDeyeString`, "sofar"→`kindSofar`. Deye — реальный SN даталоггера (`ReadRegistersDeye`), Sofar — `ReadRegisters` (отвечает и при реальном SN). Маппинг регистров Sofar в `regMap`, Deye string в `deyeRegMap` (см. выше). JSON: на каждый инвертор отдельный файл `data/<YYYY-MM-DD>/<IP>-<HHMMSS>.json` (дата в директории, время опроса и IP — в имени файла; внутри IP нет). Файл пишется только при успешном чтении данных (`HasData`); при `heartbeat_only`/`no data`/ошибке не сохраняется. Структура: `{timestamp, device_sn, values, raw_registers}`. `raw_registers` — **именованные** ключи: Sofar — все 40 регистров 0x0000-0x0027 из `SOFARMap.xml` (проект github.com/galiy/Sofar_LSW3) по именам из `regMap`; Deye — имена из `deyeRegMap` (string-группа kbialek/deye-inverter-mqtt), 32-битные — `<имя>_lo`/`<имя>_hi`; адреса без имени (недокументированные пробелы: 0x3D, 0x41-0x45, 0x51, 0x53, 0x55, 0x59, 0x5C-0x6C) остаются hex. Таблицы имен — `sofarRawRegNames`/`deyeRawRegNames` (`buildRawRegNames`).
 - `probe/main.go` — диагностический инструмент: `go run ./probe <ip> 8899 <sn hex32> [sn2...] <start hex> <count hex>` — строит Deye-кадр (`BuildDeyeReadFrame`) с каждым SN по очереди, шлёт, дробит ответ (`SplitFrames`), печатает регистры (`ParseModbusPDU`) и код Deye-ошибки (`DeyeErrorCode`, 0x05/0x06). Перебор unit-адресов — через env `PROBE_UNITS=1,2,...`. Собственных копий CRC/checksum/сборки кадра нет.
 - UDP-слушатель и `received/` — старое решение, можно удалить `received/`.
 
 ## Поведение живых логгеров (проверено 2026-09-03, важно)
-- **Логгеры шлют данные МЕДЛЕННО и ПУТЬ (pacing)**: полный ответ (~300-400 байт) приходит частями на протяжении 15-30 секунд; при коротком read-deadline теряются кадры с данными (остаются heartbeat + placeholder). В клиенте — цикл чтения до «тишины» 4 с, общий дедлайн 15 с.
-- **Sofar .76**: на любой запрос (func 03, 04, любой диапазон, любой SN, включая 0) возвращает ВЕСЬ блок 0x0000-0x0027 (40 регистров), плюс heartbeat-кадр (plen 16) и пустой placeholder-кадр (plen 99/137, data-область нулями). Данные в 1-2 PDU. CRC валидный.
-- **Deye .91/.70**: отвечают данными ТОЛЬКО на Solarman-кадр с 15-байтным datafield и реальным SN даталоггера (~8 с на оба диапазона). При неверном SN — 29-байтный heartbeat с кодом 0x06, при 14-байтном datafield — код 0x05. Реализовано в `main.go`.
+- **Логгеры шлют данные МЕДЛЕННО и ПУТЬ (pacing)**: полный ответ (~300-400 байт) приходит частями на протяжении 15-30 секунд; при коротком read-deadline теряются кадры с данными (остаются heartbeat + placeholder). В клиенте — цикл чтения до «тишины» `IdleWindow` (4 с; для Sofar 8 с — у .76 паузы между кусками до ~6.5 с), первый байт ждётся до `Timeout` (15 с).
+- **Sofar .76**: на любой запрос (func 03, 04, любой диапазон, любой SN, включая 0) возвращает ВЕСЬ блок 0x0000-0x0027 (40 регистров), плюс heartbeat-кадр (plen 16) и пустой placeholder-кадр (plen 99/137, data-область нулями). Данные в 1-2 PDU. CRC валидный. **Важно**: в одном ответе логгер шлёт полный блок (bytecount 80) И «дубль» — 16 регистров 0x0010-0x001F (bytecount 32) в отдельном кадре, и повторяет последовательность 2-3 раза за ~30 с. Слив всех PDU от базы 0 затирает 0x0000-0x000F (битые status/PV/частота) — в `main.go` берётся только САМАЯ БОЛЬШАЯ валидная PDU (полный блок от 0x0000). Иногда (примерно каждый 3-й цикл) логгер не отвечает вовсе >15 с — это нормальная флейка, следующий цикл ок.
+- **Deye .91/.70/.79/.92/.93**: отвечают данными ТОЛЬКО на Solarman-кадр с 15-байтным datafield и реальным SN даталоггера (~8 с на оба диапазона). При неверном SN — 29-байтный heartbeat с кодом 0x06, при 14-байтном datafield — код 0x05. Реализовано в `main.go`.
 - PDU в payload — поиском `01 03 <vlen>`, а не по фиксированному смещению (padding/заголовки бывают разными).
 
 ## Находки по CRC (почему Sofar_LSW3.py несовместим с эталоном)
@@ -93,9 +97,10 @@ Deye-логгеры (LSE, rebrand Solarman) понимают Solarman V5-кад�
 
 ## План реализации
 1. ~~solarman/ пакет~~ — готово.
-2. ~~poller 10s + JSON~~ — готово. `targets` включает все три инвертора.
+2. ~~poller 10s + JSON~~ — готово. Список целей — в `config.json` (все 6 инверторов: 5 Deye + 1 Sofar).
 3. ~~Deye string: чтение регистров~~ — готово (BuildDeyeReadFrame + deyeRegMap + poller).
-4. Дальнейшее (по желанию): чтение настроек/др. диапазонов Deye, мониторинг microinverters, тесты.
+4. ~~Именование raw_registers~~ — готово (имена из SOFARMap.xml / kbialek string-группы; 32-битные — `_lo`/`_hi`; недокументированные — hex).
+5. **Дальнейшее**: универсальный контракт значений — одинаковые имена тегов и единицы измерения для Deye и Sofar в `values` (сейчас имена/единицы различаются, напр. `output_active_power` Вт×10 vs `operating_power` Вт×0.1). Остальное по желанию: чтение настроек/др. диапазонов Deye, мониторинг microinverters, тесты.
 
 ## Окружение
 - Репо: github.com/galiy/sunReceiver (remote git@github.com:galiy/sunReceiver.git, branch main).

@@ -164,16 +164,17 @@ func SplitFrames(raw []byte) []Frame {
 
 // ModbusPDU — вложенный Modbus-ответ внутри payload кадра.
 type ModbusPDU struct {
-	Offset     int // позиция PDU в payload
-	Function   uint8
-	ByteCount  uint8
-	Values     []uint16 // регистры, big-endian по 2 байта
-	CRC        uint16
-	CRCCalc    uint16
+	Offset    int // позиция PDU в payload
+	Function  uint8
+	ByteCount uint8
+	Values    []uint16 // регистры, big-endian по 2 байта
+	CRC       uint16
+	CRCCalc   uint16
 }
 
-// ParseModbusPDU находит Modbus-ответ (01 03 | bytecount | data | crc16 LE)
-// в payload начиная с offsets. Возвращает все найденные PDU.
+// ParseModbusPDU находит Modbus-ответ (01 03/04 | bytecount | data | crc16 LE)
+// в payload начиная с offsets (по умолчанию 14 — после 14-байтного заголовка
+// payload, проверено на Sofar и Deye). Возвращает все найденные PDU.
 func ParseModbusPDU(payload []byte, offsets ...int) []ModbusPDU {
 	var starts []int
 	if len(offsets) > 0 {
