@@ -109,8 +109,8 @@ var regMap = map[uint16]regDef{
 	0x0009: {"pv2_current", 0.01, "A"},
 	0x000A: {"pv1_power", 10, "W"},
 	0x000B: {"pv2_power", 10, "W"},
-	0x000C: {"output_active_power", 10, "W"},
-	0x000D: {"output_reactive_power", 0.01, "kVar"},
+	0x000C: {"ac_active_power", 10, "W"},
+	0x000D: {"ac_reactive_power", 10, "var"},
 	0x000E: {"grid_frequency", 0.01, "Hz"},
 	0x000F: {"l1_voltage", 0.1, "V"},
 	0x0010: {"l1_current", 0.01, "A"},
@@ -118,14 +118,14 @@ var regMap = map[uint16]regDef{
 	0x0012: {"l2_current", 0.01, "A"},
 	0x0013: {"l3_voltage", 0.1, "V"},
 	0x0014: {"l3_current", 0.01, "A"},
-	0x0015: {"total_production_hi", 1, ""},
-	0x0016: {"total_production_lo", 1, ""},
-	0x0017: {"total_generation_time_hi", 1, ""},
-	0x0018: {"total_generation_time_lo", 1, ""},
-	0x0019: {"today_production", 10, "Wh"},
-	0x001A: {"today_generation_time", 1, "min"},
-	0x001B: {"module_temperature", 1, "C"},
-	0x001C: {"inner_temperature", 1, "C"},
+	0x0015: {"energy_total_hi", 1, ""},
+	0x0016: {"energy_total_lo", 1, ""},
+	0x0017: {"time_total_hi", 1, ""},
+	0x0018: {"time_total_lo", 1, ""},
+	0x0019: {"energy_today", 0.01, "kWh"},
+	0x001A: {"time_today", 1, "min"},
+	0x001B: {"temperature_module", 1, "C"},
+	0x001C: {"temperature_inner", 1, "C"},
 	0x001D: {"bus_voltage", 0.1, "V"},
 	0x001E: {"pv1_sample_cpu_voltage", 0.1, "V"},
 	0x001F: {"pv1_sample_cpu_current", 0.01, "A"},
@@ -199,74 +199,133 @@ func faultNames(mask uint16) []string {
 	return names
 }
 
-// mapRegisters строит человекочитаемые значения из блока регистров 0x0000-0x0027.
-func mapRegisters(regs map[uint16]uint16) map[string]any {
-	out := map[string]any{}
-	get := func(addr uint16) *uint16 {
-		if v, ok := regs[addr]; ok {
-			return &v
-		}
-		return nil
-	}
+// Универсальный контракт значений (values) — одинаковые имена тегов и единицы
+// измерения для Deye и Sofar. Единицы зашиты в суффикс имени:
+//
+//	*_power     — W (активная/полная), ac_reactive_power — var
+//	*_voltage   — V, *_current — A
+//	grid_frequency — Hz
+//	energy_*    — kWh, *_today (мин) — min, time_total — h, uptime — min
+//	temperature_* — C, insulation_* — Ohm, bus_voltage — V
+//
+// Поля, которые даёт только один из брендов, присутствуют только у него;
+// общие поля (PV, AC, частота, энергия, температура) — с идентичными тегами.
+//
+// Ключевые универсальные теги:
+//   - inverter_status (string), fault_1..fault_5 ([]string), country (string) — Sofar
+//   - pv1/pv2_voltage/current/power, dc_total_power
+//   - ac_active_power, ac_apparent_power, ac_reactive_power
+//   - grid_frequency
+//   - l1/l2/l3_voltage/current, grid_l12/l23/l31_voltage (Deye)
+//   - energy_today, energy_total, energy_sold_*, energy_bought_*, energy_load_* (kWh)
+//   - grid_power, load_power (W)
+//   - time_today (min), time_total (h) — Sofar; uptime (min) — Deye
+//   - temperature_module/inner (Sofar), temperature_radiator/igbt (Deye)
 
-	if v := get(0x0000); v != nil {
-		s, ok := statusNames[*v]
+// putSofarSimple пишет 16-битный регистр в контракт: int при ratio==1, иначе float.
+func putSofarSimple(out map[string]any, regs map[uint16]uint16, addr uint16, key string, ratio float64) {
+	v, ok := regs[addr]
+	if !ok {
+		return
+	}
+	if ratio == 1 {
+		out[key] = int16val(v)
+	} else {
+		out[key] = float64(int16val(v)) * ratio
+	}
+}
+
+// putSofarU32 пишет 32-битное значение (hi*65536+lo) с ratio.
+func putSofarU32(out map[string]any, regs map[uint16]uint16, hiAddr, loAddr uint16, key string, ratio float64) {
+	hi, ok1 := regs[hiAddr]
+	lo, ok2 := regs[loAddr]
+	if !ok1 || !ok2 {
+		return
+	}
+	val := float64(hi)*65536 + float64(lo)
+	if ratio == 1 {
+		out[key] = val
+	} else {
+		out[key] = val * ratio
+	}
+}
+
+// mapSofarRegisters строит значения универсального контракта из блока 0x0000-0x0027.
+func mapSofarRegisters(regs map[uint16]uint16) map[string]any {
+	out := map[string]any{}
+
+	if v, ok := regs[0x0000]; ok {
+		s, ok := statusNames[v]
 		if !ok {
-			s = fmt.Sprintf("unknown(%d)", *v)
+			s = fmt.Sprintf("unknown(%d)", v)
 		}
 		out["inverter_status"] = s
 	}
 	for i, name := range []string{"fault_1", "fault_2", "fault_3", "fault_4", "fault_5"} {
-		if v := get(uint16(0x0001 + i)); v != nil {
-			out[name] = faultNames(*v)
+		if v, ok := regs[uint16(0x0001+i)]; ok {
+			out[name] = faultNames(v)
 		}
 	}
-	simple := func(addr uint16) {
-		if v := get(addr); v != nil {
-			def := regMap[addr]
-			if def.Ratio == 1 {
-				out[def.Name] = int16val(*v)
-			} else {
-				out[def.Name] = float64(int16val(*v)) * def.Ratio
-			}
-		}
-	}
-	for _, addr := range []uint16{0x0006, 0x0007, 0x0008, 0x0009, 0x000A, 0x000B, 0x000C, 0x000D,
-		0x000E, 0x000F, 0x0010, 0x0011, 0x0012, 0x0013, 0x0014, 0x001B, 0x001C, 0x001D,
-		0x001E, 0x001F, 0x0020, 0x0021, 0x0022, 0x0023, 0x0024, 0x0025, 0x0026} {
-		simple(addr)
-	}
-	// 32-битные пары
-	if hi := get(0x0015); hi != nil {
-		if lo := get(0x0016); lo != nil {
-			out["total_production_kwh"] = float64(*hi)*65536 + float64(*lo)
-		}
-	}
-	if hi := get(0x0017); hi != nil {
-		if lo := get(0x0018); lo != nil {
-			out["total_generation_time_h"] = float64(*hi)*65536 + float64(*lo)
-		}
-	}
-	if v := get(0x0019); v != nil {
-		out["today_production_wh"] = float64(*v) * 10
-	}
-	if v := get(0x001A); v != nil {
-		out["today_generation_time_min"] = int16val(*v)
-	}
-	if v := get(0x0027); v != nil {
-		c, ok := countries[*v]
+
+	// PV входы (V, A, W)
+	putSofarSimple(out, regs, 0x0006, "pv1_voltage", 0.1)
+	putSofarSimple(out, regs, 0x0007, "pv1_current", 0.01)
+	putSofarSimple(out, regs, 0x0008, "pv2_voltage", 0.1)
+	putSofarSimple(out, regs, 0x0009, "pv2_current", 0.01)
+	putSofarSimple(out, regs, 0x000A, "pv1_power", 10)
+	putSofarSimple(out, regs, 0x000B, "pv2_power", 10)
+
+	// AC выход: активная W, реактивная var, частота Hz
+	putSofarSimple(out, regs, 0x000C, "ac_active_power", 10)
+	putSofarSimple(out, regs, 0x000D, "ac_reactive_power", 10) // ×0.01 kVar → var
+	putSofarSimple(out, regs, 0x000E, "grid_frequency", 0.01)
+
+	// Фазы L1/L2/L3 (V, A)
+	putSofarSimple(out, regs, 0x000F, "l1_voltage", 0.1)
+	putSofarSimple(out, regs, 0x0010, "l1_current", 0.01)
+	putSofarSimple(out, regs, 0x0011, "l2_voltage", 0.1)
+	putSofarSimple(out, regs, 0x0012, "l2_current", 0.01)
+	putSofarSimple(out, regs, 0x0013, "l3_voltage", 0.1)
+	putSofarSimple(out, regs, 0x0014, "l3_current", 0.01)
+
+	// Энергия (kWh) и время
+	putSofarU32(out, regs, 0x0015, 0x0016, "energy_total", 1)         // 32 бит, уже kWh
+	putSofarU32(out, regs, 0x0017, 0x0018, "time_total", 1)            // 32 бит, h
+	putSofarSimple(out, regs, 0x0019, "energy_today", 0.01)            // ×10 Wh → kWh
+	putSofarSimple(out, regs, 0x001A, "time_today", 1)                 // min
+
+	// Температуры (C), шина
+	putSofarSimple(out, regs, 0x001B, "temperature_module", 1)
+	putSofarSimple(out, regs, 0x001C, "temperature_inner", 1)
+	putSofarSimple(out, regs, 0x001D, "bus_voltage", 0.1)
+
+	// Диагностика Sofar
+	putSofarSimple(out, regs, 0x001E, "pv1_sample_cpu_voltage", 0.1)
+	putSofarSimple(out, regs, 0x001F, "pv1_sample_cpu_current", 0.01)
+	putSofarSimple(out, regs, 0x0020, "countdown_time", 1)
+	putSofarSimple(out, regs, 0x0021, "alert", 1)
+	putSofarSimple(out, regs, 0x0022, "input_mode", 1)
+	putSofarSimple(out, regs, 0x0023, "comm_board_msg", 1)
+	putSofarSimple(out, regs, 0x0024, "insulation_pv1_to_ground", 1)
+	putSofarSimple(out, regs, 0x0025, "insulation_pv2_to_ground", 1)
+	putSofarSimple(out, regs, 0x0026, "insulation_pv_minus_to_ground", 1)
+
+	if v, ok := regs[0x0027]; ok {
+		c, ok := countries[v]
 		if !ok {
-			c = fmt.Sprintf("unknown(%d)", *v)
+			c = fmt.Sprintf("unknown(%d)", v)
 		}
 		out["country"] = c
 	}
 	return out
 }
 
-// deyeSensors — маппинг регистров Deye string/grid-tie инвертора
+// deyeSensor — маппинг регистра Deye string/grid-tie инвертора
 // (из kbialek/deye-inverter-mqtt, диапазоны 0x3C-0x74 и 0xC6-0xD2).
+// Name — имя для raw_registers; Tag — имя универсального контракта для values.
 type deyeSensor struct {
 	Name   string
+	Tag    string
 	Ratio  float64
 	Unit   string
 	Signed bool
@@ -274,47 +333,49 @@ type deyeSensor struct {
 	Double bool // 32-бит (2 регистра), low word first
 }
 
+// 0x58 AC reactive power Deye — ×0.01 kvar (как у Sofar ×0.01 kVar), в var → ratio 10.
 var deyeRegMap = map[uint16]deyeSensor{
-	0x3C: {"production_today", 0.1, "kWh", false, 0, false},
-	0x3E: {"uptime", 1, "min", false, 0, false},
-	0x3F: {"total_production", 0.1, "kWh", false, 0, true},
-	0x46: {"grid_l12_voltage", 0.1, "V", false, 0, false},
-	0x47: {"grid_l23_voltage", 0.1, "V", false, 0, false},
-	0x48: {"grid_l31_voltage", 0.1, "V", false, 0, false},
-	0x49: {"l1_voltage", 0.1, "V", false, 0, false},
-	0x4A: {"l2_voltage", 0.1, "V", false, 0, false},
-	0x4B: {"l3_voltage", 0.1, "V", false, 0, false},
-	0x4C: {"l1_current", 0.1, "A", false, 0, false},
-	0x4D: {"l2_current", 0.1, "A", false, 0, false},
-	0x4E: {"l3_current", 0.1, "A", false, 0, false},
-	0x4F: {"ac_frequency", 0.01, "Hz", false, 0, false},
-	0x50: {"operating_power", 0.1, "W", false, 0, false},
-	0x52: {"dc_total_power", 0.1, "W", false, 0, false},
-	0x54: {"ac_apparent_power", 0.1, "W", false, 0, false},
-	0x56: {"ac_active_power", 0.1, "W", false, 0, true},
-	0x58: {"ac_reactive_power", 0.1, "W", false, 0, false},
-	0x5A: {"radiator_temperature", 0.1, "C", false, -100, false},
-	0x5B: {"igbt_temperature", 0.1, "C", false, -100, false},
-	0x6D: {"pv1_voltage", 0.1, "V", false, 0, false},
-	0x6E: {"pv1_current", 0.1, "A", false, 0, false},
-	0x6F: {"pv2_voltage", 0.1, "V", false, 0, false},
-	0x70: {"pv2_current", 0.1, "A", false, 0, false},
-	0x71: {"pv3_voltage", 0.1, "V", false, 0, false},
-	0x72: {"pv3_current", 0.1, "A", false, 0, false},
-	0x73: {"pv4_voltage", 0.1, "V", false, 0, false},
-	0x74: {"pv4_current", 0.1, "A", false, 0, false},
-	0xC6: {"load_power", 1, "W", true, 0, true},
-	0xC8: {"daily_load_consumption", 0.01, "kWh", false, 0, false},
-	0xC9: {"total_load_consumption", 0.1, "kWh", false, 0, true},
-	0xCB: {"grid_power", 1, "W", false, 0, true},
-	0xCD: {"daily_energy_sold", 0.01, "kWh", false, 0, false},
-	0xCE: {"total_energy_sold", 0.1, "kWh", false, 0, true},
-	0xD0: {"daily_energy_bought", 0.01, "kWh", false, 0, false},
-	0xD1: {"total_energy_bought", 0.1, "kWh", false, 0, true},
+	0x3C: {"production_today", "energy_today", 0.1, "kWh", false, 0, false},
+	0x3E: {"uptime", "uptime", 1, "min", false, 0, false},
+	0x3F: {"total_production", "energy_total", 0.1, "kWh", false, 0, true},
+	0x46: {"grid_l12_voltage", "grid_l12_voltage", 0.1, "V", false, 0, false},
+	0x47: {"grid_l23_voltage", "grid_l23_voltage", 0.1, "V", false, 0, false},
+	0x48: {"grid_l31_voltage", "grid_l31_voltage", 0.1, "V", false, 0, false},
+	0x49: {"l1_voltage", "l1_voltage", 0.1, "V", false, 0, false},
+	0x4A: {"l2_voltage", "l2_voltage", 0.1, "V", false, 0, false},
+	0x4B: {"l3_voltage", "l3_voltage", 0.1, "V", false, 0, false},
+	0x4C: {"l1_current", "l1_current", 0.1, "A", false, 0, false},
+	0x4D: {"l2_current", "l2_current", 0.1, "A", false, 0, false},
+	0x4E: {"l3_current", "l3_current", 0.1, "A", false, 0, false},
+	0x4F: {"ac_frequency", "grid_frequency", 0.01, "Hz", false, 0, false},
+	0x52: {"dc_total_power", "dc_total_power", 0.1, "W", false, 0, false},
+	0x54: {"ac_apparent_power", "ac_apparent_power", 0.1, "W", false, 0, false},
+	0x56: {"ac_active_power", "ac_active_power", 0.1, "W", false, 0, true},
+	// 0x58 AC reactive power: ×0.1 var (raw 365 → 36.5 var, физически правдоподобно;
+	// ×10 давал 3650 var — абсурд при P≈404W). Единицы совпадают с Sofar (var).
+	0x58: {"ac_reactive_power", "ac_reactive_power", 0.1, "var", false, 0, false},
+	0x5A: {"radiator_temperature", "temperature_radiator", 0.1, "C", false, -100, false},
+	0x5B: {"igbt_temperature", "temperature_igbt", 0.1, "C", false, -100, false},
+	0x6D: {"pv1_voltage", "pv1_voltage", 0.1, "V", false, 0, false},
+	0x6E: {"pv1_current", "pv1_current", 0.1, "A", false, 0, false},
+	0x6F: {"pv2_voltage", "pv2_voltage", 0.1, "V", false, 0, false},
+	0x70: {"pv2_current", "pv2_current", 0.1, "A", false, 0, false},
+	0x71: {"pv3_voltage", "pv3_voltage", 0.1, "V", false, 0, false},
+	0x72: {"pv3_current", "pv3_current", 0.1, "A", false, 0, false},
+	0x73: {"pv4_voltage", "pv4_voltage", 0.1, "V", false, 0, false},
+	0x74: {"pv4_current", "pv4_current", 0.1, "A", false, 0, false},
+	0xC6: {"load_power", "load_power", 1, "W", true, 0, true},
+	0xC8: {"daily_load_consumption", "energy_load_today", 0.01, "kWh", false, 0, false},
+	0xC9: {"total_load_consumption", "energy_load_total", 0.1, "kWh", false, 0, true},
+	0xCB: {"grid_power", "grid_power", 1, "W", false, 0, true},
+	0xCD: {"daily_energy_sold", "energy_sold_today", 0.01, "kWh", false, 0, false},
+	0xCE: {"total_energy_sold", "energy_sold_total", 0.1, "kWh", false, 0, true},
+	0xD0: {"daily_energy_bought", "energy_bought_today", 0.01, "kWh", false, 0, false},
+	0xD1: {"total_energy_bought", "energy_bought_total", 0.1, "kWh", false, 0, true},
 }
 
-// mapDeyeRegisters строит человекочитаемые значения Deye string-инвертора
-// из набора регистров (по абсолютному адресу).
+// mapDeyeRegisters строит значения универсального контракта Deye string-инвертора
+// из набора регистров (по абсолютному адресу). Пишет по Tag (контрактное имя).
 func mapDeyeRegisters(regs map[uint16]uint16) map[string]any {
 	out := map[string]any{}
 	for addr, def := range deyeRegMap {
@@ -325,9 +386,9 @@ func mapDeyeRegisters(regs map[uint16]uint16) map[string]any {
 			}
 			iv := int(int16(v))
 			if def.Signed {
-				out[def.Name] = float64(iv)*def.Ratio + def.Offset
+				out[def.Tag] = float64(iv)*def.Ratio + def.Offset
 			} else {
-				out[def.Name] = float64(v)*def.Ratio + def.Offset
+				out[def.Tag] = float64(v)*def.Ratio + def.Offset
 			}
 			continue
 		}
@@ -339,9 +400,9 @@ func mapDeyeRegisters(regs map[uint16]uint16) map[string]any {
 		}
 		val := uint32(hi)<<16 | uint32(lo)
 		if def.Signed {
-			out[def.Name] = float64(int32(val))*def.Ratio + def.Offset
+			out[def.Tag] = float64(int32(val))*def.Ratio + def.Offset
 		} else {
-			out[def.Name] = float64(val)*def.Ratio + def.Offset
+			out[def.Tag] = float64(val)*def.Ratio + def.Offset
 		}
 	}
 	return out
@@ -441,7 +502,7 @@ func pollDevice(t invTarget) DeviceResult {
 		}
 		if len(result) > 0 {
 			res.HasData = true
-			res.Values = mapRegisters(result)
+			res.Values = mapSofarRegisters(result)
 		}
 		regsByAddr = result
 	}
