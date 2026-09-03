@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -30,8 +33,10 @@ const (
 
 // invTarget — целевой инвертор. LoggerSN — серийный номер даталоггера,
 // обязателен для Deye (иначе логгер отвечает кодом 0x06 "serial number not match").
+// Name — логическое имя из config.json (например, "Deye Left").
 type invTarget struct {
 	IP       string
+	Name     string
 	LoggerSN uint32
 	Kind     targetKind
 }
@@ -39,6 +44,7 @@ type invTarget struct {
 // configTarget — запись инвертора в config.json.
 type configTarget struct {
 	IP       string `json:"ip"`
+	Name     string `json:"name"`
 	Type     string `json:"type"`
 	LoggerSN uint32 `json:"logger_sn"`
 }
@@ -83,61 +89,15 @@ func loadConfig(path string) ([]invTarget, error) {
 		if t.IP == "" {
 			return nil, fmt.Errorf("config %s: пустой ip (type=%s)", path, t.Type)
 		}
-		targets = append(targets, invTarget{IP: t.IP, LoggerSN: t.LoggerSN, Kind: kind})
+		if t.Name == "" {
+			return nil, fmt.Errorf("config %s: пустое логическое имя name для %s", path, t.IP)
+		}
+		targets = append(targets, invTarget{IP: t.IP, Name: t.Name, LoggerSN: t.LoggerSN, Kind: kind})
 	}
 	return targets, nil
 }
 
 var targets []invTarget
-
-type regDef struct {
-	Name  string
-	Ratio float64
-	Unit  string
-}
-
-var regMap = map[uint16]regDef{
-	0x0000: {"inverter_status", 1, ""},
-	0x0001: {"fault_1", 1, ""},
-	0x0002: {"fault_2", 1, ""},
-	0x0003: {"fault_3", 1, ""},
-	0x0004: {"fault_4", 1, ""},
-	0x0005: {"fault_5", 1, ""},
-	0x0006: {"pv1_voltage", 0.1, "V"},
-	0x0007: {"pv1_current", 0.01, "A"},
-	0x0008: {"pv2_voltage", 0.1, "V"},
-	0x0009: {"pv2_current", 0.01, "A"},
-	0x000A: {"pv1_power", 10, "W"},
-	0x000B: {"pv2_power", 10, "W"},
-	0x000C: {"ac_active_power", 10, "W"},
-	0x000D: {"ac_reactive_power", 10, "var"},
-	0x000E: {"grid_frequency", 0.01, "Hz"},
-	0x000F: {"l1_voltage", 0.1, "V"},
-	0x0010: {"l1_current", 0.01, "A"},
-	0x0011: {"l2_voltage", 0.1, "V"},
-	0x0012: {"l2_current", 0.01, "A"},
-	0x0013: {"l3_voltage", 0.1, "V"},
-	0x0014: {"l3_current", 0.01, "A"},
-	0x0015: {"energy_total_hi", 1, ""},
-	0x0016: {"energy_total_lo", 1, ""},
-	0x0017: {"time_total_hi", 1, ""},
-	0x0018: {"time_total_lo", 1, ""},
-	0x0019: {"energy_today", 0.01, "kWh"},
-	0x001A: {"time_today", 1, "min"},
-	0x001B: {"temperature_module", 1, "C"},
-	0x001C: {"temperature_inner", 1, "C"},
-	0x001D: {"bus_voltage", 0.1, "V"},
-	0x001E: {"pv1_sample_cpu_voltage", 0.1, "V"},
-	0x001F: {"pv1_sample_cpu_current", 0.01, "A"},
-	0x0020: {"countdown_time", 1, "s"},
-	0x0021: {"alert", 1, ""},
-	0x0022: {"input_mode", 1, ""},
-	0x0023: {"comm_board_msg", 1, ""},
-	0x0024: {"insulation_pv1_to_ground", 1, "Ohm"},
-	0x0025: {"insulation_pv2_to_ground", 1, "Ohm"},
-	0x0026: {"insulation_pv_minus_to_ground", 1, "Ohm"},
-	0x0027: {"country", 1, ""},
-}
 
 var statusNames = map[uint16]string{
 	0: "standby", 1: "self-checking", 2: "normal", 3: "fault", 4: "permanent",
@@ -164,22 +124,107 @@ var countries = map[uint16]string{
 	26: "Philippines", 27: "New Zealand",
 }
 
+// valuesContract — универсальный контракт значений. В файл выводит ТОЛЬКО общие
+// для обеих марок теги (commonContractTags) в фиксированном порядке; числовые значения
+// тегов *voltage / *current / temperature* / energy* / *power округляются до 1 знака
+// после запятой.
+type valuesContract map[string]any
+
+// commonContractTags — теги, которые обе марки (Deye и Sofar) отдают в одинаковых
+// единицах измерения. Только эти теги попадают в values; порядок в файле фиксирован.
+var commonContractTags = []string{
+	// PV входы
+	"pv1_voltage", "pv1_current",
+	"pv2_voltage", "pv2_current",
+	// AC выход
+	"ac_active_power",
+	"ac_reactive_power",
+	"grid_frequency",
+	// Фазы L1/L2/L3
+	"l1_voltage", "l1_current",
+	"l2_voltage", "l2_current",
+	"l3_voltage", "l3_current",
+	// Энергия
+	"energy_today",
+	"energy_total",
+}
+
+// needsRounding — true, если тэг относится к величинам, которые округляются до
+// 1 знака после запятой (напряжение, ток, мощность, энергия, температура).
+func needsRounding(tag string) bool {
+	return strings.HasSuffix(tag, "voltage") ||
+		strings.HasSuffix(tag, "current") ||
+		strings.HasSuffix(tag, "power") ||
+		strings.Contains(tag, "energy") ||
+		strings.Contains(tag, "temperature")
+}
+
+// round1 округляет числовое значение до 1 знака после запятой (для тегов,
+// для которых needsRounding). Числа возвращает как float, прочее — как есть.
+func round1(tag string, v any) any {
+	if !needsRounding(tag) {
+		return v
+	}
+	switch n := v.(type) {
+	case int:
+		return math.Round(float64(n)*10) / 10
+	case float64:
+		return math.Round(n*10) / 10
+	}
+	return v
+}
+
+// MarshalJSON выводит только общие теги (commonContractTags) в фиксированном
+// порядке; отсутствующие пропускаются. Значения числовых тегов округляются
+// до 1 знака после запятой (round1).
+func (v valuesContract) MarshalJSON() ([]byte, error) {
+	if len(v) == 0 {
+		return []byte("{}"), nil
+	}
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	first := true
+	for _, key := range commonContractTags {
+		raw, ok := v[key]
+		if !ok {
+			continue
+		}
+		k, err := json.Marshal(key)
+		if err != nil {
+			return nil, err
+		}
+		val, err := json.Marshal(round1(key, raw))
+		if err != nil {
+			return nil, err
+		}
+		if !first {
+			buf.WriteByte(',')
+		}
+		first = false
+		buf.Write(k)
+		buf.WriteByte(':')
+		buf.Write(val)
+	}
+	buf.WriteByte('}')
+	return buf.Bytes(), nil
+}
+
 // DeviceResult — результат опроса одного инвертора. Поля для JSON-файла
-// отдельные (см. deviceSnapshot): имя файла содержит IP, внутри он не нужен.
+// отдельные (см. deviceSnapshot).
 type DeviceResult struct {
 	OK       bool
 	HasData  bool
 	DeviceSN string
-	Values   map[string]any
-	RawRegs  map[string]uint16
+	Values   valuesContract
 }
 
-// deviceSnapshot — упрощённая структура, сохраняемая в JSON-файл инвертора.
+// deviceSnapshot — структура, сохраняемая в JSON-файл инвертора.
 type deviceSnapshot struct {
-	Timestamp string            `json:"timestamp"`
-	DeviceSN  string            `json:"device_sn,omitempty"`
-	Values    map[string]any    `json:"values"`
-	RawRegs   map[string]uint16 `json:"raw_registers"`
+	Name     string         `json:"name"`
+	IP       string         `json:"ip"`
+	Timestamp string        `json:"timestamp"`
+	DeviceSN string         `json:"device_sn,omitempty"`
+	Values   valuesContract `json:"values"`
 }
 
 func int16val(v uint16) int {
@@ -199,31 +244,15 @@ func faultNames(mask uint16) []string {
 	return names
 }
 
-// Универсальный контракт значений (values) — одинаковые имена тегов и единицы
-// измерения для Deye и Sofar. Единицы зашиты в суффикс имени:
-//
-//	*_power     — W (активная/полная), ac_reactive_power — var
-//	*_voltage   — V, *_current — A
-//	grid_frequency — Hz
-//	energy_*    — kWh, *_today (мин) — min, time_total — h, uptime — min
-//	temperature_* — C, insulation_* — Ohm, bus_voltage — V
-//
-// Поля, которые даёт только один из брендов, присутствуют только у него;
-// общие поля (PV, AC, частота, энергия, температура) — с идентичными тегами.
-//
-// Ключевые универсальные теги:
-//   - inverter_status (string), fault_1..fault_5 ([]string), country (string) — Sofar
-//   - pv1/pv2_voltage/current/power, dc_total_power
-//   - ac_active_power, ac_apparent_power, ac_reactive_power
-//   - grid_frequency
-//   - l1/l2/l3_voltage/current, grid_l12/l23/l31_voltage (Deye)
-//   - energy_today, energy_total, energy_sold_*, energy_bought_*, energy_load_* (kWh)
-//   - grid_power, load_power (W)
-//   - time_today (min), time_total (h) — Sofar; uptime (min) — Deye
-//   - temperature_module/inner (Sofar), temperature_radiator/igbt (Deye)
+// Универсальный контракт значений (values) — в файл попадают ТОЛЬКО теги, которые
+// обе марки (Deye и Sofar) отдают в одинаковых единицах: 15 общих тегов
+// (commonContractTags). Единица зашита в суффикс имени: *_voltage — V, *_current — A,
+// ac_*_power — W (ac_reactive_power — var), grid_frequency — Hz, energy_* — kWh.
+// Числовые значения *voltage/*current/*power/energy*/temperature* округляются до
+// 1 знака (round1). Бренд-специфичные поля в values не попадают — они в raw_registers.
 
 // putSofarSimple пишет 16-битный регистр в контракт: int при ratio==1, иначе float.
-func putSofarSimple(out map[string]any, regs map[uint16]uint16, addr uint16, key string, ratio float64) {
+func putSofarSimple(out valuesContract, regs map[uint16]uint16, addr uint16, key string, ratio float64) {
 	v, ok := regs[addr]
 	if !ok {
 		return
@@ -236,7 +265,7 @@ func putSofarSimple(out map[string]any, regs map[uint16]uint16, addr uint16, key
 }
 
 // putSofarU32 пишет 32-битное значение (hi*65536+lo) с ratio.
-func putSofarU32(out map[string]any, regs map[uint16]uint16, hiAddr, loAddr uint16, key string, ratio float64) {
+func putSofarU32(out valuesContract, regs map[uint16]uint16, hiAddr, loAddr uint16, key string, ratio float64) {
 	hi, ok1 := regs[hiAddr]
 	lo, ok2 := regs[loAddr]
 	if !ok1 || !ok2 {
@@ -251,8 +280,8 @@ func putSofarU32(out map[string]any, regs map[uint16]uint16, hiAddr, loAddr uint
 }
 
 // mapSofarRegisters строит значения универсального контракта из блока 0x0000-0x0027.
-func mapSofarRegisters(regs map[uint16]uint16) map[string]any {
-	out := map[string]any{}
+func mapSofarRegisters(regs map[uint16]uint16) valuesContract {
+	out := valuesContract{}
 
 	if v, ok := regs[0x0000]; ok {
 		s, ok := statusNames[v]
@@ -376,8 +405,8 @@ var deyeRegMap = map[uint16]deyeSensor{
 
 // mapDeyeRegisters строит значения универсального контракта Deye string-инвертора
 // из набора регистров (по абсолютному адресу). Пишет по Tag (контрактное имя).
-func mapDeyeRegisters(regs map[uint16]uint16) map[string]any {
-	out := map[string]any{}
+func mapDeyeRegisters(regs map[uint16]uint16) valuesContract {
+	out := valuesContract{}
 	for addr, def := range deyeRegMap {
 		if !def.Double {
 			v, ok := regs[addr]
@@ -408,36 +437,6 @@ func mapDeyeRegisters(regs map[uint16]uint16) map[string]any {
 	return out
 }
 
-// buildRawRegNames строит таблицу «адрес регистра → имя» для raw_registers.
-// Имена берутся из regMap (Sofar) / deyeRegMap (Deye). Для 32-битных значений
-// (Sofar: hi/lo уже раздельно в regMap; Deye: Double) low word получает
-// «<имя>_lo», high word — «<имя>_hi». Адреса без имени (недокументированные
-// пробелы в диапазоне) остаются hex-адресом.
-func buildRawRegNames(kind targetKind) map[uint16]string {
-	names := map[uint16]string{}
-	switch kind {
-	case kindSofar:
-		for addr, def := range regMap {
-			names[addr] = def.Name
-		}
-	case kindDeyeString:
-		for addr, def := range deyeRegMap {
-			if def.Double {
-				names[addr] = def.Name + "_lo"
-				names[addr+1] = def.Name + "_hi"
-			} else {
-				names[addr] = def.Name
-			}
-		}
-	}
-	return names
-}
-
-var (
-	sofarRawRegNames = buildRawRegNames(kindSofar)
-	deyeRawRegNames  = buildRawRegNames(kindDeyeString)
-)
-
 func pollDevice(t invTarget) DeviceResult {
 	res := DeviceResult{OK: true}
 	client := solarman.NewClient(t.IP+":"+port, t.LoggerSN, timeout)
@@ -446,7 +445,6 @@ func pollDevice(t invTarget) DeviceResult {
 		client.IdleWindow = 8 * time.Second
 	}
 
-	var regsByAddr map[uint16]uint16
 	var frames []solarman.Frame
 
 	switch t.Kind {
@@ -471,7 +469,6 @@ func pollDevice(t invTarget) DeviceResult {
 			res.HasData = true
 			res.Values = mapDeyeRegisters(result)
 		}
-		regsByAddr = result
 
 	case kindSofar:
 		pdus, fr, err := client.ReadRegisters(0x0000, 0x0028)
@@ -504,7 +501,6 @@ func pollDevice(t invTarget) DeviceResult {
 			res.HasData = true
 			res.Values = mapSofarRegisters(result)
 		}
-		regsByAddr = result
 	}
 
 	for _, f := range frames {
@@ -514,21 +510,6 @@ func pollDevice(t invTarget) DeviceResult {
 		}
 	}
 
-	if regsByAddr == nil {
-		return res
-	}
-	names := sofarRawRegNames
-	if t.Kind == kindDeyeString {
-		names = deyeRawRegNames
-	}
-	res.RawRegs = make(map[string]uint16, len(regsByAddr))
-	for addr, v := range regsByAddr {
-		key := names[addr]
-		if key == "" {
-			key = fmt.Sprintf("0x%04X", addr)
-		}
-		res.RawRegs[key] = v
-	}
 	return res
 }
 
@@ -579,10 +560,11 @@ func main() {
 				continue
 			}
 			snap := deviceSnapshot{
+				Name:      targets[i].Name,
+				IP:        targets[i].IP,
 				Timestamp: ts,
 				DeviceSN:  res.DeviceSN,
 				Values:    res.Values,
-				RawRegs:   res.RawRegs,
 			}
 			b, err := json.MarshalIndent(snap, "", "  ")
 			if err != nil {
