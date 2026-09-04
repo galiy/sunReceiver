@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"math"
@@ -542,6 +544,12 @@ func pollDevice(t invTarget) DeviceResult {
 
 func main() {
 	log.SetFlags(log.Ltime)
+
+	redisAddr := flag.String("redis", "127.0.0.1:6379", "адрес Redis (хост:порт)")
+	saveFiles := flag.Bool("file", false, "дополнительно писать JSON-файлы в data/ (по умолчанию выключено)")
+	dashboardAddr := flag.String("dashboard", ":8080", "адрес веб-дашборда (пустая строка — выключить)")
+	flag.Parse()
+
 	cfgPath := configPath()
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
 		// `go run .`: бинарник во временном каталоге go-сборки — ищем config.json в CWD.
@@ -553,6 +561,17 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("poller started: config=%s targets=%v period=%s", cfgPath, targets, pollPeriod)
+
+	rdb, err := openRedis(*redisAddr)
+	if err != nil {
+		log.Fatalf("redis: %v", err)
+	}
+	defer rdb.Close()
+	store := &redisStore{rdb: rdb, ctx: context.Background()}
+
+	if *dashboardAddr != "" {
+		go serveDashboard(*dashboardAddr, store)
+	}
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -575,15 +594,11 @@ func main() {
 		}
 		wg.Wait()
 
-		dayDir := filepath.Join(outDir, now.Format("2006-01-02"))
-		if err := os.MkdirAll(dayDir, 0o755); err != nil {
-			log.Printf("mkdir %s: %v", dayDir, err)
-			return
-		}
 		ts := now.Format(time.RFC3339)
+		var savedAny bool
 		for i, res := range results {
 			if !res.OK || !res.HasData {
-				// heartbeat_only / no data / ошибка — файл не сохраняем
+				// heartbeat_only / no data / ошибка — снимок не сохраняем
 				continue
 			}
 			snap := deviceSnapshot{
@@ -593,17 +608,20 @@ func main() {
 				DeviceSN:  res.DeviceSN,
 				Values:    res.Values,
 			}
-			b, err := json.MarshalIndent(snap, "", "  ")
-			if err != nil {
-				log.Printf("marshal %s: %v", targets[i].IP, err)
+			if err := store.SaveSnapshot(snap, now); err != nil {
+				log.Printf("redis save %s: %v", targets[i].IP, err)
 				continue
 			}
-			path := filepath.Join(dayDir, targets[i].IP+"-"+now.Format("150405")+".json")
-			if err := os.WriteFile(path, b, 0o644); err != nil {
-				log.Printf("write %s: %v", path, err)
-				continue
-			}
-			log.Printf("saved %s", path)
+			savedAny = true
+			log.Printf("saved %s: %s", targets[i].Name, targets[i].IP)
+		}
+		if !savedAny {
+			log.Println("no snapshot saved this cycle")
+		}
+
+		// JSON-файлы в data/ пишутся только по флагу -file.
+		if *saveFiles {
+			writeFiles(results, now, ts)
 		}
 	}
 
@@ -627,4 +645,37 @@ func describeResult(res DeviceResult) string {
 		return "data=OK registers"
 	}
 	return "heartbeat_only"
+}
+
+// writeFiles сохраняет снимки в JSON-файлы в data/<YYYY-MM-DD>/<IP>-<HHMMSS>.json.
+// Вызывается только при флаге -file: по умолчанию данные пишутся в Redis.
+func writeFiles(results []DeviceResult, now time.Time, ts string) {
+	dayDir := filepath.Join(outDir, now.Format("2006-01-02"))
+	if err := os.MkdirAll(dayDir, 0o755); err != nil {
+		log.Printf("mkdir %s: %v", dayDir, err)
+		return
+	}
+	for i, res := range results {
+		if !res.OK || !res.HasData {
+			continue
+		}
+		snap := deviceSnapshot{
+			Name:      targets[i].Name,
+			IP:        targets[i].IP,
+			Timestamp: ts,
+			DeviceSN:  res.DeviceSN,
+			Values:    res.Values,
+		}
+		b, err := json.MarshalIndent(snap, "", "  ")
+		if err != nil {
+			log.Printf("marshal %s: %v", targets[i].IP, err)
+			continue
+		}
+		path := filepath.Join(dayDir, targets[i].IP+"-"+now.Format("150405")+".json")
+		if err := os.WriteFile(path, b, 0o644); err != nil {
+			log.Printf("write %s: %v", path, err)
+			continue
+		}
+		log.Printf("saved %s", path)
+	}
 }
