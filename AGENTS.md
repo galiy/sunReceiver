@@ -1,6 +1,6 @@
 # sunReceiver
 
-Go-приложение, которое опрашивает solar-инверторы через их WiFi-даталоггеры (Solarman LSW-3/LSE, порт 8899, TCP) и сохраняет распарсенные данные в JSON.
+Go-приложение, которое опрашивает solar-инверторы через их WiFi-даталоггеры (Solarman LSW-3/LSE, порт 8899, TCP) и сохраняет распарсенные данные в Redis (in-memory, без persistent storage) + опционально в JSON-файлы. Включает веб-дашборд текущих параметров.
 
 Язык/команды: Go 1.26, `go run .` — запуск, `go vet ./...` — проверки. Коммиты писать по-русски, как в истории репо. После каждого тестового запуска чистить папку `data/` (`rm -rf data`, в .gitignore она уже есть).
 
@@ -78,7 +78,15 @@ Deye-логгеры (LSE, rebrand Solarman) понимают Solarman V5-кад�
 
 ## Текущее состояние кода
 - `solarman/` — пакет-клиент Solarman V5: `BuildReadFrame` (12-байтный datafield, для Sofar), `BuildDeyeReadFrame` (15-байтный datafield + реальный SN, для Deye), `SplitFrames` (длина кадра = **11** + PayloadLen + 2, префикс A5+len+control+serial+SN), `ParseModbusPDU` (01 03/04 | bytecount | data | crc16 LE), `Checksum8` (sum[1:len-2] mod 256), `CRC16Modbus` (стандартный, в PDU пишется LE).
-- `main.go` — poller: каждые 10 с параллельно (goroutine) TCP-опрос целей из `config.json` (порт 8899). Список целей читается из **`config.json` рядом с бинарником** (`os.Executable()`; при `go run .` — fallback в CWD) через `loadConfig` в `targets []invTarget` {IP, Name, LoggerSN, Kind}: `type` "deye"→`kindDeyeString`, "sofar"→`kindSofar`. `name` — **логическое имя** инвертора (обязательное поле, напр. `Deye Left`, `Sofar-2.5`, `Bineos Right`). Deye — реальный SN даталоггера (`ReadRegistersDeye`), Sofar — `ReadRegisters` (отвечает и при реальном SN). Маппинг регистров: Sofar — в `mapSofarRegisters` (регистрации 0x0000-0x0027), Deye string — в `deyeRegMap`/`mapDeyeRegisters` (у каждого сенсора `Tag` — имя контракта в values). JSON: на каждый инвертор отдельный файл `data/<YYYY-MM-DD>/<IP>-<HHMMSS>.json` (дата в директории, время опроса и IP — в имени файла). Файл пишется только при успешном чтении данных (`HasData`); при `heartbeat_only`/`no data`/ошибке не сохраняется. Структура: **`{name, ip, timestamp, device_sn, values}`**. `name`/`ip` — из config.json; `values` — **универсальный контракт** (см. ниже). **`raw_registers` в файл НЕ записывается** — только 15 общих тегов.
+- `main.go` — poller: каждые 10 с параллельно (goroutine) TCP-опрос целей из `config.json` (порт 8899). Список целей читается из **`config.json` рядом с бинарником** (`os.Executable()`; при `go run .` — fallback в CWD) через `loadConfig` в `targets []invTarget` {IP, Name, LoggerSN, Kind}: `type` "deye"→`kindDeyeString`, "sofar"→`kindSofar`. `name` — **логическое имя** инвертора (обязательное поле, напр. `Deye Left`, `Sofar-2.5`, `Bineos Right`). Deye — реальный SN даталоггера (`ReadRegistersDeye`), Sofar — `ReadRegisters` (отвечает и при реальном SN). Маппинг регистров: Sofar — в `mapSofarRegisters` (регистрации 0x0000-0x0027), Deye string — в `deyeRegMap`/`mapDeyeRegisters` (у каждого сенсора `Tag` — имя контракта в values). По умолчанию результаты сохраняются **в Redis** (`redis_store.go`); запись JSON-файлов в `data/` — **только по флагу `-file`** (код вынесен в `writeFiles`). Флаги CLI: `-redis <addr>` (по умолч. `127.0.0.1:6379`), `-dashboard <addr>` (по умолч. `:8080`, пустая строка выключает), `-file`. Веб-дашборд — `dashboard.go`. Снимок (структура `deviceSnapshot`: **`{name, ip, timestamp, device_sn, values}`**) отправляется только при успешном чтении данных (`HasData`); при `heartbeat_only`/`no data`/ошибке не сохраняется. `name`/`ip` — из config.json; `values` — **универсальный контракт** (см. ниже). **`raw_registers` в снимок НЕ пишется** — только 15 общих тегов.
+
+### Redis-хранилище (`redis_store.go`) и веб-дашборд (`dashboard.go`)
+- Redis запускается **без persistent storage**: `redis-server --save "" --appendonly no` (in-memory only). Клиент — `github.com/redis/go-redis/v9`.
+- Ключи:
+  - **`sunreceiver:current`** — HASH текущих (последних) значений: поле=IP инвертора, значение=JSON `deviceSnapshot`. Один `HGETALL` отдаёт состояние всех инверторов — именно его читает дашборд.
+  - **`sunreceiver:series:<YYYY-MM>`** — временной ряд, месячный сегмент = ZSET: score=Unix (сек.), member=JSON `deviceSnapshot`. Чтение произвольного периода (`QuerySeries`) = `ZRANGEBYSCORE` по затронутым месяцам, отсортировано по времени — эффективное чтение всего набора за период. На активный сегмент ставится TTL ~40 дней.
+- Сохранение снимка одним циклом: `HSet(current, ip, snap)` + `ZAdd(series, epoch, snap)` (PIPELINE/TxPipeline).
+- Дашборд: HTTP-сервер читает `HGETALL sunreceiver:current` и отдаёт JSON по `/api/current`. Сам дашборд **не пишет в Redis** — только репликация/запуск через `-dashboard` флаг в poller (см. ниже). Для старого UI (движок `github.com/badafit/gohttpmetrics`) вхождение в `go.mod` не требуется.
 
 ### Универсальный контракт `values` (одинаков для Deye и Sofar)
 `values` хранит **только общие для обеих марок теги** (15 штук, `commonContractTags` в `main.go`) с **одинаковыми именами и единицами измерения**; единица зашита в суффикс имени. Бренд-специфичные поля в файл **не пишутся**. Значения тегов `*voltage`/`*current`/`*power`/`energy*`/`temperature*` **округляются до 1 знака** после запятой (`round1`). Порядок тегов в файле фиксирован и **одинаков для обеих марок**. Полное описание каждого тега — в `docs/universal-contract.md`.
@@ -110,6 +118,8 @@ Deye-логгеры (LSE, rebrand Solarman) понимают Solarman V5-кад�
 3. ~~Deye string: чтение регистров~~ — готово (BuildDeyeReadFrame + deyeRegMap + poller).
 4. ~~Именование raw_registers~~ — готово (имена из SOFARMap.xml / kbialek string-группы; 32-битные — `_lo`/`_hi`; недокументированные — hex).
 5. ~~Универсальный контракт значений~~ — готово: одинаковые имена тегов и единицы измерения для Deye и Sofar в `values` (см. «Универсальный контракт `values`»). Остальное по желанию: чтение настроек/др. диапазонов Deye, мониторинг microinverters, тесты.
+6. ~~Redis-хранилище без persistent storage~~ — готово (`redis_store.go`): HASH `current` + месячные ZSET `series:<YYYY-MM>`, запись вместо JSON-файлов (файлы — по флагу `-file`), TTL на сегмент.
+7. ~~Веб-дашборд текущих параметров~~ — готово (`dashboard.go`): HTML + `/api/current` из `HGETALL sunreceiver:current`, запускается в poller по флагу `-dashboard`.
 
 ## Окружение
 - Репо: github.com/galiy/sunReceiver (remote git@github.com:galiy/sunReceiver.git, branch main).
