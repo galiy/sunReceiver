@@ -23,6 +23,7 @@ type dashboardHandler struct {
 type currentResponse struct {
 	GeneratedAt string           `json:"generated_at"`
 	TotalPower  float64          `json:"total_power"`
+	TotalPV     float64          `json:"total_pv"`
 	Devices     []deviceSnapshot `json:"devices"`
 }
 
@@ -132,6 +133,11 @@ h1 { font-size:22px; margin:0 0 4px; }
     <div class="kpi-value"><span id="kpiTotal">—</span><span class="kpi-unit">W</span></div>
     <div class="kpi-sub" id="kpiSub">Нет данных</div>
   </div>
+  <div class="kpi-plate">
+    <div class="kpi-label">Суммарная мощность PV</div>
+    <div class="kpi-value"><span id="kpiPV">—</span><span class="kpi-unit">W</span></div>
+    <div class="kpi-sub" id="kpiPVSub">Нет данных</div>
+  </div>
 </div>
 
 <div class="period-panel">
@@ -225,6 +231,14 @@ async function tick(){
 		}else{
 			kpiEl.textContent='—';
 			document.getElementById('kpiSub').textContent='Нет данных';
+		}
+		// Плашка суммарной мощности PV
+		var pvEl=document.getElementById('kpiPV');
+		var pv=Number(data.total_pv);
+		if(isFinite(pv) && data.total_pv>0){
+			pvEl.textContent=pv.toLocaleString('ru-RU',{maximumFractionDigits:1});
+		}else{
+			pvEl.textContent='—';
 		}
 		var cards=document.getElementById('cards');
 		cards.innerHTML = renderPivot(data.devices);
@@ -402,17 +416,26 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.SliceStable(devices, func(i, j int) bool { return devices[i].Name < devices[j].Name })
 	var total float64
+	var totalPV float64
 	for _, d := range devices {
 		if v, ok := snapFloat(d.Values, "ac_active_power"); ok {
 			total += v
 		}
+		if v, ok := snapFloat(d.Values, "pv1_power"); ok {
+			totalPV += v
+		}
+		if v, ok := snapFloat(d.Values, "pv2_power"); ok {
+			totalPV += v
+		}
 	}
 	total = math.Round(total*10) / 10
+	totalPV = math.Round(totalPV*10) / 10
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(currentResponse{
 		GeneratedAt: time.Now().Format(time.RFC3339),
 		TotalPower:  total,
+		TotalPV:     totalPV,
 		Devices:     devices,
 	})
 }
