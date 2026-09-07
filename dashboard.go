@@ -185,8 +185,6 @@ var PARAMS = [
 	['ac_active_power','Активная мощность','W'], ['ac_reactive_power','Реактивная мощность','var'],
 	['grid_frequency','Частота сети','Hz'],
 	['l1_voltage','Напряжение L1','V'], ['l1_current','Ток L1','A'],
-	['l2_voltage','Напряжение L2','V'], ['l2_current','Ток L2','A'],
-	['l3_voltage','Напряжение L3','V'], ['l3_current','Ток L3','A'],
 	['energy_today','Выработка сегодня','kWh'], ['energy_total','Выработка всего','kWh']
 ];
 // devValue возвращает строковое значение тега инвертора или null, если его нет.

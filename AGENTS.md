@@ -1,6 +1,6 @@
 # sunReceiver
 
-Go-приложение, которое опрашивает solar-инверторы через их WiFi-даталоггеры (Solarman LSW-3/LSE, порт 8899, TCP) и сохраняет распарсенные данные в Redis (in-memory, без persistent storage) + опционально в JSON-файлы. Включает веб-дашборд текущих параметров.
+Go-приложение, которое опрашивает solar-инверторы через их WiFi-даталоггеры (Solarman LSW-3/LSE, порт 8899, TCP) и сохраняет распарсенные данные в Redis (с persistence RDB+AOF) + опционально в JSON-файлы. При полностью пустом Redis данные восстанавливаются из PostgreSQL. Включает веб-дашборд текущих параметров.
 
 Язык/команды: Go 1.26, `go run .` — запуск, `go vet ./...` — проверки. Коммиты писать по-русски, как в истории репо. После каждого тестового запуска чистить папку `data/` (`rm -rf data`, в .gitignore она уже есть).
 
@@ -87,7 +87,7 @@ Deye-логгеры (LSE, rebrand Solarman) понимают Solarman V5-кад�
 - **PostgreSQL хранит всю историю как усреднённые 5-минутные точки** в таблице `sunreceiver.averages` (PK `(ip, ts)`, ts = начало 5-минутного промежутка). Усредняется каждый числовой тег `values` (для `ac_active_power` и пр. — среднее за окно). Точки старше двух календарных суток живут только здесь и никогда не удаляются.
 
 #### Redis-хранилище (`redis_store.go`)
-- Redis запускается **без persistent storage**: `redis-server --save "" --appendonly no` (in-memory only). Клиент — `github.com/redis/go-redis/v9`.
+- Redis запускается **с persistent storage**: `redis-server --port 6379 --dir <data-dir> --save 900 1 --save 300 10 --appendonly yes` (RDB-снимки + AOF), данные живут в `<data-dir>` (используется `~/.cache/sunreceiver-redis`), поэтому не исчезают при перезапусках. Клиент — `github.com/redis/go-redis/v9`. При **полностью пустом** Redis при старте (например, очистили Redis) poller восстанавливает в нём данные из PostgreSQL (`restoreRedisFromPG` → `pg.Averages` за окно 2 календарных суток), после чего persist их сохраняет.
 - Ключи:
   - **`sunreceiver:current`** — HASH текущих (последних) значений: поле=IP инвертора, значение=JSON `deviceSnapshot`. Один `HGETALL` отдаёт состояние всех инверторов — именно его читает дашборд для `/api/current`. Чистке старого не подлежит (хранится последнее состояние).
   - **`sunreceiver:series:<YYYY-MM>`** — временной ряд, месячный сегмент = ZSET: score=Unix (сек.), member=JSON `deviceSnapshot`. Чтение произвольного периода (`QuerySeries`) = `ZRANGEBYSCORE` по затронутым месяцам, отсортировано по времени. Хранятся данные за последние 2 календарных суток; старые удаляются `PurgeOld`/`runRedisCleanup`.
@@ -139,7 +139,7 @@ Deye-логгеры (LSE, rebrand Solarman) понимают Solarman V5-кад�
 3. ~~Deye string: чтение регистров~~ — готово (BuildDeyeReadFrame + deyeRegMap + poller).
 4. ~~Именование raw_registers~~ — готово (имена из SOFARMap.xml / kbialek string-группы; 32-битные — `_lo`/`_hi`; недокументированные — hex).
 5. ~~Универсальный контракт значений~~ — готово: одинаковые имена тегов и единицы измерения для Deye и Sofar в `values` (см. «Универсальный контракт `values`»). Остальное по желанию: чтение настроек/др. диапазонов Deye, мониторинг microinverters, тесты.
-6. ~~Redis-хранилище без persistent storage~~ — готово (`redis_store.go`): HASH `current` + месячные ZSET `series:<YYYY-MM>`, запись вместо JSON-файлов (файлы — по флагу `-file`), TTL на сегмент.
+6. ~~Redis-хранилище~~ — готово (`redis_store.go`): HASH `current` + месячные ZSET `series:<YYYY-MM>`, запись вместо JSON-файлов (файлы — по флагу `-file`), TTL на сегмент; Redis с persistence (RDB+AOF), при пустом Redis данные восстанавливаются из PG.
 7. ~~Веб-дашборд текущих параметров~~ — готово (`dashboard.go`): HTML + `/api/current` из `HGETALL sunreceiver:current`, запускается в poller по флагу `-dashboard`.
 8. ~~Redis — только последние 2 календарных суток + фоновая очистка~~ — готово (`accumulator.go`: `runRedisCleanup`/`redisStore.PurgeOld`, cutoff `recentCutoff`).
 9. ~~PostgreSQL — только 5-минутные усреднённые точки~~ — готово (`pg_store.go`: таблица `averages`, `InsertAveraged`/`Averages`, миграция legacy `snapshots`→`averages`; запись из poller убрана, усреднение в фоне `runAccumulator`).
