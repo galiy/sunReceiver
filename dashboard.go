@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"html/template"
 	"log"
+	"math"
 	"net/http"
 	"sort"
 	"time"
@@ -18,6 +19,7 @@ type dashboardHandler struct {
 // currentResponse отвечает на GET /api/current.
 type currentResponse struct {
 	GeneratedAt string           `json:"generated_at"`
+	TotalPower  float64          `json:"total_power"`
 	Devices     []deviceSnapshot `json:"devices"`
 }
 
@@ -41,6 +43,7 @@ type seriesResponse struct {
 	From        string         `json:"from"`
 	To          string         `json:"to"`
 	Series      []deviceSeries `json:"series"`
+	Total       []seriesPoint  `json:"total,omitempty"`
 }
 
 // seriesPalette — цвета линий инверторов (по индексу после сортировки по имени).
@@ -80,43 +83,84 @@ const dashboardPage = `<!DOCTYPE html>
 <style>
 :root { color-scheme: dark; }
 * { box-sizing: border-box; }
-body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0f1115; color:#e6e6e6; margin:0; padding:20px; }
+body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0f1115; color:#e6e6e6; margin:0; padding:20px; overflow-x:hidden; }
 h1 { font-size:22px; margin:0 0 4px; }
 .sub { color:#8a93a1; margin:0 0 20px; font-size:13px; }
-#chartbox { background:#181c24; border:1px solid #252b36; border-radius:10px; padding:16px; margin-bottom:20px; }
+#chartbox { background:#181c24; border:1px solid #252b36; border-radius:10px; padding:16px; margin-bottom:20px; max-width:100%; }
 #chartbox h2 { margin:0 0 8px; font-size:16px; }
-.chart-toolbar { display:flex; align-items:center; gap:12px; margin-bottom:8px; font-size:13px; color:#8a93a1; }
+.chart-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:10px 12px; margin-bottom:8px; font-size:13px; color:#8a93a1; }
 .chart-toolbar button { background:#252b36; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:4px 10px; cursor:pointer; font-size:13px; }
 .chart-toolbar button:hover { background:#2f3644; }
+.period-panel { display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px; font-size:13px; color:#8a93a1; }
+.period-panel button { background:#252b36; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:5px 12px; cursor:pointer; font-size:13px; }
+.period-panel button:hover { background:#2f3644; }
+.period-panel button.active { background:#2f6fed; border-color:#2f6fed; color:#fff; }
+.period-panel input[type=date] { background:#181c24; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:4px 8px; font-size:13px; color-scheme:dark; }
+.period-panel input[type=date]:focus { outline:none; border-color:#2f6fed; }
 .chart-wrap { position:relative; height:340px; }
-.cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:16px; }
-.card { background:#181c24; border:1px solid #252b36; border-radius:10px; padding:16px; }
-.card h2 { margin:0 0 12px; font-size:16px; display:flex; justify-content:space-between; align-items:center; }
+.charts { display:flex; flex-wrap:wrap; gap:16px; margin-bottom:20px; }
+.charts #chartbox { flex:1 1 46%; min-width:min(420px,100%); margin-bottom:0; }
+.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr)); gap:12px; width:100%; }
+.card { background:#181c24; border:1px solid #252b36; border-radius:10px; padding:14px 16px; min-width:0; max-width:100%; overflow:hidden; }
+.card h2 { margin:0 0 12px; font-size:16px; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }
 .card .badge { font-size:12px; color:#0f1115; background:#3fb950; padding:2px 8px; border-radius:20px; }
 .card .ts { font-size:12px; color:#8a93a1; font-weight:normal; }
-.groups { display:flex; flex-direction:column; gap:12px; }
+.card .groups { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(140px,100%),1fr)); gap:12px; }
 .group h3 { margin:0 0 6px; font-size:12px; color:#8a93a1; text-transform:uppercase; letter-spacing:.05em; }
-.rows { display:flex; flex-direction:column; gap:4px; }
-.row { display:flex; justify-content:space-between; font-size:14px; }
-.row .k { color:#aab3bf; }
-.row .v { font-variant-numeric:tabular-nums; font-weight:600; }
-.row .u { color:#8a93a1; font-weight:400; font-size:12px; }
+.rows { display:flex; flex-direction:column; gap:5px; }
+.row { display:grid; grid-template-columns:minmax(0,1fr) max-content; gap:0 10px; align-items:baseline; font-size:13px; line-height:1.3; }
+.row .k { color:#aab3bf; min-width:0; }
+.row .v { font-variant-numeric:tabular-nums; font-weight:600; text-align:right; justify-self:end; }
+.row .u { color:#8a93a1; font-weight:400; font-size:12px; margin-left:2px; }
 .missing { color:#6b7280; font-style:italic; }
+.kpi { display:flex; align-items:stretch; gap:16px; margin-bottom:20px; }
+.kpi-plate { flex:1; background:linear-gradient(135deg,#1d2430,#202a3a); border:1px solid #2a3342; border-radius:12px; padding:18px 22px; display:flex; flex-direction:column; gap:4px; }
+.kpi-label { font-size:12px; color:#8a93a1; text-transform:uppercase; letter-spacing:.06em; }
+.kpi-value { font-size:52px; font-weight:700; line-height:1; font-variant-numeric:tabular-nums; }
+.kpi-unit { font-size:20px; font-weight:400; color:#8a93a1; margin-left:6px; }
+.kpi-sub { font-size:12px; color:#6b7280; }
 </style>
 </head>
 <body>
 <h1>SunReceiver</h1>
 <p class="sub">Текущие параметры инверторов (из Redis, обновление каждые 5&nbsp;с)</p>
 
-<div id="chartbox">
-  <h2>Ac active power, W</h2>
-  <div class="chart-toolbar">
-    <span id="chartRange"></span>
-    <button id="btnToday">Сегодня</button>
-    <button id="btnReset">Сброс зума</button>
-    <span>Зум: колесо / drag&ndash;панорама</span>
+<div class="kpi">
+  <div class="kpi-plate">
+    <div class="kpi-label">Суммарная активная мощность</div>
+    <div class="kpi-value"><span id="kpiTotal">—</span><span class="kpi-unit">W</span></div>
+    <div class="kpi-sub" id="kpiSub">Нет данных</div>
   </div>
-  <div class="chart-wrap"><canvas id="powerChart"></canvas></div>
+</div>
+
+<div class="period-panel">
+  <button id="btnToday">Сегодня</button>
+  <button id="btnYesterday">Вчера</button>
+  <button id="btn7d">7 дней</button>
+  <input type="date" id="datePick" title="Выбрать день">
+  <button id="btnDate">За выбранный день</button>
+</div>
+
+<div class="charts">
+  <div id="chartbox">
+    <h2>Суммарная активная мощность, W</h2>
+    <div class="chart-toolbar">
+      <span id="totalChartRange"></span>
+      <button id="btnTotalReset">Сброс зума</button>
+      <span>Зум: колесо / drag&ndash;панорама</span>
+    </div>
+    <div class="chart-wrap"><canvas id="totalChart"></canvas></div>
+  </div>
+
+  <div id="chartbox">
+    <h2>Активная мощность по инверторам, W</h2>
+    <div class="chart-toolbar">
+      <span id="chartRange"></span>
+      <button id="btnReset">Сброс зума</button>
+      <span>Зум: колесо / drag&ndash;панорама</span>
+    </div>
+    <div class="chart-wrap"><canvas id="powerChart"></canvas></div>
+  </div>
 </div>
 
 <div class="cards" id="cards"><div class="missing">Загрузка...</div></div>
@@ -127,19 +171,21 @@ h1 { font-size:22px; margin:0 0 4px; }
 // ---------- Утилиты ----------
 function esc(s){ return String(s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
 function fmt(t){ var d=new Date(t); function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes()); }
+function fmtSec(t){ var d=new Date(t); function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds()); }
 function startOfToday(){ var d=new Date(); d.setHours(0,0,0,0); return d; }
 function endOfToday(){ var d=new Date(); d.setHours(23,59,59,999); return d; }
 
-// ---------- Табличка текущих параметров ----------
+// ---------- Таблички текущих параметров ----------
+// Каждый тег: смысловая подпись по-русски + единица измерения.
 var sel = {
-	pv1_voltage:['PV1','V'],pv1_current:['PV1 I','A'],pv1_power:['PV1 P','W'],
-	pv2_voltage:['PV2','V'],pv2_current:['PV2 I','A'],pv2_power:['PV2 P','W'],
-	ac_active_power:['Akt','W'],ac_reactive_power:['Reakt','var'],
-	grid_frequency:['Freq','Hz'],
-	l1_voltage:['L1','V'],l1_current:['L1 I','A'],
-	l2_voltage:['L2','V'],l2_current:['L2 I','A'],
-	l3_voltage:['L3','V'],l3_current:['L3 I','A'],
-	energy_today:['Today','kWh'],energy_total:['Total','kWh']
+	pv1_voltage:['Напряжение PV1','V'],pv1_current:['Ток PV1','A'],pv1_power:['Мощность PV1','W'],
+	pv2_voltage:['Напряжение PV2','V'],pv2_current:['Ток PV2','A'],pv2_power:['Мощность PV2','W'],
+	ac_active_power:['Активная мощность','W'],ac_reactive_power:['Реактивная мощность','var'],
+	grid_frequency:['Частота сети','Hz'],
+	l1_voltage:['Напряжение L1','V'],l1_current:['Ток L1','A'],
+	l2_voltage:['Напряжение L2','V'],l2_current:['Ток L2','A'],
+	l3_voltage:['Напряжение L3','V'],l3_current:['Ток L3','A'],
+	energy_today:['Выработка сегодня','kWh'],energy_total:['Выработка всего','kWh']
 };
 function render(dev){
 	var g={};
@@ -149,17 +195,18 @@ function render(dev){
 		if(!sel[k]) continue;
 		var gk = (k.indexOf('ac_')===0 || k==='grid_frequency') ? 'AC' : ((k.indexOf('pv')===0)?'PV':'Energy');
 		if(!g[gk]) g[gk]=[];
-		g[gk].push(sel[k][0] + ':' + v + ' ' + sel[k][1]);
+		g[gk].push({lab:sel[k][0], val:v, uni:sel[k][1]});
 	}
 	var order=['PV','AC','Energy'];
 	var rows='';
 	for(var j=0;j<order.length;j++){
 		var gk=order[j];
 		if(!g[gk]) continue;
-		rows += '<div class="group"><h3>' + gk + '</h3><div class="rows">';
+		var gTitle = gk==='PV' ? 'Входы PV' : (gk==='AC' ? 'Выход AC' : 'Энергия');
+		rows += '<div class="group"><h3>' + gTitle + '</h3><div class="rows">';
 		for(var m=0;m<g[gk].length;m++){
-			var parts=g[gk][m].split(':');
-			rows += '<div class="row"><span class="k">' + esc(parts[0]) + '</span><span class="v">' + esc(parts[1]) + '</span></div>';
+			var it=g[gk][m];
+			rows += '<div class="row"><span class="k">' + esc(it.lab) + '</span><span class="v">' + esc(it.val) + ' <span class="u">' + esc(it.uni) + '</span></span></div>';
 		}
 		rows += '</div></div>';
 	}
@@ -170,6 +217,16 @@ async function tick(){
 		var r=await fetch('/api/current');
 		if(!r.ok) return;
 		var data=await r.json();
+		// Плашка суммарной мощности
+		var kpiEl=document.getElementById('kpiTotal');
+		var n=Number(data.total_power);
+		if(isFinite(n) && data.total_power>0){
+			kpiEl.textContent=n.toLocaleString('ru-RU',{maximumFractionDigits:1});
+			document.getElementById('kpiSub').textContent=data.devices.length+' инверторов онлайн';
+		}else{
+			kpiEl.textContent='—';
+			document.getElementById('kpiSub').textContent='Нет данных';
+		}
 		var cards=document.getElementById('cards');
 		cards.innerHTML='';
 		if(!data.devices.length){ cards.innerHTML='<div class="missing">No data in Redis</div>'; return; }
@@ -185,12 +242,107 @@ async function tick(){
 	}catch(e){}
 }
 
-// ---------- График ac_active_power ----------
+// ---------- Графики ----------
 Chart.register(ChartZoom);
-var ctx=document.getElementById('powerChart').getContext('2d');
-var powerChart=null;
-var range={from:null,to:null};
 
+// renderChart создаёт/пересоздаёт линейный график на канвасе id; old-график уничтожается.
+function renderChart(id, datasets, opts){
+	var canvas=document.getElementById(id);
+	var holder=id+'Chart';
+	if(window[holder]) window[holder].destroy();
+	canvas.getContext('2d');
+	window[holder]=new Chart(canvas,{ type:'line', data:{datasets:datasets}, options:opts });
+	return window[holder];
+}
+function chartOpts(withLegend,yTitle){
+	var o={
+		responsive:true,
+		maintainAspectRatio:false,
+		interaction:{ mode:'index', intersect:false },
+		animation:{ duration:300 },
+		plugins:{
+			tooltip:{
+				mode:'index', intersect:false, displayColors:true,
+				callbacks:{
+					title:function(items){ return items.length ? fmtSec(items[0].parsed.x) : ''; },
+					label:function(item){ return item.dataset.label + ': ' + Number(item.parsed.y).toFixed(1) + ' W'; }
+				}
+			},
+			zoom:{
+				pan:{ enabled:true, mode:'x' },
+				zoom:{ wheel:{ enabled:true, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:true }, mode:'x' },
+				limits:{ x:{ minRange: 60*1000 } }
+			}
+		},
+		scales:{
+			x:{ type:'time', time:{ unit:'hour', displayFormats:{ hour:'HH:mm' }, tooltipFormat:'yyyy-MM-dd HH:mm:ss' }, ticks:{ maxRotation:0, autoSkipPadding:20 } },
+			y:{ beginAtZero:true, title:{ display:yTitle, text:yTitle||'' } }
+		}
+	};
+	if(withLegend){ o.plugins.legend={ display:true, labels:{ boxWidth:20, padding:14 } }; }
+	return o;
+}
+
+// ---------- Выбор периода ----------
+// Общий диапазон для обоих графиков. По умолчанию — текущие календарные сутки,
+// но можно выбрать «Вчера», «7 дней» или конкретный день через date-поле.
+var selRange={from:startOfToday(), to:endOfToday()};
+
+// dayFromStr возвращает начало локального дня по строке 'YYYY-MM-DD'.
+function dayFromStr(s){
+	var p=String(s).split('-').map(Number);
+	return new Date(p[0], p[1]-1, p[2], 0,0,0,0);
+}
+function endOfDay(d){
+	var e=new Date(d); e.setHours(23,59,59,999); return e;
+}
+function startOfYesterday(){
+	var d=new Date(); d.setDate(d.getDate()-1); d.setHours(0,0,0,0); return d;
+}
+// selectRange устанавливает текущий период, подсвечивает активную кнопку и
+// перезагружает оба графика.
+function selectRange(from,to,activeBtn){
+	selRange.from=from; selRange.to=to;
+	var btns=['btnToday','btnYesterday','btn7d'];
+	for(var i=0;i<btns.length;i++) document.getElementById(btns[i]).classList.remove('active');
+	if(activeBtn) document.getElementById(activeBtn).classList.add('active');
+	loadAll();
+}
+async function loadAll(){
+	await Promise.all([loadTotalChart(), loadChart()]);
+}
+
+// Суммарный график (одна линия)
+function buildTotalChart(data){
+	var pts=(data.total||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
+	var datasets=[{
+		label:'Сумма',
+		data:pts,
+		borderColor:'#ffd166',
+		backgroundColor:'#ffd166',
+		pointRadius:2,
+		pointHoverRadius:4,
+		borderWidth:2,
+		tension:0.35,
+		cubicInterpolationMode:'monotone',
+		fill:false
+	}];
+	renderChart('totalChart', datasets, chartOpts(false,'W'));
+	return window.totalChart;
+}
+async function loadTotalChart(){
+	var url='/api/series?from='+encodeURIComponent(selRange.from.toISOString())+'&to='+encodeURIComponent(selRange.to.toISOString());
+	try{
+		var r=await fetch(url);
+		if(!r.ok) return;
+		var data=await r.json();
+		document.getElementById('totalChartRange').textContent='Диапазон: '+fmt(data.from)+' — '+fmt(data.to);
+		buildTotalChart(data);
+	}catch(e){}
+}
+document.getElementById('btnTotalReset').addEventListener('click',function(){ if(window.totalChart) window.totalChart.resetZoom(); });
+
+// График по инверторам (несколько линий)
 function buildChart(data){
 	var datasets=[];
 	for(var i=0;i<data.series.length;i++){
@@ -201,50 +353,19 @@ function buildChart(data){
 			data:pts,
 			borderColor:s.color,
 			backgroundColor:s.color,
-			pointRadius:0,
+			pointRadius:2,
+			pointHoverRadius:4,
 			borderWidth:2,
-			tension:0.2,
+			tension:0.35,
+			cubicInterpolationMode:'monotone',
 			fill:false
 		});
 	}
-	powerChart=new Chart(ctx,{
-		type:'line',
-		data:{datasets:datasets},
-		options:{
-			responsive:true,
-			maintainAspectRatio:false,
-			interaction:{ mode:'index', intersect:false },
-			animation:{ duration:300 },
-			plugins:{
-				legend:{ display:true, labels:{ boxWidth:20, padding:14 } },
-				tooltip:{
-					mode:'index',
-					intersect:false,
-					displayColors:true,
-					callbacks:{
-						title:function(items){ return items.length ? fmt(items[0].parsed.x) : ''; },
-						label:function(item){ return item.dataset.label + ': ' + Number(item.parsed.y).toFixed(1) + ' W'; }
-					}
-				},
-				zoom:{
-					pan:{ enabled:true, mode:'x' },
-					zoom:{ wheel:{ enabled:true, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:true }, mode:'x' },
-					limits:{ x:{ minRange: 60*1000 } }
-				}
-			},
-			scales:{
-				x:{ type:'time', time:{ unit:'hour', displayFormats:{ hour:'HH:mm' }, tooltipFormat:'yyyy-MM-dd HH:mm' }, ticks:{ maxRotation:0, autoSkipPadding:20 } },
-				y:{ beginAtZero:true, title:{ display:true, text:'W' } }
-			}
-		}
-	});
+	renderChart('powerChart', datasets, chartOpts(true,'W'));
+	return window.powerChart;
 }
-
 async function loadChart(){
-	if(!range.from){ range.from=startOfToday(); range.to=endOfToday(); }
-	var fromIso=range.from.toISOString();
-	var toIso=range.to.toISOString();
-	var url='/api/series?from='+encodeURIComponent(fromIso)+'&to='+encodeURIComponent(toIso);
+	var url='/api/series?from='+encodeURIComponent(selRange.from.toISOString())+'&to='+encodeURIComponent(selRange.to.toISOString());
 	try{
 		var r=await fetch(url);
 		if(!r.ok) return;
@@ -253,15 +374,23 @@ async function loadChart(){
 		buildChart(data);
 	}catch(e){}
 }
-document.getElementById('btnToday').addEventListener('click',function(){
-	range={from:startOfToday(),to:endOfToday()};
-	loadChart();
+document.getElementById('btnReset').addEventListener('click',function(){ if(window.powerChart) window.powerChart.resetZoom(); });
+
+// Кнопки выбора периода
+document.getElementById('btnToday').addEventListener('click',function(){ selectRange(startOfToday(), endOfToday(), 'btnToday'); });
+document.getElementById('btnYesterday').addEventListener('click',function(){ selectRange(startOfYesterday(), endOfDay(startOfYesterday()), 'btnYesterday'); });
+document.getElementById('btn7d').addEventListener('click',function(){
+	var to=new Date(); var from=new Date(); from.setDate(from.getDate()-7);
+	selectRange(from, to, 'btn7d');
 });
-document.getElementById('btnReset').addEventListener('click',function(){
-	if(powerChart) powerChart.resetZoom();
+document.getElementById('btnDate').addEventListener('click',function(){
+	var el=document.getElementById('datePick');
+	if(!el.value) return;
+	var from=dayFromStr(el.value);
+	selectRange(from, endOfDay(from), null);
 });
-loadChart();
-setInterval(loadChart,60000);
+
+loadAll(); setInterval(loadAll,60000);
 
 tick(); setInterval(tick,5000);
 </script>
@@ -272,6 +401,7 @@ var dashboardTmpl = template.Must(template.New("dash").Parse(dashboardPage))
 
 func (h *dashboardHandler) index(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	_ = dashboardTmpl.Execute(w, nil)
 }
 
@@ -282,9 +412,18 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sort.SliceStable(devices, func(i, j int) bool { return devices[i].Name < devices[j].Name })
+	var total float64
+	for _, d := range devices {
+		if v, ok := snapFloat(d.Values, "ac_active_power"); ok {
+			total += v
+		}
+	}
+	total = math.Round(total*10) / 10
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(currentResponse{
 		GeneratedAt: time.Now().Format(time.RFC3339),
+		TotalPower:  total,
 		Devices:     devices,
 	})
 }
@@ -348,8 +487,84 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Суммарный ряд: складываем ac_active_power всех инверторов по минутным бакетам.
+	// Бакетирование нужно, т.к. инверторы опрашиваются параллельно и времена точек
+	// не совпадают точно; окно в 60 с сглаживает расхождение и даёт чистый итог.
+	res.Total = sumActive(snaps)
+
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(res)
+}
+
+// sumActive агрегирует ac_active_power всех инверторов в бакеты, равные периоду
+// опроса (pollPeriod), и возвращает точки суммарной мощности с дискретностью,
+// соответствующей частоте опроса. Последняя точка приравнивается к сумме
+// последних известных значений по каждому инвертору — так правый край графика
+// совпадает с суммарной мощностью на цифровой плашке (/api/current total_power).
+func sumActive(snaps []deviceSnapshot) []seriesPoint {
+	step := int64(pollPeriod / time.Second) // бакет = период опроса
+	type agg struct{ sum, count float64 }
+	buckets := map[int64]*agg{}
+	var order []int64
+	type last struct{ v float64; t time.Time }
+	latest := map[string]last{} // последнее значение по каждому инвертору
+	var latestEnd time.Time
+	for _, sn := range snaps {
+		v, ok := snapFloat(sn.Values, "ac_active_power")
+		if !ok {
+			continue
+		}
+		ts, err := time.Parse(time.RFC3339, sn.Timestamp)
+		if err != nil {
+			continue
+		}
+		if prev, ok := latest[sn.IP]; !ok || ts.After(prev.t) {
+			latest[sn.IP] = last{v: v, t: ts}
+		}
+		if ts.After(latestEnd) {
+			latestEnd = ts
+		}
+		bidx := ts.Unix() / step
+		if _, ok := buckets[bidx]; !ok {
+			buckets[bidx] = &agg{}
+			order = append(order, bidx)
+		}
+		buckets[bidx].sum += v
+		buckets[bidx].count++
+	}
+	sort.Slice(order, func(i, j int) bool { return order[i] < order[j] })
+	out := make([]seriesPoint, 0, len(order))
+	for _, bidx := range order {
+		a := buckets[bidx]
+		if a.count == 0 {
+			continue
+		}
+		bt := time.Unix(bidx*step, 0)
+		out = append(out, seriesPoint{
+			T: bt.Format(time.RFC3339),
+			V: math.Round(a.sum*10) / 10,
+		})
+	}
+	// Последняя точка = сумма последних известных значений по инверторам (как плашка).
+	if len(latest) > 0 && !latestEnd.IsZero() {
+		var total float64
+		for _, lp := range latest {
+			total += lp.v
+		}
+		if len(out) > 0 {
+			out[len(out)-1] = seriesPoint{
+				T: latestEnd.Format(time.RFC3339),
+				V: math.Round(total*10) / 10,
+			}
+		} else {
+			out = append(out, seriesPoint{
+				T: latestEnd.Format(time.RFC3339),
+				V: math.Round(total*10) / 10,
+			})
+		}
+	}
+	return out
 }
 
 // dayBounds возвращает границы текущих календарных суток в зоне loc.

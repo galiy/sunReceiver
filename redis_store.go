@@ -88,6 +88,24 @@ func eachMonth(start, end time.Time, fn func(y int, m time.Month) bool) {
 	}
 }
 
+// IsEmpty возвращает true, если в Redis нет ни текущего состояния, ни одного
+// сегмента временного ряда (т.е. in-memory данные потеряны и нужна реставрация
+// из persistent-хранилища PostgreSQL).
+func (s *redisStore) IsEmpty() (bool, error) {
+	n, err := s.rdb.HLen(s.ctx, redisCurrentKey).Result()
+	if err != nil {
+		return false, err
+	}
+	if n > 0 {
+		return false, nil
+	}
+	keys, err := s.rdb.Keys(s.ctx, redisSeriesPrefix+"*").Result()
+	if err != nil {
+		return false, err
+	}
+	return len(keys) == 0, nil
+}
+
 // Current возвращает текущие снимки всех инверторов (поля HASH current) из Redis,
 // отсортированные по имени для стабильного порядка на дашборде.
 func (s *redisStore) Current() ([]deviceSnapshot, error) {
