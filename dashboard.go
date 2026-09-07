@@ -24,10 +24,10 @@ type currentResponse struct {
 	GeneratedAt   string           `json:"generated_at"`
 	TotalPower    float64          `json:"total_power"`
 	TotalPV       float64          `json:"total_pv"`
-	MapGridV      float64          `json:"map_grid_voltage,omitempty"`
-	MapGridP      float64          `json:"map_grid_power,omitempty"`
-	MapBatV       float64          `json:"map_battery_voltage,omitempty"`
-	MapBatP       float64          `json:"map_battery_power,omitempty"`
+	MapGridV      float64          `json:"map_grid_voltage"`
+	MapGridP      float64          `json:"map_grid_power"`
+	MapBatV       float64          `json:"map_battery_voltage"`
+	MapBatP       float64          `json:"map_battery_power"`
 	Devices       []deviceSnapshot `json:"devices"`
 }
 
@@ -81,6 +81,15 @@ func snapFloat(v valuesContract, key string) (float64, bool) {
 		return f, err == nil
 	}
 	return 0, false
+}
+
+// isMAPDevice возвращает true, если снимок принадлежит устройству МАП (kindMAP,
+// батарея/сеть). Маркер — наличие тега battery_voltage, которого нет у инверторов
+// (Deye/Sofar) и MPPT-контроллеров. Мощность МАП учитывается только на своих
+// плашках и графиках, а не в сумме по инверторам.
+func isMAPDevice(v valuesContract) bool {
+	_, ok := v["battery_voltage"]
+	return ok
 }
 
 const dashboardPage = `<!DOCTYPE html>
@@ -179,26 +188,6 @@ h1 { font-size:22px; margin:0 0 4px; }
 
 <div class="charts">
   <div id="chartbox">
-    <h2>Суммарная активная мощность, W</h2>
-    <div class="chart-toolbar">
-      <span id="totalChartRange"></span>
-      <button id="btnTotalReset">Сброс зума</button>
-      <span>Зум: колесо / drag&ndash;панорама</span>
-    </div>
-    <div class="chart-wrap"><canvas id="totalChart"></canvas></div>
-  </div>
-
-  <div id="chartbox">
-    <h2>Активная мощность по инверторам, W</h2>
-    <div class="chart-toolbar">
-      <span id="chartRange"></span>
-      <button id="btnReset">Сброс зума</button>
-      <span>Зум: колесо / drag&ndash;панорама</span>
-    </div>
-    <div class="chart-wrap"><canvas id="powerChart"></canvas></div>
-  </div>
-
-  <div id="chartbox">
     <h2>Напряжение сети (МАП), V</h2>
     <div class="chart-toolbar">
       <span id="gridVChartRange"></span>
@@ -216,6 +205,26 @@ h1 { font-size:22px; margin:0 0 4px; }
       <span>Зум: колесо / drag&ndash;панорама</span>
     </div>
     <div class="chart-wrap"><canvas id="gridPChart"></canvas></div>
+  </div>
+
+  <div id="chartbox">
+    <h2>Суммарная активная мощность, W</h2>
+    <div class="chart-toolbar">
+      <span id="totalChartRange"></span>
+      <button id="btnTotalReset">Сброс зума</button>
+      <span>Зум: колесо / drag&ndash;панорама</span>
+    </div>
+    <div class="chart-wrap"><canvas id="totalChart"></canvas></div>
+  </div>
+
+  <div id="chartbox">
+    <h2>Активная мощность по инверторам, W</h2>
+    <div class="chart-toolbar">
+      <span id="chartRange"></span>
+      <button id="btnReset">Сброс зума</button>
+      <span>Зум: колесо / drag&ndash;панорама</span>
+    </div>
+    <div class="chart-wrap"><canvas id="powerChart"></canvas></div>
   </div>
 </div>
 
@@ -249,23 +258,38 @@ function devValue(dev, tag){
 }
 function renderPivot(devices){
 	if(!devices || !devices.length) return '<div class="missing">No data in Redis</div>';
+	// Устройство МАП (батарея/сеть) в сводной таблице не показываем — у него нет
+	// солнечных панелей; оно нужно только для верхних плашек и графиков.
+	// Идентифицируем по тегу battery_voltage, которого нет у инверторов и MPPT.
+	var invs=[];
+	for(var i=0;i<devices.length;i++) if(!(devices[i].values && devices[i].values.battery_voltage!==undefined)) invs.push(devices[i]);
+	if(!invs.length) return '<div class="missing">No data in Redis</div>';
 	var h = '<table class="pivot-table"><thead><tr><th></th>';
-	for(var i=0;i<devices.length;i++) h += '<th>'+esc(devices[i].name)+'</th>';
+	for(var i=0;i<invs.length;i++) h += '<th>'+esc(invs[i].name)+'</th>';
 	h += '<th></th></tr></thead><tbody>';
 	// Строка актуальности данных: время последнего снимка каждого инвертора.
 	h += '<tr><td class="p-label">Актуально</td>';
-	for(var d=0;d<devices.length;d++){
-		var ts = (devices[d] && devices[d].timestamp) ? devices[d].timestamp : null;
+	for(var d=0;d<invs.length;d++){
+		var ts = (invs[d] && invs[d].timestamp) ? invs[d].timestamp : null;
 		h += (ts===null)
 			? '<td class="p-empty"></td>'
 			: '<td class="p-val" style="font-size:11px">'+esc(fmtSec(ts))+'</td>';
 	}
 	h += '<td class="p-unit"></td></tr>';
+	// Строка серийных номеров инверторов и контроллеров.
+	h += '<tr><td class="p-label">Серийный номер</td>';
+	for(var d=0;d<invs.length;d++){
+		var sn = (invs[d] && invs[d].device_sn) ? invs[d].device_sn : null;
+		h += (sn===null)
+			? '<td class="p-empty"></td>'
+			: '<td class="p-val" style="font-size:11px">'+esc(sn)+'</td>';
+	}
+	h += '<td class="p-unit"></td></tr>';
 	for(var p=0;p<PARAMS.length;p++){
 		var tag=PARAMS[p][0], label=PARAMS[p][1], unit=PARAMS[p][2];
 		h += '<tr><td class="p-label">'+esc(label)+'</td>';
-		for(var d=0;d<devices.length;d++){
-			var v=devValue(devices[d], tag);
+		for(var d=0;d<invs.length;d++){
+			var v=devValue(invs[d], tag);
 			h += (v===null)
 				? '<td class="p-empty"></td>'
 				: '<td class="p-val">'+esc(v)+'</td>';
@@ -285,7 +309,10 @@ async function tick(){
 		var n=Number(data.total_power);
 		if(isFinite(n) && data.total_power>0){
 			kpiEl.textContent=n.toLocaleString('ru-RU',{maximumFractionDigits:1});
-			document.getElementById('kpiSub').textContent=data.devices.length+' инверторов онлайн';
+			// Число инверторов онлайн — без устройства МАП (батарея/сеть).
+			var invCount=0;
+			for(var i=0;i<data.devices.length;i++) if(!(data.devices[i].values && data.devices[i].values.battery_voltage!==undefined)) invCount++;
+			document.getElementById('kpiSub').textContent=invCount+' инверторов онлайн';
 		}else{
 			kpiEl.textContent='—';
 			document.getElementById('kpiSub').textContent='Нет данных';
@@ -395,9 +422,8 @@ function buildTotalChart(data){
 		data:pts,
 		borderColor:'#ffd166',
 		backgroundColor:'#ffd166',
-		pointRadius:2,
-		pointHoverRadius:4,
-		borderWidth:2,
+		pointRadius:0, pointHoverRadius:0,
+		borderWidth:1.5,
 		tension:0.35,
 		cubicInterpolationMode:'monotone',
 		fill:false
@@ -428,9 +454,8 @@ function buildChart(data){
 			data:pts,
 			borderColor:s.color,
 			backgroundColor:s.color,
-			pointRadius:2,
-			pointHoverRadius:4,
-			borderWidth:2,
+			pointRadius:0, pointHoverRadius:0,
+			borderWidth:1.5,
 			tension:0.35,
 			cubicInterpolationMode:'monotone',
 			fill:false
@@ -459,8 +484,8 @@ function buildGridVChart(data){
 		data:pts,
 		borderColor:'#4ecdc4',
 		backgroundColor:'#4ecdc4',
-		pointRadius:2, pointHoverRadius:4,
-		borderWidth:2, tension:0.35,
+		pointRadius:0, pointHoverRadius:0,
+		borderWidth:1.5, tension:0.35,
 		cubicInterpolationMode:'monotone', fill:false
 	}];
 	renderChart('gridVChart', datasets, chartOpts(false,'V'));
@@ -485,8 +510,8 @@ function buildGridPChart(data){
 		data:pts,
 		borderColor:'#fd79a8',
 		backgroundColor:'#fd79a8',
-		pointRadius:2, pointHoverRadius:4,
-		borderWidth:2, tension:0.35,
+		pointRadius:0, pointHoverRadius:0,
+		borderWidth:1.5, tension:0.35,
 		cubicInterpolationMode:'monotone', fill:false
 	}];
 	renderChart('gridPChart', datasets, chartOpts(false,'W'));
@@ -547,6 +572,23 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	var totalPV float64
 	var gridV, gridP, batV, batP float64
 	for _, d := range devices {
+		// Мощности устройства МАП (батарея/сеть) в сумме по инверторам не участвуют:
+		// они отображаются только на плашках/графиках МАП.
+		if isMAPDevice(d.Values) {
+			if v, ok := snapFloat(d.Values, "grid_voltage"); ok {
+				gridV = v
+			}
+			if v, ok := snapFloat(d.Values, "grid_power"); ok {
+				gridP = v
+			}
+			if v, ok := snapFloat(d.Values, "battery_voltage"); ok {
+				batV = v
+			}
+			if v, ok := snapFloat(d.Values, "battery_power"); ok {
+				batP = v
+			}
+			continue
+		}
 		if v, ok := snapFloat(d.Values, "ac_active_power"); ok {
 			total += v
 		}
@@ -555,19 +597,6 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 		}
 		if v, ok := snapFloat(d.Values, "pv2_power"); ok {
 			totalPV += v
-		}
-		// Метрики МАП (батарея/сеть) — только у kindMAP-устройства.
-		if v, ok := snapFloat(d.Values, "grid_voltage"); ok {
-			gridV = v
-		}
-		if v, ok := snapFloat(d.Values, "grid_power"); ok {
-			gridP = v
-		}
-		if v, ok := snapFloat(d.Values, "battery_voltage"); ok {
-			batV = v
-		}
-		if v, ok := snapFloat(d.Values, "battery_power"); ok {
-			batP = v
 		}
 	}
 	total = math.Round(total*10) / 10
@@ -617,9 +646,14 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Группируем по имени инвертора, цвет — по индексу в отсортированном списке.
+	// Снимки устройства МАП (батарея/сеть) исключаем — их мощность отображается
+	// только на своих графиках МАП, а не на графике активной мощности инверторов.
 	byIP := map[string]*deviceSeries{}
 	ipToName := map[string]string{}
 	for _, sn := range snaps {
+		if isMAPDevice(sn.Values) {
+			continue
+		}
 		if _, ok := byIP[sn.IP]; !ok {
 			byIP[sn.IP] = &deviceSeries{IP: sn.IP, Name: sn.Name}
 			ipToName[sn.IP] = sn.Name
@@ -693,6 +727,11 @@ func sumActive(snaps []deviceSnapshot) []seriesPoint {
 	latest := map[string]last{} // последнее значение по каждому инвертору
 	var latestEnd time.Time
 	for _, sn := range snaps {
+		// Мощность устройства МАП (батарея/сеть) в суммарный график инверторов
+		// не включаем — она отображается только на графиках МАП.
+		if isMAPDevice(sn.Values) {
+			continue
+		}
 		v, ok := snapFloat(sn.Values, "ac_active_power")
 		if !ok {
 			continue
@@ -756,13 +795,18 @@ func sumActive(snaps []deviceSnapshot) []seriesPoint {
 	return out
 }
 
-// singleMetricSeries собирает временной ряд одного тега по всем снимкам
-// (метрики МАП — grid_voltage, grid_power, battery_voltage, battery_power — есть
-// только у устройства kindMAP). Точки сортируются по времени; дубли с одинаковым
-// временем схлопываются (в пределах окна SaveSnapshotWindow остаётся одна точка).
+// singleMetricSeries собирает временной ряд одного тега по снимкам устройства
+// МАП (метрики МАП — grid_voltage, grid_power, battery_voltage, battery_power — есть
+// только у kindMAP-устройства). Снимки других устройств (Deye/Sofar/MPPT) отбрасываются:
+// фильтр по наличию battery_voltage исключает случайные теги с тем же именем
+// (например, grid_power). Точки сортируются по времени; дубли с одинаковым временем
+// схлопываются (в пределах окна SaveSnapshotWindow остаётся одна точка).
 func singleMetricSeries(snaps []deviceSnapshot, key string) []seriesPoint {
 	var pts []seriesPoint
 	for _, sn := range snaps {
+		if _, isMAP := sn.Values["battery_voltage"]; !isMAP {
+			continue
+		}
 		v, ok := snapFloat(sn.Values, key)
 		if !ok {
 			continue
