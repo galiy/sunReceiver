@@ -21,10 +21,14 @@ type dashboardHandler struct {
 
 // currentResponse отвечает на GET /api/current.
 type currentResponse struct {
-	GeneratedAt string           `json:"generated_at"`
-	TotalPower  float64          `json:"total_power"`
-	TotalPV     float64          `json:"total_pv"`
-	Devices     []deviceSnapshot `json:"devices"`
+	GeneratedAt   string           `json:"generated_at"`
+	TotalPower    float64          `json:"total_power"`
+	TotalPV       float64          `json:"total_pv"`
+	MapGridV      float64          `json:"map_grid_voltage,omitempty"`
+	MapGridP      float64          `json:"map_grid_power,omitempty"`
+	MapBatV       float64          `json:"map_battery_voltage,omitempty"`
+	MapBatP       float64          `json:"map_battery_power,omitempty"`
+	Devices       []deviceSnapshot `json:"devices"`
 }
 
 // seriesPoint — одна точка временного ряда: время + значение.
@@ -43,11 +47,15 @@ type deviceSeries struct {
 
 // seriesResponse отвечает на GET /api/series.
 type seriesResponse struct {
-	GeneratedAt string         `json:"generated_at"`
-	From        string         `json:"from"`
-	To          string         `json:"to"`
-	Series      []deviceSeries `json:"series"`
-	Total       []seriesPoint  `json:"total,omitempty"`
+	GeneratedAt    string         `json:"generated_at"`
+	From           string         `json:"from"`
+	To             string         `json:"to"`
+	Series         []deviceSeries `json:"series"`
+	Total          []seriesPoint  `json:"total,omitempty"`
+	MapGridVoltage []seriesPoint  `json:"map_grid_voltage,omitempty"`
+	MapGridPower   []seriesPoint  `json:"map_grid_power,omitempty"`
+	MapBatVoltage  []seriesPoint  `json:"map_battery_voltage,omitempty"`
+	MapBatPower    []seriesPoint  `json:"map_battery_power,omitempty"`
 }
 
 // seriesPalette — цвета линий инверторов (по индексу после сортировки по имени).
@@ -138,6 +146,26 @@ h1 { font-size:22px; margin:0 0 4px; }
     <div class="kpi-value"><span id="kpiPV">—</span><span class="kpi-unit">W</span></div>
     <div class="kpi-sub" id="kpiPVSub">Нет данных</div>
   </div>
+  <div class="kpi-plate">
+    <div class="kpi-label">Напряжение сети</div>
+    <div class="kpi-value"><span id="kpiGridV">—</span><span class="kpi-unit">V</span></div>
+    <div class="kpi-sub">МАП (батарея/сеть)</div>
+  </div>
+  <div class="kpi-plate">
+    <div class="kpi-label">Мощность сети</div>
+    <div class="kpi-value"><span id="kpiGridP">—</span><span class="kpi-unit">W</span></div>
+    <div class="kpi-sub">МАП (батарея/сеть)</div>
+  </div>
+  <div class="kpi-plate">
+    <div class="kpi-label">Напряжение батареи</div>
+    <div class="kpi-value"><span id="kpiBatV">—</span><span class="kpi-unit">V</span></div>
+    <div class="kpi-sub">МАП (батарея/сеть)</div>
+  </div>
+  <div class="kpi-plate">
+    <div class="kpi-label">Мощность батареи</div>
+    <div class="kpi-value"><span id="kpiBatP">—</span><span class="kpi-unit">W</span></div>
+    <div class="kpi-sub">МАП (батарея/сеть)</div>
+  </div>
 </div>
 
 <div class="period-panel">
@@ -168,6 +196,26 @@ h1 { font-size:22px; margin:0 0 4px; }
       <span>Зум: колесо / drag&ndash;панорама</span>
     </div>
     <div class="chart-wrap"><canvas id="powerChart"></canvas></div>
+  </div>
+
+  <div id="chartbox">
+    <h2>Напряжение сети (МАП), V</h2>
+    <div class="chart-toolbar">
+      <span id="gridVChartRange"></span>
+      <button id="btnGridVReset">Сброс зума</button>
+      <span>Зум: колесо / drag&ndash;панорама</span>
+    </div>
+    <div class="chart-wrap"><canvas id="gridVChart"></canvas></div>
+  </div>
+
+  <div id="chartbox">
+    <h2>Мощность сети (МАП), W</h2>
+    <div class="chart-toolbar">
+      <span id="gridPChartRange"></span>
+      <button id="btnGridPReset">Сброс зума</button>
+      <span>Зум: колесо / drag&ndash;панорама</span>
+    </div>
+    <div class="chart-wrap"><canvas id="gridPChart"></canvas></div>
   </div>
 </div>
 
@@ -250,9 +298,23 @@ async function tick(){
 		}else{
 			pvEl.textContent='—';
 		}
+		// Плашки МАП: напряжение/мощность сети и батареи.
+		setKpi('kpiGridV', data.map_grid_voltage);
+		setKpi('kpiGridP', data.map_grid_power);
+		setKpi('kpiBatV', data.map_battery_voltage);
+		setKpi('kpiBatP', data.map_battery_power);
 		var cards=document.getElementById('cards');
 		cards.innerHTML = renderPivot(data.devices);
 	}catch(e){}
+}
+// setKpi заполняет плашку числом (с разделителями) или прочерком, если нет данных.
+function setKpi(id, v){
+	var n=Number(v);
+	if(isFinite(n)){
+		document.getElementById(id).textContent=n.toLocaleString('ru-RU',{maximumFractionDigits:1});
+	}else{
+		document.getElementById(id).textContent='—';
+	}
 }
 
 // ---------- Графики ----------
@@ -322,7 +384,7 @@ function selectRange(from,to,activeBtn){
 	loadAll();
 }
 async function loadAll(){
-	await Promise.all([loadTotalChart(), loadChart()]);
+	await Promise.all([loadTotalChart(), loadChart(), loadGridVChart(), loadGridPChart()]);
 }
 
 // Суммарный график (одна линия)
@@ -389,6 +451,59 @@ async function loadChart(){
 }
 document.getElementById('btnReset').addEventListener('click',function(){ if(window.powerChart) window.powerChart.resetZoom(); });
 
+// Графики МАП: напряжение сети и мощность сети (одна линия из seriesResponse).
+function buildGridVChart(data){
+	var pts=(data.map_grid_voltage||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
+	var datasets=[{
+		label:'Напряжение сети',
+		data:pts,
+		borderColor:'#4ecdc4',
+		backgroundColor:'#4ecdc4',
+		pointRadius:2, pointHoverRadius:4,
+		borderWidth:2, tension:0.35,
+		cubicInterpolationMode:'monotone', fill:false
+	}];
+	renderChart('gridVChart', datasets, chartOpts(false,'V'));
+	return window.gridVChart;
+}
+async function loadGridVChart(){
+	var url='/api/series?from='+encodeURIComponent(selRange.from.toISOString())+'&to='+encodeURIComponent(selRange.to.toISOString());
+	try{
+		var r=await fetch(url);
+		if(!r.ok) return;
+		var data=await r.json();
+		document.getElementById('gridVChartRange').textContent='Диапазон: '+fmt(data.from)+' — '+fmt(data.to);
+		buildGridVChart(data);
+	}catch(e){}
+}
+document.getElementById('btnGridVReset').addEventListener('click',function(){ if(window.gridVChart) window.gridVChart.resetZoom(); });
+
+function buildGridPChart(data){
+	var pts=(data.map_grid_power||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
+	var datasets=[{
+		label:'Мощность сети',
+		data:pts,
+		borderColor:'#fd79a8',
+		backgroundColor:'#fd79a8',
+		pointRadius:2, pointHoverRadius:4,
+		borderWidth:2, tension:0.35,
+		cubicInterpolationMode:'monotone', fill:false
+	}];
+	renderChart('gridPChart', datasets, chartOpts(false,'W'));
+	return window.gridPChart;
+}
+async function loadGridPChart(){
+	var url='/api/series?from='+encodeURIComponent(selRange.from.toISOString())+'&to='+encodeURIComponent(selRange.to.toISOString());
+	try{
+		var r=await fetch(url);
+		if(!r.ok) return;
+		var data=await r.json();
+		document.getElementById('gridPChartRange').textContent='Диапазон: '+fmt(data.from)+' — '+fmt(data.to);
+		buildGridPChart(data);
+	}catch(e){}
+}
+document.getElementById('btnGridPReset').addEventListener('click',function(){ if(window.gridPChart) window.gridPChart.resetZoom(); });
+
 // Кнопки выбора периода
 document.getElementById('btnToday').addEventListener('click',function(){ selectRange(startOfToday(), endOfToday(), 'btnToday'); });
 document.getElementById('btnYesterday').addEventListener('click',function(){ selectRange(startOfYesterday(), endOfDay(startOfYesterday()), 'btnYesterday'); });
@@ -430,6 +545,7 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	sort.SliceStable(devices, func(i, j int) bool { return devices[i].Name < devices[j].Name })
 	var total float64
 	var totalPV float64
+	var gridV, gridP, batV, batP float64
 	for _, d := range devices {
 		if v, ok := snapFloat(d.Values, "ac_active_power"); ok {
 			total += v
@@ -440,15 +556,36 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 		if v, ok := snapFloat(d.Values, "pv2_power"); ok {
 			totalPV += v
 		}
+		// Метрики МАП (батарея/сеть) — только у kindMAP-устройства.
+		if v, ok := snapFloat(d.Values, "grid_voltage"); ok {
+			gridV = v
+		}
+		if v, ok := snapFloat(d.Values, "grid_power"); ok {
+			gridP = v
+		}
+		if v, ok := snapFloat(d.Values, "battery_voltage"); ok {
+			batV = v
+		}
+		if v, ok := snapFloat(d.Values, "battery_power"); ok {
+			batP = v
+		}
 	}
 	total = math.Round(total*10) / 10
 	totalPV = math.Round(totalPV*10) / 10
+	gridV = math.Round(gridV*10) / 10
+	gridP = math.Round(gridP*10) / 10
+	batV = math.Round(batV*10) / 10
+	batP = math.Round(batP*10) / 10
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(currentResponse{
 		GeneratedAt: time.Now().Format(time.RFC3339),
 		TotalPower:  total,
 		TotalPV:     totalPV,
+		MapGridV:    gridV,
+		MapGridP:    gridP,
+		MapBatV:     batV,
+		MapBatP:     batP,
 		Devices:     devices,
 	})
 }
@@ -518,6 +655,13 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	// Бакетирование нужно, т.к. инверторы опрашиваются параллельно и времена точек
 	// не совпадают точно; окно в 60 с сглаживает расхождение и даёт чистый итог.
 	res.Total = sumActive(snaps)
+
+	// Ряды МАП (батарея/сеть) — метрики устройства KindMAP (единственное, отдающее
+	// эти теги): напряжение/мощность сети и батареи для графиков дашборда.
+	res.MapGridVoltage = singleMetricSeries(snaps, "grid_voltage")
+	res.MapGridPower = singleMetricSeries(snaps, "grid_power")
+	res.MapBatVoltage = singleMetricSeries(snaps, "battery_voltage")
+	res.MapBatPower = singleMetricSeries(snaps, "battery_power")
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -610,6 +754,35 @@ func sumActive(snaps []deviceSnapshot) []seriesPoint {
 		}
 	}
 	return out
+}
+
+// singleMetricSeries собирает временной ряд одного тега по всем снимкам
+// (метрики МАП — grid_voltage, grid_power, battery_voltage, battery_power — есть
+// только у устройства kindMAP). Точки сортируются по времени; дубли с одинаковым
+// временем схлопываются (в пределах окна SaveSnapshotWindow остаётся одна точка).
+func singleMetricSeries(snaps []deviceSnapshot, key string) []seriesPoint {
+	var pts []seriesPoint
+	for _, sn := range snaps {
+		v, ok := snapFloat(sn.Values, key)
+		if !ok {
+			continue
+		}
+		pts = append(pts, seriesPoint{T: sn.Timestamp, V: v})
+	}
+	sort.Slice(pts, func(i, j int) bool { return pts[i].T < pts[j].T })
+	// Схлопываем дубли с одинаковым временем (если есть) — оставляем последний.
+	if len(pts) > 1 {
+		out := pts[:1]
+		for i := 1; i < len(pts); i++ {
+			if pts[i].T == out[len(out)-1].T {
+				out[len(out)-1] = pts[i]
+			} else {
+				out = append(out, pts[i])
+			}
+		}
+		pts = out
+	}
+	return pts
 }
 
 // loadRange возвращает снимки за период [start, end]. Точки старше окна
