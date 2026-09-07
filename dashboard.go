@@ -142,10 +142,6 @@ h1 { font-size:22px; margin:0 0 4px; }
 .pivot-table td.p-unit { color:#8a93a1; font-weight:400; }
 .pivot-table td.p-empty { color:#4a5464; }
 .pivot-table tr:nth-child(even) td { background:#1b212b; }
-.pivot-groups { display:flex; flex-wrap:wrap; gap:16px; }
-.pivot-group { border-radius:8px; padding:8px; min-width:280px; flex:1 1 auto; background:#14192222; }
-.pivot-group h3 { margin:4px 0 8px; font-size:13px; font-weight:600; letter-spacing:.03em; }
-.pivot-group .pivot-table th, .pivot-group .pivot-table td { border-color:rgba(255,255,255,.06); }
 .kpi { display:flex; align-items:stretch; gap:16px; margin-bottom:20px; }
 .kpi-plate { flex:1; background:linear-gradient(135deg,#1d2430,#202a3a); border:1px solid #2a3342; border-radius:12px; padding:18px 22px; display:flex; flex-direction:column; gap:4px; }
 .kpi-label { font-size:12px; color:#8a93a1; text-transform:uppercase; letter-spacing:.06em; }
@@ -283,9 +279,10 @@ function devValue(dev, tag){
 	}
 	return (v === undefined || v === null) ? null : v;
 }
+var GRID_COLOR='#4ecdc4', MPPT_COLOR='#f9ca24';
 function renderPivot(devices){
 	if(!devices || !devices.length) return '<div class="missing">No data in Redis</div>';
-	// Разбиваем на две группы: сетевые инверторы (первые) и MPPT-контроллеры (последние).
+	// Разбиваем колонки на две группы: сетевые инверторы (первые) и MPPT-контроллеры (последние).
 	// Устройство МАП (батарея/сеть) в сводной таблице не показываем — у него нет солнечных
 	// панелей; оно нужно только для верхних плашек и графиков. Маркер MPPT — ip вида host#mpptN.
 	var grid=[], mpts=[];
@@ -295,44 +292,55 @@ function renderPivot(devices){
 		if(String(d.ip||'').indexOf('#mppt')>=0) mpts.push(d); else grid.push(d);
 	}
 	if(!grid.length && !mpts.length) return '<div class="missing">No data in Redis</div>';
-	var out='<div class="pivot-groups">';
-	if(grid.length) out+=renderPivotGroup('Сетевые инверторы','#4ecdc4',grid);
-	if(mpts.length) out+=renderPivotGroup('MPPT-контроллеры','#f9ca24',mpts);
-	out+='</div>';
-	return out;
-}
-// renderPivotGroup строит одну сводную таблицу-группу инверторов с цветной рамкой.
-function renderPivotGroup(title, color, invs){
-	var h='<div class="pivot-group" style="border:1px solid '+color+';box-shadow:0 0 0 1px '+color+' inset">';
-	h+='<h3 style="color:'+color+'">'+esc(title)+' ('+invs.length+')</h3>';
-	h+='<table class="pivot-table"><thead><tr><th></th>';
-	for(var i=0;i<invs.length;i++) h+='<th>'+esc(invs[i].name)+'</th>';
-	h+='<th></th></tr></thead><tbody>';
-	// Строка актуальности данных: время последнего снимка каждого инвертора.
-	h+='<tr><td class="p-label">Актуально</td>';
-	for(var d=0;d<invs.length;d++){
-		var ts=(invs[d]&&invs[d].timestamp)?invs[d].timestamp:null;
-		h+=(ts===null)?'<td class="p-empty"></td>':'<td class="p-val" style="font-size:11px">'+esc(fmtSec(ts))+'</td>';
-	}
-	h+='<td class="p-unit"></td></tr>';
-	// Строка серийных номеров инверторов и контроллеров.
-	h+='<tr><td class="p-label">Серийный номер</td>';
-	for(var d=0;d<invs.length;d++){
-		var sn=(invs[d]&&invs[d].device_sn)?invs[d].device_sn:null;
-		h+=(sn===null)?'<td class="p-empty"></td>':'<td class="p-val" style="font-size:11px">'+esc(sn)+'</td>';
-	}
-	h+='<td class="p-unit"></td></tr>';
+	// Единая таблица: общий первый столбец (заголовки строк и единиц), затем колонки
+	// сетевых инверторов и MPPT, разделённые тонкой цветной рамкой групп.
+	var h='<table class="pivot-table"><thead>';
+	// Строка заголовков групп (colspan по числу колонок группы).
+	h+='<tr><th class="p-label">Параметр</th>';
+	if(grid.length) h+='<th colspan="'+grid.length+'" style="border:1px solid '+GRID_COLOR+';color:'+GRID_COLOR+'">Сетевые инверторы</th>';
+	if(mpts.length) h+='<th colspan="'+mpts.length+'" style="border:1px solid '+MPPT_COLOR+';color:'+MPPT_COLOR+'">MPPT-контроллеры</th>';
+	h+='</tr><tr><th></th>';
+	for(var i=0;i<grid.length;i++) h+='<th>'+esc(grid[i].name)+'</th>';
+	for(var i=0;i<mpts.length;i++) h+='<th>'+esc(mpts[i].name)+'</th>';
+	h+='</tr></thead><tbody>';
+	// Общие строки. Первый столбец — заголовок строки; аудитория по обеим группам.
+	h+='<tr><td class="p-label">Актуально</td>'+rowCells(grid,mpts,function(d){return d.timestamp?fmtSec(d.timestamp):null;},'11px')+'</tr>';
+	h+='<tr><td class="p-label">Серийный номер</td>'+rowCells(grid,mpts,function(d){return d.device_sn||null;},'11px')+'</tr>';
 	for(var p=0;p<PARAMS.length;p++){
 		var tag=PARAMS[p][0], label=PARAMS[p][1], unit=PARAMS[p][2];
-		h+='<tr><td class="p-label">'+esc(label)+'</td>';
-		for(var d=0;d<invs.length;d++){
-			var v=devValue(invs[d],tag);
-			h+=(v===null)?'<td class="p-empty"></td>':'<td class="p-val">'+esc(v)+'</td>';
-		}
-		h+='<td class="p-unit">'+esc(unit)+'</td></tr>';
+		h+='<tr><td class="p-label">'+esc(label)+' ('+esc(unit)+')</td>'+rowCells(grid,mpts,function(d){return devValue(d,tag);})+'</tr>';
 	}
-	h+='</tbody></table></div>';
+	// Нижняя кромка рамок групп.
+	h+='<tr><td></td>';
+	for(var i=0;i<grid.length;i++) h+=edgeCell(GRID_COLOR,i===0,i===grid.length-1);
+	for(var i=0;i<mpts.length;i++) h+=edgeCell(MPPT_COLOR,i===0,i===mpts.length-1);
+	h+='</tr>';
+	h+='</tbody></table>';
 	return h;
+}
+// rowCells формирует ячейки строки по колонкам обеих групп. Первая колонка группы
+// получает цветную левую, последняя — цветную правую рамку (вертикальные стороны).
+function rowCells(grid,mpts,getter,font){
+	var h='';
+	for(var i=0;i<grid.length;i++) h+=cellTd(grid[i],getter,i===0,i===grid.length-1,GRID_COLOR,font);
+	for(var i=0;i<mpts.length;i++) h+=cellTd(mpts[i],getter,i===0,i===mpts.length-1,MPPT_COLOR,font);
+	return h;
+}
+function cellTd(d,getter,isFirst,isLast,color,font){
+	var v=getter(d);
+	var st='';
+	if(isFirst) st+='border-left:1px solid '+color+';';
+	if(isLast) st+='border-right:1px solid '+color+';';
+	if(font) st+='font-size:'+font+';';
+	var cls=v===null?'p-empty':'p-val';
+	return '<td class="'+cls+'" style="'+st+'">'+(v===null?'':esc(v))+'</td>';
+}
+// edgeCell формирует пустую ячейку нижней кромки группы с цветной горизонтальной чертой.
+function edgeCell(color,isFirst,isLast){
+	var st='border-top:1px solid '+color+';';
+	if(isFirst) st+='border-left:1px solid '+color+';';
+	if(isLast) st+='border-right:1px solid '+color+';';
+	return '<td class="p-empty" style="'+st+'"></td>';
 }
 async function tick(){
 	try{
