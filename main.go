@@ -45,6 +45,7 @@ type invTarget struct {
 	LoggerSN uint32
 	Kind     targetKind
 	Unit     byte
+	Slot     int // для kindMAP: индекс MPPT-контроллера (0..15), -1 = агрегат по всем
 }
 
 // configTarget — запись инвертора в config.json.
@@ -54,6 +55,7 @@ type configTarget struct {
 	Type     string `json:"type"`
 	LoggerSN uint32 `json:"logger_sn"`
 	Unit     int    `json:"unit,omitempty"`
+	Slot     int    `json:"slot,omitempty"`
 }
 
 type configFile struct {
@@ -105,9 +107,23 @@ func loadConfig(path string) ([]invTarget, error) {
 		if t.Unit > 0 {
 			unit = byte(t.Unit)
 		}
-		targets = append(targets, invTarget{IP: t.IP, Name: t.Name, LoggerSN: t.LoggerSN, Kind: kind, Unit: unit})
+		slot := -1 // для МАП: по умолчанию — агрегат по всем MPPT
+		if t.Slot >= 0 {
+			slot = t.Slot
+		}
+		targets = append(targets, invTarget{IP: t.IP, Name: t.Name, LoggerSN: t.LoggerSN, Kind: kind, Unit: unit, Slot: slot})
 	}
 	return targets, nil
+}
+
+// devKey возвращает ключ устройства в хранилище (поле IP снимка): для обычных
+// инверторов это IP, для МАП — IP с суффиксом номера MPPT-слота, чтобы 3 разных
+// контроллера одного гейта не сливались в одну колонку/ряд Redis и PG.
+func devKey(t invTarget) string {
+	if t.Kind == kindMAP && t.Slot >= 0 {
+		return fmt.Sprintf("%s#mppt%d", t.IP, t.Slot)
+	}
+	return t.IP
 }
 
 var targets []invTarget
@@ -561,20 +577,20 @@ func mapClientFor(ip string, unit byte) *modbusmap.Client {
 	return c
 }
 
-// mapMAPRegisters строит значения универсального контракта цели «КЭС»
-// (МАП Титанатор + параллельные MPPT контроллеры) из байт-ячеек МАП.
+// mapMAPRegisters строит значения универсального контракта одного MPPT-контроллера
+// (или агрегата по всем) цели «КЭС» (МАП Титанатор + параллельные MPPT) из байт-ячеек МАП.
 //
 // Маппинг полей (ТЗ КЭС):
 //   - l1_voltage = напряжение АКБ МАП _UAcc_med_VH/VL (0x405/0x406), (VH*256+VL)/10.
 //     V_Bat самих контроллеров гейт МАП не отдаёт (проверено живьём 0x4D5=0),
 //     поэтому источник — то же напряжение АКБ, что заряжают контроллеры.
-//   - l1_current = суммарный ток заряда параллельных MPPT _I_Akb_MPPT (0x530+),
-//     каждый ток 16-бит LE (байты 0x530+2i, 0x531+2i), ×16; старший бит H=0x80
-//     означает "нет данных" и отбрасывается.
+//   - l1_current = ток заряда конкретного MPPT _I_Akb_MPPT[slot] (0x530+2*slot,
+//     0x531+2*slot, ×16); если H со старшим битом 0x80 — «нет данных», ток = 0.
+//     При slot<0 — сумма токов всех активных по параллельным MPPT.
 //   - ac_active_power = l1_voltage × l1_current (W).
 //   - grid_frequency = 0 (частоты сети инвертор МППТ не отдаёт).
 //   - pv1/pv2, ac_reactive_power, l2/l3 — в values не пишутся (нет данных).
-func mapMAPRegisters(cells map[uint16]byte) valuesContract {
+func mapMAPRegisters(cells map[uint16]byte, slot int) valuesContract {
 	out := valuesContract{}
 
 	// Напряжение АКБ МАП: _UAcc_med_VH=0x405, _UAcc_med_VL=0x406, U=(VH*256+VL)/10.
@@ -589,32 +605,30 @@ func mapMAPRegisters(cells map[uint16]byte) valuesContract {
 	}
 	uAcc /= 10
 
-	// Суммарный ток заряда параллельных MPPT (_I_Akb_MPPT).
-	// Максимум N=16; каждый ток лежит в 2 байтах L=0x530+2i, H=0x531+2i,
+	// Ток заряда MPPT: каждый ток лежит в 2 байтах L=0x530+2i, H=0x531+2i,
 	// значение = (L + H*256)/16, H со старшим битом 0x80 = "нет данных".
 	var sumA float64
-	var perMPPT []float64
-	for i := 0; i < 16; i++ {
-		lo, okL := cells[0x530+uint16(2*i)]
-		hi, okH := cells[0x531+uint16(2*i)]
-		if !okL || !okH {
-			break
+	if slot >= 0 {
+		lo, okL := cells[0x530+uint16(2*slot)]
+		hi, okH := cells[0x531+uint16(2*slot)]
+		if okL && okH && hi&0x80 == 0 {
+			sumA = float64(uint16(hi)<<8 | uint16(lo)) / 16
 		}
-		if hi&0x80 != 0 {
-			continue // нет данных с этого MPPT
+	} else {
+		for i := 0; i < 16; i++ {
+			lo, okL := cells[0x530+uint16(2*i)]
+			hi, okH := cells[0x531+uint16(2*i)]
+			if !okL || !okH {
+				break
+			}
+			if hi&0x80 != 0 {
+				continue // нет данных с этого MPPT
+			}
+			sumA += float64(uint16(hi)<<8 | uint16(lo)) / 16
 		}
-		val := float64(uint16(hi)<<8 | uint16(lo)) / 16
-		perMPPT = append(perMPPT, val)
-		sumA += val
 	}
 
 	out["l1_voltage"] = uAcc
-	if len(perMPPT) == 0 {
-		out["l1_current"] = 0.0
-		out["ac_active_power"] = 0.0
-		out["grid_frequency"] = 0.0
-		return out
-	}
 	out["l1_current"] = sumA
 	out["ac_active_power"] = uAcc * sumA
 	out["grid_frequency"] = 0.0
@@ -710,13 +724,13 @@ func pollDevice(t invTarget) DeviceResult {
 				cells[0x0520+uint16(i)] = b[i]
 			}
 		}
-		res.Values = mapMAPRegisters(cells)
+		res.Values = mapMAPRegisters(cells, t.Slot)
 		if _, has := cells[0x405]; has && cells[0x406] > 0 {
 			res.HasData = true
 		}
 		if len(res.Values) > 0 {
 			res.HasData = true
-			res.DeviceSN = fmt.Sprintf("map-%s", t.IP)
+			res.DeviceSN = fmt.Sprintf("map-%s", devKey(t))
 		}
 	}
 
@@ -767,13 +781,13 @@ func pollAndSaveMap(store *redisStore, now time.Time) {
 			}
 			snap := deviceSnapshot{
 				Name:      t.Name,
-				IP:        t.IP,
+				IP:        devKey(t),
 				Timestamp: now.Format(time.RFC3339),
 				DeviceSN:  res.DeviceSN,
 				Values:    res.Values,
 			}
 			if err := store.SaveSnapshotWindow(snap, now); err != nil {
-				log.Printf("redis map save %s: %v", t.IP, err)
+				log.Printf("redis map save %s: %v", devKey(t), err)
 			}
 		}(t)
 	}
