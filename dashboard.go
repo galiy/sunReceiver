@@ -513,13 +513,24 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 
 // sumActive агрегирует ac_active_power всех инверторов в бакеты, равные периоду
 // опроса (pollPeriod), и возвращает точки суммарной мощности с дискретностью,
-// соответствующей частоте опроса. Последняя точка приравнивается к сумме
-// последних известных значений по каждому инвертору — так правый край графика
-// совпадает с суммарной мощностью на цифровой плашке (/api/current total_power).
+// соответствующей частоте опроса. Внутри одного бакета инверторы опрашиваются
+// параллельными горутинами и могут дать несколько снимков, поэтому для каждого
+// инвертора берётся его среднее значение по бакету, и только потом эти средние
+// складываются — иначе каждое подряд-чтение завышало бы сумму в 2 и более раз.
+// Последняя точка приравнивается к сумме последних известных значений по каждому
+// инвертору — так правый край графика совпадает с суммарной мощностью на цифровой
+// плашке (/api/current total_power).
 func sumActive(snaps []deviceSnapshot) []seriesPoint {
 	step := int64(pollPeriod / time.Second) // бакет = период опроса
-	type agg struct{ sum, count float64 }
-	buckets := map[int64]*agg{}
+	// bucketSum[IP][bidx] — сумма и число снимков инвертора в бакете.
+	type perInv struct {
+		sum, count float64
+	}
+	type bucket struct {
+		invs map[string]*perInv
+		order []string
+	}
+	buckets := map[int64]*bucket{}
 	var order []int64
 	type last struct{ v float64; t time.Time }
 	latest := map[string]last{} // последнее значение по каждому инвертору
@@ -540,24 +551,36 @@ func sumActive(snaps []deviceSnapshot) []seriesPoint {
 			latestEnd = ts
 		}
 		bidx := ts.Unix() / step
-		if _, ok := buckets[bidx]; !ok {
-			buckets[bidx] = &agg{}
+		b, ok := buckets[bidx]
+		if !ok {
+			b = &bucket{invs: map[string]*perInv{}}
+			buckets[bidx] = b
 			order = append(order, bidx)
 		}
-		buckets[bidx].sum += v
-		buckets[bidx].count++
+		pi, ok := b.invs[sn.IP]
+		if !ok {
+			pi = &perInv{}
+			b.invs[sn.IP] = pi
+			b.order = append(b.order, sn.IP)
+		}
+		pi.sum += v
+		pi.count++
 	}
 	sort.Slice(order, func(i, j int) bool { return order[i] < order[j] })
 	out := make([]seriesPoint, 0, len(order))
 	for _, bidx := range order {
-		a := buckets[bidx]
-		if a.count == 0 {
-			continue
+		b := buckets[bidx]
+		var total float64
+		for _, ip := range b.order {
+			pi := b.invs[ip]
+			if pi.count == 0 {
+				continue
+			}
+			total += pi.sum / pi.count // среднее по снимкам инвертора в бакете
 		}
-		bt := time.Unix(bidx*step, 0)
 		out = append(out, seriesPoint{
-			T: bt.Format(time.RFC3339),
-			V: math.Round(a.sum*10) / 10,
+			T: time.Unix(bidx*step, 0).Format(time.RFC3339),
+			V: math.Round(total*10) / 10,
 		})
 	}
 	// Последняя точка = сумма последних известных значений по инверторам (как плашка).
@@ -566,16 +589,11 @@ func sumActive(snaps []deviceSnapshot) []seriesPoint {
 		for _, lp := range latest {
 			total += lp.v
 		}
+		pt := seriesPoint{T: latestEnd.Format(time.RFC3339), V: math.Round(total*10) / 10}
 		if len(out) > 0 {
-			out[len(out)-1] = seriesPoint{
-				T: latestEnd.Format(time.RFC3339),
-				V: math.Round(total*10) / 10,
-			}
+			out[len(out)-1] = pt
 		} else {
-			out = append(out, seriesPoint{
-				T: latestEnd.Format(time.RFC3339),
-				V: math.Round(total*10) / 10,
-			})
+			out = append(out, pt)
 		}
 	}
 	return out
