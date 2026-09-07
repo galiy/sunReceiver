@@ -11,9 +11,12 @@ import (
 )
 
 // dashboardHandler — веб-дашборд: отдаёт HTML-страницу и JSON API с текущими
-// параметрами и временными рядами всех инверторов, читаемых из Redis.
+// параметрами и временными рядами всех инверторов. Данные за последние
+// 2 календарных суток берутся из Redis (полное разрешение), более старые —
+// из PostgreSQL (5-минутные усреднённые точки).
 type dashboardHandler struct {
 	store *redisStore
+	pg    *pgStore
 }
 
 // currentResponse отвечает на GET /api/current.
@@ -430,6 +433,8 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 
 // apiSeries отдаёт временные ряды ac_active_power по инверторам за период [from, to].
 // По умолчанию (без параметров или при ошибке парсинга) — текущие календарные сутки.
+// Часть периода, попадающая в последние 2 календарных суток, читается из Redis
+// (полное разрешение), более старая часть — из PostgreSQL (5-минутные средние).
 func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	loc := time.Local
@@ -446,7 +451,7 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	snaps, err := h.store.QuerySeries(from, to)
+	snaps, err := h.loadRange(from, to, now)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -567,6 +572,40 @@ func sumActive(snaps []deviceSnapshot) []seriesPoint {
 	return out
 }
 
+// loadRange возвращает снимки за период [start, end]. Точки старше окна
+// последних 2 календарных суток берутся из PostgreSQL (5-минутные средние),
+// точки внутри окна — из Redis (полное разрешение). Если PG отключено,
+// возвращаются только данные из Redis в пределах окна удержания.
+func (h *dashboardHandler) loadRange(start, end time.Time, now time.Time) ([]deviceSnapshot, error) {
+	cutoff := recentCutoff(now)
+	var all []deviceSnapshot
+	// Старая часть периода (до cutoff) — из PostgreSQL.
+	if h.pg != nil && start.Before(cutoff) {
+		oldEnd := cutoff
+		if end.Before(oldEnd) {
+			oldEnd = end
+		}
+		pgSnaps, err := h.pg.Averages(start, oldEnd)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, pgSnaps...)
+	}
+	// Рецентная часть периода (от cutoff) — из Redis.
+	if end.After(cutoff) {
+		rStart := start
+		if rStart.Before(cutoff) {
+			rStart = cutoff
+		}
+		redisSnaps, err := h.store.QuerySeries(rStart, end)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, redisSnaps...)
+	}
+	return all, nil
+}
+
 // dayBounds возвращает границы текущих календарных суток в зоне loc.
 func dayBounds(now time.Time, loc *time.Location) (time.Time, time.Time) {
 	y, m, d := now.In(loc).Date()
@@ -576,8 +615,8 @@ func dayBounds(now time.Time, loc *time.Location) (time.Time, time.Time) {
 }
 
 // serveDashboard запускает HTTP-сервер дашборда в отдельной горутине.
-func serveDashboard(addr string, store *redisStore) {
-	h := &dashboardHandler{store: store}
+func serveDashboard(addr string, store *redisStore, pg *pgStore) {
+	h := &dashboardHandler{store: store, pg: pg}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.index)
 	mux.HandleFunc("/api/current", h.apiCurrent)

@@ -628,18 +628,22 @@ func main() {
 	defer rdb.Close()
 	store := &redisStore{rdb: rdb, ctx: context.Background()}
 
-	// Persistent-хранилище PostgreSQL: запись снимков в фоне, реставрация Redis.
+	// Persistent-хранилище PostgreSQL: только усреднённые 5-минутные точки,
+	// пишутся фоновым процессом аккумуляции (см. accumulator.go) после накопления
+	// данных за 5 минут. Реставрация Redis при пустом хранилище.
+	stopBG := make(chan struct{})
 	var pg *pgStore
-	var pgCh chan deviceSnapshot
 	if *pgDSN != "" {
 		pg, err = openPG(*pgDSN)
 		if err != nil {
 			log.Printf("pg: %v (persistent-хранилище отключено)", err)
 		} else {
 			defer pg.Close()
-			log.Printf("pg: persistent-хранилище подключено")
-			pgCh = make(chan deviceSnapshot, 512)
-			go pgWriter(pg, pgCh)
+			log.Printf("pg: persistent-хранилище подключено (5-минутные усреднённые точки)")
+			// Конвертируем старую сырую таблицу snapshots в 5-минутные средние.
+			if merr := pg.MigrateLegacy(); merr != nil {
+				log.Printf("pg legacy миграция: %v", merr)
+			}
 			// Если Redis пуст — восстановить в нём данные из PG в фоне.
 			empty, cerr := store.IsEmpty()
 			if cerr != nil {
@@ -652,8 +656,14 @@ func main() {
 		log.Printf("pg: отключено (флаг -pg пустой); работаем только через Redis")
 	}
 
+	// Фоновые процессы: усреднение данных за 5 минут в PG и очистка старых
+	// данных Redis (старше 2 календарных суток).
+	go runAccumulator(store, pg, stopBG)
+	go runRedisCleanup(store, stopBG)
+	defer close(stopBG)
+
 	if *dashboardAddr != "" {
-		go serveDashboard(*dashboardAddr, store)
+		go serveDashboard(*dashboardAddr, store, pg)
 	}
 
 	sig := make(chan os.Signal, 1)
@@ -694,14 +704,6 @@ func main() {
 			if err := store.SaveSnapshot(snap, now); err != nil {
 				log.Printf("redis save %s: %v", targets[i].IP, err)
 				continue
-			}
-			// Фоновая запись в PostgreSQL (не блокирует следующий опрос).
-			if pgCh != nil {
-				select {
-				case pgCh <- snap:
-				default:
-					log.Printf("pg backlog full, drop %s", targets[i].IP)
-				}
 			}
 			savedAny = true
 			log.Printf("saved %s: %s", targets[i].Name, targets[i].IP)
@@ -771,29 +773,20 @@ func writeFiles(results []DeviceResult, now time.Time, ts string) {
 	}
 }
 
-// pgWriter — фоновая запись снимков в PostgreSQL. Читает канал, парсит время
-// из snap.Timestamp и вставляет сторку в PG. Не блокирует опрос инверторов.
-func pgWriter(pg *pgStore, ch <-chan deviceSnapshot) {
-	for snap := range ch {
-		ts, err := time.Parse(time.RFC3339, snap.Timestamp)
-		if err != nil {
-			ts = time.Now()
-		}
-		if err := pg.Insert(snap, ts); err != nil {
-			log.Printf("pg write %s: %v", snap.IP, err)
-		}
-	}
-}
-
 // restoreRedisFromPG восстанавливает Redis из persistent-хранилища PostgreSQL
-// за период [now-window, now]. Запускается в фоне при пустом Redis, пока сборщики
-// продолжают писать новые снимки. Для каждой точки вызывается SaveSnapshot
-// (обновляет current и кладёт точку в месячный ZSET ряда).
+// (5-минутные усреднённые точки) за период [now-window, now], но не старше окна
+// удержания Redis (последние 2 календарных суток), иначе фоновая очистка сразу
+// удалит восстановленное. Запускается в фоне при пустом Redis. Для каждой точки
+// вызывается SaveSnapshot (обновляет current и кладёт точку в месячный ZSET ряда).
 func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration) {
 	end := time.Now()
-	start := end.Add(-window)
-	log.Printf("pg restore: восстанавливаю Redis из PG за %s", window)
-	snaps, err := pg.Snapshots(start, end)
+	start := recentCutoff(end)
+	if w := end.Add(-window); w.After(start) {
+		start = w
+	}
+	log.Printf("pg restore: восстанавливаю Redis из PG за [%s, %s]",
+		start.Format(time.RFC3339), end.Format(time.RFC3339))
+	snaps, err := pg.Averages(start, end)
 	if err != nil {
 		log.Printf("pg restore: query: %v", err)
 		return
