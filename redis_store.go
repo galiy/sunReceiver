@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -163,6 +164,34 @@ func (s *redisStore) SaveSnapshotWindow(snap deviceSnapshot, ts time.Time) error
 		return fmt.Errorf("save window %s: %w", snap.IP, err)
 	}
 	return nil
+}
+
+// PruneMPPT удаляет из HASH current все MPPT-ключи (содержащие "#mppt"), которых
+// нет в active (множество актуальных devKey каждого MPPT, присутствующем в ответе
+// ПАК «Малина»). Нужно, чтобы исчезнувшие с МАП контроллеры переставали считаться
+// «актуальными» на дашборде, но их история во временном ряду сохранялась.
+func (s *redisStore) PruneMPPT(active map[string]struct{}) {
+	m, err := s.rdb.HGetAll(s.ctx, redisCurrentKey).Result()
+	if err != nil {
+		log.Printf("redis prune mppt HGETALL: %v", err)
+		return
+	}
+	var keys []string
+	for ip := range m {
+		if !strings.Contains(ip, "#mppt") {
+			continue
+		}
+		if _, ok := active[ip]; ok {
+			continue
+		}
+		keys = append(keys, ip)
+	}
+	if len(keys) == 0 {
+		return
+	}
+	if err := s.rdb.HDel(s.ctx, redisCurrentKey, keys...).Err(); err != nil {
+		log.Printf("redis prune mppt del %v: %v", keys, err)
+	}
 }
 
 // eachMonth вызывает fn для каждого года/месяца, покрывающего [start, end] включительно.
