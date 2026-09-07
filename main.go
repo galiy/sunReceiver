@@ -41,7 +41,8 @@ const (
 // Name — логическое имя из sunReceiver.json (например, "Deye Left").
 // Unit — Modbus-адрес устройства для МАП (kindMAP), по умолчанию 1.
 // Slot — для kindMAP: индекс MPPT-контроллера (0..15), -1 = агрегат/база батареи-сети;
-//        для kindMPPT: индекс контроллера (слот) в ответе read_json.php?device=mppt.
+//
+//	для kindMPPT: индекс контроллера (слот) в ответе read_json.php?device=mppt.
 type invTarget struct {
 	IP       string
 	Name     string
@@ -634,7 +635,7 @@ func mapMAPRegisters(cells map[uint16]byte, slot int) valuesContract {
 	var iAcc float64
 	if l, okL := cells[0x432]; okL {
 		if h, okH := cells[0x433]; okH {
-			iAcc = float64(uint16(h)<<8 | uint16(l)) / 16
+			iAcc = float64(uint16(h)<<8|uint16(l)) / 16
 		}
 	}
 
@@ -651,8 +652,9 @@ func mapMAPRegisters(cells map[uint16]byte, slot int) valuesContract {
 			out["grid_voltage"] = float64(un) + 100
 		}
 	}
-	// Мощность сети: _PNET (16 бит) = 0x59A(L),0x59B(H), Pnet=((H*256+L)/8)*100;
-	// знак по _PNET_Sign_P=0x587: 1 — продажа(+)/(-), 0 — закупка(-).
+	// Мощность сети: _PNET (16 бит) = 0x59A(L),0x59B(H), Pnet=((H*256+L)/8)*100.
+	// Знак по _PNET_Sign_P=0x587 (как в mapread.py) семантики дашборда:
+	// 1 — положительная (потребляем из сети), 0 — отрицательная (продажа/отдача в сеть).
 	if lo, okL := cells[0x59A]; okL {
 		if hi, okH := cells[0x59B]; okH {
 			pnet := (float64(hi)*256 + float64(lo)) / 8 * 100
@@ -662,30 +664,31 @@ func mapMAPRegisters(cells map[uint16]byte, slot int) valuesContract {
 			out["grid_power"] = pnet
 		}
 	}
-	// Мощность батареи со знаком по режиму работы МАП (фирменная логика mapread.py):
-	//   - режим заряда (MODE=0x400 == 4): P = I_АКБ × U_АКБ (заряд, положительная),
+	// Мощность батареи со знаком (семантика дашборда: заряд = отрицательная,
+	// отдача в нагрузку/сеть = положительная). Источник — фирменная логика mapread.py:
+	//   - режим заряда (MODE=0x400 == 4): P = −(I_АКБ × U_АКБ) (заряд — отрицательная),
 	//     ток АКБ _IAcc_med = 0x432/0x433, I[А]=(L+H*256)/16;
-	//   - иначе (генерация/подкачка/трансляция): P = −PLoad (отдача в нагрузку,
-	//     отрицательная). Предпочитаем 16-битную PLoad_8 (0x59E/0x59F), но гейт
-	//     чаще отдаёт её нулём — тогда берём 8-битную _PLoad_L (0x409, ×100).
+	//   - иначе (генерация/подкачка/трансляция): P = +PLoad (отдача в нагрузку — положительная).
+	//     Предпочитаем 16-битную PLoad_8 (0x59E/0x59F), но гейт чаще отдаёт её нулём —
+	//     тогда берём 8-битную _PLoad_L (0x409, ×100).
 	var batP float64
 	if mode, okM := cells[0x400]; okM && mode == 4 {
 		if l, okL := cells[0x432]; okL {
 			if h, okH := cells[0x433]; okH {
-				batP = (float64(uint16(h)<<8|uint16(l)) / 16) * uAcc
+				batP = -(float64(uint16(h)<<8|uint16(l)) / 16) * uAcc
 			}
 		}
 	} else {
 		if lo, okL := cells[0x59E]; okL {
 			if hi, okH := cells[0x59F]; okH {
 				if uv := uint16(hi)<<8 | uint16(lo); uv > 0 {
-					batP = -(float64(uv) / 8 * 100)
+					batP = float64(uv) / 8 * 100
 				}
 			}
 		}
 		if batP == 0 {
 			if raw, ok := cells[0x409]; ok {
-				batP = -float64(raw) * 100
+				batP = float64(raw) * 100
 			}
 		}
 	}

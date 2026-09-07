@@ -21,7 +21,7 @@ type mpptSite struct {
 	Login    string
 	Password string
 
-	client *http.Client
+	client  *http.Client
 	authHdr string // "Basic base64(login:password)"
 }
 
@@ -29,7 +29,7 @@ type mpptSite struct {
 type siteConfig struct {
 	Site struct {
 		BaseURL string `json:"base_url"`
-		URLs     struct {
+		URLs    struct {
 			ReadJSONMPPT string `json:"read_json_mppt"`
 		} `json:"urls"`
 		Auth struct {
@@ -196,7 +196,8 @@ func (s *mpptSite) FetchMPPTs() ([]mpptRaw, error) {
 //   - pv1_voltage/current/power = Vc_PV / Ic_PV / P_PV (панели данного контроллера);
 //   - l1_voltage = V_Bat (напряжение АКБ);
 //   - l1_current = I_Ch (ток заряда);
-//   - ac_active_power = P_Out (мощность на выходе контроллера / заряд).
+//   - ac_active_power = P_Out (мощность на выходе контроллера / заряд);
+//   - energy_today = Pwr_kW + Pwr_W/1000 (общий объём выработки за сутки, кВт·ч).
 //
 // Возвращает также ts актуальности данных (поле timestamp ответа API).
 func mapMPPTAPI(r mpptRaw) (valuesContract, time.Time, bool) {
@@ -221,6 +222,14 @@ func mapMPPTAPI(r mpptRaw) (valuesContract, time.Time, bool) {
 	}
 	if v, ok = parseFloat(r.P_Out); ok {
 		out["ac_active_power"] = v
+	}
+	// Общий объём выработки за сутки, кВт·ч: Pwr_kW (кВт·ч) + Pwr_W (добавочные Вт·ч).
+	// Суммарно за сутки = Pwr_kW*1000 + Pwr_W (Вт·ч) → energy_today = Pwr_kW + Pwr_W/1000.
+	if v, ok = parseFloat(r.Pwr_kW); ok {
+		if w, ok2 := parseFloat(r.Pwr_W); ok2 {
+			v += w / 1000
+		}
+		out["energy_today"] = v
 	}
 	if len(out) == 0 {
 		return nil, ts, false
