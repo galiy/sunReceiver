@@ -37,7 +37,7 @@ const (
 
 // invTarget — целевой инвертор. LoggerSN — серийный номер даталоггера,
 // обязателен для Deye (иначе логгер отвечает кодом 0x06 "serial number not match").
-// Name — логическое имя из config.json (например, "Deye Left").
+// Name — логическое имя из sunReceiver.json (например, "Deye Left").
 // Unit — Modbus-адрес устройства для МАП (kindMAP), по умолчанию 1.
 type invTarget struct {
 	IP       string
@@ -48,7 +48,7 @@ type invTarget struct {
 	Slot     int // для kindMAP: индекс MPPT-контроллера (0..15), -1 = агрегат по всем
 }
 
-// configTarget — запись инвертора в config.json.
+// configTarget — запись инвертора в sunReceiver.json.
 type configTarget struct {
 	IP       string `json:"ip"`
 	Name     string `json:"name"`
@@ -62,16 +62,16 @@ type configFile struct {
 	Targets []configTarget `json:"targets"`
 }
 
-// configPath — config.json в каталоге исполняемого файла.
+// configPath — sunReceiver.json в каталоге исполняемого файла.
 func configPath() string {
 	exe, err := os.Executable()
 	if err != nil {
-		return "config.json"
+		return "sunReceiver.json"
 	}
-	return filepath.Join(filepath.Dir(exe), "config.json")
+	return filepath.Join(filepath.Dir(exe), "sunReceiver.json")
 }
 
-// loadConfig читает и проверяет config.json, возвращает список целей.
+// loadConfig читает и проверяет sunReceiver.json, возвращает список целей.
 func loadConfig(path string) ([]invTarget, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -806,8 +806,8 @@ func main() {
 
 	cfgPath := configPath()
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
-		// `go run .`: бинарник во временном каталоге go-сборки — ищем config.json в CWD.
-		cfgPath = "config.json"
+		// `go run .`: бинарник во временном каталоге go-сборки — ищем sunReceiver.json в CWD.
+		cfgPath = "sunReceiver.json"
 	}
 	var err error
 	targets, err = loadConfig(cfgPath)
