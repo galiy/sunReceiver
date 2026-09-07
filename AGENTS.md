@@ -159,7 +159,7 @@ Deye-логгеры (LSE, rebrand Solarman) понимают Solarman V5-кад�
 8. ~~Redis — только последние 2 календарных суток + фоновая очистка~~ — готово (`accumulator.go`: `runRedisCleanup`/`redisStore.PurgeOld`, cutoff `recentCutoff`).
 9. ~~PostgreSQL — только 5-минутные усреднённые точки~~ — готово (`pg_store.go`: таблица `averages`, `InsertAveraged`/`Averages`, миграция legacy `snapshots`→`averages`; запись из poller убрана, усреднение в фоне `runAccumulator`).
 10. ~~Дашборд: <2 суток из Redis, старше — из PG~~ — готово (`dashboardHandler.loadRange`).
-11. МАП Титанатор («КЭС») — подключение Modbus TCP + маппинг на контракт (см. секцию «МАП Титанатор…»). В config.json добавлена цель `MAP TESla` (192.168.13.74). PV с контроллеров — на следующем этапе из другого источника.
+11. ~~МАП Титанатор («КЭС»): Modbus TCP (батарея/сеть) + MPPT через веб-API ПАК «Малина»~~ — готово (см. секцию «МАП Титанатор…»): тип `map` — МАП по Modbus TCP (192.168.13.74, unit 1) для данных батареи/сети на дашборд; тип `mppt` — контроллеры MPPT через read_json.php ПАК «Малина» (192.168.13.60). PV с контроллеров MPPT — через веб-API (источник ПАК «Малина»), на дашборд в значениях МАП.
 
 ## Окружение
 - Репо: github.com/galiy/sunReceiver (remote git@github.com:galiy/sunReceiver.git, branch main).
