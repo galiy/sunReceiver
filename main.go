@@ -136,8 +136,8 @@ type valuesContract map[string]any
 // единицах измерения. Только эти теги попадают в values; порядок в файле фиксирован.
 var commonContractTags = []string{
 	// PV входы
-	"pv1_voltage", "pv1_current",
-	"pv2_voltage", "pv2_current",
+	"pv1_voltage", "pv1_current", "pv1_power",
+	"pv2_voltage", "pv2_current", "pv2_power",
 	// AC выход
 	"ac_active_power",
 	"ac_reactive_power",
@@ -485,6 +485,18 @@ func mapDeyeRegisters(regs map[uint16]uint16) valuesContract {
 			out[def.Tag] = float64(int32(val))*def.Ratio + def.Offset
 		} else {
 			out[def.Tag] = float64(val)*def.Ratio + def.Offset
+		}
+	}
+	// Мощность PV-входов: Deye string отдаёт только V и I на каждый вход
+	// (0x6D/0x6E — PV1, 0x6F/0x70 — PV2); мощность считаем как P = V * I (W).
+	if v1, ok := out["pv1_voltage"]; ok {
+		if i1, ok := out["pv1_current"]; ok {
+			out["pv1_power"] = v1.(float64) * i1.(float64)
+		}
+	}
+	if v2, ok := out["pv2_voltage"]; ok {
+		if i2, ok := out["pv2_current"]; ok {
+			out["pv2_power"] = v2.(float64) * i2.(float64)
 		}
 	}
 	return out
