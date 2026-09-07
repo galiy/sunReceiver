@@ -1,6 +1,9 @@
 # runtime-данные poller'а
 data/
 
+# конфигурация веб-интерфейса МАП (url, логин, пароль) — не коммитить
+malina.json
+
 # бинарники сборки
 sunReceiver
 solarman-probe
