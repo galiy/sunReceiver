@@ -103,19 +103,17 @@ h1 { font-size:22px; margin:0 0 4px; }
 .chart-wrap { position:relative; height:340px; }
 .charts { display:flex; flex-wrap:wrap; gap:16px; margin-bottom:20px; }
 .charts #chartbox { flex:1 1 46%; min-width:min(420px,100%); margin-bottom:0; }
-.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr)); gap:12px; width:100%; }
-.card { background:#181c24; border:1px solid #252b36; border-radius:10px; padding:14px 16px; min-width:0; max-width:100%; overflow:hidden; }
-.card h2 { margin:0 0 12px; font-size:16px; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }
-.card .badge { font-size:12px; color:#0f1115; background:#3fb950; padding:2px 8px; border-radius:20px; }
-.card .ts { font-size:12px; color:#8a93a1; font-weight:normal; }
-.card .groups { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(140px,100%),1fr)); gap:12px; }
-.group h3 { margin:0 0 6px; font-size:12px; color:#8a93a1; text-transform:uppercase; letter-spacing:.05em; }
-.rows { display:flex; flex-direction:column; gap:5px; }
-.row { display:grid; grid-template-columns:minmax(0,1fr) max-content; gap:0 10px; align-items:baseline; font-size:13px; line-height:1.3; }
-.row .k { color:#aab3bf; min-width:0; }
-.row .v { font-variant-numeric:tabular-nums; font-weight:600; text-align:right; justify-self:end; }
-.row .u { color:#8a93a1; font-weight:400; font-size:12px; margin-left:2px; }
 .missing { color:#6b7280; font-style:italic; }
+/* Сводная таблица параметров по инверторам */
+.pivot-wrap { background:#181c24; border:1px solid #252b36; border-radius:10px; padding:14px 16px; margin:16px 0 20px; overflow-x:auto; }
+.pivot-table { border-collapse:collapse; width:100%; font-size:13px; }
+.pivot-table th, .pivot-table td { border:1px solid #333b49; padding:6px 10px; text-align:center; white-space:nowrap; }
+.pivot-table thead th { font-size:12px; font-weight:600; color:#e6e6e6; background:#202630; }
+.pivot-table .p-label { text-align:left; color:#aab3bf; width:auto; }
+.pivot-table td.p-val { font-variant-numeric:tabular-nums; font-weight:600; }
+.pivot-table td.p-unit { color:#8a93a1; font-weight:400; }
+.pivot-table td.p-empty { color:#4a5464; }
+.pivot-table tr:nth-child(even) td { background:#1b212b; }
 .kpi { display:flex; align-items:stretch; gap:16px; margin-bottom:20px; }
 .kpi-plate { flex:1; background:linear-gradient(135deg,#1d2430,#202a3a); border:1px solid #2a3342; border-radius:12px; padding:18px 22px; display:flex; flex-direction:column; gap:4px; }
 .kpi-label { font-size:12px; color:#8a93a1; text-transform:uppercase; letter-spacing:.06em; }
@@ -166,7 +164,7 @@ h1 { font-size:22px; margin:0 0 4px; }
   </div>
 </div>
 
-<div class="cards" id="cards"><div class="missing">Загрузка...</div></div>
+<div class="pivot-wrap" id="cards"><div class="missing">Загрузка...</div></div>
 
 <script>
 'use strict';
@@ -178,42 +176,42 @@ function fmtSec(t){ var d=new Date(t); function p(x){return (x<10?'0':'')+x;} re
 function startOfToday(){ var d=new Date(); d.setHours(0,0,0,0); return d; }
 function endOfToday(){ var d=new Date(); d.setHours(23,59,59,999); return d; }
 
-// ---------- Таблички текущих параметров ----------
-// Каждый тег: смысловая подпись по-русски + единица измерения.
-var sel = {
-	pv1_voltage:['Напряжение PV1','V'],pv1_current:['Ток PV1','A'],pv1_power:['Мощность PV1','W'],
-	pv2_voltage:['Напряжение PV2','V'],pv2_current:['Ток PV2','A'],pv2_power:['Мощность PV2','W'],
-	ac_active_power:['Активная мощность','W'],ac_reactive_power:['Реактивная мощность','var'],
-	grid_frequency:['Частота сети','Hz'],
-	l1_voltage:['Напряжение L1','V'],l1_current:['Ток L1','A'],
-	l2_voltage:['Напряжение L2','V'],l2_current:['Ток L2','A'],
-	l3_voltage:['Напряжение L3','V'],l3_current:['Ток L3','A'],
-	energy_today:['Выработка сегодня','kWh'],energy_total:['Выработка всего','kWh']
-};
-function render(dev){
-	var g={};
-	var keys=Object.keys(dev.values||{});
-	for(var i=0;i<keys.length;i++){
-		var k=keys[i], v=dev.values[k];
-		if(!sel[k]) continue;
-		var gk = (k.indexOf('ac_')===0 || k==='grid_frequency') ? 'AC' : ((k.indexOf('pv')===0)?'PV':'Energy');
-		if(!g[gk]) g[gk]=[];
-		g[gk].push({lab:sel[k][0], val:v, uni:sel[k][1]});
-	}
-	var order=['PV','AC','Energy'];
-	var rows='';
-	for(var j=0;j<order.length;j++){
-		var gk=order[j];
-		if(!g[gk]) continue;
-		var gTitle = gk==='PV' ? 'Входы PV' : (gk==='AC' ? 'Выход AC' : 'Энергия');
-		rows += '<div class="group"><h3>' + gTitle + '</h3><div class="rows">';
-		for(var m=0;m<g[gk].length;m++){
-			var it=g[gk][m];
-			rows += '<div class="row"><span class="k">' + esc(it.lab) + '</span><span class="v">' + esc(it.val) + ' <span class="u">' + esc(it.uni) + '</span></span></div>';
+// ---------- Сводная таблица параметров по инверторам ----------
+// Упорядоченный список строк: [тег, подпись, единица измерения].
+// Единица пишется в самую правую колонку и одинакова для всех инверторов.
+var PARAMS = [
+	['pv1_voltage','Напряжение PV1','V'], ['pv1_current','Ток PV1','A'], ['pv1_power','Мощность PV1','W'],
+	['pv2_voltage','Напряжение PV2','V'], ['pv2_current','Ток PV2','A'], ['pv2_power','Мощность PV2','W'],
+	['ac_active_power','Активная мощность','W'], ['ac_reactive_power','Реактивная мощность','var'],
+	['grid_frequency','Частота сети','Hz'],
+	['l1_voltage','Напряжение L1','V'], ['l1_current','Ток L1','A'],
+	['l2_voltage','Напряжение L2','V'], ['l2_current','Ток L2','A'],
+	['l3_voltage','Напряжение L3','V'], ['l3_current','Ток L3','A'],
+	['energy_today','Выработка сегодня','kWh'], ['energy_total','Выработка всего','kWh']
+];
+// devValue возвращает строковое значение тега инвертора или null, если его нет.
+function devValue(dev, tag){
+	var v = (dev && dev.values) ? dev.values[tag] : undefined;
+	return (v === undefined || v === null) ? null : v;
+}
+function renderPivot(devices){
+	if(!devices || !devices.length) return '<div class="missing">No data in Redis</div>';
+	var h = '<table class="pivot-table"><thead><tr><th></th>';
+	for(var i=0;i<devices.length;i++) h += '<th>'+esc(devices[i].name)+'</th>';
+	h += '<th></th></tr></thead><tbody>';
+	for(var p=0;p<PARAMS.length;p++){
+		var tag=PARAMS[p][0], label=PARAMS[p][1], unit=PARAMS[p][2];
+		h += '<tr><td class="p-label">'+esc(label)+'</td>';
+		for(var d=0;d<devices.length;d++){
+			var v=devValue(devices[d], tag);
+			h += (v===null)
+				? '<td class="p-empty"></td>'
+				: '<td class="p-val">'+esc(v)+'</td>';
 		}
-		rows += '</div></div>';
+		h += '<td class="p-unit">'+esc(unit)+'</td></tr>';
 	}
-	return rows;
+	h += '</tbody></table>';
+	return h;
 }
 async function tick(){
 	try{
@@ -231,17 +229,7 @@ async function tick(){
 			document.getElementById('kpiSub').textContent='Нет данных';
 		}
 		var cards=document.getElementById('cards');
-		cards.innerHTML='';
-		if(!data.devices.length){ cards.innerHTML='<div class="missing">No data in Redis</div>'; return; }
-		for(var i=0;i<data.devices.length;i++){
-			var d=data.devices[i];
-			var el=document.createElement('div'); el.className='card';
-			var ts=(d.timestamp||'').replace('T',' ').substring(0,19);
-			var ok=d.values && Object.keys(d.values).length>0;
-			var body=ok?render(d):'<div class="missing">No data</div>';
-			el.innerHTML='<h2><span>'+esc(d.name)+'</span><span>'+(ok?'<span class="badge">online</span>':'')+'<span class="ts">'+esc(ts)+'</span></span></h2>'+body;
-			cards.appendChild(el);
-		}
+		cards.innerHTML = renderPivot(data.devices);
 	}catch(e){}
 }
 
