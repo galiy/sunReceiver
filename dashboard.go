@@ -274,7 +274,9 @@ function devValue(dev, tag){
 	if(v === undefined || v === null){
 		if(tag === 'l1_power' && dev && dev.values){
 			var u=dev.values['l1_voltage'], i=dev.values['l1_current'];
-			if(u!==undefined && u!==null && i!==undefined && i!==null) v=Number(u)*Number(i);
+			// Мощность = U×I. Произведение чисел с плавающей точкой даёт длинную дробную
+			// часть (например 228.9×0.35 = 80.11499999…) — округляем до 1 знака, как у остальных.
+			if(u!==undefined && u!==null && i!==undefined && i!==null) v=Math.round(Number(u)*Number(i)*10)/10;
 		}
 	}
 	return (v === undefined || v === null) ? null : v;
