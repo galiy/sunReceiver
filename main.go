@@ -495,7 +495,9 @@ var deyeRegMap = map[uint16]deyeSensor{
 	0xC6: {"load_power", "load_power", 1, "W", true, 0, true},
 	0xC8: {"daily_load_consumption", "energy_load_today", 0.01, "kWh", false, 0, false},
 	0xC9: {"total_load_consumption", "energy_load_total", 0.1, "kWh", false, 0, true},
-	0xCB: {"grid_power", "grid_power", 1, "W", false, 0, true},
+	// 0xCB "Grid power" Deye НЕ маппится: тег grid_power зарезервирован контрактом
+	// за устройством МАП (kindMAP) — плашки/график МАП строятся по нему. Маппинг
+	// сюда из Deye-регистра давал бы ложные нули в ряду мощности сети МАП.
 	0xCD: {"daily_energy_sold", "energy_sold_today", 0.01, "kWh", false, 0, false},
 	0xCE: {"total_energy_sold", "energy_sold_total", 0.1, "kWh", false, 0, true},
 	0xD0: {"daily_energy_bought", "energy_bought_today", 0.01, "kWh", false, 0, false},
@@ -626,31 +628,18 @@ func mapMAPRegisters(cells map[uint16]byte, slot int) valuesContract {
 	out["l1_voltage"] = uAcc
 	out["battery_voltage"] = uAcc
 
-	// Ток заряда MPPT: каждый ток лежит в 2 байтах L=0x530+2i, H=0x531+2i,
-	// значение = (L + H*256)/16, H со старшим битом 0x80 = "нет данных".
-	var sumA float64
-	if slot >= 0 {
-		lo, okL := cells[0x530+uint16(2*slot)]
-		hi, okH := cells[0x531+uint16(2*slot)]
-		if okL && okH && hi&0x80 == 0 {
-			sumA = float64(uint16(hi)<<8 | uint16(lo)) / 16
-		}
-	} else {
-		for i := 0; i < 16; i++ {
-			lo, okL := cells[0x530+uint16(2*i)]
-			hi, okH := cells[0x531+uint16(2*i)]
-			if !okL || !okH {
-				break
-			}
-			if hi&0x80 != 0 {
-				continue // нет данных с этого MPPT
-			}
-			sumA += float64(uint16(hi)<<8 | uint16(lo)) / 16
+	// Ток АКБ: _IAcc_med_A_u16_L=0x432, _IAcc_med_A_u16_H=0x433,
+	// I[А] = (L + H*256)/16. Это более точный ток батареи (заряд/разряд АКБ);
+	// токи MPPT (0x530) — это токи контроллеров, а не ток самой АКБ.
+	var iAcc float64
+	if l, okL := cells[0x432]; okL {
+		if h, okH := cells[0x433]; okH {
+			iAcc = float64(uint16(h)<<8 | uint16(l)) / 16
 		}
 	}
 
-	out["l1_current"] = sumA
-	out["ac_active_power"] = uAcc * sumA
+	out["l1_current"] = iAcc
+	out["ac_active_power"] = uAcc * iAcc
 	out["grid_frequency"] = 0.0
 
 	// ---- Данные батареи и сети МАП (для дашборда КЭС) ----
@@ -673,13 +662,34 @@ func mapMAPRegisters(cells map[uint16]byte, slot int) valuesContract {
 			out["grid_power"] = pnet
 		}
 	}
-	// Мощность нагрузки по АКБ (батареи): _PLoad (16 бит) = 0x59E(L),0x59F(H),
-	// Pload=((H*256+L)/8)*100.
-	if lo, okL := cells[0x59E]; okL {
-		if hi, okH := cells[0x59F]; okH {
-			out["battery_power"] = (float64(hi)*256 + float64(lo)) / 8 * 100
+	// Мощность батареи со знаком по режиму работы МАП (фирменная логика mapread.py):
+	//   - режим заряда (MODE=0x400 == 4): P = I_АКБ × U_АКБ (заряд, положительная),
+	//     ток АКБ _IAcc_med = 0x432/0x433, I[А]=(L+H*256)/16;
+	//   - иначе (генерация/подкачка/трансляция): P = −PLoad (отдача в нагрузку,
+	//     отрицательная). Предпочитаем 16-битную PLoad_8 (0x59E/0x59F), но гейт
+	//     чаще отдаёт её нулём — тогда берём 8-битную _PLoad_L (0x409, ×100).
+	var batP float64
+	if mode, okM := cells[0x400]; okM && mode == 4 {
+		if l, okL := cells[0x432]; okL {
+			if h, okH := cells[0x433]; okH {
+				batP = (float64(uint16(h)<<8|uint16(l)) / 16) * uAcc
+			}
+		}
+	} else {
+		if lo, okL := cells[0x59E]; okL {
+			if hi, okH := cells[0x59F]; okH {
+				if uv := uint16(hi)<<8 | uint16(lo); uv > 0 {
+					batP = -(float64(uv) / 8 * 100)
+				}
+			}
+		}
+		if batP == 0 {
+			if raw, ok := cells[0x409]; ok {
+				batP = -float64(raw) * 100
+			}
 		}
 	}
+	out["battery_power"] = batP
 	return out
 }
 
@@ -764,7 +774,10 @@ func pollDevice(t invTarget) DeviceResult {
 		cells := map[uint16]byte{}
 		// первое чтение может «прогреть» гейт и занять долго — оно же и должно
 		// вернуть данные; повторные чтения в том же сокете быстрые.
-		if b, err := mc.ReadRegisters(0x0400, 0x10); err == nil {
+		// Блок 0x400 (0x20 слов = 0x400..0x43F) охватывает режим (0x400), мощности
+		// (_PLoad_L 0x409), напряжения (_UNET 0x422, _INET 0x423, _PNET_L 0x424)
+		// и ток АКБ (_IAcc_med 0x432/0x433).
+		if b, err := mc.ReadRegisters(0x0400, 0x20); err == nil {
 			for i := 0; i < len(b); i++ {
 				cells[0x0400+uint16(i)] = b[i]
 			}

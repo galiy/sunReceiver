@@ -80,6 +80,34 @@ func (s *redisStore) SaveSnapshot(snap deviceSnapshot, ts time.Time) error {
 	return nil
 }
 
+// mergeMAPSnap дополняет снимок устройства МАП недостающими МАП-тегами
+// (grid_voltage, grid_power, battery_voltage, battery_power) значениями из
+// предыдущего снимка prevMember этого же устройства. Нужно из-за того, что гейт
+// МАП нестабильно отдаёт блоки ячеек: тег может отсутствовать в части кадров.
+// Возвращает снимок с полным набором последних известных значений МАП.
+func mergeMAPSnap(snap deviceSnapshot, prevMember string) deviceSnapshot {
+	if prevMember == "" {
+		return snap
+	}
+	var prev deviceSnapshot
+	if err := json.Unmarshal([]byte(prevMember), &prev); err != nil {
+		return snap
+	}
+	out := valuesContract{}
+	for k, v := range snap.Values {
+		out[k] = v
+	}
+	for _, tag := range []string{"grid_voltage", "grid_power", "battery_voltage", "battery_power"} {
+		if _, ok := out[tag]; !ok {
+			if pv, ok2 := prev.Values[tag]; ok2 {
+				out[tag] = pv
+			}
+		}
+	}
+	snap.Values = out
+	return snap
+}
+
 // SaveSnapshotWindow — специальная запись для целей kindMAP: снимок пишется с
 // score = начало 10-секундного окна (ts.Truncate(10s)), а не с точной секундой.
 // В пределах одного окна каждая новая запись ЗАМЕНЯЕТ предыдущую точку этого же
@@ -89,18 +117,36 @@ func (s *redisStore) SaveSnapshot(snap deviceSnapshot, ts time.Time) error {
 func (s *redisStore) SaveSnapshotWindow(snap deviceSnapshot, ts time.Time) error {
 	window := ts.Truncate(10 * time.Second)
 	winUnix := window.Unix()
-	b, err := json.Marshal(snap)
+
+	// Для устройства МАП (kindMAP) недостающие МАП-теги (grid_voltage, grid_power,
+	// battery_voltage, battery_power) дополняем из предыдущего снимка этого же
+	// устройства: гейт МАП нестабильно отдаёт блоки, поэтому последнее известное
+	// значение сохраняется, а на плашках/графиках дашборда не бывает прочерка.
+	merged := snap
+	if isMAPDevice(snap.Values) {
+		prevMember := ""
+		s.mapMu.Lock()
+		if p, had := s.mapWin[snap.IP]; had {
+			prevMember = p.member
+		}
+		s.mapMu.Unlock()
+		merged = mergeMAPSnap(snap, prevMember)
+	}
+
+	b, err := json.Marshal(merged)
 	if err != nil {
 		return fmt.Errorf("marshal snapshot %s: %w", snap.IP, err)
 	}
 	member := string(b)
 	key := redisSeriesKey(window)
 
+	var prev mapWinMember
+	had := false
 	s.mapMu.Lock()
 	if s.mapWin == nil {
 		s.mapWin = map[string]mapWinMember{}
 	}
-	prev, had := s.mapWin[snap.IP]
+	prev, had = s.mapWin[snap.IP]
 	s.mapWin[snap.IP] = mapWinMember{window: winUnix, member: member}
 	s.mapMu.Unlock()
 
