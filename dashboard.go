@@ -21,14 +21,15 @@ type dashboardHandler struct {
 
 // currentResponse отвечает на GET /api/current.
 type currentResponse struct {
-	GeneratedAt   string           `json:"generated_at"`
-	TotalPower    float64          `json:"total_power"`
-	TotalPV       float64          `json:"total_pv"`
-	MapGridV      float64          `json:"map_grid_voltage"`
-	MapGridP      float64          `json:"map_grid_power"`
-	MapBatV       float64          `json:"map_battery_voltage"`
-	MapBatP       float64          `json:"map_battery_power"`
-	Devices       []deviceSnapshot `json:"devices"`
+	GeneratedAt string           `json:"generated_at"`
+	TotalPower  float64          `json:"total_power"`
+	TotalPV     float64          `json:"total_pv"`
+	MapGridV    float64          `json:"map_grid_voltage"`
+	MapGridP    float64          `json:"map_grid_power"`
+	MapBatV     float64          `json:"map_battery_voltage"`
+	MapBatP     float64          `json:"map_battery_power"`
+	MapCons     float64          `json:"map_consumption"`
+	Devices     []deviceSnapshot `json:"devices"`
 }
 
 // seriesPoint — одна точка временного ряда: время + значение.
@@ -56,6 +57,7 @@ type seriesResponse struct {
 	MapGridPower   []seriesPoint  `json:"map_grid_power,omitempty"`
 	MapBatVoltage  []seriesPoint  `json:"map_battery_voltage,omitempty"`
 	MapBatPower    []seriesPoint  `json:"map_battery_power,omitempty"`
+	MapCons        []seriesPoint  `json:"map_consumption,omitempty"`
 }
 
 // seriesPalette — цвета линий инверторов (по индексу после сортировки по имени).
@@ -175,6 +177,11 @@ h1 { font-size:22px; margin:0 0 4px; }
     <div class="kpi-value"><span id="kpiBatP">—</span><span class="kpi-unit">W</span></div>
     <div class="kpi-sub">МАП (батарея/сеть)</div>
   </div>
+  <div class="kpi-plate">
+    <div class="kpi-label">Мощность потребления</div>
+    <div class="kpi-value"><span id="kpiConsP">—</span><span class="kpi-unit">W</span></div>
+    <div class="kpi-sub">Сеть + батарея</div>
+  </div>
 </div>
 
 <div class="period-panel">
@@ -198,7 +205,7 @@ h1 { font-size:22px; margin:0 0 4px; }
   </div>
 
   <div id="chartbox">
-    <h2>Мощность сети (МАП), W</h2>
+    <h2>Мощности сети и батареи (МАП), W</h2>
     <div class="chart-toolbar">
       <span id="gridPChartRange"></span>
       <button id="btnGridPReset">Сброс зума</button>
@@ -248,12 +255,20 @@ var PARAMS = [
 	['pv2_voltage','Напряжение PV2','V'], ['pv2_current','Ток PV2','A'], ['pv2_power','Мощность PV2','W'],
 	['ac_active_power','Активная мощность','W'], ['ac_reactive_power','Реактивная мощность','var'],
 	['grid_frequency','Частота сети','Hz'],
-	['l1_voltage','Напряжение L1','V'], ['l1_current','Ток L1','A'],
+	['l1_voltage','Напряжение L1','V'], ['l1_current','Ток L1','A'], ['l1_power','Мощность L1','W'],
 	['energy_today','Выработка сегодня','kWh'], ['energy_total','Выработка всего','kWh']
 ];
 // devValue возвращает строковое значение тега инвертора или null, если его нет.
+// Для вычисляемых тегов (l1_power = l1_voltage × l1_current) значение считается из
+// исходных тегов, если явного тега в данных нет.
 function devValue(dev, tag){
 	var v = (dev && dev.values) ? dev.values[tag] : undefined;
+	if(v === undefined || v === null){
+		if(tag === 'l1_power' && dev && dev.values){
+			var u=dev.values['l1_voltage'], i=dev.values['l1_current'];
+			if(u!==undefined && u!==null && i!==undefined && i!==null) v=Number(u)*Number(i);
+		}
+	}
 	return (v === undefined || v === null) ? null : v;
 }
 function renderPivot(devices){
@@ -330,6 +345,7 @@ async function tick(){
 		setKpi('kpiGridP', data.map_grid_power);
 		setKpi('kpiBatV', data.map_battery_voltage);
 		setKpi('kpiBatP', data.map_battery_power);
+		setKpi('kpiConsP', data.map_consumption);
 		var cards=document.getElementById('cards');
 		cards.innerHTML = renderPivot(data.devices);
 	}catch(e){}
@@ -504,17 +520,18 @@ async function loadGridVChart(){
 document.getElementById('btnGridVReset').addEventListener('click',function(){ if(window.gridVChart) window.gridVChart.resetZoom(); });
 
 function buildGridPChart(data){
-	var pts=(data.map_grid_power||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
-	var datasets=[{
-		label:'Мощность сети',
-		data:pts,
-		borderColor:'#fd79a8',
-		backgroundColor:'#fd79a8',
-		pointRadius:0, pointHoverRadius:0,
-		borderWidth:1.5, tension:0.35,
-		cubicInterpolationMode:'monotone', fill:false
-	}];
-	renderChart('gridPChart', datasets, chartOpts(false,'W'));
+	var grid=(data.map_grid_power||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
+	var bat=(data.map_battery_power||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
+	var cons=(data.map_consumption||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
+	var datasets=[
+		{ label:'Мощность сети', data:grid, borderColor:'#74b9ff', backgroundColor:'#74b9ff',
+		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false },
+		{ label:'Мощность батареи', data:bat, borderColor:'#00b894', backgroundColor:'#00b894',
+		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false },
+		{ label:'Мощность потребления', data:cons, borderColor:'#f39c12', backgroundColor:'#f39c12',
+		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false }
+	];
+	renderChart('gridPChart', datasets, chartOpts(true,'W'));
 	return window.gridPChart;
 }
 async function loadGridPChart(){
@@ -615,6 +632,7 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 		MapGridP:    gridP,
 		MapBatV:     batV,
 		MapBatP:     batP,
+		MapCons:     gridP + batP,
 		Devices:     devices,
 	})
 }
@@ -696,6 +714,7 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	res.MapGridPower = singleMetricSeries(snaps, "grid_power")
 	res.MapBatVoltage = singleMetricSeries(snaps, "battery_voltage")
 	res.MapBatPower = singleMetricSeries(snaps, "battery_power")
+	res.MapCons = sumSeries(res.MapGridPower, res.MapBatPower)
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -718,12 +737,15 @@ func sumActive(snaps []deviceSnapshot) []seriesPoint {
 		sum, count float64
 	}
 	type bucket struct {
-		invs map[string]*perInv
+		invs  map[string]*perInv
 		order []string
 	}
 	buckets := map[int64]*bucket{}
 	var order []int64
-	type last struct{ v float64; t time.Time }
+	type last struct {
+		v float64
+		t time.Time
+	}
 	latest := map[string]last{} // последнее значение по каждому инвертору
 	var latestEnd time.Time
 	for _, sn := range snaps {
@@ -790,6 +812,28 @@ func sumActive(snaps []deviceSnapshot) []seriesPoint {
 			out[len(out)-1] = pt
 		} else {
 			out = append(out, pt)
+		}
+	}
+	return out
+}
+
+// sumSeries складывает два временных ряда поэлементно по совпадающей временной
+// метке T и возвращает результирующий ряд (потребление = мощность сети + батареи).
+// Ряды a и b отсортированы по времени и имеют общие точки (с одного снимка МАП);
+// если в одном из рядов нет точки на временную метку другого — она пропускается.
+func sumSeries(a, b []seriesPoint) []seriesPoint {
+	var out []seriesPoint
+	i, j := 0, 0
+	for i < len(a) && j < len(b) {
+		switch {
+		case a[i].T == b[j].T:
+			out = append(out, seriesPoint{T: a[i].T, V: math.Round((a[i].V+b[j].V)*10) / 10})
+			i++
+			j++
+		case a[i].T < b[j].T:
+			i++
+		default:
+			j++
 		}
 	}
 	return out
