@@ -125,7 +125,7 @@ h1 { font-size:22px; margin:0 0 4px; }
 </head>
 <body>
 <h1>SunReceiver</h1>
-<p class="sub">Текущие параметры инверторов (из Redis, обновление каждые 5&nbsp;с)</p>
+<p class="sub">Текущие параметры инверторов (из Redis, обновление каждую секунду)</p>
 
 <div class="kpi">
   <div class="kpi-plate">
@@ -146,6 +146,7 @@ h1 { font-size:22px; margin:0 0 4px; }
   <button id="btn7d">7 дней</button>
   <input type="date" id="datePick" title="Выбрать день">
   <button id="btnDate">За выбранный день</button>
+  <button id="btnRefresh" title="Принудительно обновить графики">Обновить графики</button>
 </div>
 
 <div class="charts">
@@ -203,6 +204,15 @@ function renderPivot(devices){
 	var h = '<table class="pivot-table"><thead><tr><th></th>';
 	for(var i=0;i<devices.length;i++) h += '<th>'+esc(devices[i].name)+'</th>';
 	h += '<th></th></tr></thead><tbody>';
+	// Строка актуальности данных: время последнего снимка каждого инвертора.
+	h += '<tr><td class="p-label">Актуально</td>';
+	for(var d=0;d<devices.length;d++){
+		var ts = (devices[d] && devices[d].timestamp) ? devices[d].timestamp : null;
+		h += (ts===null)
+			? '<td class="p-empty"></td>'
+			: '<td class="p-val" style="font-size:11px">'+esc(fmtSec(ts))+'</td>';
+	}
+	h += '<td class="p-unit"></td></tr>';
 	for(var p=0;p<PARAMS.length;p++){
 		var tag=PARAMS[p][0], label=PARAMS[p][1], unit=PARAMS[p][2];
 		h += '<tr><td class="p-label">'+esc(label)+'</td>';
@@ -392,10 +402,13 @@ document.getElementById('btnDate').addEventListener('click',function(){
 	var from=dayFromStr(el.value);
 	selectRange(from, endOfDay(from), null);
 });
+document.getElementById('btnRefresh').addEventListener('click',function(){
+	loadAll();
+});
 
 loadAll(); setInterval(loadAll,60000);
 
-tick(); setInterval(tick,5000);
+tick(); setInterval(tick,1000);
 </script>
 </body>
 </html>`
