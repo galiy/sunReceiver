@@ -33,19 +33,22 @@ const (
 	kindSofar targetKind = iota
 	kindDeyeString
 	kindMAP
+	kindMPPT // MPPT-контроллер (КЭС) через веб-API read_json.php?device=mppt ПАК «Малина»
 )
 
 // invTarget — целевой инвертор. LoggerSN — серийный номер даталоггера,
 // обязателен для Deye (иначе логгер отвечает кодом 0x06 "serial number not match").
 // Name — логическое имя из sunReceiver.json (например, "Deye Left").
 // Unit — Modbus-адрес устройства для МАП (kindMAP), по умолчанию 1.
+// Slot — для kindMAP: индекс MPPT-контроллера (0..15), -1 = агрегат/база батареи-сети;
+//        для kindMPPT: индекс контроллера (слот) в ответе read_json.php?device=mppt.
 type invTarget struct {
 	IP       string
 	Name     string
 	LoggerSN uint32
 	Kind     targetKind
 	Unit     byte
-	Slot     int // для kindMAP: индекс MPPT-контроллера (0..15), -1 = агрегат по всем
+	Slot     int
 }
 
 // configTarget — запись инвертора в sunReceiver.json.
@@ -55,7 +58,7 @@ type configTarget struct {
 	Type     string `json:"type"`
 	LoggerSN uint32 `json:"logger_sn"`
 	Unit     int    `json:"unit,omitempty"`
-	Slot     int    `json:"slot,omitempty"`
+	Slot     *int   `json:"slot,omitempty"` // nil = не задан (kindMAP → агрегат/батарея-сеть)
 }
 
 type configFile struct {
@@ -94,6 +97,8 @@ func loadConfig(path string) ([]invTarget, error) {
 			kind = kindSofar
 		case "map":
 			kind = kindMAP
+		case "mppt":
+			kind = kindMPPT
 		default:
 			return nil, fmt.Errorf("config %s: неизвестный тип %q для %s", path, t.Type, t.IP)
 		}
@@ -107,9 +112,9 @@ func loadConfig(path string) ([]invTarget, error) {
 		if t.Unit > 0 {
 			unit = byte(t.Unit)
 		}
-		slot := -1 // для МАП: по умолчанию — агрегат по всем MPPT
-		if t.Slot >= 0 {
-			slot = t.Slot
+		slot := -1 // для МАП и MPPT: по умолчанию (не задан) — агрегат/последний доступный
+		if t.Slot != nil && *t.Slot >= 0 {
+			slot = *t.Slot
 		}
 		targets = append(targets, invTarget{IP: t.IP, Name: t.Name, LoggerSN: t.LoggerSN, Kind: kind, Unit: unit, Slot: slot})
 	}
@@ -117,9 +122,13 @@ func loadConfig(path string) ([]invTarget, error) {
 }
 
 // devKey возвращает ключ устройства в хранилище (поле IP снимка): для обычных
-// инверторов это IP, для МАП — IP с суффиксом номера MPPT-слота, чтобы 3 разных
-// контроллера одного гейта не сливались в одну колонку/ряд Redis и PG.
+// инверторов это IP; для kindMAP с slot и для kindMPPT — IP с суффиксом номера
+// контроллера (например, 192.168.13.74#mppt0 / 192.168.13.60#mppt0), чтобы разные
+// контроллеры одного гейта не сливались в одну колонку/ряд Redis и PG.
 func devKey(t invTarget) string {
+	if t.Kind == kindMPPT {
+		return fmt.Sprintf("%s#mppt%d", t.IP, t.Slot)
+	}
 	if t.Kind == kindMAP && t.Slot >= 0 {
 		return fmt.Sprintf("%s#mppt%d", t.IP, t.Slot)
 	}
@@ -127,6 +136,10 @@ func devKey(t invTarget) string {
 }
 
 var targets []invTarget
+
+// mppt — конфигурация доступа к веб-API ПАК «Малина» для мониторинга MPPT (КЭС)
+// через read_json.php?device=mppt. Заполняется в main() из malina.json.
+var mppt *mpptSite
 
 var statusNames = map[uint16]string{
 	0: "standby", 1: "self-checking", 2: "normal", 3: "fault", 4: "permanent",
@@ -176,6 +189,11 @@ var commonContractTags = []string{
 	// Энергия
 	"energy_today",
 	"energy_total",
+	// МАП modbus: батарея и сеть (для дашборда КЭС)
+	"grid_voltage",
+	"grid_power",
+	"battery_voltage",
+	"battery_power",
 }
 
 // needsRounding — true, если тэг относится к величинам, которые округляются до
@@ -246,6 +264,7 @@ type DeviceResult struct {
 	HasData  bool
 	DeviceSN string
 	Values   valuesContract
+	Time     time.Time // время актуальности данных (для MPPT API — timestamp ответа)
 }
 
 // deviceSnapshot — структура, сохраняемая в JSON-файл инвертора.
@@ -604,6 +623,8 @@ func mapMAPRegisters(cells map[uint16]byte, slot int) valuesContract {
 		return out
 	}
 	uAcc /= 10
+	out["l1_voltage"] = uAcc
+	out["battery_voltage"] = uAcc
 
 	// Ток заряда MPPT: каждый ток лежит в 2 байтах L=0x530+2i, H=0x531+2i,
 	// значение = (L + H*256)/16, H со старшим битом 0x80 = "нет данных".
@@ -628,10 +649,37 @@ func mapMAPRegisters(cells map[uint16]byte, slot int) valuesContract {
 		}
 	}
 
-	out["l1_voltage"] = uAcc
 	out["l1_current"] = sumA
 	out["ac_active_power"] = uAcc * sumA
 	out["grid_frequency"] = 0.0
+
+	// ---- Данные батареи и сети МАП (для дашборда КЭС) ----
+	// Напряжение сети: _UNET=0x422; UNET=0 → нет сети, иначе U=(UNET+100).
+	if un, ok := cells[0x422]; ok {
+		if un == 0 {
+			out["grid_voltage"] = 0.0
+		} else {
+			out["grid_voltage"] = float64(un) + 100
+		}
+	}
+	// Мощность сети: _PNET (16 бит) = 0x59A(L),0x59B(H), Pnet=((H*256+L)/8)*100;
+	// знак по _PNET_Sign_P=0x587: 1 — продажа(+)/(-), 0 — закупка(-).
+	if lo, okL := cells[0x59A]; okL {
+		if hi, okH := cells[0x59B]; okH {
+			pnet := (float64(hi)*256 + float64(lo)) / 8 * 100
+			if sign, okS := cells[0x587]; okS && sign == 0 {
+				pnet = -pnet
+			}
+			out["grid_power"] = pnet
+		}
+	}
+	// Мощность нагрузки по АКБ (батареи): _PLoad (16 бит) = 0x59E(L),0x59F(H),
+	// Pload=((H*256+L)/8)*100.
+	if lo, okL := cells[0x59E]; okL {
+		if hi, okH := cells[0x59F]; okH {
+			out["battery_power"] = (float64(hi)*256 + float64(lo)) / 8 * 100
+		}
+	}
 	return out
 }
 
@@ -709,7 +757,9 @@ func pollDevice(t invTarget) DeviceResult {
 
 	case kindMAP:
 		// МАП Титанатор («КЭС») — Modbus TCP (порт 502), не Solarman-кадр.
-		// Читаем два блока байт-ячеек: режим/АКБ (0x400-0x410) и токи MPPT (0x530-0x551).
+		// Читаем блоки байт-ячеек: режим/АКБ (0x400-0x410), токи MPPT (0x530-0x551),
+		// напряжение сети/ток (0x420-0x423) и мощности сети/батареи (0x580-0x5A3, т.ч.
+		// 0x587 sign, 0x59A/0x59B PNET, 0x59E/0x59F PLOAD).
 		mc := mapClientFor(t.IP, t.Unit)
 		cells := map[uint16]byte{}
 		// первое чтение может «прогреть» гейт и занять долго — оно же и должно
@@ -719,9 +769,19 @@ func pollDevice(t invTarget) DeviceResult {
 				cells[0x0400+uint16(i)] = b[i]
 			}
 		}
-		if b, err := mc.ReadRegisters(0x0520, 0x40); err == nil {
+		if b, err := mc.ReadRegisters(0x0420, 0x04); err == nil {
 			for i := 0; i < len(b); i++ {
-				cells[0x0520+uint16(i)] = b[i]
+				cells[0x0420+uint16(i)] = b[i]
+			}
+		}
+		if b, err := mc.ReadRegisters(0x0530, 0x40); err == nil {
+			for i := 0; i < len(b); i++ {
+				cells[0x0530+uint16(i)] = b[i]
+			}
+		}
+		if b, err := mc.ReadRegisters(0x0580, 0x24); err == nil {
+			for i := 0; i < len(b); i++ {
+				cells[0x0580+uint16(i)] = b[i]
 			}
 		}
 		res.Values = mapMAPRegisters(cells, t.Slot)
@@ -732,6 +792,40 @@ func pollDevice(t invTarget) DeviceResult {
 			res.HasData = true
 			res.DeviceSN = fmt.Sprintf("map-%s", devKey(t))
 		}
+
+	case kindMPPT:
+		// MPPT-контроллер (КЭС) через веб-API ПАК «Малина»: read_json.php?device=mppt.
+		// Выбираем контроллер по слоту (t.Slot — индекс в массиве ответа).
+		// Источник данных и актуальность (поле timestamp ответа) — у самого API.
+		if mppt == nil {
+			res.OK = false
+			return res
+		}
+		arr, err := mppt.FetchMPPTs()
+		if err != nil {
+			res.OK = false
+			log.Printf("%s: mppt api: %v", t.IP, err)
+			return res
+		}
+		if t.Slot < 0 || t.Slot >= len(arr) {
+			res.OK = false
+			log.Printf("%s: mppt api: слот %d вне диапазона (получено %d контроллеров)", t.IP, t.Slot, len(arr))
+			return res
+		}
+		vals, ts, ok := mapMPPTAPI(arr[t.Slot])
+		if !ok {
+			res.OK = false
+			log.Printf("%s: mppt api: слот %d не дал данных", t.IP, t.Slot)
+			return res
+		}
+		res.OK = true
+		res.HasData = true
+		res.Values = vals
+		if arr[t.Slot].UID != "" {
+			res.DeviceSN = fmt.Sprintf("mppt-%s", arr[t.Slot].UID)
+		}
+		// Сохраняем актуальность данных из API (для таймстампа снимка).
+		res.Time = ts
 	}
 
 	for _, f := range frames {
@@ -744,10 +838,11 @@ func pollDevice(t invTarget) DeviceResult {
 	return res
 }
 
-// runMapPoll — отдельный 1-секундный цикл опроса МАП (целей kindMAP) и записи в
-// Redis через SaveSnapshotWindow: в пределах каждого 10-секундного окна в Redis
-// остаётся ровно одна (последняя) строка МАП. МАП исключается из общего 10-сек
-// цикла doPoll (см. doPoll), поэтому каждый 10-сек цикл даёт ~1 точку МАП.
+// runMapPoll — отдельный 1-секундный цикл опроса быстрых целей — МАП (kindMAP,
+// Modbus TCP) и MPPT-контроллеров (kindMPPT, веб-API ПАК «Малина») — и записи в
+// Redis через SaveSnapshotWindow: в пределах каждого 10-секундного окна остаётся
+// ровно одна (последняя) строка на устройство. Эти цели исключены из общего
+// 10-сек цикла doPoll (см. doPoll), поэтому каждый 10-сек цикл даёт ~1 точку.
 func runMapPoll(store *redisStore, stop <-chan struct{}) {
 	const pollEvery = time.Second
 	ticker := time.NewTicker(pollEvery)
@@ -762,13 +857,14 @@ func runMapPoll(store *redisStore, stop <-chan struct{}) {
 	}
 }
 
-// pollAndSaveMap опрашивает все цели kindMAP параллельно и пишет в Redis через
-// SaveSnapshotWindow (одна строка МАП за каждые 10 секунд + актуальное current).
+// pollAndSaveMap опрашивает все быстрые цели (kindMAP, kindMPPT) параллельно и
+// пишет в Redis через SaveSnapshotWindow (одна строка за каждые 10 секунд +
+// актуальное current).
 func pollAndSaveMap(store *redisStore, now time.Time) {
 	var wg sync.WaitGroup
 	for i := range targets {
 		t := targets[i]
-		if t.Kind != kindMAP {
+		if t.Kind != kindMAP && t.Kind != kindMPPT {
 			continue
 		}
 		wg.Add(1)
@@ -779,14 +875,20 @@ func pollAndSaveMap(store *redisStore, now time.Time) {
 				log.Printf("%s: map %s", t.IP, describeResult(res))
 				return
 			}
+			// Для MPPT API время актуальности данных берём из ответа API,
+			// иначе — время опроса.
+			ts := now
+			if !res.Time.IsZero() {
+				ts = res.Time
+			}
 			snap := deviceSnapshot{
 				Name:      t.Name,
 				IP:        devKey(t),
-				Timestamp: now.Format(time.RFC3339),
+				Timestamp: ts.Format(time.RFC3339),
 				DeviceSN:  res.DeviceSN,
 				Values:    res.Values,
 			}
-			if err := store.SaveSnapshotWindow(snap, now); err != nil {
+			if err := store.SaveSnapshotWindow(snap, ts); err != nil {
 				log.Printf("redis map save %s: %v", devKey(t), err)
 			}
 		}(t)
@@ -815,6 +917,9 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("poller started: config=%s targets=%v period=%s", cfgPath, targets, pollPeriod)
+
+	// Конфигурация веб-API ПАК «Малина» для мониторинга MPPT (КЭС) — из malina.json.
+	mppt = loadMPPTSite()
 
 	rdb, err := openRedis(*redisAddr)
 	if err != nil {
@@ -855,8 +960,9 @@ func main() {
 	// данных Redis (старше 2 календарных суток).
 	go runAccumulator(store, pg, stopBG)
 	go runRedisCleanup(store, stopBG)
-	// МАП («КЭС») опрашивается отдельно, 1 раз в секунду, и пишется в Redis
-	// со специальной логикой «одна строка за 10 с» (см. SaveSnapshotWindow).
+	// МАП («КЭС», Modbus TCP) и MPPT-контроллеры (веб-API ПАК «Малина»)
+	// опрашиваются отдельно, 1 раз в секунду, и пишутся в Redis со специальной
+	// логикой «одна строка за 10 с» (см. SaveSnapshotWindow).
 	go runMapPoll(store, stopBG)
 	defer close(stopBG)
 
@@ -875,8 +981,8 @@ func main() {
 		results := make([]DeviceResult, len(targets))
 		var wg sync.WaitGroup
 		for i, t := range targets {
-			if t.Kind == kindMAP {
-				continue // МАП опрашивается отдельным 1-сек циклом (runMapPoll)
+			if t.Kind == kindMAP || t.Kind == kindMPPT {
+				continue // МАП и MPPT API опрашиваются отдельным 1-сек циклом (runMapPoll)
 			}
 			wg.Add(1)
 			go func(i int, t invTarget) {

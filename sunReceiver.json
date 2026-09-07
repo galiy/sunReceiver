@@ -6,8 +6,9 @@
     { "ip": "192.168.13.91", "name": "Bineos Left", "type": "deye", "logger_sn": 1774265353 },
     { "ip": "192.168.13.92", "name": "Bineos Center", "type": "deye", "logger_sn": 1774585911 },
     { "ip": "192.168.13.93", "name": "Bineos Right", "type": "deye", "logger_sn": 1766715945 },
-    { "ip": "192.168.13.74", "name": "MAP MPPT-1", "type": "map", "unit": 1, "slot": 0 },
-    { "ip": "192.168.13.74", "name": "MAP MPPT-2", "type": "map", "unit": 1, "slot": 1 },
-    { "ip": "192.168.13.74", "name": "MAP MPPT-3", "type": "map", "unit": 1, "slot": 2 }
+    { "ip": "192.168.13.60", "name": "MPPT-1", "type": "mppt", "slot": 0 },
+    { "ip": "192.168.13.60", "name": "MPPT-2", "type": "mppt", "slot": 1 },
+    { "ip": "192.168.13.60", "name": "MPPT-3", "type": "mppt", "slot": 2 },
+    { "ip": "192.168.13.74", "name": "MAP (батарея/сеть)", "type": "map", "unit": 1 }
   ]
 }
