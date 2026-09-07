@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -104,6 +105,48 @@ func (s *redisStore) IsEmpty() (bool, error) {
 		return false, err
 	}
 	return len(keys) == 0, nil
+}
+
+// recentCutoff возвращает момент начала вторых из последних двух календарных
+// суток (в локальной зоне). Redis хранит данные за последние 2 календарных
+// суток: «сегодня» и «вчера», т.е. начиная с 00:00 вчерашнего дня. Данные
+// строго старше cutofа удаляются фоновой очисткой и не читаются из Redis.
+func recentCutoff(t time.Time) time.Time {
+	y, m, d := t.In(time.Local).Date()
+	startOfToday := time.Date(y, m, d, 0, 0, 0, 0, time.Local)
+	return startOfToday.AddDate(0, 0, -1)
+}
+
+// PurgeOld удаляет из временного ряда Redis (месячные сегменты) все точки,
+// timestamp которых строго старше окна последних 2 календарных суток
+// (recentCutoff). Пустые сегменты удаляются целиком. Текущий HASH current
+// не трогается — последнее состояние инвертора хранится всегда.
+// Вызывается фоновым процессом (см. runRedisCleanup).
+func (s *redisStore) PurgeOld(now time.Time) {
+	cutoff := recentCutoff(now)
+	keys, err := s.rdb.Keys(s.ctx, redisSeriesPrefix+"*").Result()
+	if err != nil {
+		log.Printf("redis cleanup keys: %v", err)
+		return
+	}
+	// Операцию выполняем так, чтобы «строго старше cutoff», т.е. ZRemRangeByScore
+	// убирает [ -inf ; cutoff-1 ], поэтому ровно cutoff остаётся в ряде.
+	remBelow := strconv.FormatInt(cutoff.Unix()-1, 10)
+	for _, key := range keys {
+		if err := s.rdb.ZRemRangeByScore(s.ctx, key, "-inf", remBelow).Err(); err != nil {
+			log.Printf("redis cleanup %s: %v", key, err)
+			continue
+		}
+		n, err := s.rdb.ZCard(s.ctx, key).Result()
+		if err != nil {
+			continue
+		}
+		if n == 0 {
+			if err := s.rdb.Del(s.ctx, key).Err(); err != nil {
+				log.Printf("redis cleanup del %s: %v", key, err)
+			}
+		}
+	}
 }
 
 // Current возвращает текущие снимки всех инверторов (поля HASH current) из Redis,
