@@ -43,7 +43,7 @@ func main() {
 
 	for _, sn := range sns {
 		for _, unit := range units {
-			req := solarman.BuildDeyeReadFrame(sn, unit, uint16(start), uint16(count))
+			req := solarman.BuildDeyeReadFrame(sn, unit, 0, uint16(start), uint16(count))
 			fmt.Printf("\n=== SN=0x%08X (%d) unit=0x%02X REQ (%d bytes): %s\n", sn, sn, unit, len(req), hex.EncodeToString(req))
 
 			conn, err := net.DialTimeout("tcp", ip+":"+port, 5*time.Second)

@@ -7,10 +7,11 @@ import (
 	"time"
 )
 
-// Client — TCP-клиент Solarman V5. Держит одно TCP-соединение и переиспользует его
-// между опросами, чтобы не выполнять TCP-handshake каждые 10 секунд (логгеры отвечают
-// медленно — лишний переподъём сокета не нужен). Соединение открывается лениво при
-// первом запросе и автоматически пересоздаётся, если разорвано. Один Client рассчитан
+// Client — TCP-клиент Solarman V5. Логгеры отвечают медленно и могут оставлять
+// «висящее» соединение (когда по нему приходят только heartbeat-кадры). Чтобы
+// каждый запрос шёл на свежем сокете и гарантированно закрывался после получения
+// данных, Client открывает НОВОЕ TCP-соединение на каждый запрос (Exchange) и
+// закрывает его сразу после чтения ответа (включая ошибки). Один Client рассчитан
 // на последовательное чтение одним опрашивающим (инвертором).
 type Client struct {
 	Address    string
@@ -18,54 +19,23 @@ type Client struct {
 	Timeout    time.Duration
 	IdleWindow time.Duration
 
-	conn net.Conn
-	mu   sync.Mutex
+	// серийный номер кадра — инкрементируется на каждый запрос.
+	mu     sync.Mutex
+	serial uint16
 }
 
-// open возвращает подключённое TCP-соединение, переиспользуя существующее.
-func (c *Client) open() (net.Conn, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.conn != nil {
-		return c.conn, nil
-	}
+// dial открывает свежее TCP-соединение без кэширования.
+func (c *Client) dial() (net.Conn, error) {
 	conn, err := net.DialTimeout("tcp", c.Address, c.Timeout)
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
 	}
-	c.conn = conn
 	return conn, nil
 }
 
-// Close закрывает текущее соединение (если открыто).
-func (c *Client) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.conn == nil {
-		return nil
-	}
-	err := c.conn.Close()
-	c.conn = nil
-	return err
-}
-
-// markBroken закрывает соединение и очищает указатель, если это текущее — следующий
-// open() выполнит новый dial.
-func (c *Client) markBroken(conn net.Conn) {
-	if conn == nil {
-		return
-	}
-	conn.Close()
-	c.mu.Lock()
-	if c.conn == conn {
-		c.conn = nil
-	}
-	c.mu.Unlock()
-}
-
 // readAll собирает все кадры ответа с соединения до «тишины» (IdleWindow) либо общего
-// Timeout (для первого байта). Возвращает true, если что-то получено.
-func (c *Client) readAll(conn net.Conn) ([]byte, bool) {
+// Timeout (для первого байта). Возвращает полученные байты.
+func (c *Client) readAll(conn net.Conn) []byte {
 	var raw []byte
 	buf := make([]byte, 1024)
 	firstByte := true
@@ -91,29 +61,35 @@ func (c *Client) readAll(conn net.Conn) ([]byte, bool) {
 		// idle таймаут или ошибка соединения — конец приёма
 		break
 	}
-	return raw, len(raw) > 0
+	return raw
 }
 
-// Exchange отправляет один запрос через переиспользуемое соединение и собирает все
-// кадры ответа. При разрыве соединения производится новый dial. Если ответа нет
-// вовсе, соединение помечается закрытым, чтобы следующий вызов переподключился.
+// nextSerial возвращает следующий порядковый номер кадра (LE u16) под mutex.
+func (c *Client) nextSerial() uint16 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.serial++
+	return c.serial
+}
+
+// Exchange отправляет один запрос через СВЕЖЕЕ соединение и собирает все кадры
+// ответа. Соединение гарантированно закрывается после чтения ответа или любой
+// ошибки.
 func (c *Client) Exchange(req []byte) ([]Frame, error) {
-	conn, err := c.open()
+	conn, err := c.dial()
 	if err != nil {
 		return nil, err
 	}
+	defer conn.Close()
+
 	if err := conn.SetDeadline(time.Now().Add(c.Timeout)); err != nil {
-		c.markBroken(conn)
 		return nil, fmt.Errorf("set deadline: %w", err)
 	}
 	if _, err := conn.Write(req); err != nil {
-		c.markBroken(conn)
 		return nil, fmt.Errorf("write: %w", err)
 	}
-	raw, ok := c.readAll(conn)
-	if !ok {
-		// Пусто — возможно, соединение оборвано (логгер закрыл простаивающий сокет).
-		c.markBroken(conn)
+	raw := c.readAll(conn)
+	if len(raw) == 0 {
 		return nil, fmt.Errorf("no data from %s", c.Address)
 	}
 	return SplitFrames(raw), nil
@@ -122,7 +98,7 @@ func (c *Client) Exchange(req []byte) ([]Frame, error) {
 // ReadRegisters — запрос чтения startReg..startReg+regCount-1.
 // Возвращает распарсенные PDU (может быть несколько) и кадры ответа.
 func (c *Client) ReadRegisters(startReg, regCount uint16) ([]ModbusPDU, []Frame, error) {
-	frames, err := c.Exchange(BuildReadFrame(c.DeviceSN, startReg, regCount))
+	frames, err := c.Exchange(BuildReadFrame(c.DeviceSN, c.nextSerial(), startReg, regCount))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -131,10 +107,8 @@ func (c *Client) ReadRegisters(startReg, regCount uint16) ([]ModbusPDU, []Frame,
 
 // ReadRegistersDeye — запрос чтения для Deye-даталоггеров (15-байтный datafield,
 // реальный SN логгера обязателен). Unit — Modbus-адрес устройства (обычно 0x01).
-// Несколько вызовов на один инвертор делят одно TCP-соединение, так как ответы
-// разделяются паузой в тишине (pacing) между диапазонами.
 func (c *Client) ReadRegistersDeye(startReg, regCount uint16, unit uint32) ([]ModbusPDU, []Frame, error) {
-	frames, err := c.Exchange(BuildDeyeReadFrame(c.DeviceSN, unit, startReg, regCount))
+	frames, err := c.Exchange(BuildDeyeReadFrame(c.DeviceSN, unit, c.nextSerial(), startReg, regCount))
 	if err != nil {
 		return nil, nil, err
 	}

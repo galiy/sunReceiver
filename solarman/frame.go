@@ -50,8 +50,9 @@ func CRC16Modbus(data []byte) uint16 {
 }
 
 // BuildReadFrame — кадр запроса чтения регистров (Modbus func 03).
-// deviceSN — серийник логгера (0 принимается Sofar LSW-3).
-func BuildReadFrame(deviceSN uint32, startReg, regCount uint16) []byte {
+// deviceSN — серийник логгера (0 принимается Sofar LSW-3); serial — порядковый номер
+// кадра (LE u16), инкрементируется внутри на каждый запрос (Client.nextSerial).
+func BuildReadFrame(deviceSN uint32, serial uint16, startReg, regCount uint16) []byte {
 	pdu := make([]byte, 6)
 	pdu[0] = 0x01
 	pdu[1] = 0x03
@@ -68,7 +69,7 @@ func BuildReadFrame(deviceSN uint32, startReg, regCount uint16) []byte {
 	frame = append(frame, StartMarker)
 	frame = append(frame, byte(len(payload)), byte(len(payload)>>8))
 	frame = append(frame, byte(ReqControlCode&0xFF), byte(ReqControlCode>>8))
-	frame = append(frame, 0x00, 0x00)
+	frame = append(frame, byte(serial), byte(serial>>8))
 	var sn [4]byte
 	binary.LittleEndian.PutUint32(sn[:], deviceSN)
 	frame = append(frame, sn[:]...)
@@ -80,8 +81,9 @@ func BuildReadFrame(deviceSN uint32, startReg, regCount uint16) []byte {
 
 // BuildDeyeReadFrame — кадр чтения регистров для Deye-даталоггеров (Solarman V5,
 // но 14-байтный datafield-заголовок, как в kbialek/deye-inverter-mqtt).
-// deviceSN — реальный SN логгера; unit — Modbus-адрес устройства (обычно 0x01).
-func BuildDeyeReadFrame(deviceSN, unit uint32, startReg, regCount uint16) []byte {
+// deviceSN — реальный SN логгера; unit — Modbus-адрес устройства (обычно 0x01);
+// serial — порядковый номер кадра (LE u16).
+func BuildDeyeReadFrame(deviceSN, unit uint32, serial uint16, startReg, regCount uint16) []byte {
 	pdu := make([]byte, 8)
 	pdu[0] = byte(unit)
 	pdu[1] = 0x03
@@ -100,7 +102,7 @@ func BuildDeyeReadFrame(deviceSN, unit uint32, startReg, regCount uint16) []byte
 	frame = append(frame, StartMarker)
 	frame = append(frame, byte(len(payload)), byte(len(payload)>>8))
 	frame = append(frame, byte(ReqControlCode&0xFF), byte(ReqControlCode>>8))
-	frame = append(frame, 0x00, 0x00)
+	frame = append(frame, byte(serial), byte(serial>>8))
 	var sn [4]byte
 	binary.LittleEndian.PutUint32(sn[:], deviceSN)
 	frame = append(frame, sn[:]...)
