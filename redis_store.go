@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -28,6 +29,17 @@ const (
 type redisStore struct {
 	rdb *redis.Client
 	ctx context.Context
+
+	// mapWin помнит последнюю точку временного ряда каждого МАП-инвертора и её
+	// 10-секундное окно, чтобы в пределах одного окна заменять её (см. SaveSnapshotWindow),
+	// а не плодить дубли: в Redis остаётся ровно одна строка МАП за каждые 10 секунд.
+	mapMu  sync.Mutex
+	mapWin map[string]mapWinMember
+}
+
+type mapWinMember struct {
+	window int64  // Unix-начало 10-секундного окна
+	member string // JSON-снапшот (member ZSET)
 }
 
 // openRedis создаёт клиент Redis. Retry-логику оставляем библиотеке go-redis.
@@ -64,6 +76,45 @@ func (s *redisStore) SaveSnapshot(snap deviceSnapshot, ts time.Time) error {
 	_, err = pipe.Exec(s.ctx)
 	if err != nil {
 		return fmt.Errorf("save %s: %w", snap.IP, err)
+	}
+	return nil
+}
+
+// SaveSnapshotWindow — специальная запись для целей kindMAP: снимок пишется с
+// score = начало 10-секундного окна (ts.Truncate(10s)), а не с точной секундой.
+// В пределах одного окна каждая новая запись ЗАМЕНЯЕТ предыдущую точку этого же
+// окна (ZREM старого member + ZADD нового), поэтому в Redis по каждому МАП
+// остаётся ровно одна строка за 10 секунд. Текущее значение (HASH current)
+// обновляется всегда — на каждый опрос.
+func (s *redisStore) SaveSnapshotWindow(snap deviceSnapshot, ts time.Time) error {
+	window := ts.Truncate(10 * time.Second)
+	winUnix := window.Unix()
+	b, err := json.Marshal(snap)
+	if err != nil {
+		return fmt.Errorf("marshal snapshot %s: %w", snap.IP, err)
+	}
+	member := string(b)
+	key := redisSeriesKey(window)
+
+	s.mapMu.Lock()
+	if s.mapWin == nil {
+		s.mapWin = map[string]mapWinMember{}
+	}
+	prev, had := s.mapWin[snap.IP]
+	s.mapWin[snap.IP] = mapWinMember{window: winUnix, member: member}
+	s.mapMu.Unlock()
+
+	pipe := s.rdb.TxPipeline()
+	if had && prev.window == winUnix {
+		// то же 10-секундное окно — стираем предыдущую точку и заменяем на актуальную
+		pipe.ZRem(s.ctx, key, prev.member)
+	}
+	pipe.ZAdd(s.ctx, key, redis.Z{Score: float64(winUnix), Member: member})
+	pipe.HSet(s.ctx, redisCurrentKey, snap.IP, b)
+	pipe.Expire(s.ctx, key, 40*24*time.Hour)
+	_, err = pipe.Exec(s.ctx)
+	if err != nil {
+		return fmt.Errorf("save window %s: %w", snap.IP, err)
 	}
 	return nil
 }

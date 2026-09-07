@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/galiy/sunReceiver/modbusmap"
 	"github.com/galiy/sunReceiver/solarman"
 )
 
@@ -31,16 +32,19 @@ type targetKind int
 const (
 	kindSofar targetKind = iota
 	kindDeyeString
+	kindMAP
 )
 
 // invTarget — целевой инвертор. LoggerSN — серийный номер даталоггера,
 // обязателен для Deye (иначе логгер отвечает кодом 0x06 "serial number not match").
 // Name — логическое имя из config.json (например, "Deye Left").
+// Unit — Modbus-адрес устройства для МАП (kindMAP), по умолчанию 1.
 type invTarget struct {
 	IP       string
 	Name     string
 	LoggerSN uint32
 	Kind     targetKind
+	Unit     byte
 }
 
 // configTarget — запись инвертора в config.json.
@@ -49,6 +53,7 @@ type configTarget struct {
 	Name     string `json:"name"`
 	Type     string `json:"type"`
 	LoggerSN uint32 `json:"logger_sn"`
+	Unit     int    `json:"unit,omitempty"`
 }
 
 type configFile struct {
@@ -85,6 +90,8 @@ func loadConfig(path string) ([]invTarget, error) {
 			kind = kindDeyeString
 		case "sofar":
 			kind = kindSofar
+		case "map":
+			kind = kindMAP
 		default:
 			return nil, fmt.Errorf("config %s: неизвестный тип %q для %s", path, t.Type, t.IP)
 		}
@@ -94,7 +101,11 @@ func loadConfig(path string) ([]invTarget, error) {
 		if t.Name == "" {
 			return nil, fmt.Errorf("config %s: пустое логическое имя name для %s", path, t.IP)
 		}
-		targets = append(targets, invTarget{IP: t.IP, Name: t.Name, LoggerSN: t.LoggerSN, Kind: kind})
+		unit := byte(1)
+		if t.Unit > 0 {
+			unit = byte(t.Unit)
+		}
+		targets = append(targets, invTarget{IP: t.IP, Name: t.Name, LoggerSN: t.LoggerSN, Kind: kind, Unit: unit})
 	}
 	return targets, nil
 }
@@ -528,6 +539,88 @@ func clientFor(ip string, sn uint32) *solarman.Client {
 	return c
 }
 
+// MAP clients — переиспользуемое TCP-соединение, но для МАП гейт отвечает
+// медленно, и соединение живёт. Каждая цель (КЭС) опрашивается из одной горутины,
+// поэтому сокет не гоняется между опросами.
+var (
+	mapClientsMu    sync.Mutex
+	mapClientsByKey = map[string]*modbusmap.Client{}
+)
+
+// mapClientFor возвращает (и при первом обращении создаёт) клиент МАП-гейта
+// для адреса ip:502 с Modbus-адресом unit.
+func mapClientFor(ip string, unit byte) *modbusmap.Client {
+	key := ip + ":" + modbusmap.DefaultPort
+	mapClientsMu.Lock()
+	defer mapClientsMu.Unlock()
+	if c, ok := mapClientsByKey[key]; ok {
+		return c
+	}
+	c := &modbusmap.Client{Address: key, Unit: unit}
+	mapClientsByKey[key] = c
+	return c
+}
+
+// mapMAPRegisters строит значения универсального контракта цели «КЭС»
+// (МАП Титанатор + параллельные MPPT контроллеры) из байт-ячеек МАП.
+//
+// Маппинг полей (ТЗ КЭС):
+//   - l1_voltage = напряжение АКБ МАП _UAcc_med_VH/VL (0x405/0x406), (VH*256+VL)/10.
+//     V_Bat самих контроллеров гейт МАП не отдаёт (проверено живьём 0x4D5=0),
+//     поэтому источник — то же напряжение АКБ, что заряжают контроллеры.
+//   - l1_current = суммарный ток заряда параллельных MPPT _I_Akb_MPPT (0x530+),
+//     каждый ток 16-бит LE (байты 0x530+2i, 0x531+2i), ×16; старший бит H=0x80
+//     означает "нет данных" и отбрасывается.
+//   - ac_active_power = l1_voltage × l1_current (W).
+//   - grid_frequency = 0 (частоты сети инвертор МППТ не отдаёт).
+//   - pv1/pv2, ac_reactive_power, l2/l3 — в values не пишутся (нет данных).
+func mapMAPRegisters(cells map[uint16]byte) valuesContract {
+	out := valuesContract{}
+
+	// Напряжение АКБ МАП: _UAcc_med_VH=0x405, _UAcc_med_VL=0x406, U=(VH*256+VL)/10.
+	vh, ok1 := cells[0x405]
+	vl, ok2 := cells[0x406]
+	if !ok1 || !ok2 {
+		return out
+	}
+	uAcc := float64(vh)*256 + float64(vl)
+	if uAcc <= 0 {
+		return out
+	}
+	uAcc /= 10
+
+	// Суммарный ток заряда параллельных MPPT (_I_Akb_MPPT).
+	// Максимум N=16; каждый ток лежит в 2 байтах L=0x530+2i, H=0x531+2i,
+	// значение = (L + H*256)/16, H со старшим битом 0x80 = "нет данных".
+	var sumA float64
+	var perMPPT []float64
+	for i := 0; i < 16; i++ {
+		lo, okL := cells[0x530+uint16(2*i)]
+		hi, okH := cells[0x531+uint16(2*i)]
+		if !okL || !okH {
+			break
+		}
+		if hi&0x80 != 0 {
+			continue // нет данных с этого MPPT
+		}
+		val := float64(uint16(hi)<<8 | uint16(lo)) / 16
+		perMPPT = append(perMPPT, val)
+		sumA += val
+	}
+
+	out["l1_voltage"] = uAcc
+	if len(perMPPT) == 0 {
+		out["l1_current"] = 0.0
+		out["ac_active_power"] = 0.0
+		out["grid_frequency"] = 0.0
+		return out
+	}
+	out["l1_current"] = sumA
+	out["ac_active_power"] = uAcc * sumA
+	out["grid_frequency"] = 0.0
+	return out
+}
+
 func pollDevice(t invTarget) DeviceResult {
 	res := DeviceResult{OK: true}
 	client := clientFor(t.IP, t.LoggerSN)
@@ -599,6 +692,32 @@ func pollDevice(t invTarget) DeviceResult {
 			res.HasData = true
 			res.Values = mapSofarRegisters(result)
 		}
+
+	case kindMAP:
+		// МАП Титанатор («КЭС») — Modbus TCP (порт 502), не Solarman-кадр.
+		// Читаем два блока байт-ячеек: режим/АКБ (0x400-0x410) и токи MPPT (0x530-0x551).
+		mc := mapClientFor(t.IP, t.Unit)
+		cells := map[uint16]byte{}
+		// первое чтение может «прогреть» гейт и занять долго — оно же и должно
+		// вернуть данные; повторные чтения в том же сокете быстрые.
+		if b, err := mc.ReadRegisters(0x0400, 0x10); err == nil {
+			for i := 0; i < len(b); i++ {
+				cells[0x0400+uint16(i)] = b[i]
+			}
+		}
+		if b, err := mc.ReadRegisters(0x0520, 0x40); err == nil {
+			for i := 0; i < len(b); i++ {
+				cells[0x0520+uint16(i)] = b[i]
+			}
+		}
+		res.Values = mapMAPRegisters(cells)
+		if _, has := cells[0x405]; has && cells[0x406] > 0 {
+			res.HasData = true
+		}
+		if len(res.Values) > 0 {
+			res.HasData = true
+			res.DeviceSN = fmt.Sprintf("map-%s", t.IP)
+		}
 	}
 
 	for _, f := range frames {
@@ -609,6 +728,56 @@ func pollDevice(t invTarget) DeviceResult {
 	}
 
 	return res
+}
+
+// runMapPoll — отдельный 1-секундный цикл опроса МАП (целей kindMAP) и записи в
+// Redis через SaveSnapshotWindow: в пределах каждого 10-секундного окна в Redis
+// остаётся ровно одна (последняя) строка МАП. МАП исключается из общего 10-сек
+// цикла doPoll (см. doPoll), поэтому каждый 10-сек цикл даёт ~1 точку МАП.
+func runMapPoll(store *redisStore, stop <-chan struct{}) {
+	const pollEvery = time.Second
+	ticker := time.NewTicker(pollEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			pollAndSaveMap(store, time.Now())
+		case <-stop:
+			return
+		}
+	}
+}
+
+// pollAndSaveMap опрашивает все цели kindMAP параллельно и пишет в Redis через
+// SaveSnapshotWindow (одна строка МАП за каждые 10 секунд + актуальное current).
+func pollAndSaveMap(store *redisStore, now time.Time) {
+	var wg sync.WaitGroup
+	for i := range targets {
+		t := targets[i]
+		if t.Kind != kindMAP {
+			continue
+		}
+		wg.Add(1)
+		go func(t invTarget) {
+			defer wg.Done()
+			res := pollDevice(t)
+			if !res.OK || !res.HasData {
+				log.Printf("%s: map %s", t.IP, describeResult(res))
+				return
+			}
+			snap := deviceSnapshot{
+				Name:      t.Name,
+				IP:        t.IP,
+				Timestamp: now.Format(time.RFC3339),
+				DeviceSN:  res.DeviceSN,
+				Values:    res.Values,
+			}
+			if err := store.SaveSnapshotWindow(snap, now); err != nil {
+				log.Printf("redis map save %s: %v", t.IP, err)
+			}
+		}(t)
+	}
+	wg.Wait()
 }
 
 func main() {
@@ -672,6 +841,9 @@ func main() {
 	// данных Redis (старше 2 календарных суток).
 	go runAccumulator(store, pg, stopBG)
 	go runRedisCleanup(store, stopBG)
+	// МАП («КЭС») опрашивается отдельно, 1 раз в секунду, и пишется в Redis
+	// со специальной логикой «одна строка за 10 с» (см. SaveSnapshotWindow).
+	go runMapPoll(store, stopBG)
 	defer close(stopBG)
 
 	if *dashboardAddr != "" {
@@ -689,6 +861,9 @@ func main() {
 		results := make([]DeviceResult, len(targets))
 		var wg sync.WaitGroup
 		for i, t := range targets {
+			if t.Kind == kindMAP {
+				continue // МАП опрашивается отдельным 1-сек циклом (runMapPoll)
+			}
 			wg.Add(1)
 			go func(i int, t invTarget) {
 				defer wg.Done()

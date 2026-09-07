@@ -5,6 +5,7 @@
     { "ip": "192.168.13.79", "name": "Deye Right", "type": "deye", "logger_sn": 2947000147 },
     { "ip": "192.168.13.91", "name": "Bineos Left", "type": "deye", "logger_sn": 1774265353 },
     { "ip": "192.168.13.92", "name": "Bineos Center", "type": "deye", "logger_sn": 1774585911 },
-    { "ip": "192.168.13.93", "name": "Bineos Right", "type": "deye", "logger_sn": 1766715945 }
+    { "ip": "192.168.13.93", "name": "Bineos Right", "type": "deye", "logger_sn": 1766715945 },
+    { "ip": "192.168.13.74", "name": "MAP TESla", "type": "map", "unit": 1 }
   ]
 }
