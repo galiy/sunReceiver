@@ -352,6 +352,56 @@ func mapSofarRegisters(regs map[uint16]uint16) valuesContract {
 	return out
 }
 
+// probableSofarBlock возвращает true, если блок регистров выглядит как настоящий
+// полный блок LSW-3 (0x0000-0x0027), а не сбойный кадр: логгер иногда отдаёт PDU
+// с валидным CRC, но мусором (повторяющееся слово вместо регистров, частота ~220 Гц,
+// пустая энергия), что даёт абсурдные пики мощности вроде ac_active_power = 220680 W.
+// Валидных полных блоков 20-40 регистров; «дубль» 16 регистров (0x0010-0x001F) и
+// Placeholder тоже не подходят. Физические пороги консервативные (с запасом от
+// реальных значений инвертора 2.5 kVA), чтобы не отсечь аномальные, но реальные данные.
+func probableSofarBlock(r map[uint16]uint16) bool {
+	if len(r) < 20 {
+		return false
+	}
+
+	// Частота сети: 0 или 40..80 Гц (raw ×0.01 → 4000..8000). ~220 Гц (22000) — мусор.
+	if v, ok := r[0x000E]; ok {
+		if hz := int16(v); hz != 0 && (hz < 4000 || hz > 8000) {
+			return false
+		}
+	}
+
+	// Напряжения фаз L1/L2/L3 (raw ×0.1): физически 0..270 В.
+	for _, addr := range []uint16{0x000F, 0x0011, 0x0013} {
+		if v, ok := r[addr]; ok {
+			if volts := float64(int16(v)) * 0.1; volts < -300 || volts > 300 {
+				return false
+			}
+		}
+	}
+
+	// PV1/PV2 напряжение (raw ×0.1): физически 0..450 В.
+	for _, addr := range []uint16{0x0006, 0x0008} {
+		if v, ok := r[addr]; ok {
+			if volts := float64(int16(v)) * 0.1; volts < -450 || volts > 450 {
+				return false
+			}
+		}
+	}
+
+	// Активная и реактивная мощность (raw ×10): для 2.5 kVA инвертора
+	// |W| не бывает > 10 кВт. Пик 220680 Вт (raw 22068) — отсекаем.
+	for _, addr := range []uint16{0x000C, 0x000D} {
+		if v, ok := r[addr]; ok {
+			if w := int64(int16(v)) * 10; w > 10000 || w < -10000 {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
 // deyeSensor — маппинг регистра Deye string/grid-tie инвертора
 // (из kbialek/deye-inverter-mqtt, диапазоны 0x3C-0x74 и 0xC6-0xD2).
 // Name — имя для raw_registers; Tag — имя универсального контракта для values.
@@ -509,23 +559,30 @@ func pollDevice(t invTarget) DeviceResult {
 		// Sofar LSW-3 возвращает весь блок 0x0000-0x0027 (40 рег., bytecount 80)
 		// И «дубль» — 16 рег. 0x0010-0x001F в отдельном кадре (bytecount 32).
 		// Если слить все PDU от базы 0, дубль затирает 0x0000-0x000F (битый статус/
-		// PV/частота). Берём только самую большую валидную PDU — полный блок от 0x0000.
-		var best *solarman.ModbusPDU
+		// PV/частота). Берём самую большую валидную PDU, которая выглядит как
+		// НАСТОЯЩИЙ полный блок: сбойные кадры с валидным CRC иногда содержат
+		// мусор (повторяющееся слово вместо регистров, частота ~220 Гц, пустая
+		// энергия) и дают абсурдные пики мощности — такие отсеиваем.
+		var bestResult map[uint16]uint16
+		bestLen := 0
 		for i := range pdus {
 			p := pdus[i]
 			if p.CRC != p.CRCCalc {
 				continue
 			}
-			if best == nil || len(p.Values) > len(best.Values) {
-				best = &pdus[i]
+			result := make(map[uint16]uint16, len(p.Values))
+			for k := 0; k < len(p.Values); k++ {
+				result[uint16(k)] = p.Values[k]
+			}
+			if !probableSofarBlock(result) {
+				continue
+			}
+			if len(p.Values) > bestLen {
+				bestLen = len(p.Values)
+				bestResult = result
 			}
 		}
-		result := map[uint16]uint16{}
-		if best != nil {
-			for k := 0; k < len(best.Values); k++ {
-				result[uint16(k)] = best.Values[k]
-			}
-		}
+		result := bestResult
 		if len(result) > 0 {
 			res.HasData = true
 			res.Values = mapSofarRegisters(result)
@@ -546,6 +603,8 @@ func main() {
 	log.SetFlags(log.Ltime)
 
 	redisAddr := flag.String("redis", "127.0.0.1:6379", "адрес Redis (хост:порт)")
+	pgDSN := flag.String("pg", "postgres://localhost:5432/sunreceiver?sslmode=disable", "DSN PostgreSQL для persistent-хранилища (пустая строка — выключить)")
+	restoreWindow := flag.Duration("pg-restore-window", 30*24*time.Hour, "окно РЕСТАВРАЦИИ Redis из PG при пустом Redis")
 	saveFiles := flag.Bool("file", false, "дополнительно писать JSON-файлы в data/ (по умолчанию выключено)")
 	dashboardAddr := flag.String("dashboard", ":8080", "адрес веб-дашборда (пустая строка — выключить)")
 	flag.Parse()
@@ -568,6 +627,30 @@ func main() {
 	}
 	defer rdb.Close()
 	store := &redisStore{rdb: rdb, ctx: context.Background()}
+
+	// Persistent-хранилище PostgreSQL: запись снимков в фоне, реставрация Redis.
+	var pg *pgStore
+	var pgCh chan deviceSnapshot
+	if *pgDSN != "" {
+		pg, err = openPG(*pgDSN)
+		if err != nil {
+			log.Printf("pg: %v (persistent-хранилище отключено)", err)
+		} else {
+			defer pg.Close()
+			log.Printf("pg: persistent-хранилище подключено")
+			pgCh = make(chan deviceSnapshot, 512)
+			go pgWriter(pg, pgCh)
+			// Если Redis пуст — восстановить в нём данные из PG в фоне.
+			empty, cerr := store.IsEmpty()
+			if cerr != nil {
+				log.Printf("redis empty-check: %v", cerr)
+			} else if empty {
+				go restoreRedisFromPG(store, pg, *restoreWindow)
+			}
+		}
+	} else {
+		log.Printf("pg: отключено (флаг -pg пустой); работаем только через Redis")
+	}
 
 	if *dashboardAddr != "" {
 		go serveDashboard(*dashboardAddr, store)
@@ -611,6 +694,14 @@ func main() {
 			if err := store.SaveSnapshot(snap, now); err != nil {
 				log.Printf("redis save %s: %v", targets[i].IP, err)
 				continue
+			}
+			// Фоновая запись в PostgreSQL (не блокирует следующий опрос).
+			if pgCh != nil {
+				select {
+				case pgCh <- snap:
+				default:
+					log.Printf("pg backlog full, drop %s", targets[i].IP)
+				}
 			}
 			savedAny = true
 			log.Printf("saved %s: %s", targets[i].Name, targets[i].IP)
@@ -678,4 +769,46 @@ func writeFiles(results []DeviceResult, now time.Time, ts string) {
 		}
 		log.Printf("saved %s", path)
 	}
+}
+
+// pgWriter — фоновая запись снимков в PostgreSQL. Читает канал, парсит время
+// из snap.Timestamp и вставляет сторку в PG. Не блокирует опрос инверторов.
+func pgWriter(pg *pgStore, ch <-chan deviceSnapshot) {
+	for snap := range ch {
+		ts, err := time.Parse(time.RFC3339, snap.Timestamp)
+		if err != nil {
+			ts = time.Now()
+		}
+		if err := pg.Insert(snap, ts); err != nil {
+			log.Printf("pg write %s: %v", snap.IP, err)
+		}
+	}
+}
+
+// restoreRedisFromPG восстанавливает Redis из persistent-хранилища PostgreSQL
+// за период [now-window, now]. Запускается в фоне при пустом Redis, пока сборщики
+// продолжают писать новые снимки. Для каждой точки вызывается SaveSnapshot
+// (обновляет current и кладёт точку в месячный ZSET ряда).
+func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration) {
+	end := time.Now()
+	start := end.Add(-window)
+	log.Printf("pg restore: восстанавливаю Redis из PG за %s", window)
+	snaps, err := pg.Snapshots(start, end)
+	if err != nil {
+		log.Printf("pg restore: query: %v", err)
+		return
+	}
+	var restored int
+	for _, snap := range snaps {
+		ts, perr := time.Parse(time.RFC3339, snap.Timestamp)
+		if perr != nil {
+			continue
+		}
+		if serr := store.SaveSnapshot(snap, ts); serr != nil {
+			log.Printf("pg restore: save %s: %v", snap.IP, serr)
+			continue
+		}
+		restored++
+	}
+	log.Printf("pg restore: завершено, восстановлено точек: %d", restored)
 }
