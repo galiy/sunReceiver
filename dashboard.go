@@ -389,7 +389,8 @@ function chartOpts(withLegend,yTitle){
 			zoom:{
 				pan:{ enabled:true, mode:'x' },
 				zoom:{ wheel:{ enabled:true, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:true }, mode:'x' },
-				limits:{ x:{ minRange: 60*1000 } }
+				limits:{ x:{ minRange: 60*1000 } },
+				onPanComplete:onViewChange, onZoomComplete:onViewChange
 			}
 		},
 		scales:{
@@ -405,6 +406,50 @@ function chartOpts(withLegend,yTitle){
 // Общий диапазон для обоих графиков. По умолчанию — текущие календарные сутки,
 // но можно выбрать «Вчера», «7 дней» или конкретный день через date-поле.
 var selRange={from:startOfToday(), to:endOfToday()};
+// expandedRange возвращает период с запасом по обе стороны, чтобы панорама и зум
+// могли уходить за границы выбранного диапазона (например, в прошлое за начало суток).
+// Запас = половина ширины видимого периода, но не меньше 12 часов с каждой стороны.
+function expandedRange(){
+	var from=selRange.from.getTime(), to=selRange.to.getTime();
+	var pad=Math.round((to-from)/2); if(pad<12*3600*1000) pad=12*3600*1000;
+	return {from:new Date(from-pad), to:new Date(to+pad)};
+}
+// loadedRange — фактически загруженный диапазон (для определения, когда нужна подгрузка).
+var loadedRange=null;
+// lastView — последняя видимая область по данным интерактивных панорам/зумов.
+var lastView={min:null,max:null};
+var reloading=false;
+// onViewChange отслеживает смещение/сужение видимой области, расширяя lastView и проверяя,
+// не нужно ли догрузить данные за новой границей (перекрытие начала суток при панораме влево).
+function onViewChange(chart){
+	var x=chart.scales&&chart.scales.x;
+	if(!x||!isFinite(x.min)||!isFinite(x.max)) return;
+	if(lastView.min===null||x.min<lastView.min) lastView.min=x.min;
+	if(lastView.max===null||x.max>lastView.max) lastView.max=x.max;
+	maybeReload();
+}
+// restoreView принудительно выставляет видимую область на всех графиках после подгрузки.
+function restoreView(min,max){
+	['powerChart','totalChart','gridVChart','gridPChart'].forEach(function(k){
+		var c=window[k];
+		if(c){ c.options.scales.x.min=min; c.options.scales.x.max=max; c.update('none'); }
+	});
+}
+// maybeReload: если видимая область вышла за загруженный диапазон — перезагружает данные
+// вокруг нового центра и возвращает графики обратно на видимую позицию.
+async function maybeReload(){
+	if(reloading||!lastView.min||!lastView.max) return;
+	var from=new Date(lastView.min), to=new Date(lastView.max);
+	var pad=(to-from)/2; if(pad<12*3600*1000) pad=12*3600*1000;
+	var needL=from.getTime()-pad, needR=to.getTime()+pad;
+	if(loadedRange && needL>=loadedRange.from && needR<=loadedRange.to) return;
+	reloading=true;
+	var view={min:lastView.min,max:lastView.max};
+	selRange.from=from; selRange.to=to;
+	try{ await loadAll(); }catch(e){}
+	restoreView(view.min,view.max);
+	reloading=false;
+}
 
 // dayFromStr возвращает начало локального дня по строке 'YYYY-MM-DD'.
 function dayFromStr(s){
@@ -421,13 +466,16 @@ function startOfYesterday(){
 // перезагружает оба графика.
 function selectRange(from,to,activeBtn){
 	selRange.from=from; selRange.to=to;
+	loadedRange=null; lastView={min:null,max:null}; reloading=false;
 	var btns=['btnToday','btnYesterday','btn7d'];
 	for(var i=0;i<btns.length;i++) document.getElementById(btns[i]).classList.remove('active');
 	if(activeBtn) document.getElementById(activeBtn).classList.add('active');
 	loadAll();
 }
 async function loadAll(){
-	await Promise.all([loadTotalChart(), loadChart(), loadGridVChart(), loadGridPChart()]);
+	var exp=expandedRange();
+	loadedRange={from:exp.from.getTime(), to:exp.to.getTime()};
+	await Promise.all([loadTotalChart(exp), loadChart(exp), loadGridVChart(exp), loadGridPChart(exp)]);
 }
 
 // Суммарный график (одна линия)
@@ -447,8 +495,9 @@ function buildTotalChart(data){
 	renderChart('totalChart', datasets, chartOpts(false,'W'));
 	return window.totalChart;
 }
-async function loadTotalChart(){
-	var url='/api/series?from='+encodeURIComponent(selRange.from.toISOString())+'&to='+encodeURIComponent(selRange.to.toISOString());
+async function loadTotalChart(exp){
+	exp = exp || expandedRange();
+	var url='/api/series?from='+encodeURIComponent(exp.from.toISOString())+'&to='+encodeURIComponent(exp.to.toISOString());
 	try{
 		var r=await fetch(url);
 		if(!r.ok) return;
@@ -480,8 +529,9 @@ function buildChart(data){
 	renderChart('powerChart', datasets, chartOpts(true,'W'));
 	return window.powerChart;
 }
-async function loadChart(){
-	var url='/api/series?from='+encodeURIComponent(selRange.from.toISOString())+'&to='+encodeURIComponent(selRange.to.toISOString());
+async function loadChart(exp){
+	exp = exp || expandedRange();
+	var url='/api/series?from='+encodeURIComponent(exp.from.toISOString())+'&to='+encodeURIComponent(exp.to.toISOString());
 	try{
 		var r=await fetch(url);
 		if(!r.ok) return;
@@ -507,8 +557,9 @@ function buildGridVChart(data){
 	renderChart('gridVChart', datasets, chartOpts(false,'V'));
 	return window.gridVChart;
 }
-async function loadGridVChart(){
-	var url='/api/series?from='+encodeURIComponent(selRange.from.toISOString())+'&to='+encodeURIComponent(selRange.to.toISOString());
+async function loadGridVChart(exp){
+	exp = exp || expandedRange();
+	var url='/api/series?from='+encodeURIComponent(exp.from.toISOString())+'&to='+encodeURIComponent(exp.to.toISOString());
 	try{
 		var r=await fetch(url);
 		if(!r.ok) return;
@@ -534,8 +585,9 @@ function buildGridPChart(data){
 	renderChart('gridPChart', datasets, chartOpts(true,'W'));
 	return window.gridPChart;
 }
-async function loadGridPChart(){
-	var url='/api/series?from='+encodeURIComponent(selRange.from.toISOString())+'&to='+encodeURIComponent(selRange.to.toISOString());
+async function loadGridPChart(exp){
+	exp = exp || expandedRange();
+	var url='/api/series?from='+encodeURIComponent(exp.from.toISOString())+'&to='+encodeURIComponent(exp.to.toISOString());
 	try{
 		var r=await fetch(url);
 		if(!r.ok) return;
