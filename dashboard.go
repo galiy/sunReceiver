@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -94,6 +95,13 @@ func isMAPDevice(v valuesContract) bool {
 	return ok
 }
 
+// isMPPTKey возвращает true для ключа/IP устройства MPPT-контроллера (devKey вида
+// host#mppt<slot>). Используется, чтобы MPPT-контроллеры сортировались и
+// выводились после сетевых инверторов.
+func isMPPTKey(ip string) bool {
+	return strings.Contains(ip, "#mppt")
+}
+
 const dashboardPage = `<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -134,6 +142,10 @@ h1 { font-size:22px; margin:0 0 4px; }
 .pivot-table td.p-unit { color:#8a93a1; font-weight:400; }
 .pivot-table td.p-empty { color:#4a5464; }
 .pivot-table tr:nth-child(even) td { background:#1b212b; }
+.pivot-groups { display:flex; flex-wrap:wrap; gap:16px; }
+.pivot-group { border-radius:8px; padding:8px; min-width:280px; flex:1 1 auto; background:#14192222; }
+.pivot-group h3 { margin:4px 0 8px; font-size:13px; font-weight:600; letter-spacing:.03em; }
+.pivot-group .pivot-table th, .pivot-group .pivot-table td { border-color:rgba(255,255,255,.06); }
 .kpi { display:flex; align-items:stretch; gap:16px; margin-bottom:20px; }
 .kpi-plate { flex:1; background:linear-gradient(135deg,#1d2430,#202a3a); border:1px solid #2a3342; border-radius:12px; padding:18px 22px; display:flex; flex-direction:column; gap:4px; }
 .kpi-label { font-size:12px; color:#8a93a1; text-transform:uppercase; letter-spacing:.06em; }
@@ -273,45 +285,53 @@ function devValue(dev, tag){
 }
 function renderPivot(devices){
 	if(!devices || !devices.length) return '<div class="missing">No data in Redis</div>';
-	// Устройство МАП (батарея/сеть) в сводной таблице не показываем — у него нет
-	// солнечных панелей; оно нужно только для верхних плашек и графиков.
-	// Идентифицируем по тегу battery_voltage, которого нет у инверторов и MPPT.
-	var invs=[];
-	for(var i=0;i<devices.length;i++) if(!(devices[i].values && devices[i].values.battery_voltage!==undefined)) invs.push(devices[i]);
-	if(!invs.length) return '<div class="missing">No data in Redis</div>';
-	var h = '<table class="pivot-table"><thead><tr><th></th>';
-	for(var i=0;i<invs.length;i++) h += '<th>'+esc(invs[i].name)+'</th>';
-	h += '<th></th></tr></thead><tbody>';
+	// Разбиваем на две группы: сетевые инверторы (первые) и MPPT-контроллеры (последние).
+	// Устройство МАП (батарея/сеть) в сводной таблице не показываем — у него нет солнечных
+	// панелей; оно нужно только для верхних плашек и графиков. Маркер MPPT — ip вида host#mpptN.
+	var grid=[], mpts=[];
+	for(var i=0;i<devices.length;i++){
+		var d=devices[i];
+		if(d.values && d.values.battery_voltage!==undefined) continue;
+		if(String(d.ip||'').indexOf('#mppt')>=0) mpts.push(d); else grid.push(d);
+	}
+	if(!grid.length && !mpts.length) return '<div class="missing">No data in Redis</div>';
+	var out='<div class="pivot-groups">';
+	if(grid.length) out+=renderPivotGroup('Сетевые инверторы','#4ecdc4',grid);
+	if(mpts.length) out+=renderPivotGroup('MPPT-контроллеры','#f9ca24',mpts);
+	out+='</div>';
+	return out;
+}
+// renderPivotGroup строит одну сводную таблицу-группу инверторов с цветной рамкой.
+function renderPivotGroup(title, color, invs){
+	var h='<div class="pivot-group" style="border:1px solid '+color+';box-shadow:0 0 0 1px '+color+' inset">';
+	h+='<h3 style="color:'+color+'">'+esc(title)+' ('+invs.length+')</h3>';
+	h+='<table class="pivot-table"><thead><tr><th></th>';
+	for(var i=0;i<invs.length;i++) h+='<th>'+esc(invs[i].name)+'</th>';
+	h+='<th></th></tr></thead><tbody>';
 	// Строка актуальности данных: время последнего снимка каждого инвертора.
-	h += '<tr><td class="p-label">Актуально</td>';
+	h+='<tr><td class="p-label">Актуально</td>';
 	for(var d=0;d<invs.length;d++){
-		var ts = (invs[d] && invs[d].timestamp) ? invs[d].timestamp : null;
-		h += (ts===null)
-			? '<td class="p-empty"></td>'
-			: '<td class="p-val" style="font-size:11px">'+esc(fmtSec(ts))+'</td>';
+		var ts=(invs[d]&&invs[d].timestamp)?invs[d].timestamp:null;
+		h+=(ts===null)?'<td class="p-empty"></td>':'<td class="p-val" style="font-size:11px">'+esc(fmtSec(ts))+'</td>';
 	}
-	h += '<td class="p-unit"></td></tr>';
+	h+='<td class="p-unit"></td></tr>';
 	// Строка серийных номеров инверторов и контроллеров.
-	h += '<tr><td class="p-label">Серийный номер</td>';
+	h+='<tr><td class="p-label">Серийный номер</td>';
 	for(var d=0;d<invs.length;d++){
-		var sn = (invs[d] && invs[d].device_sn) ? invs[d].device_sn : null;
-		h += (sn===null)
-			? '<td class="p-empty"></td>'
-			: '<td class="p-val" style="font-size:11px">'+esc(sn)+'</td>';
+		var sn=(invs[d]&&invs[d].device_sn)?invs[d].device_sn:null;
+		h+=(sn===null)?'<td class="p-empty"></td>':'<td class="p-val" style="font-size:11px">'+esc(sn)+'</td>';
 	}
-	h += '<td class="p-unit"></td></tr>';
+	h+='<td class="p-unit"></td></tr>';
 	for(var p=0;p<PARAMS.length;p++){
 		var tag=PARAMS[p][0], label=PARAMS[p][1], unit=PARAMS[p][2];
-		h += '<tr><td class="p-label">'+esc(label)+'</td>';
+		h+='<tr><td class="p-label">'+esc(label)+'</td>';
 		for(var d=0;d<invs.length;d++){
-			var v=devValue(invs[d], tag);
-			h += (v===null)
-				? '<td class="p-empty"></td>'
-				: '<td class="p-val">'+esc(v)+'</td>';
+			var v=devValue(invs[d],tag);
+			h+=(v===null)?'<td class="p-empty"></td>':'<td class="p-val">'+esc(v)+'</td>';
 		}
-		h += '<td class="p-unit">'+esc(unit)+'</td></tr>';
+		h+='<td class="p-unit">'+esc(unit)+'</td></tr>';
 	}
-	h += '</tbody></table>';
+	h+='</tbody></table></div>';
 	return h;
 }
 async function tick(){
@@ -636,7 +656,14 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	sort.SliceStable(devices, func(i, j int) bool { return devices[i].Name < devices[j].Name })
+	sort.SliceStable(devices, func(i, j int) bool {
+		// Сначала сетевые инверторы, MPPT-контроллеры — последними, внутри — по имени.
+		mi, mj := isMPPTKey(devices[i].IP), isMPPTKey(devices[j].IP)
+		if mi != mj {
+			return !mi
+		}
+		return devices[i].Name < devices[j].Name
+	})
 	var total float64
 	var totalPV float64
 	var gridV, gridP, batV, batP float64
@@ -719,14 +746,14 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	// Снимки устройства МАП (батарея/сеть) исключаем — их мощность отображается
 	// только на своих графиках МАП, а не на графике активной мощности инверторов.
 	byIP := map[string]*deviceSeries{}
-	ipToName := map[string]string{}
+	nameToIP := map[string]string{}
 	for _, sn := range snaps {
 		if isMAPDevice(sn.Values) {
 			continue
 		}
 		if _, ok := byIP[sn.IP]; !ok {
 			byIP[sn.IP] = &deviceSeries{IP: sn.IP, Name: sn.Name}
-			ipToName[sn.IP] = sn.Name
+			nameToIP[sn.Name] = sn.IP
 		}
 		if v, ok := snapFloat(sn.Values, "ac_active_power"); ok {
 			byIP[sn.IP].Points = append(byIP[sn.IP].Points, seriesPoint{T: sn.Timestamp, V: v})
@@ -737,7 +764,13 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	for _, ds := range byIP {
 		names = append(names, string(ds.Name))
 	}
-	sort.Strings(names)
+	sort.SliceStable(names, func(i, j int) bool {
+		mi, mj := isMPPTKey(nameToIP[names[i]]), isMPPTKey(nameToIP[names[j]])
+		if mi != mj {
+			return !mi
+		}
+		return names[i] < names[j]
+	})
 
 	res := seriesResponse{
 		GeneratedAt: now.Format(time.RFC3339),

@@ -99,7 +99,11 @@ func loadConfig(path string) ([]invTarget, error) {
 		case "map":
 			kind = kindMAP
 		case "mppt":
-			kind = kindMPPT
+			// MPPT-контроллеры не регистрируются в sunReceiver.json: они появляются и
+			// исчезают динамически по фактически подключённым контроллерам, возвращаемым
+			// веб-API ПАК «Малина» (read_json.php?device=mppt). Записи mppt в конфиге
+			// игнорируются — см. pollAndSaveMap.
+			continue
 		default:
 			return nil, fmt.Errorf("config %s: неизвестный тип %q для %s", path, t.Type, t.IP)
 		}
@@ -855,10 +859,10 @@ func pollDevice(t invTarget) DeviceResult {
 }
 
 // runMapPoll — отдельный 1-секундный цикл опроса быстрых целей — МАП (kindMAP,
-// Modbus TCP) и MPPT-контроллеров (kindMPPT, веб-API ПАК «Малина») — и записи в
-// Redis через SaveSnapshotWindow: в пределах каждого 10-секундного окна остаётся
-// ровно одна (последняя) строка на устройство. Эти цели исключены из общего
-// 10-сек цикла doPoll (см. doPoll), поэтому каждый 10-сек цикл даёт ~1 точку.
+// Modbus TCP) и MPPT-контроллеров (веб-API ПАК «Малина») — и записи в Redis через
+// SaveSnapshotWindow: в пределах каждого 10-секундного окна остаётся ровно одна
+// (последняя) строка на устройство. МАП-цели исключены из общего 10-сек цикла
+// doPoll; MPPT не регистрируются в конфиге вовсе (см. pollAndSaveMap).
 func runMapPoll(store *redisStore, stop <-chan struct{}) {
 	const pollEvery = time.Second
 	ticker := time.NewTicker(pollEvery)
@@ -873,14 +877,21 @@ func runMapPoll(store *redisStore, stop <-chan struct{}) {
 	}
 }
 
-// pollAndSaveMap опрашивает все быстрые цели (kindMAP, kindMPPT) параллельно и
-// пишет в Redis через SaveSnapshotWindow (одна строка за каждые 10 секунд +
-// актуальное current).
+// pollAndSaveMap опрашивает быстрые источники параллельно и пишет в Redis через
+// SaveSnapshotWindow (одна строка за каждые 10 секунд + актуальное current):
+//   - МАП (kindMAP, Modbus TCP) — цели из targets;
+//   - MPPT-контроллеры — ДИНАМИЧЕСКИ: состав определяется фактически подключёнными
+//     к ПАК «Малина» контроллерами из ответа read_json.php?device=mppt, а не из
+//     sunReceiver.json. Поэтому MPPT появляются/исчезают с дашборда по факту наличия
+//     в ответе API; исчезнувшие удаляются и из HASH current (их строка не числится
+//     «актуальной».
 func pollAndSaveMap(store *redisStore, now time.Time) {
 	var wg sync.WaitGroup
+	activeMPPT := map[string]struct{}{}
+	// МАП (батарея/сеть) — из targets, фиксированно.
 	for i := range targets {
 		t := targets[i]
-		if t.Kind != kindMAP && t.Kind != kindMPPT {
+		if t.Kind != kindMAP {
 			continue
 		}
 		wg.Add(1)
@@ -891,8 +902,6 @@ func pollAndSaveMap(store *redisStore, now time.Time) {
 				log.Printf("%s: map %s", t.IP, describeResult(res))
 				return
 			}
-			// Для MPPT API время актуальности данных берём из ответа API,
-			// иначе — время опроса.
 			ts := now
 			if !res.Time.IsZero() {
 				ts = res.Time
@@ -909,7 +918,52 @@ func pollAndSaveMap(store *redisStore, now time.Time) {
 			}
 		}(t)
 	}
+	// MPPT-контроллеры — по факту подключённых из API. Каждый контроллер ответа —
+	// отдельное устройство с ключом devKey(MPPT слотом); имя генерируем как MPPT-<n+1>.
+	if mppt != nil {
+		arr, err := mppt.FetchMPPTs()
+		if err != nil {
+			log.Printf("mppt api: %v", err)
+		} else {
+			for slot := range arr {
+				slot := slot
+				activeMPPT[saveMPPTKey(slot)] = struct{}{}
+				wg.Add(1)
+				go func(slot int) {
+					defer wg.Done()
+					t := invTarget{IP: mppt.Host, Name: fmt.Sprintf("MPPT-%d", slot+1), Kind: kindMPPT, Slot: slot}
+					res := pollDevice(t)
+					if !res.OK || !res.HasData {
+						log.Printf("%s: mppt %s", t.IP, describeResult(res))
+						return
+					}
+					ts := now
+					if !res.Time.IsZero() {
+						ts = res.Time
+					}
+					snap := deviceSnapshot{
+						Name:      t.Name,
+						IP:        devKey(t),
+						Timestamp: ts.Format(time.RFC3339),
+						DeviceSN:  res.DeviceSN,
+						Values:    res.Values,
+					}
+					if err := store.SaveSnapshotWindow(snap, ts); err != nil {
+						log.Printf("redis map save %s: %v", devKey(t), err)
+					}
+				}(slot)
+			}
+		}
+	}
 	wg.Wait()
+	// Исчезнувшие MPPT-контроллеры (не в ответе API) убираем из HASH current, чтобы
+	// их строка не показывалась на дашборде как актуальная.
+	store.PruneMPPT(activeMPPT)
+}
+
+// saveMPPTKey возвращает devKey (поле IP снимка) для MPPT-слота: host#mppt<slot>.
+func saveMPPTKey(slot int) string {
+	return fmt.Sprintf("%s#mppt%d", mppt.Host, slot)
 }
 
 func main() {

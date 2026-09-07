@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -20,6 +21,7 @@ type mpptSite struct {
 	MPPTPath string
 	Login    string
 	Password string
+	Host     string // host из base_url (IP ПАК «Малина») — используется как IP MPPT-устройства
 
 	client  *http.Client
 	authHdr string // "Basic base64(login:password)"
@@ -74,14 +76,26 @@ func loadMPPTSite() *mpptSite {
 		return nil
 	}
 	tok := base64.StdEncoding.EncodeToString([]byte(sc.Site.Auth.Login + ":" + sc.Site.Auth.Password))
+	host := hostOf(sc.Site.BaseURL)
 	return &mpptSite{
 		BaseURL:  sc.Site.BaseURL,
 		MPPTPath: sc.Site.URLs.ReadJSONMPPT,
 		Login:    sc.Site.Auth.Login,
 		Password: sc.Site.Auth.Password,
+		Host:     host,
 		client:   &http.Client{Timeout: 5 * time.Second},
 		authHdr:  "Basic " + tok,
 	}
+}
+
+// hostOf возвращает хост/порт из базового URL (например, "192.168.13.60" из
+// "http://192.168.13.60"); при ошибке парсинга — пустую строку.
+func hostOf(u string) string {
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return ""
+	}
+	return parsed.Host
 }
 
 // mpptRaw — один элемент ответа read_json.php?device=mppt (текущие параметры
