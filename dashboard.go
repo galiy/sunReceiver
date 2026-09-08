@@ -148,11 +148,34 @@ h1 { font-size:22px; margin:0 0 4px; }
 .kpi-value { font-size:52px; font-weight:700; line-height:1; font-variant-numeric:tabular-nums; }
 .kpi-unit { font-size:20px; font-weight:400; color:#8a93a1; margin-left:6px; }
 .kpi-sub { font-size:12px; color:#6b7280; }
+/* Плашка электросчётчика (самый верх) */
+.meter-plate { background:#10161f; border:1px solid #2a3342; border-radius:12px; padding:14px 18px; margin:0 0 16px; }
+.meter-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:10px; }
+.meter-title { font-size:14px; font-weight:700; color:#e6e6e6; }
+.meter-ts { font-size:12px; color:#6b7280; }
+.meter-stats { display:flex; flex-wrap:wrap; gap:10px; }
+.meter-stat { background:#181c24; border:1px solid #252b36; border-radius:8px; padding:8px 14px; min-width:120px; }
+.meter-stat .lbl { font-size:11px; color:#8a93a1; text-transform:uppercase; letter-spacing:.04em; }
+.meter-stat .val { font-size:20px; font-weight:700; font-variant-numeric:tabular-nums; }
+.meter-stat .unit { font-size:12px; color:#8a93a1; font-weight:400; margin-left:4px; }
+.meter-stat .pos { color:#6fd08a; } /* положительная величина / потребление */
+.meter-stat .neg { color:#ff6b6b; } /* отрицательная величина / отдача в сеть */
+.meter-stat .off { color:#ff9f43; } /* нулевое/неопределённое */
+.meter-note { font-size:11px; color:#6b7280; margin-top:8px; }
 </style>
 </head>
 <body>
 <h1>SunReceiver</h1>
-<p class="sub">Текущие параметры инверторов (из Redis, обновление каждую секунду)</p>
+<p class="sub">Текущие параметры инверторов и электросчётчика (из Redis, обновление каждую секунду)</p>
+
+<div class="meter-plate">
+  <div class="meter-head">
+    <span class="meter-title">Электросчётчик DDS238 &mdash; текущие параметры</span>
+    <span class="meter-ts" id="meterTs">&mdash;</span>
+  </div>
+  <div class="meter-stats" id="meterStats"><span class="missing">Нет данных</span></div>
+  <div class="meter-note">Мощность с отрицательным знаком &mdash; отдача в сеть (генерация); положительная &mdash; потребление.</div>
+</div>
 
 <div class="kpi">
   <div class="kpi-plate">
@@ -290,7 +313,7 @@ function renderPivot(devices){
 	var grid=[], mpts=[];
 	for(var i=0;i<devices.length;i++){
 		var d=devices[i];
-		if(d.values && d.values.battery_voltage!==undefined) continue;
+		if(isMAPDeviceJS(d) || isMeterDevice(d)) continue;
 		if(String(d.ip||'').indexOf('#mppt')>=0) mpts.push(d); else grid.push(d);
 	}
 	if(!grid.length && !mpts.length) return '<div class="missing">No data in Redis</div>';
@@ -344,6 +367,50 @@ function edgeCell(color,isFirst,isLast){
 	if(isLast) st+='border-right:1px solid '+color+';';
 	return '<td class="p-empty" style="'+st+'"></td>';
 }
+// isMeterDevice возвращает true, если устройство — электросчётчик DDS238 (имеет
+// теги meter_*). Используется, чтобы не выводить счётчик в сводную таблицу
+// инверторов и не считать его в «инверторах онлайн».
+function isMeterDevice(d){ return !!(d && d.values && d.values.meter_voltage !== undefined); }
+// isMAPDeviceJS — маркер устройства МАП (батарея/сеть) в JS (аналог isMAPDevice в Go).
+function isMAPDeviceJS(d){ return !!(d && d.values && d.values.battery_voltage !== undefined); }
+
+// METER_PARAMS — параметры счётчика для плашки: [тег, подпись, единица, знаковый].
+// Знаковые (активная/реактивная мощность) окрашиваются: отрицательная — отдача.
+var METER_PARAMS = [
+	['meter_voltage','Напряжение','V',false],
+	['meter_current','Ток','A',false],
+	['meter_active_power','Активная мощность','W',true],
+	['meter_reactive_power','Реактивная мощность','var',true],
+	['meter_power_factor','Коэффициент мощности','',false],
+	['meter_frequency','Частота','Hz',false],
+	['meter_import','Потребление (Import)','kWh',false],
+	['meter_export','Отдача (Export)','kWh',false],
+	['meter_total','Общая (Total)','kWh',false]
+];
+// renderMeter строит HTML статистик плашки счётчика из его снимка (или «Нет данных»).
+function renderMeter(meter){
+	var stats=document.getElementById('meterStats');
+	if(!meter){ stats.innerHTML='<span class="missing">Нет данных</span>'; return; }
+	var ts=document.getElementById('meterTs');
+	ts.textContent=meter.timestamp? 'Актуально: '+fmtSec(meter.timestamp) : '—';
+	var h='';
+	for(var i=0;i<METER_PARAMS.length;i++){
+		var t=METER_PARAMS[i][0], lbl=METER_PARAMS[i][1], unit=METER_PARAMS[i][2], signed=METER_PARAMS[i][3];
+		var raw=meter.values? meter.values[t] : undefined;
+		if(raw===undefined||raw===null){ h+='<div class="meter-stat"><div class="lbl">'+esc(lbl)+'</div><div class="val off">—</div></div>'; continue; }
+		var n=Number(raw);
+		var cls='val', txt;
+		if(isFinite(n)){
+			txt=n.toLocaleString('ru-RU',{maximumFractionDigits:2});
+			if(signed){ cls+=' '+(n<0?' neg':' pos'); }
+		}else{
+			cls+=' off'; txt='—';
+		}
+		h+='<div class="meter-stat"><div class="lbl">'+esc(lbl)+'</div><div class="'+cls+'">'+esc(txt)+
+		   (unit?' <span class="unit">'+esc(unit)+'</span>':'')+'</div></div>';
+	}
+	stats.innerHTML=h;
+}
 async function tick(){
 	try{
 		var r=await fetch('/api/current');
@@ -354,9 +421,9 @@ async function tick(){
 		var n=Number(data.total_power);
 		if(isFinite(n) && data.total_power>0){
 			kpiEl.textContent=n.toLocaleString('ru-RU',{maximumFractionDigits:1});
-			// Число инверторов онлайн — без устройства МАП (батарея/сеть).
+			// Число инверторов онлайн — без устройства МАП (батарея/сеть) и счётчика.
 			var invCount=0;
-			for(var i=0;i<data.devices.length;i++) if(!(data.devices[i].values && data.devices[i].values.battery_voltage!==undefined)) invCount++;
+			for(var i=0;i<data.devices.length;i++) if(!isMAPDeviceJS(data.devices[i]) && !isMeterDevice(data.devices[i])) invCount++;
 			document.getElementById('kpiSub').textContent=invCount+' инверторов онлайн';
 		}else{
 			kpiEl.textContent='—';
@@ -376,6 +443,10 @@ async function tick(){
 		setKpi('kpiBatV', data.map_battery_voltage);
 		setKpi('kpiBatP', data.map_battery_power);
 		setKpi('kpiConsP', data.map_consumption);
+		// Плашка электросчётчика (вверху).
+		var meter=null;
+		for(var i=0;i<data.devices.length;i++) if(isMeterDevice(data.devices[i])){ meter=data.devices[i]; break; }
+		renderMeter(meter);
 		var cards=document.getElementById('cards');
 		cards.innerHTML = renderPivot(data.devices);
 	}catch(e){}
