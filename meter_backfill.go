@@ -139,7 +139,10 @@ func nearestMeterReading(store *redisStore, cfg *meterConfig, b time.Time) (imp,
 		if !okI || !okE {
 			continue
 		}
-		ts := parseTS(sn.Timestamp)
+		ts, okTS := parseTS(sn.Timestamp)
+		if !okTS {
+			continue
+		}
 		d := ts.Sub(b)
 		if d < 0 {
 			d = -d

@@ -192,6 +192,13 @@ func (s *redisStore) PruneMPPT(active map[string]struct{}) {
 	if err := s.rdb.HDel(s.ctx, redisCurrentKey, keys...).Err(); err != nil {
 		log.Printf("redis prune mppt del %v: %v", keys, err)
 	}
+	// Чистим в памяти mapWin по удалённым MPPT-ключам (иначе карта растёт при
+	// ротации контроллеров).
+	s.mapMu.Lock()
+	for _, k := range keys {
+		delete(s.mapWin, k)
+	}
+	s.mapMu.Unlock()
 }
 
 // eachMonth вызывает fn для каждого года/месяца, покрывающего [start, end] включительно.

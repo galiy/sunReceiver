@@ -35,19 +35,40 @@ func toFloat(raw any) (float64, bool) {
 	return 0, false
 }
 
+// accumulatorTags — монотонно возрастающие счётчики (энергия/показания).
+// Усреднение по окну занижало бы их значение (в среднем попадаем на начало окна),
+// поэтому для них усреднение заменяем на последнее по времени значение окна.
+var accumulatorTags = map[string]bool{
+	"energy_total": true,
+	"energy_today": true,
+	"meter_import": true,
+	"meter_export": true,
+	"meter_total":  true,
+}
+
 // averageValues усредняет все числовые теги набора снимков одного инвертора и
 // одного 5-минутного промежутка в одну точку для записи в PostgreSQL.
 // Так как values содержит только числовые теги общего контракта, усредняется
-// каждый ключ; частотные/напряженские величины усредняются честно, а накопительные
-// счётчики (energy_*) — как «репрезентативное» значение промежутка (для графиков
-// мощности и так используется только ac_active_power).
+// каждый ключ; частотные/напряженские величины усредняются честно, а
+// накопительные счётчики (accumulatorTags) — по последнему значению окна.
 func averageValues(snaps []deviceSnapshot) valuesContract {
 	sums := map[string]float64{}
 	counts := map[string]int{}
+	// Накопительные счётчики: держим значение снимка с наибольшим timestamp.
+	lastTS := map[string]time.Time{}
+	lastVal := map[string]float64{}
 	for _, sn := range snaps {
+		ts, _ := time.Parse(time.RFC3339, sn.Timestamp)
 		for k, raw := range sn.Values {
 			f, ok := toFloat(raw)
 			if !ok {
+				continue
+			}
+			if accumulatorTags[k] {
+				if ts.After(lastTS[k]) {
+					lastTS[k] = ts
+					lastVal[k] = f
+				}
 				continue
 			}
 			sums[k] += f
@@ -61,6 +82,9 @@ func averageValues(snaps []deviceSnapshot) valuesContract {
 		}
 		out[k] = math.Round(sums[k]/float64(n)*10) / 10
 	}
+	for k, v := range lastVal {
+		out[k] = math.Round(v*10) / 10
+	}
 	return out
 }
 
@@ -72,6 +96,13 @@ func averageBucket(store *redisStore, pg *pgStore, start, end time.Time) {
 		log.Printf("acc avg %s: %v", start.Format(time.RFC3339), err)
 		return
 	}
+	insertAverageBucket(pg, start, snaps)
+}
+
+// insertAverageBucket группирует снимки по инвертору (по IP) и для каждого
+// записывает одну усреднённую точку в PG (ts = start). Общий для накопителя
+// (averageBucket) и бэкенд-долива (backfillAccumulator).
+func insertAverageBucket(pg *pgStore, start time.Time, snaps []deviceSnapshot) {
 	if len(snaps) == 0 {
 		return
 	}
@@ -93,20 +124,47 @@ func averageBucket(store *redisStore, pg *pgStore, start, end time.Time) {
 // backfillAccumulator конвертирует уже накопленные в Redis данные (за последние
 // 2 календарных суток, окно удержания Redis) в 5-минутные усреднённые точки PG.
 // Вызывается однократно при старте, чтобы промежутки до текущего аккумулирования
-// не потерялись при переходе на новый режим.
+// не потерялись при переходе на новый режим. Читает ОДНИМ QuerySeries за всё
+// окно и группирует снимки по (ip, 5-минутный промежуток) в памяти, вместо того
+// чтобы ходить в Redis по каждому 5-минутному бакету (~576 раз за 2 суток).
 func backfillAccumulator(store *redisStore, pg *pgStore, now time.Time) {
 	if pg == nil {
 		return
 	}
 	end := floorToStep(now)
 	start := recentCutoff(now)
-	for cur := floorToStep(start); cur.Before(end); cur = cur.Add(avgStep) {
-		bucketEnd := cur.Add(avgStep)
-		if bucketEnd.After(end) {
-			break
-		}
-		averageBucket(store, pg, cur, bucketEnd)
+	if !start.Before(end) {
+		return
 	}
+	snaps, err := store.QuerySeries(start, end)
+	if err != nil {
+		log.Printf("acc backfill: %v", err)
+		return
+	}
+	// Группируем по 5-минутному бакету (начало бакета = ключ); снимок с ts
+	// строго в [бакет, бакет+5м). Внутри бакета усредняем все снимки всех
+	// инверторов по IP (см. insertAverageBucket).
+	type bucketKey struct {
+		ip  string
+		bts time.Time
+	}
+	groups := map[bucketKey][]deviceSnapshot{}
+	for _, sn := range snaps {
+		ts, perr := time.Parse(time.RFC3339, sn.Timestamp)
+		if perr != nil {
+			continue
+		}
+		if !ts.After(end) || ts.Before(start) {
+			continue
+		}
+		groups[bucketKey{ip: sn.IP, bts: floorToStep(ts)}] = append(groups[bucketKey{ip: sn.IP, bts: floorToStep(ts)}], sn)
+	}
+	var n int
+	for k, bucketSnaps := range groups {
+		insertAverageBucket(pg, k.bts, bucketSnaps)
+		n++
+	}
+	log.Printf("acc backfill: обработано %d 5-минутных бакетов", n)
 }
 
 // runAccumulator — фоновый процесс усреднения и записи в PostgreSQL:

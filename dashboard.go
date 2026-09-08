@@ -110,22 +110,14 @@ var seriesPalette = []string{
 	"#74b9ff", "#55efc4", "#fdcb6e", "#fab1a0",
 }
 
-// snapFloat извлекает числовое значение из универсального контракта по ключу.
+// snapFloat извлекает числовое значение из универсального контракта по ключу
+// (обёртка над toFloat — единая реализация в accumulator.go).
 func snapFloat(v valuesContract, key string) (float64, bool) {
 	raw, ok := v[key]
 	if !ok {
 		return 0, false
 	}
-	switch n := raw.(type) {
-	case float64:
-		return n, true
-	case int:
-		return float64(n), true
-	case json.Number:
-		f, err := n.Float64()
-		return f, err == nil
-	}
-	return 0, false
+	return toFloat(raw)
 }
 
 // isMAPDevice возвращает true, если снимок принадлежит устройству МАП (kindMAP,
@@ -1307,14 +1299,15 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 		To:          to.Format(time.RFC3339),
 		Series:      make([]deviceSeries, 0, len(names)),
 	}
+	// name → *deviceSeries, O(1) на имя вместо O(N) вложенного обхода.
+	nameToSeries := make(map[string]*deviceSeries, len(byIP))
+	for _, ds := range byIP {
+		nameToSeries[ds.Name] = ds
+	}
 	for i, n := range names {
-		for _, ds := range byIP {
-			if ds.Name == n {
-				ds.Color = seriesPalette[i%len(seriesPalette)]
-				res.Series = append(res.Series, *ds)
-				break
-			}
-		}
+		ds := nameToSeries[n]
+		ds.Color = seriesPalette[i%len(seriesPalette)]
+		res.Series = append(res.Series, *ds)
 	}
 
 	// Суммарный ряд: складываем ac_active_power всех инверторов по минутным бакетам.

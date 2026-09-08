@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,10 @@ import (
 	"path/filepath"
 	"time"
 )
+
+// requestTimeout — таймаут одного HTTP-запроса к read_json.php. Ниже общего
+// client.Timeout (5 с), чтобы 1-сек цикл runMapPoll не блокировался надолго.
+const requestTimeout = 3 * time.Second
 
 // mpptSite — конфигурация доступа к веб-API ПАК «Малина» для мониторинга MPPT
 // (КЭС) через read_json.php?device=mppt. Источник — скрытый конфиг malina.json
@@ -179,12 +184,17 @@ func parseFloat(s string) (float64, bool) {
 
 // FetchMPPTs запрашивает текущие параметры всех MPPT-контроллеров через
 // read_json.php?device=mppt и возвращает слайс контроллеров (индекс = слот).
+// Per-request контекст с таймаутом requestTimeout: если ПАК «Малина» виснет,
+// 1-секундный цикл runMapPoll не блокируется на общий Timeout клиента (5 с).
 func (s *mpptSite) FetchMPPTs() ([]mpptRaw, error) {
 	u := s.BaseURL + s.MPPTPath
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	defer cancel()
+	req = req.WithContext(ctx)
 	req.Header.Set("Authorization", s.authHdr)
 	resp, err := s.client.Do(req)
 	if err != nil {

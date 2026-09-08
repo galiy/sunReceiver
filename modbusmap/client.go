@@ -97,7 +97,7 @@ func (c *Client) ReadRegisters(start uint16, count uint16) ([]byte, error) {
 
 	// Читаем MBAP (7 байт) затем остальное.
 	hdr := make([]byte, 7)
-	if _, err := readFull(c.conn, hdr); err != nil {
+	if _, err := ReadFull(c.conn, hdr); err != nil {
 		c.closeConn()
 		return nil, fmt.Errorf("read header: %w", err)
 	}
@@ -111,7 +111,7 @@ func (c *Client) ReadRegisters(start uint16, count uint16) ([]byte, error) {
 		return nil, fmt.Errorf("некорректный MBAP length=%d", mbLen)
 	}
 	rest := make([]byte, mbLen-1) // минус unit id (уже в hdr[6])
-	if _, err := readFull(c.conn, rest); err != nil {
+	if _, err := ReadFull(c.conn, rest); err != nil {
 		c.closeConn()
 		return nil, fmt.Errorf("read pdu: %w", err)
 	}
@@ -147,7 +147,9 @@ func (c *Client) closeConn() {
 	}
 }
 
-func readFull(conn net.Conn, buf []byte) (int, error) {
+// ReadFull читает ровно len(buf) байт из соединения (сборка нескольких Read).
+// Общий для modbusmap и других Modbus TCP-клиентов (например, электросчётчика).
+func ReadFull(conn net.Conn, buf []byte) (int, error) {
 	total := 0
 	for total < len(buf) {
 		n, err := conn.Read(buf[total:])
