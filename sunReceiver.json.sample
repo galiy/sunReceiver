@@ -1,0 +1,23 @@
+{
+  "targets": [
+    { "ip": "192.168.0.x", "name": "Deye Left", "type": "deye", "logger_sn": ########## },
+    { "ip": "192.168.0.x", "name": "Sofar-2.5", "type": "sofar", "logger_sn": ########## },
+    { "ip": "192.168.0.x", "name": "Deye Right", "type": "deye", "logger_sn": ########## },
+    { "ip": "192.168.0.x", "name": "Bineos Left", "type": "deye", "logger_sn": ########## },
+    { "ip": "192.168.0.x", "name": "Bineos Center", "type": "deye", "logger_sn": ########## },
+    { "ip": "192.168.0.x", "name": "Bineos Right", "type": "deye", "logger_sn": ########## },
+    { "ip": "192.168.0.x", "name": "MAP (батарея/сеть)", "type": "map", "unit": 1 }
+  ],
+  "db": {
+    "redis": "192.168.0.x:6379",
+    "pg": "postgres://sunreceiver:CHANGE_ME_PASSWORD@192.168.0.x:5432/sunreceiver?sslmode=disable"
+  },
+  "meter": {
+    "name": "Электросчётчик",
+    "ip": "192.168.0.x",
+    "port": 502,
+    "unit": 1,
+    "first_reg": 0,
+    "register_count": 27
+  }
+}

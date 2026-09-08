@@ -29,9 +29,41 @@ func meterConfigPath() string {
 	return filepath.Join(filepath.Dir(exe), "dds238.json")
 }
 
-// loadMeterConfig читает и проверяет dds238.json. Если файла нет или поля не
-// полностью заданы — возвращает nil (опрос счётчика отключён).
-func loadMeterConfig() *meterConfig {
+// meterFromSection строит *meterConfig из раздела meter основного sunReceiver.json.
+// Значения по умолчанию и валидация — как у loadMeterConfig (файл dds238.json).
+func meterFromSection(m *meterSection) *meterConfig {
+	if m == nil {
+		return nil
+	}
+	if m.IP == "" || m.Port == 0 || m.Unit == 0 || m.Name == "" {
+		return nil
+	}
+	mc := &meterConfig{
+		Name:        m.Name,
+		IP:          m.IP,
+		Port:        m.Port,
+		Unit:        m.Unit,
+		FirstReg:    m.FirstReg,
+		RegisterCnt: m.RegisterCnt,
+	}
+	if mc.FirstReg == 0 && mc.RegisterCnt == 0 {
+		mc.FirstReg = 0
+		mc.RegisterCnt = 27
+	}
+	if mc.RegisterCnt == 0 {
+		return nil
+	}
+	return mc
+}
+
+// loadMeterConfig читает и проверяет конфигурацию счётчика. Источники по приоритету:
+//   1) раздел "meter" в sunReceiver.json (передаётся из main как meterSection);
+//   2) отдельный файл dds238.json рядом с бинарником (обратная совместимость).
+// Если ни там, ни там счётчик не задан полностью — возвращает nil (опрос отключён).
+func loadMeterConfig(section *meterSection) *meterConfig {
+	if mc := meterFromSection(section); mc != nil {
+		return mc
+	}
 	path := meterConfigPath()
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		// `go run .`: бинарник во временном каталоге go-сборки — ищем в CWD.

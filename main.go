@@ -62,8 +62,29 @@ type configTarget struct {
 	Slot     *int   `json:"slot,omitempty"` // nil = не задан (kindMAP → агрегат/батарея-сеть)
 }
 
+// dbConfig — расположение баз данных. Задаётся в sunReceiver.json в разделе "db".
+// Пароль указывается прямо в pg-DSN (sunReceiver.json — приватный конфиг, в git не
+// коммитится).
+type dbConfig struct {
+	Redis string `json:"redis"` // адрес Redis в формате host:port
+	PG    string `json:"pg"`    // DSN PostgreSQL (с паролем)
+}
+
+// meterSection — конфигурация электросчётчика DDS238, может быть задана прямо
+// в sunReceiver.json разделом "meter" вместо отдельного dds238.json.
+type meterSection struct {
+	Name        string `json:"name"`
+	IP          string `json:"ip"`
+	Port        int    `json:"port"`
+	Unit        byte   `json:"unit"`
+	FirstReg    uint16 `json:"first_reg"`
+	RegisterCnt uint16 `json:"register_count"`
+}
+
 type configFile struct {
 	Targets []configTarget `json:"targets"`
+	DB      *dbConfig      `json:"db"`
+	Meter   *meterSection  `json:"meter"`
 }
 
 // configPath — sunReceiver.json в каталоге исполняемого файла.
@@ -75,18 +96,19 @@ func configPath() string {
 	return filepath.Join(filepath.Dir(exe), "sunReceiver.json")
 }
 
-// loadConfig читает и проверяет sunReceiver.json, возвращает список целей.
-func loadConfig(path string) ([]invTarget, error) {
+// loadConfig читает и проверяет sunReceiver.json, возвращает список целей
+// и настройки БД/счётчика (если заданы в файле).
+func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read config %s: %w", path, err)
+		return nil, nil, nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 	var cf configFile
 	if err := json.Unmarshal(b, &cf); err != nil {
-		return nil, fmt.Errorf("parse config %s: %w", path, err)
+		return nil, nil, nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	if len(cf.Targets) == 0 {
-		return nil, fmt.Errorf("config %s: пустой список targets", path)
+		return nil, nil, nil, fmt.Errorf("config %s: пустой список targets", path)
 	}
 	targets := make([]invTarget, 0, len(cf.Targets))
 	for _, t := range cf.Targets {
@@ -105,13 +127,13 @@ func loadConfig(path string) ([]invTarget, error) {
 			// игнорируются — см. pollAndSaveMap.
 			continue
 		default:
-			return nil, fmt.Errorf("config %s: неизвестный тип %q для %s", path, t.Type, t.IP)
+			return nil, nil, nil, fmt.Errorf("config %s: неизвестный тип %q для %s", path, t.Type, t.IP)
 		}
 		if t.IP == "" {
-			return nil, fmt.Errorf("config %s: пустой ip (type=%s)", path, t.Type)
+			return nil, nil, nil, fmt.Errorf("config %s: пустой ip (type=%s)", path, t.Type)
 		}
 		if t.Name == "" {
-			return nil, fmt.Errorf("config %s: пустое логическое имя name для %s", path, t.IP)
+			return nil, nil, nil, fmt.Errorf("config %s: пустое логическое имя name для %s", path, t.IP)
 		}
 		unit := byte(1)
 		if t.Unit > 0 {
@@ -123,7 +145,25 @@ func loadConfig(path string) ([]invTarget, error) {
 		}
 		targets = append(targets, invTarget{IP: t.IP, Name: t.Name, LoggerSN: t.LoggerSN, Kind: kind, Unit: unit, Slot: slot})
 	}
-	return targets, nil
+	return targets, cf.DB, cf.Meter, nil
+}
+
+// defaultRedisAddr возвращает адрес Redis: из раздела db конфига (приоритет),
+// иначе — дефолт 127.0.0.1:6379.
+func defaultRedisAddr(db *dbConfig) string {
+	if db != nil && db.Redis != "" {
+		return db.Redis
+	}
+	return "127.0.0.1:6379"
+}
+
+// defaultPGDSN возвращает DSN PostgreSQL: из раздела db конфига (приоритет),
+// иначе — дефолт localhost.
+func defaultPGDSN(db *dbConfig) string {
+	if db != nil && db.PG != "" {
+		return db.PG
+	}
+	return "postgres://localhost:5432/sunreceiver?sslmode=disable"
 }
 
 // devKey возвращает ключ устройства в хранилище (поле IP снимка): для обычных
@@ -979,29 +1019,34 @@ func saveMPPTKey(slot int) string {
 func main() {
 	log.SetFlags(log.Ltime)
 
-	redisAddr := flag.String("redis", "127.0.0.1:6379", "адрес Redis (хост:порт)")
-	pgDSN := flag.String("pg", "postgres://localhost:5432/sunreceiver?sslmode=disable", "DSN PostgreSQL для persistent-хранилища (пустая строка — выключить)")
-	restoreWindow := flag.Duration("pg-restore-window", 30*24*time.Hour, "окно РЕСТАВРАЦИИ Redis из PG при пустом Redis")
-	saveFiles := flag.Bool("file", false, "дополнительно писать JSON-файлы в data/ (по умолчанию выключено)")
-	dashboardAddr := flag.String("dashboard", ":8080", "адрес веб-дашборда (пустая строка — выключить)")
-	flag.Parse()
-
 	cfgPath := configPath()
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
 		// `go run .`: бинарник во временном каталоге go-сборки — ищем sunReceiver.json в CWD.
 		cfgPath = "sunReceiver.json"
 	}
+	var dbCfg *dbConfig
+	var meterSec *meterSection
 	var err error
-	targets, err = loadConfig(cfgPath)
+	targets, dbCfg, meterSec, err = loadConfig(cfgPath)
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	// Дефолты адресов БД берутся из раздела "db" sunReceiver.json, иначе — локальные.
+	redisAddr := flag.String("redis", defaultRedisAddr(dbCfg), "адрес Redis (хост:порт)")
+	pgDSN := flag.String("pg", defaultPGDSN(dbCfg), "DSN PostgreSQL для persistent-хранилища (пустая строка — выключить)")
+	restoreWindow := flag.Duration("pg-restore-window", 30*24*time.Hour, "окно РЕСТАВРАЦИИ Redis из PG при пустом Redis")
+	saveFiles := flag.Bool("file", false, "дополнительно писать JSON-файлы в data/ (по умолчанию выключено)")
+	dashboardAddr := flag.String("dashboard", ":8080", "адрес веб-дашборда (пустая строка — выключить)")
+	flag.Parse()
+
 	log.Printf("poller started: config=%s targets=%v period=%s", cfgPath, targets, pollPeriod)
 
 	// Конфигурация веб-API ПАК «Малина» для мониторинга MPPT (КЭС) — из malina.json.
 	mppt = loadMPPTSite()
-	// Конфигурация электросчётчика DDS238 — из dds238.json.
-	meterCfg := loadMeterConfig()
+	// Конфигурация электросчётчика DDS238 — раздел "meter" sunReceiver.json
+	// или файл dds238.json (обратная совместимость).
+	meterCfg := loadMeterConfig(meterSec)
 	if desc := describeMeterConfig(meterCfg); desc != "" {
 		log.Printf("meter: %s", desc)
 	} else {
