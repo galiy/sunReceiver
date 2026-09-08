@@ -11,12 +11,13 @@ import (
 	"time"
 )
 
-// dashboardHandler — веб-дашборд: отдаёт две HTML-страницы и JSON API.
+// dashboardHandler — веб-дашборд: отдаёт три HTML-страницы и JSON API.
 //  - Главная страница (/) — текущие параметры: плашки, электросчётчик, сводная
 //    таблица; обновляются каждую секунду из Redis.
 //  - Страница графиков (/charts) — временные ряды инверторов, МАП и счётчика за
-//    выбранный период (Redis полное разрешение за 2 суток + PG 5-минутные средние),
-//    а также столбчатая статистика «день/ночь» из daily_tariffs.
+//    выбранный период (Redis полное разрешение за 2 суток + PG 5-минутные средние).
+//  - Страница электроэнергии (/energy) — посуточные и помесячные тарифы счётчика
+//    (потребление/отдача «День»/«Ночь») из daily_tariffs с независимыми диапазонами.
 type dashboardHandler struct {
 	store *redisStore
 	pg    *pgStore
@@ -66,9 +67,11 @@ type seriesResponse struct {
 }
 
 // meterDailyResponse отвечает на GET /api/tariffs: посуточные тарифные величины
-// счётчика (потребление/отдача «День»/«Ночь»), отсортированные по дню возврастанию.
+// счётчика (потребление/отдача «День»/«Ночь»), отсортированные по дню возрастанию.
 type meterDailyResponse struct {
 	GeneratedAt string         `json:"generated_at"`
+	From        string         `json:"from"`
+	To          string         `json:"to"`
 	Days        []meterDayStat `json:"days"`
 }
 
@@ -195,6 +198,7 @@ h1 { font-size:22px; margin:0 0 4px; }
     <p class="sub">Текущие параметры инверторов и электросчётчика (из Redis, обновление каждую секунду)</p>
   </div>
   <a class="nav-btn" href="/charts">Открыть графики</a>
+  <a class="nav-btn" href="/energy">Электроэнергия</a>
 </div>
 
 <div class="meter-plate">
@@ -454,7 +458,7 @@ tick(); setInterval(tick,1000);
 </html>`
 
 // chartsPage — страница графиков: временные ряды инверторов/МАП/счётчика за
-// выбранный период + столбчатая статистика «день/ночь» счётчика (daily_tariffs).
+// выбранный период (Redis полное разрешение за 2 суток + PG 5-минутные средние).
 const chartsPage = `<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -560,14 +564,6 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
   </div>
 </div>
 
-<div id="chartbox">
-  <h2>Электросчётчик: потребление / отдача по тарифу «День» и «Ночь», kWh</h2>
-  <div class="chart-toolbar">
-    <span id="tariffRange">Последние 4 финализированных дня</span>
-  </div>
-  <div class="chart-wrap"><canvas id="tariffChart"></canvas></div>
-</div>
-
 <script>
 'use strict';
 
@@ -581,6 +577,11 @@ Chart.register(ChartZoom);
 
 var preserveZoom=false;
 var hoverPix={};
+// TOOLTIP_MAX_GAP — максимальный возраст «ближайшей точки слева» (мс), который
+// считается актуальным в хинте. Устройства, замолчавшие дольше этого (простои,
+// исчезновение с дашборда), не должны показываться как продолжающие выдавать
+// мощность из последней известной точки — их точку в хинте пропускаем.
+var TOOLTIP_MAX_GAP=20*60*1000;
 function drawCursorTooltip(chart){
 	try{
 		var px=hoverPix[chart.canvas.id];
@@ -603,6 +604,9 @@ function drawCursorTooltip(chart){
 				if(X<=t && (best===null || X>best)) best=X;
 			}
 			if(best===null) return;
+			// Данные «неадекватно» старые относительно курсора (устройство давно
+			// не присылает снимки) — не показываем его значение как текущее.
+			if(t-best>TOOLTIP_MAX_GAP) return;
 			var v=null;
 			for(var i2=0;i2<pts.length;i2++){ var q=pts[i2]; var qX=(q.x instanceof Date)? q.x.getTime() : Number(q.x); if(qX===best){ v=q.y; break; } }
 			if(v===null||v===undefined) return;
@@ -913,26 +917,109 @@ document.getElementById('btnRefresh').addEventListener('click',function(){
 	loadAll();
 });
 
-// ---------- Столбчатый график «день/ночь» счётчика ----------
+document.getElementById('fromPick').value=toInputDate(dayStart(selRange.from));
+document.getElementById('toPick').value=toInputDate(dayStart(selRange.to));
+document.getElementById('datePick').value=toInputDate(selRange.from);
+loadAll(); setInterval(function(){ preserveZoom=true; loadAll(); },60000);
+</script>
+</body>
+</html>`
+
+var chartsTmpl = template.Must(template.New("charts").Parse(chartsPage))
+
+// energyPage — страница «Электроэнергия»: посуточные и помесячные тарифы
+// электросчётчика (потребление/отдача «День»/«Ночь») с независимыми
+// диапазонами отображения для каждого графика.
+const energyPage = `<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Электроэнергия — SunReceiver</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0f1115; color:#e6e6e6; margin:0; padding:20px; overflow-x:hidden; }
+.top-nav { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:20px; }
+.top-nav .ttl { margin:0; font-size:22px; }
+.top-nav .sub { color:#8a93a1; margin:4px 0 0; font-size:13px; }
+.nav-btn { background:#2f6fed; color:#fff; border:none; border-radius:8px; padding:9px 16px; font-size:14px; font-weight:600; cursor:pointer; text-decoration:none; white-space:nowrap; }
+.nav-btn.secondary { background:#252b36; border:1px solid #333b49; }
+#chartbox { background:#181c24; border:1px solid #252b36; border-radius:10px; padding:16px; margin-bottom:20px; max-width:100%; }
+#chartbox h2 { margin:0 0 8px; font-size:16px; }
+.chart-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:10px 12px; margin-bottom:8px; font-size:13px; color:#8a93a1; }
+.range-panel { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px; font-size:13px; color:#8a93a1; }
+.range-panel button { background:#252b36; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:4px 10px; cursor:pointer; font-size:13px; }
+.range-panel button:hover { background:#2f3644; }
+.range-panel button.active { background:#2f6fed; border-color:#2f6fed; color:#fff; }
+.range-panel input[type=date] { background:#181c24; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:4px 8px; font-size:13px; color-scheme:dark; }
+.range-panel input[type=date]:focus { outline:none; border-color:#2f6fed; }
+.chart-wrap { position:relative; height:360px; }
+.range-status { color:#ffa94d; font-style:italic; }
+</style>
+</head>
+<body>
+<div class="top-nav">
+  <div>
+    <h1 class="ttl">Электроэнергия</h1>
+    <p class="sub">Счётчик DDS238: потребление/отдача по тарифам «День»/«Ночь»</p>
+  </div>
+  <a class="nav-btn secondary" href="/">&larr; Назад</a>
+</div>
+
+<div id="chartbox">
+  <h2>Потребление / отдача по тарифу «День» и «Ночь» по дням, kWh</h2>
+  <div class="range-panel" id="r1">
+    <button id="d1Month">Текущий месяц</button>
+    <button id="d1PrevMonth">Прошлый месяц</button>
+    <button id="d1Year">Текущий год</button>
+    <button id="d1Week">7 дней</button>
+    <button id="d1Days30">30 дней</button>
+    <span style="color:#555">С</span>
+    <input type="date" id="d1From">
+    <span style="color:#555">по</span>
+    <input type="date" id="d1To">
+    <button id="d1Apply">Показать</button>
+  </div>
+  <div class="chart-toolbar"><span class="range-status" id="s1"></span></div>
+  <div class="chart-wrap"><canvas id="dailyTariffChart"></canvas></div>
+</div>
+
+<div id="chartbox">
+  <h2>Потребление / отдача по тарифу «День» и «Ночь» по месяцам, kWh</h2>
+  <div class="range-panel" id="r2">
+    <button id="d2Year">Текущий год</button>
+    <button id="d2PrevYear">Прошлый год</button>
+    <button id="d2Month">Текущий месяц</button>
+    <span style="color:#555">С</span>
+    <input type="date" id="d2From">
+    <span style="color:#555">по</span>
+    <input type="date" id="d2To">
+    <button id="d2Apply">Показать</button>
+  </div>
+  <div class="chart-toolbar"><span class="range-status" id="s2"></span></div>
+  <div class="chart-wrap"><canvas id="monthlyTariffChart"></canvas></div>
+</div>
+
+<script>
+'use strict';
 var TARIFF_COLORS={ import_day:'#d0663a', import_night:'#8c5bbf', export_day:'#3fbf7f', export_night:'#2c8f6a' };
-function buildTariffChart(data){
-	var days=(data.days||[]);
-	var labels=days.map(function(d){ return d.day; });
-	var borderColor='rgba(0,0,0,0.35)';
-	function ds(label,key,color){
-		return { label:label, data:days.map(function(d){ return d[key]; }), backgroundColor:color, borderColor:borderColor,
-			borderWidth:1, borderRadius:3 };
-	}
-	var datasets=[
-		ds('Потребление день','import_day',TARIFF_COLORS.import_day),
-		ds('Потребление ночь','import_night',TARIFF_COLORS.import_night),
-		ds('Отдача день','export_day',TARIFF_COLORS.export_day),
-		ds('Отдача ночь','export_night',TARIFF_COLORS.export_night)
-	];
-	var canvas=document.getElementById('tariffChart');
-	var old=window.tariffChart; if(old){ try{ old.destroy(); }catch(e){} }
+
+function toD(d){ function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
+function dayStart(d){ var r=new Date(d); r.setHours(0,0,0,0); return r; }
+function parseDay(s){ var p=String(s).split('-').map(Number); return new Date(p[0],p[1]-1,p[2],0,0,0,0); }
+function endOfDay(d){ var e=new Date(d); e.setHours(23,59,59,999); return e; }
+function startOfMonth(){ var d=new Date(); return new Date(d.getFullYear(),d.getMonth(),1,0,0,0,0); }
+function endOfMonth(){ var d=new Date(); return new Date(d.getFullYear(),d.getMonth()+1,0,23,59,59,999); }
+function startOfYear(){ var d=new Date(); return new Date(d.getFullYear(),0,1,0,0,0,0); }
+function endOfYear(){ var d=new Date(); return new Date(d.getFullYear(),11,31,23,59,59,999); }
+
+function renderEnergyChart(canvasId, labels, datasets){
+	var canvas=document.getElementById(canvasId);
+	var old=window[canvasId]; if(old){ try{ old.destroy(); }catch(e){} }
 	canvas.getContext('2d');
-	window.tariffChart=new Chart(canvas,{
+	window[canvasId]=new Chart(canvas,{
 		type:'bar',
 		data:{ labels:labels, datasets:datasets },
 		options:{
@@ -940,43 +1027,123 @@ function buildTariffChart(data){
 			interaction:{ mode:'index', intersect:false },
 			animation:{ duration:300 },
 			plugins:{ legend:{ display:true, labels:{ boxWidth:16, padding:12 } } },
-			scales:{
-				x:{ ticks:{ autoSkip:false } },
-				y:{ beginAtZero:true, title:{ display:true, text:'kWh' } }
-			}
+			scales:{ x:{ ticks:{ autoSkip:true, maxTicksLimit:24 } }, y:{ beginAtZero:true, title:{ display:true, text:'kWh' } } }
 		}
 	});
-	return window.tariffChart;
-}
-async function loadTariffChart(){
-	try{
-		var r=await fetch('/api/tariffs');
-		if(!r.ok) return;
-		var data=await r.json();
-		if(!data.days || !data.days.length){
-			document.getElementById('tariffRange').textContent='Ещё нет финализированных дней (нужны показания на границах 00:00, 07:00, 23:00)';
-		}else{
-			document.getElementById('tariffRange').textContent='Последние '+data.days.length+' финализированных дня';
-		}
-		buildTariffChart(data);
-	}catch(e){}
+	return window[canvasId];
 }
 
-document.getElementById('fromPick').value=toInputDate(dayStart(selRange.from));
-document.getElementById('toPick').value=toInputDate(dayStart(selRange.to));
-document.getElementById('datePick').value=toInputDate(selRange.from);
-loadAll(); setInterval(function(){ preserveZoom=true; loadAll(); },60000);
-loadTariffChart(); setInterval(loadTariffChart, 5*60*1000);
+function dailyDatasets(days){
+	return [
+		{ label:'Потребление день', data:days.map(function(d){ return d.import_day; }), backgroundColor:TARIFF_COLORS.import_day },
+		{ label:'Потребление ночь', data:days.map(function(d){ return d.import_night; }), backgroundColor:TARIFF_COLORS.import_night },
+		{ label:'Отдача день', data:days.map(function(d){ return d.export_day; }), backgroundColor:TARIFF_COLORS.export_day },
+		{ label:'Отдача ночь', data:days.map(function(d){ return d.export_night; }), backgroundColor:TARIFF_COLORS.export_night }
+	];
+}
+
+function monthlyDatasets(days){
+	var m={};
+	days.forEach(function(d){
+		var k=d.day.slice(0,7);
+		if(!m[k]) m[k]={ import_day:0, import_night:0, export_day:0, export_night:0 };
+		m[k].import_day+=d.import_day; m[k].import_night+=d.import_night;
+		m[k].export_day+=d.export_day; m[k].export_night+=d.export_night;
+	});
+	var keys=Object.keys(m).sort();
+	return { labels:keys, datasets:[
+		{ label:'Потребление день', data:keys.map(function(k){ return m[k].import_day; }), backgroundColor:TARIFF_COLORS.import_day },
+		{ label:'Потребление ночь', data:keys.map(function(k){ return m[k].import_night; }), backgroundColor:TARIFF_COLORS.import_night },
+		{ label:'Отдача день', data:keys.map(function(k){ return m[k].export_day; }), backgroundColor:TARIFF_COLORS.export_day },
+		{ label:'Отдача ночь', data:keys.map(function(k){ return m[k].export_night; }), backgroundColor:TARIFF_COLORS.export_night }
+	] };
+}
+
+// initEnergyPanel создаёт независимо управляемый график со своим диапазоном.
+// cfg: { canvasId, statusId, fromEl, toEl, applyBtn, isMonthly, presets:[{btn,range}], defaultFrom, defaultTo }
+function initEnergyPanel(cfg){
+	var p={ selFrom:cfg.defaultFrom(), selTo:cfg.defaultTo() };
+	var presetIds=cfg.presets.map(function(pr){ return pr.btn; });
+	function setRange(from,to,activeBtn){
+		p.selFrom=from; p.selTo=to;
+		presetIds.forEach(function(id){ document.getElementById(id).classList.remove('active'); });
+		if(activeBtn) document.getElementById(activeBtn).classList.add('active');
+		document.getElementById(cfg.fromEl).value=toD(dayStart(from));
+		document.getElementById(cfg.toEl).value=toD(dayStart(to));
+		load();
+	}
+	async function load(){
+		var url='/api/tariffs?from='+toD(dayStart(p.selFrom))+'&to='+toD(dayStart(p.selTo));
+		var r=await fetch(url); if(!r.ok) return;
+		var data=await r.json();
+		var days=data.days||[];
+		var st=document.getElementById(cfg.statusId);
+		if(!days.length){ st.textContent='Нет финализированных дней за выбранный период'; }
+		else{ st.textContent='Показано дней: '+days.length+(cfg.isMonthly?' (по месяцам)':''); }
+		if(cfg.isMonthly){
+			var mx=monthlyDatasets(days);
+			renderEnergyChart(cfg.canvasId, mx.labels, mx.datasets);
+		}else{
+			renderEnergyChart(cfg.canvasId, days.map(function(d){ return d.day; }), dailyDatasets(days));
+		}
+	}
+	cfg.presets.forEach(function(pr){
+		document.getElementById(pr.btn).addEventListener('click',function(){
+			document.getElementById(pr.btn).blur();
+			var r=pr.range(); setRange(r.from, r.to, pr.btn);
+		});
+	});
+	document.getElementById(cfg.applyBtn).addEventListener('click',function(){
+		var f=document.getElementById(cfg.fromEl).value, t=document.getElementById(cfg.toEl).value;
+		if(!f||!t) return;
+		setRange(parseDay(f), endOfDay(parseDay(t)), null);
+	});
+	// Инициализация диапазона и полей по умолчанию.
+	document.getElementById(cfg.fromEl).value=toD(dayStart(p.selFrom));
+	document.getElementById(cfg.toEl).value=toD(dayStart(p.selTo));
+	load();
+	return p;
+}
+
+// График 1 — по дням, по умолчанию текущий месяц.
+initEnergyPanel({
+	canvasId:'dailyTariffChart', statusId:'s1', fromEl:'d1From', toEl:'d1To', applyBtn:'d1Apply', isMonthly:false,
+	presets:[
+		{ btn:'d1Month', range:function(){ return { from:startOfMonth(), to:endOfMonth() }; } },
+		{ btn:'d1PrevMonth', range:function(){ var d=new Date(); return { from:new Date(d.getFullYear(),d.getMonth()-1,1,0,0,0,0), to:new Date(d.getFullYear(),d.getMonth(),0,23,59,59,999) }; } },
+		{ btn:'d1Year', range:function(){ return { from:startOfYear(), to:endOfYear() }; } },
+		{ btn:'d1Week', range:function(){ var to=new Date(); var from=new Date(); from.setDate(from.getDate()-6); from.setHours(0,0,0,0); return { from:from, to:endOfDay(to) }; } },
+		{ btn:'d1Days30', range:function(){ var to=new Date(); var from=new Date(); from.setDate(from.getDate()-29); from.setHours(0,0,0,0); return { from:from, to:endOfDay(to) }; } }
+	],
+	defaultFrom:startOfMonth, defaultTo:endOfMonth
+});
+
+// График 2 — по месяцам, по умолчанию текущий год.
+initEnergyPanel({
+	canvasId:'monthlyTariffChart', statusId:'s2', fromEl:'d2From', toEl:'d2To', applyBtn:'d2Apply', isMonthly:true,
+	presets:[
+		{ btn:'d2Year', range:function(){ return { from:startOfYear(), to:endOfYear() }; } },
+		{ btn:'d2PrevYear', range:function(){ var y=new Date().getFullYear()-1; return { from:new Date(y,0,1,0,0,0,0), to:new Date(y,11,31,23,59,59,999) }; } },
+		{ btn:'d2Month', range:function(){ return { from:startOfMonth(), to:endOfMonth() }; } }
+	],
+	defaultFrom:startOfYear, defaultTo:endOfYear
+});
 </script>
 </body>
 </html>`
 
-var chartsTmpl = template.Must(template.New("charts").Parse(chartsPage))
+var energyTmpl = template.Must(template.New("energy").Parse(energyPage))
 
 func (h *dashboardHandler) charts(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = chartsTmpl.Execute(w, nil)
+}
+
+func (h *dashboardHandler) energy(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = energyTmpl.Execute(w, nil)
 }
 
 var dashboardTmpl = template.Must(template.New("dash").Parse(dashboardPage))
@@ -1163,8 +1330,15 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 // (carry-forward) значение каждого инвертора на этот момент времени и суммируется.
 // Получается кусочно-постоянный непрерывный ряд без глубоких провалов; правая точка
 // совпадает с суммой последних значений (/api/current total_power).
-// Мощность устройства МАП (батарея/сеть) не включается — она на графиках МАП.
+//
+// Окно актуальности carry-forward ограничено: если устройство не присылало снимков
+// дольше inverterStaleWindow (напр. ушло офлайн/исчезло), его устаревшая мощность
+// перестаёт учитываться в сумме — иначе отключившийся инвертор вечно «выдавал бы»
+// последнее значение, и на графике суммарной мощности появлялась бы линия, будто он
+// продолжает работать. Окно много больше асинхронного джиттера опроса (~8 с), поэтому
+// глубокие провалы из-за фазовых сдвигов не возвращаются.
 func sumActive(snaps []deviceSnapshot) []seriesPoint {
+	const staleWindow = 20 * time.Minute
 	type rec struct {
 		ts time.Time
 		v  float64
@@ -1187,11 +1361,20 @@ func sumActive(snaps []deviceSnapshot) []seriesPoint {
 	}
 	sort.Slice(recs, func(i, j int) bool { return recs[i].ts.Before(recs[j].ts) })
 	current := map[string]float64{}
+	lastSeen := map[string]time.Time{}
 	out := make([]seriesPoint, 0, len(recs))
 	for _, r := range recs {
 		current[r.ip] = r.v
+		lastSeen[r.ip] = r.ts
+		// Исключаем устройства, замолчавшие дольше окна актуальности: их устаревшая
+		// мощность больше не суммируется, пока не появится новый реальный снимок.
 		var total float64
-		for _, v := range current {
+		for ip, v := range current {
+			if r.ts.Sub(lastSeen[ip]) > staleWindow {
+				delete(current, ip)
+				delete(lastSeen, ip)
+				continue
+			}
 			total += v
 		}
 		total = math.Round(total*10) / 10
@@ -1350,6 +1533,7 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.index)
 	mux.HandleFunc("/charts", h.charts)
+	mux.HandleFunc("/energy", h.energy)
 	mux.HandleFunc("/api/current", h.apiCurrent)
 	mux.HandleFunc("/api/series", h.apiSeries)
 	mux.HandleFunc("/api/tariffs", h.apiTariffs)
@@ -1361,27 +1545,45 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore) {
 }
 
 // apiTariffs отдаёт посуточную тарифную статистику счётчика (день/ночь ×
-// потребление/отдача) за последние 4 финализированных дня, отсортированные по дате.
+// потребление/отдача) за запрошенный период [from, to] (YYYY-MM-DD), отсортированную
+// по дате. Параметры from/to необязательны; если не заданы — берётся текущий
+// календарный месяц. Только финализированные дни (полные показания на 00:00/07:00/23:00).
 func (h *dashboardHandler) apiTariffs(w http.ResponseWriter, r *http.Request) {
+	from, to := parseTariffRange(r.URL.Query().Get("from"), r.URL.Query().Get("to"))
+	days := []meterDayStat{}
 	if h.pg != nil {
-		days, err := h.pg.DailyTariffs(4)
-		if err == nil {
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.Header().Set("Cache-Control", "no-store")
-			_ = json.NewEncoder(w).Encode(meterDailyResponse{
-				GeneratedAt: time.Now().Format(time.RFC3339),
-				Days:        days,
-			})
+		var err error
+		days, err = h.pg.DailyTariffsRange(from, to)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
 	}
-	// Без PG статистики нет — отдаём пустой список.
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(meterDailyResponse{
 		GeneratedAt: time.Now().Format(time.RFC3339),
-		Days:        []meterDayStat{},
+		From:        from.Format("2006-01-02"),
+		To:          to.AddDate(0, 0, -1).Format("2006-01-02"),
+		Days:        days,
 	})
+}
+
+// parseTariffRange разбирает необязательные параметры from/to (YYYY-MM-DD) в диапазон
+// [from, to) в локальной зоне. Пустые значения дают текущий календарный месяц.
+func parseTariffRange(fromStr, toStr string) (time.Time, time.Time) {
+	now := time.Now()
+	loc := now.Location()
+	defStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
+	defEnd := defStart.AddDate(0, 1, 0)
+	if t, err := time.ParseInLocation("2006-01-02", fromStr, loc); err == nil {
+		defStart = t
+	}
+	if t, err := time.ParseInLocation("2006-01-02", toStr, loc); err == nil {
+		defEnd = t.AddDate(0, 0, 1)
+	}
+	if defEnd.Before(defStart) {
+		defEnd = defStart.AddDate(0, 1, 0)
+	}
+	return defStart, defEnd
 }
