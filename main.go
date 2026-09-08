@@ -36,6 +36,22 @@ const (
 	kindMPPT // MPPT-контроллер (КЭС) через веб-API read_json.php?device=mppt ПАК «Малина»
 )
 
+// String — короткое имя типа для логов.
+func (k targetKind) String() string {
+	switch k {
+	case kindSofar:
+		return "sofar"
+	case kindDeyeString:
+		return "deye"
+	case kindMAP:
+		return "map"
+	case kindMPPT:
+		return "mppt"
+	default:
+		return "unknown"
+	}
+}
+
 // invTarget — целевой инвертор. LoggerSN — серийный номер даталоггера,
 // обязателен для Deye (иначе логгер отвечает кодом 0x06 "serial number not match").
 // Name — логическое имя из sunReceiver.json (например, "Deye Left").
@@ -863,39 +879,6 @@ func pollDevice(t invTarget) DeviceResult {
 			res.DeviceSN = fmt.Sprintf("map-%s", devKey(t))
 		}
 
-	case kindMPPT:
-		// MPPT-контроллер (КЭС) через веб-API ПАК «Малина»: read_json.php?device=mppt.
-		// Выбираем контроллер по слоту (t.Slot — индекс в массиве ответа).
-		// Источник данных и актуальность (поле timestamp ответа) — у самого API.
-		if mppt == nil {
-			res.OK = false
-			return res
-		}
-		arr, err := mppt.FetchMPPTs()
-		if err != nil {
-			res.OK = false
-			log.Printf("%s: mppt api: %v", t.IP, err)
-			return res
-		}
-		if t.Slot < 0 || t.Slot >= len(arr) {
-			res.OK = false
-			log.Printf("%s: mppt api: слот %d вне диапазона (получено %d контроллеров)", t.IP, t.Slot, len(arr))
-			return res
-		}
-		vals, ts, ok := mapMPPTAPI(arr[t.Slot])
-		if !ok {
-			res.OK = false
-			log.Printf("%s: mppt api: слот %d не дал данных", t.IP, t.Slot)
-			return res
-		}
-		res.OK = true
-		res.HasData = true
-		res.Values = vals
-		if arr[t.Slot].UID != "" {
-			res.DeviceSN = fmt.Sprintf("mppt-%s", arr[t.Slot].UID)
-		}
-		// Сохраняем актуальность данных из API (для таймстампа снимка).
-		res.Time = ts
 	}
 
 	for _, f := range frames {
@@ -905,6 +888,34 @@ func pollDevice(t invTarget) DeviceResult {
 		}
 	}
 
+	return res
+}
+
+// pollMPPTFromArr строит DeviceResult для MPPT-контроллера (t.Slot) из УЖЕ
+// полученного ответа ПАК «Малина» (arr = read_json.php?device=mppt). Вынесена из
+// pollDevice, чтобы один HTTP-запрос FetchMPPTs переиспользовался для всех слотов
+// за цикл, а не повторялся на каждый контроллер.
+func pollMPPTFromArr(t invTarget, arr []mpptRaw) DeviceResult {
+	res := DeviceResult{OK: true}
+	if t.Slot < 0 || t.Slot >= len(arr) {
+		res.OK = false
+		log.Printf("%s: mppt api: слот %d вне диапазона (получено %d контроллеров)", t.IP, t.Slot, len(arr))
+		return res
+	}
+	vals, ts, ok := mapMPPTAPI(arr[t.Slot])
+	if !ok {
+		res.OK = false
+		log.Printf("%s: mppt api: слот %d не дал данных", t.IP, t.Slot)
+		return res
+	}
+	res.OK = true
+	res.HasData = true
+	res.Values = vals
+	if arr[t.Slot].UID != "" {
+		res.DeviceSN = fmt.Sprintf("mppt-%s", arr[t.Slot].UID)
+	}
+	// Актуальность данных из API (для таймстампа снимка).
+	res.Time = ts
 	return res
 }
 
@@ -935,6 +946,30 @@ func runMapPoll(store *redisStore, stop <-chan struct{}) {
 //     sunReceiver.json. Поэтому MPPT появляются/исчезают с дашборда по факту наличия
 //     в ответе API; исчезнувшие удаляются и из HASH current (их строка не числится
 //     «актуальной».
+// saveWindowSnapshot складывает результат опроса в deviceSnapshot (ts = res.Time
+// при наличии, иначе now) и пишет в Redis через SaveSnapshotWindow. Общий для
+// МАП- и MPPT-веток pollAndSaveMap.
+func saveWindowSnapshot(store *redisStore, t invTarget, res DeviceResult, now time.Time) {
+	if !res.OK || !res.HasData {
+		log.Printf("%s: %s %s", t.IP, t.Kind, describeResult(res))
+		return
+	}
+	ts := now
+	if !res.Time.IsZero() {
+		ts = res.Time
+	}
+	snap := deviceSnapshot{
+		Name:      t.Name,
+		IP:        devKey(t),
+		Timestamp: ts.Format(time.RFC3339),
+		DeviceSN:  res.DeviceSN,
+		Values:    res.Values,
+	}
+	if err := store.SaveSnapshotWindow(snap, ts); err != nil {
+		log.Printf("redis save %s: %v", devKey(t), err)
+	}
+}
+
 func pollAndSaveMap(store *redisStore, now time.Time) {
 	var wg sync.WaitGroup
 	activeMPPT := map[string]struct{}{}
@@ -947,29 +982,13 @@ func pollAndSaveMap(store *redisStore, now time.Time) {
 		wg.Add(1)
 		go func(t invTarget) {
 			defer wg.Done()
-			res := pollDevice(t)
-			if !res.OK || !res.HasData {
-				log.Printf("%s: map %s", t.IP, describeResult(res))
-				return
-			}
-			ts := now
-			if !res.Time.IsZero() {
-				ts = res.Time
-			}
-			snap := deviceSnapshot{
-				Name:      t.Name,
-				IP:        devKey(t),
-				Timestamp: ts.Format(time.RFC3339),
-				DeviceSN:  res.DeviceSN,
-				Values:    res.Values,
-			}
-			if err := store.SaveSnapshotWindow(snap, ts); err != nil {
-				log.Printf("redis map save %s: %v", devKey(t), err)
-			}
+			saveWindowSnapshot(store, t, pollDevice(t), now)
 		}(t)
 	}
-	// MPPT-контроллеры — по факту подключённых из API. Каждый контроллер ответа —
-	// отдельное устройство с ключом devKey(MPPT слотом); имя генерируем как MPPT-<n+1>.
+	// MPPT-контроллеры — по факту подключённых из API. Состав определяется
+	// фактически подключёнными к ПАК «Малина» контроллерами (один HTTP-запрос
+	// FetchMPPTs переиспользуется для всех слотов за цикл). Каждый контроллер
+	// ответа — отдельное устройство с ключом devKey(MPPT слотом); имя MPPT-<n+1>.
 	if mppt != nil {
 		arr, err := mppt.FetchMPPTs()
 		if err != nil {
@@ -982,25 +1001,7 @@ func pollAndSaveMap(store *redisStore, now time.Time) {
 				go func(slot int) {
 					defer wg.Done()
 					t := invTarget{IP: mppt.Host, Name: fmt.Sprintf("MPPT-%d", slot+1), Kind: kindMPPT, Slot: slot}
-					res := pollDevice(t)
-					if !res.OK || !res.HasData {
-						log.Printf("%s: mppt %s", t.IP, describeResult(res))
-						return
-					}
-					ts := now
-					if !res.Time.IsZero() {
-						ts = res.Time
-					}
-					snap := deviceSnapshot{
-						Name:      t.Name,
-						IP:        devKey(t),
-						Timestamp: ts.Format(time.RFC3339),
-						DeviceSN:  res.DeviceSN,
-						Values:    res.Values,
-					}
-					if err := store.SaveSnapshotWindow(snap, ts); err != nil {
-						log.Printf("redis map save %s: %v", devKey(t), err)
-					}
+					saveWindowSnapshot(store, t, pollMPPTFromArr(t, arr), now)
 				}(slot)
 			}
 		}
