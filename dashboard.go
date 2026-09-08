@@ -151,6 +151,7 @@ h1 { font-size:22px; margin:0 0 4px; }
 .period-panel button.active { background:#2f6fed; border-color:#2f6fed; color:#fff; }
 .period-panel input[type=date] { background:#181c24; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:4px 8px; font-size:13px; color-scheme:dark; }
 .period-panel input[type=date]:focus { outline:none; border-color:#2f6fed; }
+.period-panel .nav-arrow { padding:5px 10px; font-size:16px; line-height:1; }
 .chart-wrap { position:relative; height:340px; }
 .charts { display:flex; flex-wrap:wrap; gap:16px; margin-bottom:20px; }
 .charts #chartbox { flex:1 1 46%; min-width:min(420px,100%); margin-bottom:0; }
@@ -484,6 +485,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 .period-panel button.active { background:#2f6fed; border-color:#2f6fed; color:#fff; }
 .period-panel input[type=date] { background:#181c24; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:4px 8px; font-size:13px; color-scheme:dark; }
 .period-panel input[type=date]:focus { outline:none; border-color:#2f6fed; }
+.period-panel .nav-arrow { padding:5px 10px; font-size:16px; line-height:1; }
 .chart-wrap { position:relative; height:340px; }
 .charts { display:flex; flex-wrap:wrap; gap:16px; margin-bottom:20px; }
 .charts #chartbox { flex:1 1 46%; min-width:min(420px,100%); margin-bottom:0; }
@@ -503,8 +505,16 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
   <button id="btnToday">Сегодня</button>
   <button id="btnYesterday">Вчера</button>
   <button id="btn7d">7 дней</button>
+  <button id="btnMonth">Месяц</button>
+  <button id="btnPeriodPrev" class="nav-arrow" title="Предыдущий период">&lsaquo;</button>
   <input type="date" id="datePick" title="Выбрать день">
   <button id="btnDate">За выбранный день</button>
+  <span style="color:#555">С</span>
+  <input type="date" id="fromPick" title="Начало периода">
+  <span style="color:#555">по</span>
+  <input type="date" id="toPick" title="Конец периода">
+  <button id="btnRange">Показать период</button>
+  <button id="btnPeriodNext" title="Следующий период">&rsaquo;</button>
   <button id="btnRefresh" title="Принудительно обновить графики">Обновить графики</button>
 </div>
 
@@ -718,23 +728,48 @@ function chartOpts(withLegend,yTitle,extra){
 
 // ---------- Выбор периода ----------
 var selRange={from:startOfToday(), to:endOfToday()};
+var periodMode='day';
 function dayFromStr(s){
 	var p=String(s).split('-').map(Number);
 	return new Date(p[0], p[1]-1, p[2], 0,0,0,0);
 }
+function toInputDate(d){ function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
 function endOfDay(d){
 	var e=new Date(d); e.setHours(23,59,59,999); return e;
 }
 function startOfYesterday(){
 	var d=new Date(); d.setDate(d.getDate()-1); d.setHours(0,0,0,0); return d;
 }
-function selectRange(from,to,activeBtn){
-	selRange.from=from; selRange.to=to;
-	preserveZoom=false;
-	var btns=['btnToday','btnYesterday','btn7d'];
-	for(var i=0;i<btns.length;i++) document.getElementById(btns[i]).classList.remove('active');
+function dayStart(d){ var r=new Date(d); r.setHours(0,0,0,0); return r; }
+function addDays(d,n){ var r=new Date(d); r.setDate(r.getDate()+n); return r; }
+function addMonths(d,n){ var r=new Date(d); r.setMonth(r.getMonth()+n); return r; }
+function startOfMonthOf(d){ return dayStart(new Date(d.getFullYear(), d.getMonth(), 1)); }
+function endOfMonthOf(d){ var f=new Date(d.getFullYear(), d.getMonth(), 1); return new Date(f.getFullYear(), f.getMonth()+1, 0, 23,59,59,999); }
+var PERIOD_BTNS=['btnToday','btnYesterday','btn7d','btnMonth'];
+function setActiveBtn(activeBtn){
+	for(var i=0;i<PERIOD_BTNS.length;i++) document.getElementById(PERIOD_BTNS[i]).classList.remove('active');
 	if(activeBtn) document.getElementById(activeBtn).classList.add('active');
+}
+// setPeriod(from,to,mode,activeBtn) — выставляет диапазон, режим (day/week/month/custom,
+// чтобы стрелки знали шаг), синхронизирует поля ввода и перерисовывает графики.
+function setPeriod(from,to,mode,activeBtn){
+	selRange.from=from; selRange.to=to; periodMode=mode;
+	preserveZoom=false;
+	setActiveBtn(activeBtn);
+	var dFrom=dayStart(from), dTo=dayStart(to);
+	document.getElementById('fromPick').value=toInputDate(dFrom);
+	document.getElementById('toPick').value=toInputDate(dTo);
+	document.getElementById('datePick').value=toInputDate(mode==='day'?from:dFrom);
 	loadAll();
+}
+// shiftPeriod(delta) — сдвигает текущий период назад/вперёд на его длительность.
+function shiftPeriod(delta){
+	var from=selRange.from, to=selRange.to;
+	var newFrom, newTo;
+	if(periodMode==='day'){ newFrom=addDays(dayStart(from), delta); newTo=endOfDay(newFrom); }
+	else if(periodMode==='month'){ newFrom=addMonths(dayStart(from), delta); newTo=endOfMonthOf(newFrom); }
+	else{ var span=to-from; newFrom=new Date(from.getTime()+delta*span); newTo=new Date(to.getTime()+delta*span); }
+	setPeriod(newFrom,newTo,periodMode,null);
 }
 async function loadAll(){
 	await Promise.all([loadTotalChart(), loadChart(), loadGridVChart(), loadGridPChart()]);
@@ -849,17 +884,29 @@ async function loadGridPChart(){
 document.getElementById('btnGridPReset').addEventListener('click',function(){ if(window.gridPChart) window.gridPChart.resetZoom(); });
 
 // ---------- Кнопки выбора периода ----------
-document.getElementById('btnToday').addEventListener('click',function(){ selectRange(startOfToday(), endOfToday(), 'btnToday'); });
-document.getElementById('btnYesterday').addEventListener('click',function(){ selectRange(startOfYesterday(), endOfDay(startOfYesterday()), 'btnYesterday'); });
+document.getElementById('btnToday').addEventListener('click',function(){ setPeriod(startOfToday(), endOfToday(), 'day', 'btnToday'); });
+document.getElementById('btnYesterday').addEventListener('click',function(){ var y=startOfYesterday(); setPeriod(y, endOfDay(y), 'day', 'btnYesterday'); });
 document.getElementById('btn7d').addEventListener('click',function(){
 	var to=new Date(); var from=new Date(); from.setDate(from.getDate()-7);
-	selectRange(from, to, 'btn7d');
+	setPeriod(from, to, 'week', 'btn7d');
+});
+document.getElementById('btnMonth').addEventListener('click',function(){
+	var f=new Date(); f.setHours(0,0,0,0);
+	setPeriod(startOfMonthOf(f), endOfMonthOf(f), 'month', 'btnMonth');
 });
 document.getElementById('btnDate').addEventListener('click',function(){
 	var el=document.getElementById('datePick');
 	if(!el.value) return;
 	var from=dayFromStr(el.value);
-	selectRange(from, endOfDay(from), null);
+	setPeriod(from, endOfDay(from), 'day', null);
+});
+document.getElementById('btnPeriodPrev').addEventListener('click',function(){ shiftPeriod(-1); });
+document.getElementById('btnPeriodNext').addEventListener('click',function(){ shiftPeriod(1); });
+document.getElementById('btnRange').addEventListener('click',function(){
+	var f=document.getElementById('fromPick'), t=document.getElementById('toPick');
+	if(!f.value||!t.value) return;
+	var from=dayFromStr(f.value), to=dayFromStr(t.value); to.setHours(23,59,59,999);
+	setPeriod(from, to, 'custom', null);
 });
 document.getElementById('btnRefresh').addEventListener('click',function(){
 	preserveZoom=false;
@@ -915,6 +962,9 @@ async function loadTariffChart(){
 	}catch(e){}
 }
 
+document.getElementById('fromPick').value=toInputDate(dayStart(selRange.from));
+document.getElementById('toPick').value=toInputDate(dayStart(selRange.to));
+document.getElementById('datePick').value=toInputDate(selRange.from);
 loadAll(); setInterval(function(){ preserveZoom=true; loadAll(); },60000);
 loadTariffChart(); setInterval(loadTariffChart, 5*60*1000);
 </script>
