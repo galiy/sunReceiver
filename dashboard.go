@@ -203,7 +203,7 @@ h1 { font-size:22px; margin:0 0 4px; }
 
 <div class="charts">
   <div id="chartbox">
-    <h2>Напряжение сети (МАП), V</h2>
+    <h2>Напряжение сети и батареи (МАП), V</h2>
     <div class="chart-toolbar">
       <span id="gridVChartRange"></span>
       <button id="btnGridVReset">Сброс зума</button>
@@ -393,29 +393,160 @@ function setKpi(id, v){
 // ---------- Графики ----------
 Chart.register(ChartZoom);
 
+// preserveZoom указывает, нужно ли при пересоздании графика сохранить текущую
+// видимую область (зум): true при обновлении по таймеру, false при выборе
+// периода/кнопке «Обновить» (в этом случае зум сбрасывается).
+var preserveZoom=false;
+// hoverPix — пиксель по X курсора для каждого графика (по id канваса), когда мышь над ним.
+var hoverPix={};
+// drawCursorTooltip — рисует вертикальную линию под курсором и подпись значений всех
+// линий из ближайшей точки СЛЕВА от курсора. Оборачивается в try/catch, чтобы никогда
+// не ломать отрисовку графика.
+function drawCursorTooltip(chart){
+	try{
+		var px=hoverPix[chart.canvas.id];
+		if(px===undefined) return;
+		var xScale=chart.scales&&chart.scales.x, yScale=chart.scales&&chart.scales.y;
+		if(!xScale||!yScale) return;
+		if(!isFinite(px)||px<xScale.left||px>xScale.right) return;
+		var t=xScale.getValueForPixel(px);
+		var ctx=chart.ctx; ctx.save();
+		// вертикальная линия под курсором
+		ctx.beginPath(); ctx.moveTo(px,yScale.top); ctx.lineTo(px,yScale.bottom);
+		ctx.strokeStyle='rgba(160,160,160,0.55)'; ctx.lineWidth=1; ctx.stroke();
+		var labels=[], titleT=null;
+		chart.data.datasets.forEach(function(ds){
+			var pts=ds.data; if(!pts||!pts.length) return;
+			var best=null;
+			for(var i=0;i<pts.length;i++){
+				var p=pts[i];
+				var X=(p.x instanceof Date)? p.x.getTime() : Number(p.x);
+				if(!isFinite(X)) continue;
+				if(X<=t && (best===null || X>best)) best=X;
+			}
+			if(best===null) return;
+			var v=null;
+			for(var i2=0;i2<pts.length;i2++){ var q=pts[i2]; var qX=(q.x instanceof Date)? q.x.getTime() : Number(q.x); if(qX===best){ v=q.y; break; } }
+			if(v===null||v===undefined) return;
+			var dsy = chart.scales && (chart.scales[ds.yAxisID||'y']) || yScale;
+			if(!dsy || !isFinite(v)) return;
+			labels.push({
+				label:ds.label||'', color:ds.borderColor||'#999', v:v,
+				px:xScale.getPixelForValue(best), py:dsy.getPixelForValue(v),
+				txt:''
+			});
+			if(titleT===null||best>titleT) titleT=best;
+		});
+		if(!labels.length){ ctx.restore(); return; }
+		labels.forEach(function(l){ ctx.beginPath(); ctx.arc(l.px,l.py,3.5,0,2*Math.PI); ctx.fillStyle=l.color; ctx.fill(); ctx.strokeStyle='rgba(0,0,0,0.9)'; ctx.lineWidth=1; ctx.stroke(); });
+		var boxW=0, lineH=16;
+		labels.forEach(function(l){ l.txt=l.label+': '+Number(l.v).toFixed(1)+' W'; });
+		labels.forEach(function(l){ var w=ctx.measureText(l.txt).width; if(w>boxW) boxW=w; });
+		var header=titleT!==null? fmtSec(new Date(titleT)) : '';
+		if(header && ctx.measureText(header).width>boxW) boxW=ctx.measureText(header).width;
+		boxW+=22; var boxH=labels.length*lineH+(header?lineH:0)+8;
+		var bx=px+12, by=yScale.top+4;
+		if(bx+boxW>xScale.right) bx=px-boxW-12;
+		if(bx<xScale.left) bx=xScale.left+2;
+		ctx.fillStyle='rgba(20,20,25,0.88)'; ctx.fillRect(bx,by,boxW,boxH);
+		ctx.strokeStyle='rgba(255,255,255,0.25)'; ctx.lineWidth=1; ctx.strokeRect(bx,by,boxW,boxH);
+		var ty=by+(header?lineH+4:8);
+		if(header){ ctx.fillStyle='#e8e8e8'; ctx.font='600 12px sans-serif'; ctx.textBaseline='top'; ctx.fillText(header,bx+11,by+6); }
+		labels.forEach(function(l){ ctx.textBaseline='top'; ctx.fillStyle=l.color; ctx.font='12px sans-serif'; ctx.fillText(l.txt,bx+11,ty); ty+=lineH; });
+		ctx.restore();
+	}catch(err){ try{ ctx&&ctx.restore(); }catch(e){} }
+}
+// cursorTooltipPlugin — после каждой отрисовки: (1) если видимое окно времени у этого
+// графика изменилось, синхронизирует его на остальных; (2) рисует хинт под курсором.
+// Обёрнут в try/catch, чтобы сбой здесь не приводил к пустому графику.
+var lastXWindow={};
+var cursorTooltipPlugin={ id:'cursorTooltip', afterDraw:function(chart){
+	try{
+		checkZoomSync(chart);
+		drawZeroGridAxis(chart);
+		drawCursorTooltip(chart);
+	}catch(err){}
+} };
+// drawZeroGridAxis рисует контрастную горизонтальную ось на уровне y=0 у графиков,
+// где это важно (мощности сети/батареи/потребления — значения бывают и отрицательными).
+function drawZeroGridAxis(chart){
+	if(!chart || chart.canvas.id!=='gridPChart') return;
+	var x=chart.scales&&chart.scales.x, y=chart.scales&&chart.scales.y;
+	if(!x||!y) return;
+	if(y.min>0 || y.max<0) return;
+	var ctx=chart.ctx; ctx.save();
+	var py=y.getPixelForValue(0);
+	if(py<y.top||py>y.bottom){ ctx.restore(); return; }
+	ctx.beginPath(); ctx.moveTo(x.left,py); ctx.lineTo(x.right,py);
+	ctx.strokeStyle='rgba(0,0,0,0.85)'; ctx.lineWidth=1.2; ctx.setLineDash && ctx.setLineDash([]);
+	ctx.stroke();
+	ctx.restore();
+}
+// checkZoomSync сверяет видимое окно времени (X-ось) графика с запомненным; если
+// изменилось — применяет его ко всем остальным графикам. Защита zoomSyncing не даёт
+// зациклиться при каскадной синхронизации.
+function checkZoomSync(chart){
+	if(zoomSyncing) return;
+	var x=chart&&chart.scales&&chart.scales.x;
+	if(!x||!isFinite(x.min)||!isFinite(x.max)||x.max<=x.min) return;
+	var key=x.min.toFixed(3)+','+x.max.toFixed(3);
+	if(lastXWindow[chart.canvas.id]!==undefined && lastXWindow[chart.canvas.id]!==key) syncZoomToOthers(chart);
+	lastXWindow[chart.canvas.id]=key;
+}
+// syncZoomToOthers применяет видимую область времени (X-ось) графика fromChart ко
+// всем остальным графикам через штатный метод плагина zoomScale (регистрирует зум
+// во внутреннем состоянии плагина, поэтому он сохраняется). Вызывается из
+// checkZoomSync при изменении окна.
+var zoomSyncing=false;
+function syncZoomToOthers(fromChart){
+	if(zoomSyncing) return;
+	var sx=fromChart&&fromChart.scales&&fromChart.scales.x;
+	if(!sx||!isFinite(sx.min)||!isFinite(sx.max)||sx.max<=sx.min) return;
+	var m=sx.min, M=sx.max;
+	zoomSyncing=true;
+	try{
+		['powerChart','totalChart','gridVChart','gridPChart'].forEach(function(id){
+			var c=window[id]||Chart.getChart(id);
+			if(!c || c===fromChart) return;
+			try{ c.zoomScale('x', {min:m, max:M}, 'none'); }catch(e){}
+		});
+	}finally{ zoomSyncing=false; }
+}
+
 // renderChart создаёт/пересоздаёт линейный график на канвасе id; old-график уничтожается.
+// Инстанс хранится в window[id] (id = id канваса), кнопки сброса/синхронизация зума
+// обращаются к нему. Начальную видимую область можно ограничить через opts (см. chartOpts).
 function renderChart(id, datasets, opts){
 	var canvas=document.getElementById(id);
-	var holder=id+'Chart';
-	if(window[holder]) window[holder].destroy();
+	var old=window[id];
+	var saved={min:null,max:null};
+	if(old && old.scales && old.scales.x && isFinite(old.scales.x.min) && isFinite(old.scales.x.max)){
+		saved={min:old.scales.x.min, max:old.scales.x.max};
+	}
+	if(old){ try{ old.destroy(); }catch(e){} }
 	canvas.getContext('2d');
-	window[holder]=new Chart(canvas,{ type:'line', data:{datasets:datasets}, options:opts });
-	return window[holder];
+	window[id]=new Chart(canvas,{ type:'line', data:{datasets:datasets}, options:opts, plugins:[cursorTooltipPlugin] });
+	canvas.addEventListener('mouseleave',function(){ delete hoverPix[id]; try{ window[id]&&window[id].update('none'); }catch(e){} });
+	if(preserveZoom && saved.min!==null && saved.max!==null){
+		window[id].options.scales.x.min=saved.min; window[id].options.scales.x.max=saved.max;
+		window[id].update('none');
+	}
+	return window[id];
 }
-function chartOpts(withLegend,yTitle){
+function chartOpts(withLegend,yTitle,extra){
 	var o={
 		responsive:true,
 		maintainAspectRatio:false,
 		interaction:{ mode:'index', intersect:false },
 		animation:{ duration:300 },
+		onHover:function(event, elements, chart){
+			if(chart && chart.canvas){
+				if(event && isFinite(event.x)) hoverPix[chart.canvas.id]=event.x;
+				try{ chart.update('none'); }catch(e){}
+			}
+		},
 		plugins:{
-			tooltip:{
-				mode:'index', intersect:false, displayColors:true,
-				callbacks:{
-					title:function(items){ return items.length ? fmtSec(items[0].parsed.x) : ''; },
-					label:function(item){ return item.dataset.label + ': ' + Number(item.parsed.y).toFixed(1) + ' W'; }
-				}
-			},
+			tooltip:{ enabled:false },
 			zoom:{
 				pan:{ enabled:true, mode:'x' },
 				zoom:{ wheel:{ enabled:true, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:true }, mode:'x' },
@@ -427,6 +558,11 @@ function chartOpts(withLegend,yTitle){
 			y:{ beginAtZero:true, title:{ display:yTitle, text:yTitle||'' } }
 		}
 	};
+	if(extra){
+		if(extra.zoomMode){ o.plugins.zoom.zoom.mode=extra.zoomMode; o.plugins.zoom.pan.mode=extra.zoomMode; }
+		if(extra.limits){ o.plugins.zoom.limits=Object.assign(o.plugins.zoom.limits, extra.limits); }
+		if(extra.scales){ for(var k in extra.scales) o.scales[k]=extra.scales[k]; }
+	}
 	if(withLegend){ o.plugins.legend={ display:true, labels:{ boxWidth:20, padding:14 } }; }
 	return o;
 }
@@ -451,6 +587,7 @@ function startOfYesterday(){
 // перезагружает оба графика.
 function selectRange(from,to,activeBtn){
 	selRange.from=from; selRange.to=to;
+	preserveZoom=false;
 	var btns=['btnToday','btnYesterday','btn7d'];
 	for(var i=0;i<btns.length;i++) document.getElementById(btns[i]).classList.remove('active');
 	if(activeBtn) document.getElementById(activeBtn).classList.add('active');
@@ -522,19 +659,22 @@ async function loadChart(){
 }
 document.getElementById('btnReset').addEventListener('click',function(){ if(window.powerChart) window.powerChart.resetZoom(); });
 
-// Графики МАП: напряжение сети и мощность сети (одна линия из seriesResponse).
+// Графики МАП: напряжение сети и батареи (на отдельных осях), мощность сети (seriesResponse).
 function buildGridVChart(data){
-	var pts=(data.map_grid_voltage||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
-	var datasets=[{
-		label:'Напряжение сети',
-		data:pts,
-		borderColor:'#4ecdc4',
-		backgroundColor:'#4ecdc4',
-		pointRadius:0, pointHoverRadius:0,
-		borderWidth:1.5, tension:0.35,
-		cubicInterpolationMode:'monotone', fill:false
-	}];
-	renderChart('gridVChart', datasets, chartOpts(false,'V'));
+	var grid=(data.map_grid_voltage||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
+	var bat=(data.map_battery_voltage||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
+	var datasets=[
+		{ label:'Напряжение сети', data:grid, borderColor:'#4ecdc4', backgroundColor:'#4ecdc4',
+		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false },
+		{ label:'Напряжение батареи', data:bat, borderColor:'#e74c3c', backgroundColor:'#e74c3c',
+		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false,
+		  yAxisID:'y1' }
+	];
+	renderChart('gridVChart', datasets, chartOpts(true,'V',{
+		zoomMode:'xy',
+		limits:{ x:{minRange:60*1000}, y:{minRange:20}, y1:{minRange:20} },
+		scales:{ y1:{ type:'linear', position:'right', beginAtZero:false, title:{display:true, text:'Напряжение батареи, V'} } }
+	}));
 	return window.gridVChart;
 }
 async function loadGridVChart(){
@@ -590,10 +730,11 @@ document.getElementById('btnDate').addEventListener('click',function(){
 	selectRange(from, endOfDay(from), null);
 });
 document.getElementById('btnRefresh').addEventListener('click',function(){
+	preserveZoom=false;
 	loadAll();
 });
 
-loadAll(); setInterval(loadAll,60000);
+loadAll(); setInterval(function(){ preserveZoom=true; loadAll(); },60000);
 
 tick(); setInterval(tick,1000);
 </script>
