@@ -11,10 +11,12 @@ import (
 	"time"
 )
 
-// dashboardHandler — веб-дашборд: отдаёт HTML-страницу и JSON API с текущими
-// параметрами и временными рядами всех инверторов. Данные за последние
-// 2 календарных суток берутся из Redis (полное разрешение), более старые —
-// из PostgreSQL (5-минутные усреднённые точки).
+// dashboardHandler — веб-дашборд: отдаёт две HTML-страницы и JSON API.
+//  - Главная страница (/) — текущие параметры: плашки, электросчётчик, сводная
+//    таблица; обновляются каждую секунду из Redis.
+//  - Страница графиков (/charts) — временные ряды инверторов, МАП и счётчика за
+//    выбранный период (Redis полное разрешение за 2 суток + PG 5-минутные средние),
+//    а также столбчатая статистика «день/ночь» из daily_tariffs.
 type dashboardHandler struct {
 	store *redisStore
 	pg    *pgStore
@@ -49,16 +51,34 @@ type deviceSeries struct {
 
 // seriesResponse отвечает на GET /api/series.
 type seriesResponse struct {
-	GeneratedAt    string         `json:"generated_at"`
-	From           string         `json:"from"`
-	To             string         `json:"to"`
-	Series         []deviceSeries `json:"series"`
-	Total          []seriesPoint  `json:"total,omitempty"`
-	MapGridVoltage []seriesPoint  `json:"map_grid_voltage,omitempty"`
-	MapGridPower   []seriesPoint  `json:"map_grid_power,omitempty"`
-	MapBatVoltage  []seriesPoint  `json:"map_battery_voltage,omitempty"`
-	MapBatPower    []seriesPoint  `json:"map_battery_power,omitempty"`
-	MapCons        []seriesPoint  `json:"map_consumption,omitempty"`
+	GeneratedAt      string         `json:"generated_at"`
+	From             string         `json:"from"`
+	To               string         `json:"to"`
+	Series           []deviceSeries `json:"series"`
+	Total            []seriesPoint  `json:"total,omitempty"`
+	MapGridVoltage   []seriesPoint  `json:"map_grid_voltage,omitempty"`
+	MapGridPower     []seriesPoint  `json:"map_grid_power,omitempty"`
+	MapBatVoltage    []seriesPoint  `json:"map_battery_voltage,omitempty"`
+	MapBatPower      []seriesPoint  `json:"map_battery_power,omitempty"`
+	MapCons          []seriesPoint  `json:"map_consumption,omitempty"`
+	MeterVoltage     []seriesPoint  `json:"meter_voltage,omitempty"`
+	MeterActivePower []seriesPoint  `json:"meter_active_power,omitempty"`
+}
+
+// meterDailyResponse отвечает на GET /api/tariffs: посуточные тарифные величины
+// счётчика (потребление/отдача «День»/«Ночь»), отсортированные по дню возврастанию.
+type meterDailyResponse struct {
+	GeneratedAt string         `json:"generated_at"`
+	Days        []meterDayStat `json:"days"`
+}
+
+// meterDayStat — тарифные величины одного календарного дня (kWh).
+type meterDayStat struct {
+	Day        string  `json:"day"` // YYYY-MM-DD
+	ImportDay  float64 `json:"import_day"`
+	ImportNight float64 `json:"import_night"`
+	ExportDay  float64 `json:"export_day"`
+	ExportNight float64 `json:"export_night"`
 }
 
 // seriesPalette — цвета линий инверторов (по индексу после сортировки по имени).
@@ -107,16 +127,19 @@ const dashboardPage = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SunReceiver Dashboard</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+<title>SunReceiver</title>
 <style>
 :root { color-scheme: dark; }
 * { box-sizing: border-box; }
 body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0f1115; color:#e6e6e6; margin:0; padding:20px; overflow-x:hidden; }
 h1 { font-size:22px; margin:0 0 4px; }
 .sub { color:#8a93a1; margin:0 0 20px; font-size:13px; }
+.top-nav { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:20px; }
+.top-nav .ttl { margin:0; }
+.top-nav .sub { margin:4px 0 0; }
+.nav-btn { background:#2f6fed; color:#fff; border:none; border-radius:8px; padding:9px 16px; font-size:14px; font-weight:600; cursor:pointer; text-decoration:none; white-space:nowrap; }
+.nav-btn:hover { background:#3f7bf0; }
+.nav-btn.secondary { background:#252b36; border:1px solid #333b49; }
 #chartbox { background:#181c24; border:1px solid #252b36; border-radius:10px; padding:16px; margin-bottom:20px; max-width:100%; }
 #chartbox h2 { margin:0 0 8px; font-size:16px; }
 .chart-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:10px 12px; margin-bottom:8px; font-size:13px; color:#8a93a1; }
@@ -165,8 +188,13 @@ h1 { font-size:22px; margin:0 0 4px; }
 </style>
 </head>
 <body>
-<h1>SunReceiver</h1>
-<p class="sub">Текущие параметры инверторов и электросчётчика (из Redis, обновление каждую секунду)</p>
+<div class="top-nav">
+  <div>
+    <h1 class="ttl">SunReceiver</h1>
+    <p class="sub">Текущие параметры инверторов и электросчётчика (из Redis, обновление каждую секунду)</p>
+  </div>
+  <a class="nav-btn" href="/charts">Открыть графики</a>
+</div>
 
 <div class="meter-plate">
   <div class="meter-head">
@@ -222,48 +250,6 @@ h1 { font-size:22px; margin:0 0 4px; }
   <input type="date" id="datePick" title="Выбрать день">
   <button id="btnDate">За выбранный день</button>
   <button id="btnRefresh" title="Принудительно обновить графики">Обновить графики</button>
-</div>
-
-<div class="charts">
-  <div id="chartbox">
-    <h2>Напряжение сети и батареи (МАП), V</h2>
-    <div class="chart-toolbar">
-      <span id="gridVChartRange"></span>
-      <button id="btnGridVReset">Сброс зума</button>
-      <span>Зум: колесо / drag&ndash;панорама</span>
-    </div>
-    <div class="chart-wrap"><canvas id="gridVChart"></canvas></div>
-  </div>
-
-  <div id="chartbox">
-    <h2>Мощности сети и батареи (МАП), W</h2>
-    <div class="chart-toolbar">
-      <span id="gridPChartRange"></span>
-      <button id="btnGridPReset">Сброс зума</button>
-      <span>Зум: колесо / drag&ndash;панорама</span>
-    </div>
-    <div class="chart-wrap"><canvas id="gridPChart"></canvas></div>
-  </div>
-
-  <div id="chartbox">
-    <h2>Суммарная активная мощность, W</h2>
-    <div class="chart-toolbar">
-      <span id="totalChartRange"></span>
-      <button id="btnTotalReset">Сброс зума</button>
-      <span>Зум: колесо / drag&ndash;панорама</span>
-    </div>
-    <div class="chart-wrap"><canvas id="totalChart"></canvas></div>
-  </div>
-
-  <div id="chartbox">
-    <h2>Активная мощность по инверторам, W</h2>
-    <div class="chart-toolbar">
-      <span id="chartRange"></span>
-      <button id="btnReset">Сброс зума</button>
-      <span>Зум: колесо / drag&ndash;панорама</span>
-    </div>
-    <div class="chart-wrap"><canvas id="powerChart"></canvas></div>
-  </div>
 </div>
 
 <div class="pivot-wrap" id="cards"><div class="missing">Загрузка...</div></div>
@@ -461,18 +447,130 @@ function setKpi(id, v){
 	}
 }
 
+tick(); setInterval(tick,1000);
+</script>
+</body>
+</html>`
+
+// chartsPage — страница графиков: временные ряды инверторов/МАП/счётчика за
+// выбранный период + столбчатая статистика «день/ночь» счётчика (daily_tariffs).
+const chartsPage = `<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Графики — SunReceiver</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+<style>
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0f1115; color:#e6e6e6; margin:0; padding:20px; overflow-x:hidden; }
+.top-nav { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+.top-nav .ttl { margin:0; font-size:22px; }
+.top-nav .sub { color:#8a93a1; margin:4px 0 0; font-size:13px; }
+.nav-btn { background:#2f6fed; color:#fff; border:none; border-radius:8px; padding:9px 16px; font-size:14px; font-weight:600; cursor:pointer; text-decoration:none; white-space:nowrap; }
+.nav-btn:hover { background:#3f7bf0; }
+.nav-btn.secondary { background:#252b36; border:1px solid #333b49; }
+#chartbox { background:#181c24; border:1px solid #252b36; border-radius:10px; padding:16px; margin-bottom:20px; max-width:100%; }
+#chartbox h2 { margin:0 0 8px; font-size:16px; }
+.chart-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:10px 12px; margin-bottom:8px; font-size:13px; color:#8a93a1; }
+.chart-toolbar button { background:#252b36; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:4px 10px; cursor:pointer; font-size:13px; }
+.chart-toolbar button:hover { background:#2f3644; }
+.period-panel { display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px; font-size:13px; color:#8a93a1; }
+.period-panel button { background:#252b36; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:5px 12px; cursor:pointer; font-size:13px; }
+.period-panel button:hover { background:#2f3644; }
+.period-panel button.active { background:#2f6fed; border-color:#2f6fed; color:#fff; }
+.period-panel input[type=date] { background:#181c24; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:4px 8px; font-size:13px; color-scheme:dark; }
+.period-panel input[type=date]:focus { outline:none; border-color:#2f6fed; }
+.chart-wrap { position:relative; height:340px; }
+.charts { display:flex; flex-wrap:wrap; gap:16px; margin-bottom:20px; }
+.charts #chartbox { flex:1 1 46%; min-width:min(420px,100%); margin-bottom:0; }
+.missing { color:#6b7280; font-style:italic; }
+</style>
+</head>
+<body>
+<div class="top-nav">
+  <div>
+    <h1 class="ttl">Графики</h1>
+    <p class="sub">Временные ряды за выбранный период; статистика счётчика «день/ночь» за последние дни</p>
+  </div>
+  <a class="nav-btn secondary" href="/">&larr; Назад</a>
+</div>
+
+<div class="period-panel">
+  <button id="btnToday">Сегодня</button>
+  <button id="btnYesterday">Вчера</button>
+  <button id="btn7d">7 дней</button>
+  <input type="date" id="datePick" title="Выбрать день">
+  <button id="btnDate">За выбранный день</button>
+  <button id="btnRefresh" title="Принудительно обновить графики">Обновить графики</button>
+</div>
+
+<div class="charts">
+  <div id="chartbox">
+    <h2>Напряжение сети и батареи (МАП), V + напряжение счётчика</h2>
+    <div class="chart-toolbar">
+      <span id="gridVChartRange"></span>
+      <button id="btnGridVReset">Сброс зума</button>
+      <span>Зум: колесо / drag&ndash;панорама</span>
+    </div>
+    <div class="chart-wrap"><canvas id="gridVChart"></canvas></div>
+  </div>
+
+  <div id="chartbox">
+    <h2>Мощности сети и батареи (МАП), W + активная мощность счётчика</h2>
+    <div class="chart-toolbar">
+      <span id="gridPChartRange"></span>
+      <button id="btnGridPReset">Сброс зума</button>
+      <span>Зум: колесо / drag&ndash;панорама</span>
+    </div>
+    <div class="chart-wrap"><canvas id="gridPChart"></canvas></div>
+  </div>
+
+  <div id="chartbox">
+    <h2>Суммарная активная мощность, W</h2>
+    <div class="chart-toolbar">
+      <span id="totalChartRange"></span>
+      <button id="btnTotalReset">Сброс зума</button>
+      <span>Зум: колесо / drag&ndash;панорама</span>
+    </div>
+    <div class="chart-wrap"><canvas id="totalChart"></canvas></div>
+  </div>
+
+  <div id="chartbox">
+    <h2>Активная мощность по инверторам, W</h2>
+    <div class="chart-toolbar">
+      <span id="chartRange"></span>
+      <button id="btnReset">Сброс зума</button>
+      <span>Зум: колесо / drag&ndash;панорама</span>
+    </div>
+    <div class="chart-wrap"><canvas id="powerChart"></canvas></div>
+  </div>
+</div>
+
+<div id="chartbox">
+  <h2>Электросчётчик: потребление / отдача по тарифу «День» и «Ночь», kWh</h2>
+  <div class="chart-toolbar">
+    <span id="tariffRange">Последние 4 финализированных дня</span>
+  </div>
+  <div class="chart-wrap"><canvas id="tariffChart"></canvas></div>
+</div>
+
+<script>
+'use strict';
+
+function fmt(t){ var d=new Date(t); function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes()); }
+function fmtSec(t){ var d=new Date(t); function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds()); }
+function startOfToday(){ var d=new Date(); d.setHours(0,0,0,0); return d; }
+function endOfToday(){ var d=new Date(); d.setHours(23,59,59,999); return d; }
+
 // ---------- Графики ----------
 Chart.register(ChartZoom);
 
-// preserveZoom указывает, нужно ли при пересоздании графика сохранить текущую
-// видимую область (зум): true при обновлении по таймеру, false при выборе
-// периода/кнопке «Обновить» (в этом случае зум сбрасывается).
 var preserveZoom=false;
-// hoverPix — пиксель по X курсора для каждого графика (по id канваса), когда мышь над ним.
 var hoverPix={};
-// drawCursorTooltip — рисует вертикальную линию под курсором и подпись значений всех
-// линий из ближайшей точки СЛЕВА от курсора. Оборачивается в try/catch, чтобы никогда
-// не ломать отрисовку графика.
 function drawCursorTooltip(chart){
 	try{
 		var px=hoverPix[chart.canvas.id];
@@ -482,7 +580,6 @@ function drawCursorTooltip(chart){
 		if(!isFinite(px)||px<xScale.left||px>xScale.right) return;
 		var t=xScale.getValueForPixel(px);
 		var ctx=chart.ctx; ctx.save();
-		// вертикальная линия под курсором
 		ctx.beginPath(); ctx.moveTo(px,yScale.top); ctx.lineTo(px,yScale.bottom);
 		ctx.strokeStyle='rgba(160,160,160,0.55)'; ctx.lineWidth=1; ctx.stroke();
 		var labels=[], titleT=null;
@@ -501,17 +598,14 @@ function drawCursorTooltip(chart){
 			if(v===null||v===undefined) return;
 			var dsy = chart.scales && (chart.scales[ds.yAxisID||'y']) || yScale;
 			if(!dsy || !isFinite(v)) return;
-			labels.push({
-				label:ds.label||'', color:ds.borderColor||'#999', v:v,
-				px:xScale.getPixelForValue(best), py:dsy.getPixelForValue(v),
-				txt:''
-			});
+			labels.push({ label:ds.label||'', color:ds.borderColor||'#999', v:v,
+				px:xScale.getPixelForValue(best), py:dsy.getPixelForValue(v), txt:'' });
 			if(titleT===null||best>titleT) titleT=best;
 		});
 		if(!labels.length){ ctx.restore(); return; }
 		labels.forEach(function(l){ ctx.beginPath(); ctx.arc(l.px,l.py,3.5,0,2*Math.PI); ctx.fillStyle=l.color; ctx.fill(); ctx.strokeStyle='rgba(0,0,0,0.9)'; ctx.lineWidth=1; ctx.stroke(); });
 		var boxW=0, lineH=16;
-		labels.forEach(function(l){ l.txt=l.label+': '+Number(l.v).toFixed(1)+' W'; });
+		labels.forEach(function(l){ l.txt=l.label+': '+Number(l.v).toFixed(1)+' '; });
 		labels.forEach(function(l){ var w=ctx.measureText(l.txt).width; if(w>boxW) boxW=w; });
 		var header=titleT!==null? fmtSec(new Date(titleT)) : '';
 		if(header && ctx.measureText(header).width>boxW) boxW=ctx.measureText(header).width;
@@ -527,9 +621,6 @@ function drawCursorTooltip(chart){
 		ctx.restore();
 	}catch(err){ try{ ctx&&ctx.restore(); }catch(e){} }
 }
-// cursorTooltipPlugin — после каждой отрисовки: (1) если видимое окно времени у этого
-// графика изменилось, синхронизирует его на остальных; (2) рисует хинт под курсором.
-// Обёрнут в try/catch, чтобы сбой здесь не приводил к пустому графику.
 var lastXWindow={};
 var cursorTooltipPlugin={ id:'cursorTooltip', afterDraw:function(chart){
 	try{
@@ -538,10 +629,8 @@ var cursorTooltipPlugin={ id:'cursorTooltip', afterDraw:function(chart){
 		drawCursorTooltip(chart);
 	}catch(err){}
 } };
-// drawZeroGridAxis рисует контрастную горизонтальную ось на уровне y=0 у графиков,
-// где это важно (мощности сети/батареи/потребления — значения бывают и отрицательными).
 function drawZeroGridAxis(chart){
-	if(!chart || chart.canvas.id!=='gridPChart') return;
+	if(!chart || (chart.canvas.id!=='gridPChart' && chart.canvas.id!=='totalChart')) return;
 	var x=chart.scales&&chart.scales.x, y=chart.scales&&chart.scales.y;
 	if(!x||!y) return;
 	if(y.min>0 || y.max<0) return;
@@ -553,9 +642,6 @@ function drawZeroGridAxis(chart){
 	ctx.stroke();
 	ctx.restore();
 }
-// checkZoomSync сверяет видимое окно времени (X-ось) графика с запомненным; если
-// изменилось — применяет его ко всем остальным графикам. Защита zoomSyncing не даёт
-// зациклиться при каскадной синхронизации.
 function checkZoomSync(chart){
 	if(zoomSyncing) return;
 	var x=chart&&chart.scales&&chart.scales.x;
@@ -564,10 +650,6 @@ function checkZoomSync(chart){
 	if(lastXWindow[chart.canvas.id]!==undefined && lastXWindow[chart.canvas.id]!==key) syncZoomToOthers(chart);
 	lastXWindow[chart.canvas.id]=key;
 }
-// syncZoomToOthers применяет видимую область времени (X-ось) графика fromChart ко
-// всем остальным графикам через штатный метод плагина zoomScale (регистрирует зум
-// во внутреннем состоянии плагина, поэтому он сохраняется). Вызывается из
-// checkZoomSync при изменении окна.
 var zoomSyncing=false;
 function syncZoomToOthers(fromChart){
 	if(zoomSyncing) return;
@@ -583,10 +665,6 @@ function syncZoomToOthers(fromChart){
 		});
 	}finally{ zoomSyncing=false; }
 }
-
-// renderChart создаёт/пересоздаёт линейный график на канвасе id; old-график уничтожается.
-// Инстанс хранится в window[id] (id = id канваса), кнопки сброса/синхронизация зума
-// обращаются к нему. Начальную видимую область можно ограничить через opts (см. chartOpts).
 function renderChart(id, datasets, opts){
 	var canvas=document.getElementById(id);
 	var old=window[id];
@@ -639,11 +717,7 @@ function chartOpts(withLegend,yTitle,extra){
 }
 
 // ---------- Выбор периода ----------
-// Общий диапазон для обоих графиков. По умолчанию — текущие календарные сутки,
-// но можно выбрать «Вчера», «7 дней» или конкретный день через date-поле.
 var selRange={from:startOfToday(), to:endOfToday()};
-
-// dayFromStr возвращает начало локального дня по строке 'YYYY-MM-DD'.
 function dayFromStr(s){
 	var p=String(s).split('-').map(Number);
 	return new Date(p[0], p[1]-1, p[2], 0,0,0,0);
@@ -654,8 +728,6 @@ function endOfDay(d){
 function startOfYesterday(){
 	var d=new Date(); d.setDate(d.getDate()-1); d.setHours(0,0,0,0); return d;
 }
-// selectRange устанавливает текущий период, подсвечивает активную кнопку и
-// перезагружает оба графика.
 function selectRange(from,to,activeBtn){
 	selRange.from=from; selRange.to=to;
 	preserveZoom=false;
@@ -668,20 +740,11 @@ async function loadAll(){
 	await Promise.all([loadTotalChart(), loadChart(), loadGridVChart(), loadGridPChart()]);
 }
 
-// Суммарный график (одна линия)
+// Суммарный график
 function buildTotalChart(data){
 	var pts=(data.total||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
-	var datasets=[{
-		label:'Сумма',
-		data:pts,
-		borderColor:'#ffd166',
-		backgroundColor:'#ffd166',
-		pointRadius:0, pointHoverRadius:0,
-		borderWidth:1.5,
-		tension:0.35,
-		cubicInterpolationMode:'monotone',
-		fill:false
-	}];
+	var datasets=[{ label:'Сумма', data:pts, borderColor:'#ffd166', backgroundColor:'#ffd166',
+		pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false }];
 	renderChart('totalChart', datasets, chartOpts(false,'W'));
 	return window.totalChart;
 }
@@ -697,23 +760,14 @@ async function loadTotalChart(){
 }
 document.getElementById('btnTotalReset').addEventListener('click',function(){ if(window.totalChart) window.totalChart.resetZoom(); });
 
-// График по инверторам (несколько линий)
+// Активная мощность по инверторам
 function buildChart(data){
 	var datasets=[];
 	for(var i=0;i<data.series.length;i++){
 		var s=data.series[i];
 		var pts=s.points.map(function(p){ return {x:new Date(p.t), y:p.v}; });
-		datasets.push({
-			label:s.name,
-			data:pts,
-			borderColor:s.color,
-			backgroundColor:s.color,
-			pointRadius:0, pointHoverRadius:0,
-			borderWidth:1.5,
-			tension:0.35,
-			cubicInterpolationMode:'monotone',
-			fill:false
-		});
+		datasets.push({ label:s.name, data:pts, borderColor:s.color, backgroundColor:s.color,
+			pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false });
 	}
 	renderChart('powerChart', datasets, chartOpts(true,'W'));
 	return window.powerChart;
@@ -730,16 +784,19 @@ async function loadChart(){
 }
 document.getElementById('btnReset').addEventListener('click',function(){ if(window.powerChart) window.powerChart.resetZoom(); });
 
-// Графики МАП: напряжение сети и батареи (на отдельных осях), мощность сети (seriesResponse).
+// Напряжения (МАП + счётчик). Счётчик на левой оси (белая линия).
 function buildGridVChart(data){
 	var grid=(data.map_grid_voltage||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
 	var bat=(data.map_battery_voltage||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
+	var meter=(data.meter_voltage||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
 	var datasets=[
 		{ label:'Напряжение сети', data:grid, borderColor:'#4ecdc4', backgroundColor:'#4ecdc4',
 		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false },
 		{ label:'Напряжение батареи', data:bat, borderColor:'#e74c3c', backgroundColor:'#e74c3c',
 		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false,
-		  yAxisID:'y1' }
+		  yAxisID:'y1' },
+		{ label:'Напряжение счётчика', data:meter, borderColor:'#ffffff', backgroundColor:'#ffffff',
+		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false }
 	];
 	renderChart('gridVChart', datasets, chartOpts(true,'V',{
 		zoomMode:'xy',
@@ -760,17 +817,21 @@ async function loadGridVChart(){
 }
 document.getElementById('btnGridVReset').addEventListener('click',function(){ if(window.gridVChart) window.gridVChart.resetZoom(); });
 
+// Мощности (МАП + счётчик). Активная мощность счётчика белой линией на левой оси.
 function buildGridPChart(data){
 	var grid=(data.map_grid_power||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
 	var bat=(data.map_battery_power||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
 	var cons=(data.map_consumption||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
+	var meter=(data.meter_active_power||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
 	var datasets=[
 		{ label:'Мощность сети', data:grid, borderColor:'#74b9ff', backgroundColor:'#74b9ff',
 		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false },
 		{ label:'Мощность батареи', data:bat, borderColor:'#00b894', backgroundColor:'#00b894',
 		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false },
 		{ label:'Мощность потребления', data:cons, borderColor:'#f39c12', backgroundColor:'#f39c12',
-		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false }
+		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false },
+		{ label:'Мощность счётчика (активная)', data:meter, borderColor:'#ffffff', backgroundColor:'#ffffff',
+		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.2, cubicInterpolationMode:'monotone', fill:false }
 	];
 	renderChart('gridPChart', datasets, chartOpts(true,'W'));
 	return window.gridPChart;
@@ -787,7 +848,7 @@ async function loadGridPChart(){
 }
 document.getElementById('btnGridPReset').addEventListener('click',function(){ if(window.gridPChart) window.gridPChart.resetZoom(); });
 
-// Кнопки выбора периода
+// ---------- Кнопки выбора периода ----------
 document.getElementById('btnToday').addEventListener('click',function(){ selectRange(startOfToday(), endOfToday(), 'btnToday'); });
 document.getElementById('btnYesterday').addEventListener('click',function(){ selectRange(startOfYesterday(), endOfDay(startOfYesterday()), 'btnYesterday'); });
 document.getElementById('btn7d').addEventListener('click',function(){
@@ -805,12 +866,68 @@ document.getElementById('btnRefresh').addEventListener('click',function(){
 	loadAll();
 });
 
-loadAll(); setInterval(function(){ preserveZoom=true; loadAll(); },60000);
+// ---------- Столбчатый график «день/ночь» счётчика ----------
+var TARIFF_COLORS={ import_day:'#d0663a', import_night:'#8c5bbf', export_day:'#3fbf7f', export_night:'#2c8f6a' };
+function buildTariffChart(data){
+	var days=(data.days||[]);
+	var labels=days.map(function(d){ return d.day; });
+	var borderColor='rgba(0,0,0,0.35)';
+	function ds(label,key,color){
+		return { label:label, data:days.map(function(d){ return d[key]; }), backgroundColor:color, borderColor:borderColor,
+			borderWidth:1, borderRadius:3 };
+	}
+	var datasets=[
+		ds('Потребление день','import_day',TARIFF_COLORS.import_day),
+		ds('Потребление ночь','import_night',TARIFF_COLORS.import_night),
+		ds('Отдача день','export_day',TARIFF_COLORS.export_day),
+		ds('Отдача ночь','export_night',TARIFF_COLORS.export_night)
+	];
+	var canvas=document.getElementById('tariffChart');
+	var old=window.tariffChart; if(old){ try{ old.destroy(); }catch(e){} }
+	canvas.getContext('2d');
+	window.tariffChart=new Chart(canvas,{
+		type:'bar',
+		data:{ labels:labels, datasets:datasets },
+		options:{
+			responsive:true, maintainAspectRatio:false,
+			interaction:{ mode:'index', intersect:false },
+			animation:{ duration:300 },
+			plugins:{ legend:{ display:true, labels:{ boxWidth:16, padding:12 } } },
+			scales:{
+				x:{ ticks:{ autoSkip:false } },
+				y:{ beginAtZero:true, title:{ display:true, text:'kWh' } }
+			}
+		}
+	});
+	return window.tariffChart;
+}
+async function loadTariffChart(){
+	try{
+		var r=await fetch('/api/tariffs');
+		if(!r.ok) return;
+		var data=await r.json();
+		if(!data.days || !data.days.length){
+			document.getElementById('tariffRange').textContent='Ещё нет финализированных дней (нужны показания на границах 00:00, 07:00, 23:00)';
+		}else{
+			document.getElementById('tariffRange').textContent='Последние '+data.days.length+' финализированных дня';
+		}
+		buildTariffChart(data);
+	}catch(e){}
+}
 
-tick(); setInterval(tick,1000);
+loadAll(); setInterval(function(){ preserveZoom=true; loadAll(); },60000);
+loadTariffChart(); setInterval(loadTariffChart, 5*60*1000);
 </script>
 </body>
 </html>`
+
+var chartsTmpl = template.Must(template.New("charts").Parse(chartsPage))
+
+func (h *dashboardHandler) charts(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = chartsTmpl.Execute(w, nil)
+}
 
 var dashboardTmpl = template.Must(template.New("dash").Parse(dashboardPage))
 
@@ -918,16 +1035,22 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	byIP := map[string]*deviceSeries{}
 	nameToIP := map[string]string{}
 	for _, sn := range snaps {
+		// Снимки устройства МАП (батарея/сеть) и счётчика DDS238 исключаем — их
+		// мощность отображается на своих графиках/плашках, а не на графике активной
+		// мощности инверторов. Смотрим дальше: устройство попадает в ряд только если
+		// хоть в одном снимке есть ac_active_power (у счётчика его нет).
 		if isMAPDevice(sn.Values) {
+			continue
+		}
+		v, hasPower := snapFloat(sn.Values, "ac_active_power")
+		if !hasPower {
 			continue
 		}
 		if _, ok := byIP[sn.IP]; !ok {
 			byIP[sn.IP] = &deviceSeries{IP: sn.IP, Name: sn.Name}
 			nameToIP[sn.Name] = sn.IP
 		}
-		if v, ok := snapFloat(sn.Values, "ac_active_power"); ok {
-			byIP[sn.IP].Points = append(byIP[sn.IP].Points, seriesPoint{T: sn.Timestamp, V: v})
-		}
+		byIP[sn.IP].Points = append(byIP[sn.IP].Points, seriesPoint{T: sn.Timestamp, V: v})
 	}
 
 	names := make([]string, 0, len(byIP))
@@ -970,6 +1093,12 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	res.MapBatVoltage = singleMetricSeries(snaps, "battery_voltage")
 	res.MapBatPower = singleMetricSeries(snaps, "battery_power")
 	res.MapCons = sumSeries(res.MapGridPower, res.MapBatPower)
+
+	// Ряды электросчётчика DDS238: напряжение и активная мощность для наложения
+	// на графики напряжений и мощностей (белые линии счётчика). Маркер устройства —
+	// наличие meter_voltage, которого нет ни у инверторов, ни у МАП/MPPT.
+	res.MeterVoltage = meterSeries(snaps, "meter_voltage")
+	res.MeterActivePower = meterSeries(snaps, "meter_active_power")
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -1081,6 +1210,36 @@ func singleMetricSeries(snaps []deviceSnapshot, key string) []seriesPoint {
 	return pts
 }
 
+// meterSeries собирает временной ряд одного тега счётчика DDS238 по его снимкам
+// (снимки инверторов/МАП/MPPT отбрасываются). Маркер устройства — meter_voltage.
+// Точки сортируются по времени; дубли с одним временем схлопываются.
+func meterSeries(snaps []deviceSnapshot, key string) []seriesPoint {
+	var pts []seriesPoint
+	for _, sn := range snaps {
+		if _, isMeter := sn.Values["meter_voltage"]; !isMeter {
+			continue
+		}
+		v, ok := snapFloat(sn.Values, key)
+		if !ok {
+			continue
+		}
+		pts = append(pts, seriesPoint{T: sn.Timestamp, V: v})
+	}
+	sort.Slice(pts, func(i, j int) bool { return pts[i].T < pts[j].T })
+	if len(pts) > 1 {
+		out := pts[:1]
+		for i := 1; i < len(pts); i++ {
+			if pts[i].T == out[len(out)-1].T {
+				out[len(out)-1] = pts[i]
+			} else {
+				out = append(out, pts[i])
+			}
+		}
+		pts = out
+	}
+	return pts
+}
+
 // loadRange возвращает снимки за период [start, end]. Точки старше окна
 // последних 2 календарных суток берутся из PostgreSQL (5-минутные средние),
 // точки внутри окна — из Redis (полное разрешение). Если PG отключено,
@@ -1100,7 +1259,11 @@ func (h *dashboardHandler) loadRange(start, end time.Time, now time.Time) ([]dev
 		}
 		all = append(all, pgSnaps...)
 	}
-	// Рецентная часть периода (от cutoff) — из Redis.
+	// Рецентная часть периода (от cutoff) — из Redis (полное разрешение ~10 с).
+	// Если в Redis снимков нет (их потеряли, например при сбое Redis или пока был
+	// выключен пулер, а реставрация из PG срабатывает только при полностью пустом
+	// Redis) — дополняем окно 5-минутными средними из PG, чтобы график не остался
+	// пустым, а показал хотя бы усреднённую историю за период.
 	if end.After(cutoff) {
 		rStart := start
 		if rStart.Before(cutoff) {
@@ -1110,7 +1273,15 @@ func (h *dashboardHandler) loadRange(start, end time.Time, now time.Time) ([]dev
 		if err != nil {
 			return nil, err
 		}
-		all = append(all, redisSnaps...)
+		if len(redisSnaps) == 0 && h.pg != nil {
+			pgSnaps, perr := h.pg.Averages(rStart, end)
+			if perr != nil {
+				return nil, perr
+			}
+			all = append(all, pgSnaps...)
+		} else {
+			all = append(all, redisSnaps...)
+		}
 	}
 	return all, nil
 }
@@ -1128,11 +1299,39 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore) {
 	h := &dashboardHandler{store: store, pg: pg}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.index)
+	mux.HandleFunc("/charts", h.charts)
 	mux.HandleFunc("/api/current", h.apiCurrent)
 	mux.HandleFunc("/api/series", h.apiSeries)
+	mux.HandleFunc("/api/tariffs", h.apiTariffs)
 	srv := &http.Server{Addr: addr, Handler: mux}
-	log.Printf("dashboard: http://%s/", addr)
+	log.Printf("dashboard: http://%s/ (графики — http://%s/charts)", addr, addr)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Printf("dashboard: %v", err)
 	}
+}
+
+// apiTariffs отдаёт посуточную тарифную статистику счётчика (день/ночь ×
+// потребление/отдача) за последние 4 финализированных дня, отсортированные по дате.
+func (h *dashboardHandler) apiTariffs(w http.ResponseWriter, r *http.Request) {
+	if h.pg != nil {
+		days, err := h.pg.DailyTariffs(4)
+		if err == nil {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			_ = json.NewEncoder(w).Encode(meterDailyResponse{
+				GeneratedAt: time.Now().Format(time.RFC3339),
+				Days:        days,
+			})
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Без PG статистики нет — отдаём пустой список.
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(meterDailyResponse{
+		GeneratedAt: time.Now().Format(time.RFC3339),
+		Days:        []meterDayStat{},
+	})
 }

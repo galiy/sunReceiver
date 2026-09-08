@@ -126,6 +126,43 @@ ORDER BY ts`, start.UTC(), end.UTC())
 	return snaps, nil
 }
 
+// DailyTariffs возвращает до n последних финализированных дней счётчика DDS238
+// (день/ночь × потребление/отдача, kWh), отсортированных по дню возврастанию.
+// Дни без финализации (finalized IS NULL) пропускаются.
+func (s *pgStore) DailyTariffs(n int) ([]meterDayStat, error) {
+	rows, err := s.pool.Query(s.ctx, `
+SELECT day, import_day, import_night, export_day, export_night
+FROM sunreceiver.daily_tariffs
+WHERE finalized IS NOT NULL
+  AND import_day IS NOT NULL AND import_night IS NOT NULL
+  AND export_day IS NOT NULL AND export_night IS NOT NULL
+ORDER BY day DESC
+LIMIT $1`, n)
+	if err != nil {
+		return nil, fmt.Errorf("pg daily_tariffs: %w", err)
+	}
+	defer rows.Close()
+
+	// Возвращаем в хронологическом порядке (прочитали DESC, поэтому инвертируем).
+	got := []meterDayStat{}
+	for rows.Next() {
+		var day time.Time
+		var st meterDayStat
+		if err := rows.Scan(&day, &st.ImportDay, &st.ImportNight, &st.ExportDay, &st.ExportNight); err != nil {
+			return nil, fmt.Errorf("pg daily_tariffs scan: %w", err)
+		}
+		st.Day = day.Format("2006-01-02")
+		got = append(got, st)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pg daily_tariffs rows: %w", err)
+	}
+	for i, j := 0, len(got)-1; i < j; i, j = i+1, j-1 {
+		got[i], got[j] = got[j], got[i]
+	}
+	return got, nil
+}
+
 // MigrateLegacy конвертирует старую таблицу сырых снимков snapshots в
 // 5-минутные усреднённые точки таблицы averages, после чего удаляет snapshots.
 // Идемпотентна: вторая попытка находит, что таблицы уже нет, и бездействует.
