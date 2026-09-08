@@ -621,10 +621,12 @@ func mapDeyeRegisters(regs map[uint16]uint16) valuesContract {
 	return out
 }
 
-// clients — пул TCP-клиентов на инвертор. Соединение переиспользуется между опросами:
-// логгеры отвечают медленно (pacing), переподъём сокета каждые 10 с не нужен.
-// Опрос одного инвертора всегда идёт из одной горутины, поэтому сокет и порядковый
-// номер кадра не гоняются между опросами.
+// clients — кэш объектов solarman.Client по ip (конфиг + счётчик порядкового
+// номера кадра). Сам TCP-сокет НЕ переиспользуется: Client.Exchange открывает
+// свежее соединение на каждый запрос и закрывает его после чтения ответа
+// (логгеры отвечают медленно и могут оставлять «висящее» соединение).
+// Опрос одного инвертора всегда идёт из одной горутины, поэтому счётчик кадра
+// не гоняется между опросами.
 var (
 	clientsMu    sync.Mutex
 	clientsByKey = map[string]*solarman.Client{}
@@ -669,20 +671,21 @@ func mapClientFor(ip string, unit byte) *modbusmap.Client {
 	return c
 }
 
-// mapMAPRegisters строит значения универсального контракта одного MPPT-контроллера
-// (или агрегата по всем) цели «КЭС» (МАП Титанатор + параллельные MPPT) из байт-ячеек МАП.
+// mapMAPRegisters строит значения универсального контракта цели «КЭС» (МАП
+// Титанатор — агрегат батареи/сети) из байт-ячеек МАП. Per-слотовые MPPT
+// контроллеры больше не читаются через Modbus (они переехали на веб-API read_json);
+// эта функция обслуживает единственный агрегат (slot = -1) из sunReceiver.json.
 //
 // Маппинг полей (ТЗ КЭС):
 //   - l1_voltage = напряжение АКБ МАП _UAcc_med_VH/VL (0x405/0x406), (VH*256+VL)/10.
 //     V_Bat самих контроллеров гейт МАП не отдаёт (проверено живьём 0x4D5=0),
 //     поэтому источник — то же напряжение АКБ, что заряжают контроллеры.
-//   - l1_current = ток заряда конкретного MPPT _I_Akb_MPPT[slot] (0x530+2*slot,
-//     0x531+2*slot, ×16); если H со старшим битом 0x80 — «нет данных», ток = 0.
-//     При slot<0 — сумма токов всех активных по параллельным MPPT.
+//   - l1_current = ток АКБ _IAcc_med_A_u16_L/H (0x432/0x433), I[А]=(L+H*256)/16.
+//     Ток АКБ (а не токи отдельных MPPT-контроллеров 0x530+2*slot).
 //   - ac_active_power = l1_voltage × l1_current (W).
 //   - grid_frequency = 0 (частоты сети инвертор МППТ не отдаёт).
 //   - pv1/pv2, ac_reactive_power, l2/l3 — в values не пишутся (нет данных).
-func mapMAPRegisters(cells map[uint16]byte, slot int) valuesContract {
+func mapMAPRegisters(cells map[uint16]byte) valuesContract {
 	out := valuesContract{}
 
 	// Напряжение АКБ МАП: _UAcc_med_VH=0x405, _UAcc_med_VL=0x406, U=(VH*256+VL)/10.
@@ -840,24 +843,19 @@ func pollDevice(t invTarget) DeviceResult {
 
 	case kindMAP:
 		// МАП Титанатор («КЭС») — Modbus TCP (порт 502), не Solarman-кадр.
-		// Читаем блоки байт-ячеек: режим/АКБ (0x400-0x410), токи MPPT (0x530-0x551),
-		// напряжение сети/ток (0x420-0x423) и мощности сети/батареи (0x580-0x5A3, т.ч.
+		// Читаем блоки байт-ячеек: 0x400 (0x400..0x43F — режим/АКБ/сети),
+		// токи MPPT (0x530-0x551) и мощности сети/батареи (0x580-0x5A3, т.ч.
 		// 0x587 sign, 0x59A/0x59B PNET, 0x59E/0x59F PLOAD).
 		mc := mapClientFor(t.IP, t.Unit)
 		cells := map[uint16]byte{}
-		// первое чтение может «прогреть» гейт и занять долго — оно же и должно
-		// вернуть данные; повторные чтения в том же сокете быстрые.
 		// Блок 0x400 (0x20 слов = 0x400..0x43F) охватывает режим (0x400), мощности
 		// (_PLoad_L 0x409), напряжения (_UNET 0x422, _INET 0x423, _PNET_L 0x424)
-		// и ток АКБ (_IAcc_med 0x432/0x433).
+		// и ток АКБ (_IAcc_med 0x432/0x433). Отдельного чтения 0x420 нет — оно было
+		// строгим подмножеством этого блока (ReadRegisters проверяет bytecount,
+		// поэтому при успехе 0x422 уже в cells).
 		if b, err := mc.ReadRegisters(0x0400, 0x20); err == nil {
 			for i := 0; i < len(b); i++ {
 				cells[0x0400+uint16(i)] = b[i]
-			}
-		}
-		if b, err := mc.ReadRegisters(0x0420, 0x04); err == nil {
-			for i := 0; i < len(b); i++ {
-				cells[0x0420+uint16(i)] = b[i]
 			}
 		}
 		if b, err := mc.ReadRegisters(0x0530, 0x40); err == nil {
@@ -870,7 +868,7 @@ func pollDevice(t invTarget) DeviceResult {
 				cells[0x0580+uint16(i)] = b[i]
 			}
 		}
-		res.Values = mapMAPRegisters(cells, t.Slot)
+		res.Values = mapMAPRegisters(cells)
 		if _, has := cells[0x405]; has && cells[0x406] > 0 {
 			res.HasData = true
 		}
@@ -1190,6 +1188,8 @@ func describeResult(res DeviceResult) string {
 
 // writeFiles сохраняет снимки в JSON-файлы в data/<YYYY-MM-DD>/<IP>-<HHMMSS>.json.
 // Вызывается только при флаге -file: по умолчанию данные пишутся в Redis.
+// Пишет ТОЛЬКО инверторы из 10-секундного цикла doPoll; МАП/MPPT и электросчётчик
+// (отдельный 1-сек цикл runMapPoll/runMeterPoll) в файлы не попадают.
 func writeFiles(results []DeviceResult, now time.Time, ts string) {
 	dayDir := filepath.Join(outDir, now.Format("2006-01-02"))
 	if err := os.MkdirAll(dayDir, 0o755); err != nil {

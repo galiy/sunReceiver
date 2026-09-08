@@ -228,7 +228,12 @@ ORDER BY ts`)
 	for key, group := range groups {
 		ip := strings.SplitN(key, "|", 2)[0]
 		first := group[0]
-		bucket := floorToStep(parseTS(group[0].Timestamp))
+		bts, ok := parseTS(first.Timestamp)
+		if !ok {
+			log.Printf("pg legacy: пропускаю снимок с нераспознанным timestamp %q", first.Timestamp)
+			continue
+		}
+		bucket := floorToStep(bts)
 		vc := averageValues(group)
 		if len(vc) == 0 {
 			continue
@@ -244,13 +249,14 @@ ORDER BY ts`)
 	return s.dropLegacy()
 }
 
-// parseTS разбирает timestamp снимка (RFC3339) в time.Time.
-func parseTS(s string) time.Time {
+// parseTS разбирает timestamp снимка (RFC3339) в time.Time. При ошибке
+// парсинга — ok=false (вызывающий должен пропустить снимок).
+func parseTS(s string) (time.Time, bool) {
 	ts, err := time.Parse(time.RFC3339, s)
 	if err != nil {
-		return time.Now()
+		return time.Time{}, false
 	}
-	return ts
+	return ts, true
 }
 
 // dropLegacy удаляет старую сырую таблицу snapshots.

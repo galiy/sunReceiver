@@ -6,6 +6,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/galiy/sunReceiver/modbusmap"
 )
 
 // meterClient — переиспользуемое TCP-соединение к электросчётчику DDS238
@@ -91,7 +93,7 @@ func (c *meterClient) ReadHoldingRegisters(start, count uint16) ([]uint16, error
 	}
 
 	hdr := make([]byte, 7)
-	if _, err := readFullConn(c.conn, hdr); err != nil {
+	if _, err := modbusmap.ReadFull(c.conn, hdr); err != nil {
 		c.closeConn()
 		return nil, fmt.Errorf("meter read header: %w", err)
 	}
@@ -105,7 +107,7 @@ func (c *meterClient) ReadHoldingRegisters(start, count uint16) ([]uint16, error
 		return nil, fmt.Errorf("meter: некорректный MBAP length=%d", mbLen)
 	}
 	rest := make([]byte, mbLen-1) // минус unit id (уже в hdr[6])
-	if _, err := readFullConn(c.conn, rest); err != nil {
+	if _, err := modbusmap.ReadFull(c.conn, rest); err != nil {
 		c.closeConn()
 		return nil, fmt.Errorf("meter read pdu: %w", err)
 	}
@@ -123,17 +125,4 @@ func (c *meterClient) ReadHoldingRegisters(start, count uint16) ([]uint16, error
 		regs[i] = binary.BigEndian.Uint16(data[2*i:])
 	}
 	return regs, nil
-}
-
-// readFullConn читает ровно len(buf) байт из соединения.
-func readFullConn(conn net.Conn, buf []byte) (int, error) {
-	total := 0
-	for total < len(buf) {
-		n, err := conn.Read(buf[total:])
-		if err != nil {
-			return total, err
-		}
-		total += n
-	}
-	return total, nil
 }
