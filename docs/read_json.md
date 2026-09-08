@@ -8,7 +8,9 @@
 `write_eeprom.php`).
 
 Учётные данные и все используемые URL хранятся в `malina.json` рядом с исполняемым файлом
-(в git не попадает, см. `.gitignore`).
+(в git не попадает, см. `.gitignore`). Шаблон разметки — `malina.json.sample` с подставными
+значениями; правила заполнения и распределение файлов (`malina.json`, `malina.json.sample`,
+`.kilo/malina-ssh.json`) — в `docs/malina-web-api.md`, секция «Конфигурация доступа».
 
 ```
 read_json.php?device=map
