@@ -7,5 +7,17 @@
     { "ip": "192.168.13.92", "name": "Bineos Center", "type": "deye", "logger_sn": 1774585911 },
     { "ip": "192.168.13.93", "name": "Bineos Right", "type": "deye", "logger_sn": 1766715945 },
     { "ip": "192.168.13.74", "name": "MAP (батарея/сеть)", "type": "map", "unit": 1 }
-  ]
+  ],
+  "db": {
+    "redis": "192.168.13.253:6379",
+    "pg": "postgres://sunreceiver:CHANGE_ME_PASSWORD@192.168.13.253:5432/sunreceiver?sslmode=disable"
+  },
+  "meter": {
+    "name": "Электросчётчик",
+    "ip": "192.168.13.77",
+    "port": 502,
+    "unit": 1,
+    "first_reg": 0,
+    "register_count": 27
+  }
 }
