@@ -905,36 +905,23 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(res)
 }
 
-// sumActive агрегирует ac_active_power всех инверторов в бакеты, равные периоду
-// опроса (pollPeriod), и возвращает точки суммарной мощности с дискретностью,
-// соответствующей частоте опроса. Внутри одного бакета инверторы опрашиваются
-// параллельными горутинами и могут дать несколько снимков, поэтому для каждого
-// инвертора берётся его среднее значение по бакету, и только потом эти средние
-// складываются — иначе каждое подряд-чтение завышало бы сумму в 2 и более раз.
-// Последняя точка приравнивается к сумме последних известных значений по каждому
-// инвертору — так правый край графика совпадает с суммарной мощностью на цифровой
-// плашке (/api/current total_power).
+// sumActive строит временной ряд суммарной активной мощности всех инверторов.
+// Инверторы опрашиваются параллельно и присылают снимки с разным фазовым сдвигом
+// относительно границ секундных интервалов, поэтому НЕЛЬЗЯ суммировать только те
+// снимки, что попали в один бакет — иначе в каждом бакете часть инверторов молчит,
+// и сумма проседает к нулю. Вместо этого на каждую точку берётся последнее известное
+// (carry-forward) значение каждого инвертора на этот момент времени и суммируется.
+// Получается кусочно-постоянный непрерывный ряд без глубоких провалов; правая точка
+// совпадает с суммой последних значений (/api/current total_power).
+// Мощность устройства МАП (батарея/сеть) не включается — она на графиках МАП.
 func sumActive(snaps []deviceSnapshot) []seriesPoint {
-	step := int64(pollPeriod / time.Second) // бакет = период опроса
-	// bucketSum[IP][bidx] — сумма и число снимков инвертора в бакете.
-	type perInv struct {
-		sum, count float64
+	type rec struct {
+		ts time.Time
+		v  float64
+		ip string
 	}
-	type bucket struct {
-		invs  map[string]*perInv
-		order []string
-	}
-	buckets := map[int64]*bucket{}
-	var order []int64
-	type last struct {
-		v float64
-		t time.Time
-	}
-	latest := map[string]last{} // последнее значение по каждому инвертору
-	var latestEnd time.Time
+	var recs []rec
 	for _, sn := range snaps {
-		// Мощность устройства МАП (батарея/сеть) в суммарный график инверторов
-		// не включаем — она отображается только на графиках МАП.
 		if isMAPDevice(sn.Values) {
 			continue
 		}
@@ -946,56 +933,22 @@ func sumActive(snaps []deviceSnapshot) []seriesPoint {
 		if err != nil {
 			continue
 		}
-		if prev, ok := latest[sn.IP]; !ok || ts.After(prev.t) {
-			latest[sn.IP] = last{v: v, t: ts}
-		}
-		if ts.After(latestEnd) {
-			latestEnd = ts
-		}
-		bidx := ts.Unix() / step
-		b, ok := buckets[bidx]
-		if !ok {
-			b = &bucket{invs: map[string]*perInv{}}
-			buckets[bidx] = b
-			order = append(order, bidx)
-		}
-		pi, ok := b.invs[sn.IP]
-		if !ok {
-			pi = &perInv{}
-			b.invs[sn.IP] = pi
-			b.order = append(b.order, sn.IP)
-		}
-		pi.sum += v
-		pi.count++
+		recs = append(recs, rec{ts: ts, v: v, ip: sn.IP})
 	}
-	sort.Slice(order, func(i, j int) bool { return order[i] < order[j] })
-	out := make([]seriesPoint, 0, len(order))
-	for _, bidx := range order {
-		b := buckets[bidx]
+	sort.Slice(recs, func(i, j int) bool { return recs[i].ts.Before(recs[j].ts) })
+	current := map[string]float64{}
+	out := make([]seriesPoint, 0, len(recs))
+	for _, r := range recs {
+		current[r.ip] = r.v
 		var total float64
-		for _, ip := range b.order {
-			pi := b.invs[ip]
-			if pi.count == 0 {
-				continue
-			}
-			total += pi.sum / pi.count // среднее по снимкам инвертора в бакете
+		for _, v := range current {
+			total += v
 		}
-		out = append(out, seriesPoint{
-			T: time.Unix(bidx*step, 0).Format(time.RFC3339),
-			V: math.Round(total*10) / 10,
-		})
-	}
-	// Последняя точка = сумма последних известных значений по инверторам (как плашка).
-	if len(latest) > 0 && !latestEnd.IsZero() {
-		var total float64
-		for _, lp := range latest {
-			total += lp.v
-		}
-		pt := seriesPoint{T: latestEnd.Format(time.RFC3339), V: math.Round(total*10) / 10}
-		if len(out) > 0 {
-			out[len(out)-1] = pt
+		total = math.Round(total*10) / 10
+		if n := len(out); n > 0 && out[n-1].T == r.ts.Format(time.RFC3339) {
+			out[n-1].V = total
 		} else {
-			out = append(out, pt)
+			out = append(out, seriesPoint{T: r.ts.Format(time.RFC3339), V: total})
 		}
 	}
 	return out
