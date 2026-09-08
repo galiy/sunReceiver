@@ -200,6 +200,12 @@ fallback в CWD при `go run .`), в git НЕ коммитится; шабло
 9. ~~PostgreSQL — только 5-минутные усреднённые точки~~ — готово (`pg_store.go`: таблица `averages`, `InsertAveraged`/`Averages`, миграция legacy `snapshots`→`averages`; запись из poller убрана, усреднение в фоне `runAccumulator`).
 10. ~~Дашборд: <2 суток из Redis, старше — из PG~~ — готово (`dashboardHandler.loadRange`).
 11. ~~МАП Титанатор («КЭС»): Modbus TCP (батарея/сеть) + MPPT через веб-API ПАК «Малина»~~ — готово (см. секцию «МАП Титанатор…»): тип `map` — МАП по Modbus TCP (192.168.13.74, unit 1) для данных батареи/сети на дашборд; тип `mppt` — контроллеры MPPT через read_json.php ПАК «Малина» (192.168.13.60). PV с контроллеров MPPT — через веб-API (источник ПАК «Малина»), на дашборд в значениях МАП.
+12. ~~Электросчётчик DDS238~~ — готово (см. секцию «Электросчётчик DDS238…»): непрерывный опрос (1 с), мгновенные значения `meter_*` в Redis+PG, посуточные тарифы в `sunreceiver.daily_tariffs`, добор пропущенных границ из Redis.
+
+## Запуск и эксплуатация
+- **Прод-процесс** (собранный бинарник, непрерывно): `go build -o sunReceiver .` затем `./sunReceiver` как **persistent-фоновый процесс** (в Kilo — `background_process` с `persistent: true`, чтоб переживал сессии/завершение). Дашборд слушает `:8080`, счётчик и инверторы опрашиваются постоянно. Для теста — `go run .` (fallback конфигов в CWD).
+- Локальный пурлер работает от конфигов **рядом с бинарником**: `sunReceiver.json`, `malina.json`, `dds238.json` (последние два — приватные, в git не попадают). При `go run .` fallback в CWD.
+- **При перезапуске после правок кода**: остановить старый persistent-процесс (kill PID старого `sunReceiver`), пересобрать бинарник, запустить заново как persistent.
 
 ## Окружение
 - Репо: github.com/galiy/sunReceiver (remote git@github.com:galiy/sunReceiver.git, branch main).
