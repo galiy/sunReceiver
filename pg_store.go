@@ -59,6 +59,10 @@ CREATE INDEX IF NOT EXISTS averages_ts_idx ON sunreceiver.averages (ts);
 	if err != nil {
 		return fmt.Errorf("pg schema: %w", err)
 	}
+	// Таблица посуточных тарифных значений электросчётчика DDS238.
+	if err := ensureMeterTariffSchema(s); err != nil {
+		return fmt.Errorf("pg meter tariff schema: %w", err)
+	}
 	return nil
 }
 

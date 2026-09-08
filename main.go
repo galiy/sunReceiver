@@ -199,6 +199,16 @@ var commonContractTags = []string{
 	"grid_power",
 	"battery_voltage",
 	"battery_power",
+	// Электросчётчик DDS238: мгновенные значения (V, A, W, var, Hz, kWh)
+	"meter_voltage",
+	"meter_current",
+	"meter_active_power",
+	"meter_reactive_power",
+	"meter_power_factor",
+	"meter_frequency",
+	"meter_import",
+	"meter_export",
+	"meter_total",
 }
 
 // needsRounding — true, если тэг относится к величинам, которые округляются до
@@ -990,6 +1000,13 @@ func main() {
 
 	// Конфигурация веб-API ПАК «Малина» для мониторинга MPPT (КЭС) — из malina.json.
 	mppt = loadMPPTSite()
+	// Конфигурация электросчётчика DDS238 — из dds238.json.
+	meterCfg := loadMeterConfig()
+	if desc := describeMeterConfig(meterCfg); desc != "" {
+		log.Printf("meter: %s", desc)
+	} else {
+		log.Printf("meter: не настроен (нет dds238.json рядом с бинарником) — опрос счётчика отключён")
+	}
 
 	rdb, err := openRedis(*redisAddr)
 	if err != nil {
@@ -1034,6 +1051,14 @@ func main() {
 	// опрашиваются отдельно, 1 раз в секунду, и пишутся в Redis со специальной
 	// логикой «одна строка за 10 с» (см. SaveSnapshotWindow).
 	go runMapPoll(store, stopBG)
+	// Электросчётчик DDS238 — 1 раз в секунду (мгновенные значения в Redis +
+	// посуточные тарифные захваты в PG, см. runMeterPoll и meter_tariff.go).
+	if meterCfg != nil {
+		go runMeterPoll(store, pg, meterCfg, stopBG)
+		// Добор пропущенных тарифных границ («ближайшее из зафиксированного»),
+		// см. meter_backfill.go.
+		go runMeterBackfill(store, pg, meterCfg, stopBG)
+	}
 	defer close(stopBG)
 
 	if *dashboardAddr != "" {

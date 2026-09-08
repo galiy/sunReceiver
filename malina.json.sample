@@ -1,0 +1,17 @@
+{
+  "site": {
+    "name": "МАП Микроарт (веб-интерфейс)",
+    "base_url": "http://192.168.0.1",
+    "urls": {
+      "read_memory": "/read_memory.php",
+      "write_eeprom": "/write_eeprom.php",
+      "read_json_map": "/read_json.php?device=map",
+      "read_json_mppt": "/read_json.php?device=mppt",
+      "read_json_bat": "/read_json.php?device=bat"
+    },
+    "auth": {
+      "login": "CHANGE_ME_LOGIN",
+      "password": "CHANGE_ME_PASSWORD"
+    }
+  }
+}
