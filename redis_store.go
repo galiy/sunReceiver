@@ -215,6 +215,28 @@ func eachMonth(start, end time.Time, fn func(y int, m time.Month) bool) {
 	}
 }
 
+// scanSeriesKeys возвращает все месячные ключи временного ряда (prefix*) через
+// SCAN — не блокирует Redis в отличие от KEYS. Вызывается очисткой (PurgeOld) и
+// проверкой пустоты (IsEmpty).
+func (s *redisStore) scanSeriesKeys() ([]string, error) {
+	var (
+		keys  []string
+		cursor uint64
+	)
+	for {
+		batch, next, err := s.rdb.Scan(s.ctx, cursor, redisSeriesPrefix+"*", 200).Result()
+		if err != nil {
+			return nil, fmt.Errorf("scan series keys: %w", err)
+		}
+		keys = append(keys, batch...)
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+	return keys, nil
+}
+
 // IsEmpty возвращает true, если в Redis нет ни текущего состояния, ни одного
 // сегмента временного ряда (т.е. in-memory данные потеряны и нужна реставрация
 // из persistent-хранилища PostgreSQL).
@@ -226,7 +248,7 @@ func (s *redisStore) IsEmpty() (bool, error) {
 	if n > 0 {
 		return false, nil
 	}
-	keys, err := s.rdb.Keys(s.ctx, redisSeriesPrefix+"*").Result()
+	keys, err := s.scanSeriesKeys()
 	if err != nil {
 		return false, err
 	}
@@ -250,7 +272,7 @@ func recentCutoff(t time.Time) time.Time {
 // Вызывается фоновым процессом (см. runRedisCleanup).
 func (s *redisStore) PurgeOld(now time.Time) {
 	cutoff := recentCutoff(now)
-	keys, err := s.rdb.Keys(s.ctx, redisSeriesPrefix+"*").Result()
+	keys, err := s.scanSeriesKeys()
 	if err != nil {
 		log.Printf("redis cleanup keys: %v", err)
 		return

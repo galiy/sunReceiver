@@ -2,14 +2,22 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"log"
 	"math"
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
+
+// rangeCacheTTL — срок жизни кешированного набора снимков в loadRange. Страница
+// графиков делает 4 fetch /api/series с одинаковыми from/to за цикл (60 с), и
+// данные Redis обновляются каждые ~10 с, поэтому 15 с — свежее и даёт схождение
+// всех 4 запросов в один реальный read из Redis/PG.
+const rangeCacheTTL = 15 * time.Second
 
 // dashboardHandler — веб-дашборд: отдаёт три HTML-страницы и JSON API.
 //  - Главная страница (/) — текущие параметры: плашки, электросчётчик, сводная
@@ -21,6 +29,17 @@ import (
 type dashboardHandler struct {
 	store *redisStore
 	pg    *pgStore
+
+	// Кэш loadRange: 4 одинаковых запроса /api/series за цикл сойдутся в один
+	// read из Redis/PG. Ключ — от (start, end).
+	cacheMu sync.Mutex
+	cache   map[string]cachedRange
+}
+
+// cachedRange — кешированный результат loadRange.
+type cachedRange struct {
+	at    time.Time
+	snaps []deviceSnapshot
 }
 
 // currentResponse отвечает на GET /api/current.
@@ -1477,7 +1496,39 @@ func meterSeries(snaps []deviceSnapshot, key string) []seriesPoint {
 // последних 2 календарных суток берутся из PostgreSQL (5-минутные средние),
 // точки внутри окна — из Redis (полное разрешение). Если PG отключено,
 // возвращаются только данные из Redis в пределах окна удержания.
+//
+// Результат кешируется на rangeCacheTTL: страница графиков делает 4 fetch
+// /api/series с одинаковыми from/to за цикл, и все 4 сходятся в один read.
 func (h *dashboardHandler) loadRange(start, end time.Time, now time.Time) ([]deviceSnapshot, error) {
+	key := fmt.Sprintf("%d|%d", start.UnixNano(), end.UnixNano())
+	h.cacheMu.Lock()
+	if c, ok := h.cache[key]; ok && now.Sub(c.at) < rangeCacheTTL {
+		h.cacheMu.Unlock()
+		return c.snaps, nil
+	}
+	// Чистим устаревшие записи, пока держим блокировку.
+	for k, c := range h.cache {
+		if now.Sub(c.at) >= rangeCacheTTL {
+			delete(h.cache, k)
+		}
+	}
+	h.cacheMu.Unlock()
+
+	snaps, err := h.loadRangeUncached(start, end, now)
+	if err != nil {
+		return nil, err
+	}
+	h.cacheMu.Lock()
+	if h.cache == nil {
+		h.cache = map[string]cachedRange{}
+	}
+	h.cache[key] = cachedRange{at: now, snaps: snaps}
+	h.cacheMu.Unlock()
+	return snaps, nil
+}
+
+// loadRangeUncached — реальное чтение из PG (старая часть) и Redis (рецентная часть).
+func (h *dashboardHandler) loadRangeUncached(start, end time.Time, now time.Time) ([]deviceSnapshot, error) {
 	cutoff := recentCutoff(now)
 	var all []deviceSnapshot
 	// Старая часть периода (до cutoff) — из PostgreSQL.
