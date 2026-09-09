@@ -3,14 +3,14 @@
 > Проверено живьём 2026-09-07, текущее время ~21:44.
 
 Сайт МАП Микроарт отдаёт текущие параметры МАП Титанатор, MPPT-контроллеров (КЭС) и АКБ
-по HTTP с **Basic-авторизацией** (`admin` / пароль из `malina.json`, файл исключён из git).
+по HTTP с **Basic-авторизацией** (`admin` / пароль из раздела `mppt` в `sunReceiver.json`).
 Сервер: Microsoft-IIS/6.0, интерфейс на PHP (`index.php`, `read_memory.php`, `read_json.php`,
 `write_eeprom.php`).
 
-Учётные данные и все используемые URL хранятся в `malina.json` рядом с исполняемым файлом
-(в git не попадает, см. `.gitignore`). Шаблон разметки — `malina.json.sample` с подставными
-значениями; правила заполнения и распределение файлов (`malina.json`, `malina.json.sample`,
-`.kilo/malina-ssh.json`) — в `docs/malina-web-api.md`, секция «Конфигурация доступа».
+Учётные данные и URL для MPPT хранятся в разделе `mppt` файла `sunReceiver.json` рядом с
+исполняемым файлом (файл в git не попадает, см. `.gitignore`; публичный шаблон —
+`sunReceiver.sample.json`). Полное описание всех PHP-эндпоинтов и устройства ПАК — в
+[`malina-web-api.md`](malina-web-api.md).
 
 ```
 read_json.php?device=map
@@ -18,8 +18,8 @@ read_json.php?device=mppt
 read_json.php?device=bat
 ```
 
-В `malina.json` эти пути заданы в `site.urls` как `read_json_map` / `read_json_mppt` / `read_json_bat`;
-полный URL = `site.base_url` + путь. `read_memory`/`write_eeprom` — там же.
+Путь MPPT-эндпоинта задан в разделе `mppt` файла `sunReceiver.json` как `mppt_path`;
+полный URL = `mppt.base_url` + `mppt_path`.
 
 **Важно:** в отличие от Modbus-гейта МАП (порт 502), `read_json.php?device=mppt` отдаёт
 **полные индивидуальные параметры каждого MPPT-контроллера** (`Vc_PV`, `Ic_PV`, `V_Bat`,
@@ -87,10 +87,10 @@ read_json.php?device=bat
 
 > **Источник данных мониторинга MPPT (`kindMPPT`).** Эндпоинт отдаёт полные параметры
 > каждого MPPT-контроллера, которых нет в Modbus-гейте МАП (Vc_PV/Ic_PV/P_PV, V_Bat,
-> I_Ch, P_Out). В `sunReceiver.json` каждый контроллер задаётся как `{"type":"mppt",
-> "slot": <индекс в массиве>}` (слот = позиция в ответе, 0..N-1). `mpptSite` собирается
-> из `malina.json` (`base_url` + `urls.read_json_mppt` + Basic-auth). Время актуальности
-> данных — поле `timestamp` ответа (Unix), им же помечается снимок.
+> I_Ch, P_Out). Состав контроллеров определяется **динамически** по массиву ответа
+> (индекс = слот, 0..N-1); в `sunReceiver.json` MPPT не регистрируются. `mpptSite`
+> собирается из раздела `mppt` `sunReceiver.json` (`base_url` + `mppt_path` + Basic-auth).
+> Время актуальности данных — поле `timestamp` ответа (Unix), им же помечается снимок.
 
 Массив из N объектов — по одному на каждый подключённый MPPT-контроллер (в нашей системе — 3:
 UID 1097, 1750, 1751, соответствуют MPPT-1/2/3). Поля совпадают с картой памяти МППТ
@@ -198,9 +198,9 @@ UID 1097, 1750, 1751, соответствуют MPPT-1/2/3). Поля совп�
 ## Авторизация
 
 Без авторизации возвращается `401/403` (Basic realm «Restricted»). Работает Basic Auth
-`admin` / пароль из `malina.json`. Пример запроса:
+`admin` / пароль из раздела `mppt` в `sunReceiver.json`. Пример запроса:
 
 ```
-curl -u "admin:$(jq -r .site.auth.password malina.json)" \
+curl -u "admin:$(jq -r .mppt.password sunReceiver.json)" \
      "http://192.168.13.60/read_json.php?device=mppt"
 ```

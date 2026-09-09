@@ -9,7 +9,8 @@
 - ХОСТ: Raspberry Pi, Raspbian 8 (jessie), hostname `malina.localhost`.
   ФС `/` — **read-only** (ext4, mmcblk0p2); данные живут на rw-разделе
   `/settings` (mmcblk0p3). Веб-интерфейс — PHP 5, сервер — Microsoft-IIS/6.0
-  на памяти (вероятно nginx-обвязка), Basic-auth (`admin`/пароль из `malina.json`).
+   на памяти (вероятно nginx-обвязка), Basic-auth (`admin`/пароль из раздела `mppt`
+   в `sunReceiver.json`).
 - Веб-корень: `/settings/html`. Все данные, меняющиеся в реальном времени,
   демон `mapd` непрерывно складывает в **System V shared memory**, откуда их
   читают PHP-обработчики.
@@ -116,60 +117,27 @@
   из `/settings/logs/*.json` и БД через `db_read`.
 - Системные/инфраструктурные данные (список узлов, CPU, статус сети, события,
   состояние EEPROM) — отдельные маленькие PHP.
-- Скрытый конфиг доступа — `malina.json` (не в git): Basic-auth для HTTP.
+- Конфиг доступа (Basic-auth) — раздел `mppt` файла `sunReceiver.json` (не в git).
   Веб-роот на rw-разделе `/settings/html`.
 
 ---
 
-## Конфигурация доступа (`malina.json` / `.kilo/malina-ssh.json`)
+## Конфигурация доступа
 
-**`malina.json`** — единственный конфиг, читаемый программой (см. `mppt_api.go`,
-`loadMPPTSite`): только `site.base_url`, `site.urls.read_json_mppt` и
-`site.auth.login`/`site.auth.password` (Basic-auth для HTTP). SSH-доступ
-программа **не использует** — он нужен лишь при разработке/отладке. Поэтому
-SSH-настройки в `malina.json` **не хранятся**.
+Доступ к веб-API (Basic-auth) задаётся в **разделе `mppt` файла `sunReceiver.json`**
+(см. `mppt_api.go`, `loadMPPTSite`). Раньше был отдельный файл `malina.json` — он
+удалён, все поля переехали в `sunReceiver.json`.
 
-Распределение файлов:
+| Поле | Назначение |
+|---|---|
+| `mppt.base_url` | адрес ПАК «Малина», например `http://192.168.13.60` |
+| `mppt.mppt_path` | путь к эндпоинту, `/read_json.php?device=mppt` |
+| `mppt.login` | логин Basic-auth (обычно `admin`) |
+| `mppt.password` | пароль Basic-auth (в открытом виде; `sunReceiver.json` в git не попадает) |
 
-| Файл | Назначение | В git |
-|---|---|---|
-| `malina.json` | рабочая конфигурация программы (HTTP Basic-auth) с реальными данными | ❌ исключён |
-| `malina.json.sample` | эталонная разметка с **подставными** значениями (`.sample`) | ✅ коммитится |
-| `.kilo/malina-ssh.json` | SSH-доступ к хосту ПАК (root/пароль), только для разработки | ❌ исключён |
+Без полного набора полей (`base_url` + `mppt_path` + `login` + `password`)
+`loadMPPTSite` вернёт `nil` и мониторинг MPPT отключится.
 
-### Правила заполнения `malina.json`
-
-Шаблон всегда в `malina.json.sample`. Рабочий файл создаётся копированием шаблона
-и подстановкой реальных значений:
-
-```bash
-cp malina.json.sample malina.json   # затем отредактировать поля ниже
-```
-
-Обязательные поля (без них `loadMPPTSite` вернёт `nil`, MPPT-мониторинг отключится):
-
-- `site.base_url` — адрес ПАК «Малина», например `http://192.168.13.60`.
-- `site.urls.read_json_mppt` — путь для чтения MPPT, `/read_json.php?device=mppt`.
-- `site.auth.login` / `site.auth.password` — учётные данные Basic-auth
-  (веб-интерфейс ПАК). **Никогда не оставляйте `CHANGE_ME_`-заглушки** — в противном
-  случае это просто пароль от несуществующей пары логин/пароль: программа работать не будет.
-
-Остальные поля `site.urls` (`read_memory`, `write_eeprom`, `read_json_map`,
-`read_json_bat`) — справочно, в выборке MPPT **не участвуют**.
-
-`site.name` — справочное имя узла, на работу не влияет.
-
-### Правила файла `.sample`
-
-- В `malina.json.sample` класть **заведомо подставные** значения (фейковый URL в
-  частном диапазоне `192.168.0.x`, логин/пароль-заглушки `CHANGE_ME_*`) — файл
-  коммитится в git и не должен содержать реальных учётных данных.
-- SSH в `.sample` **не включать**: SSH-настройки в git не попадают в принципе.
-
-### Правила SSH-доступа (`.kilo/malina-ssh.json`)
-
-- SSH-настройки ПАК (host/port/login/password) хранятся **только** в
-  `.kilo/malina-ssh.json`, исключённом из git. Используются исключительно при
-  разработке (реверс протокола, чтение ФС хоста) — программа их не читает.
-- Никогда не коммитить этот файл и не переносить его содержимое в файлы,
-  попадающие в git.
+SSH-доступ к хосту ПАК хранится **отдельно** в `.kilo/malina-ssh.json` (исключён из
+git) и используется только при разработке (реверс протокола, чтение ФС хоста) —
+программа его **не читает**.
