@@ -1,0 +1,31 @@
+{
+  "invertors": [
+    { "ip": "192.168.0.10", "name": "Deye Left", "type": "deye", "logger_sn": 1234567890, "disabled": false },
+    { "ip": "192.168.0.11", "name": "Sofar-2.5", "type": "sofar", "logger_sn": 2345678901, "disabled": false },
+    { "ip": "192.168.0.12", "name": "Sofar 3.3K Левый", "type": "sofar", "logger_sn": 3456789012, "disabled": false },
+    { "ip": "192.168.0.13", "name": "Sofar 3.3K Правый", "type": "sofar", "logger_sn": 4567890123, "disabled": true }
+  ],
+  "map": {
+    "name": "MAP (батарея/сеть)",
+    "ip": "192.168.0.20",
+    "unit": 1
+  },
+  "mppt": {
+    "base_url": "http://192.168.0.30",
+    "mppt_path": "/read_json.php?device=mppt",
+    "login": "admin",
+    "password": "CHANGE_ME"
+  },
+  "db": {
+    "redis": "192.168.0.253:6379",
+    "pg": "postgres://sunreceiver:CHANGE_ME_PASSWORD@192.168.0.253:5432/sunreceiver?sslmode=disable"
+  },
+  "meter": {
+    "name": "Электросчётчик",
+    "ip": "192.168.0.40",
+    "port": 502,
+    "unit": 1,
+    "first_reg": 0,
+    "register_count": 27
+  }
+}
