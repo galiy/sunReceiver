@@ -2,8 +2,13 @@
   "invertors": [
     { "ip": "192.168.0.10", "name": "Deye Left", "type": "deye", "logger_sn": 1234567890, "disabled": false },
     { "ip": "192.168.0.11", "name": "Sofar-2.5", "type": "sofar", "logger_sn": 2345678901, "disabled": false },
-    { "ip": "192.168.0.12", "name": "Sofar 3.3K Левый", "type": "sofar", "logger_sn": 3456789012, "disabled": false },
-    { "ip": "192.168.0.13", "name": "Sofar 3.3K Правый", "type": "sofar", "logger_sn": 4567890123, "disabled": true }
+    { "ip": "192.168.0.12", "name": "Deye Right", "type": "deye", "logger_sn": 3456789012, "disabled": false },
+    { "ip": "192.168.0.13", "name": "Sofar 3.3K Левый", "type": "sofar", "logger_sn": 4567890123, "disabled": false },
+    { "ip": "192.168.0.14", "name": "Sofar 3.3K Правый", "type": "sofar", "logger_sn": 5678901234, "disabled": false },
+    { "ip": "192.168.0.15", "name": "Sofar 3.3K Левый", "type": "sofar", "logger_sn": 6789012345, "disabled": false },
+    { "ip": "192.168.0.16", "name": "Bineos Left", "type": "deye", "logger_sn": 7890123456, "disabled": true },
+    { "ip": "192.168.0.17", "name": "Bineos Center", "type": "deye", "logger_sn": 8901234567, "disabled": true },
+    { "ip": "192.168.0.18", "name": "Bineos Right", "type": "deye", "logger_sn": 9012345678, "disabled": true }
   ],
   "map": {
     "name": "MAP (батарея/сеть)",
