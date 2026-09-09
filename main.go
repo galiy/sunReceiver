@@ -68,14 +68,23 @@ type invTarget struct {
 	Slot     int
 }
 
-// configTarget — запись инвертора в sunReceiver.json.
-type configTarget struct {
+// configInverter — запись инвертора (Deye/Sofar) в sunReceiver.json разделе "invertors".
+// Disabled — ОБЯЗАТЕЛЬНОЕ поле (отсутствие = ошибка конфига): false = опрашивается,
+// true = временно отключён (устройство в конфиге, но не опрашивается).
+type configInverter struct {
 	IP       string `json:"ip"`
 	Name     string `json:"name"`
 	Type     string `json:"type"`
 	LoggerSN uint32 `json:"logger_sn"`
-	Unit     int    `json:"unit,omitempty"`
-	Slot     *int   `json:"slot,omitempty"` // nil = не задан (kindMAP → агрегат/батарея-сеть)
+	Disabled *bool  `json:"disabled"`
+}
+
+// mapSection — отдельный блок настройки МАП Титанатор («КЭС», батарея/сеть) в
+// sunReceiver.json. Не входит в invertors: это устройство Modbus TCP, а не инвертор.
+type mapSection struct {
+	Name string `json:"name"`
+	IP   string `json:"ip"`
+	Unit int    `json:"unit,omitempty"`
 }
 
 // dbConfig — расположение баз данных. Задаётся в sunReceiver.json в разделе "db".
@@ -86,8 +95,8 @@ type dbConfig struct {
 	PG    string `json:"pg"`    // DSN PostgreSQL (с паролем)
 }
 
-// meterSection — конфигурация электросчётчика DDS238, может быть задана прямо
-// в sunReceiver.json разделом "meter" вместо отдельного dds238.json.
+// meterSection — конфигурация электросчётчика DDS238, заданная в sunReceiver.json
+// разделом "meter" (обратная совместимость — отдельный dds238.json).
 type meterSection struct {
 	Name        string `json:"name"`
 	IP          string `json:"ip"`
@@ -97,10 +106,21 @@ type meterSection struct {
 	RegisterCnt uint16 `json:"register_count"`
 }
 
+// mpptSection — конфигурация веб-API ПАК «Малина» для мониторинга MPPT-контроллеров.
+// Пароль хранится в открытом виде (sunReceiver.json — приватный, в git не выгружается).
+type mpptSection struct {
+	BaseURL  string `json:"base_url"`
+	MPPTPath string `json:"mppt_path"`
+	Login    string `json:"login"`
+	Password string `json:"password"`
+}
+
 type configFile struct {
-	Targets []configTarget `json:"targets"`
-	DB      *dbConfig      `json:"db"`
-	Meter   *meterSection  `json:"meter"`
+	Invertors []configInverter `json:"invertors"`
+	Map       *mapSection      `json:"map"`
+	DB        *dbConfig        `json:"db"`
+	Meter     *meterSection    `json:"meter"`
+	MPPT      *mpptSection     `json:"mppt"`
 }
 
 // configPath — sunReceiver.json в каталоге исполняемого файла.
@@ -113,55 +133,69 @@ func configPath() string {
 }
 
 // loadConfig читает и проверяет sunReceiver.json, возвращает список целей
-// и настройки БД/счётчика (если заданы в файле).
-func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, error) {
+// (инверторы + МАП, без отключённых) и настройки БД/счётчика/MPPT.
+func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mpptSection, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("read config %s: %w", path, err)
+		return nil, nil, nil, nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 	var cf configFile
 	if err := json.Unmarshal(b, &cf); err != nil {
-		return nil, nil, nil, fmt.Errorf("parse config %s: %w", path, err)
+		return nil, nil, nil, nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
-	if len(cf.Targets) == 0 {
-		return nil, nil, nil, fmt.Errorf("config %s: пустой список targets", path)
-	}
-	targets := make([]invTarget, 0, len(cf.Targets))
-	for _, t := range cf.Targets {
+	targets := make([]invTarget, 0, len(cf.Invertors)+1)
+
+	// Инверторы (Deye/Sofar) из invertors; отключённые (disabled=true) пропускаются.
+	for _, t := range cf.Invertors {
+		if t.Disabled == nil {
+			return nil, nil, nil, nil, fmt.Errorf("config %s: для %s (%s) не задано обязательное поле disabled (false/true)", path, t.Name, t.IP)
+		}
+		if *t.Disabled {
+			log.Printf("config: %s (%s) отключён (disabled=true) — не опрашивается", t.Name, t.IP)
+			continue
+		}
 		var kind targetKind
 		switch t.Type {
 		case "deye":
 			kind = kindDeyeString
 		case "sofar":
 			kind = kindSofar
-		case "map":
-			kind = kindMAP
-		case "mppt":
-			// MPPT-контроллеры не регистрируются в sunReceiver.json: они появляются и
-			// исчезают динамически по фактически подключённым контроллерам, возвращаемым
-			// веб-API ПАК «Малина» (read_json.php?device=mppt). Записи mppt в конфиге
-			// игнорируются — см. pollAndSaveMap.
+		case "map", "mppt":
+			// map/mppt вынесены в отдельные разделы; записи в invertors игнорируются.
+			log.Printf("config: тип %q для %s не ожидается в invertors (используйте раздел map/mppt) — пропущен", t.Type, t.IP)
 			continue
 		default:
-			return nil, nil, nil, fmt.Errorf("config %s: неизвестный тип %q для %s", path, t.Type, t.IP)
+			return nil, nil, nil, nil, fmt.Errorf("config %s: неизвестный тип %q для %s", path, t.Type, t.IP)
 		}
 		if t.IP == "" {
-			return nil, nil, nil, fmt.Errorf("config %s: пустой ip (type=%s)", path, t.Type)
+			return nil, nil, nil, nil, fmt.Errorf("config %s: пустой ip (type=%s)", path, t.Type)
 		}
 		if t.Name == "" {
-			return nil, nil, nil, fmt.Errorf("config %s: пустое логическое имя name для %s", path, t.IP)
+			return nil, nil, nil, nil, fmt.Errorf("config %s: пустое имя name для %s", path, t.IP)
+		}
+		targets = append(targets, invTarget{IP: t.IP, Name: t.Name, LoggerSN: t.LoggerSN, Kind: kind, Unit: 1, Slot: -1})
+	}
+
+	// МАП (батарея/сеть) — отдельный блок "map".
+	if cf.Map != nil {
+		if cf.Map.IP == "" {
+			return nil, nil, nil, nil, fmt.Errorf("config %s: пустой ip в разделе map", path)
+		}
+		name := cf.Map.Name
+		if name == "" {
+			name = "MAP (батарея/сеть)"
 		}
 		unit := byte(1)
-		if t.Unit > 0 {
-			unit = byte(t.Unit)
+		if cf.Map.Unit > 0 {
+			unit = byte(cf.Map.Unit)
 		}
-		slot := -1 // для МАП и MPPT: по умолчанию (не задан) — агрегат/последний доступный
-		if t.Slot != nil && *t.Slot >= 0 {
-			slot = *t.Slot
-		}
-		targets = append(targets, invTarget{IP: t.IP, Name: t.Name, LoggerSN: t.LoggerSN, Kind: kind, Unit: unit, Slot: slot})
+		targets = append(targets, invTarget{IP: cf.Map.IP, Name: name, Kind: kindMAP, Unit: unit, Slot: -1})
 	}
-	return targets, cf.DB, cf.Meter, nil
+
+	if len(targets) == 0 {
+		return nil, nil, nil, nil, fmt.Errorf("config %s: нет ни одного активного устройства", path)
+	}
+	return targets, cf.DB, cf.Meter, cf.MPPT, nil
 }
 
 // defaultRedisAddr возвращает адрес Redis: из раздела db конфига (приоритет),
@@ -199,7 +233,8 @@ func devKey(t invTarget) string {
 var targets []invTarget
 
 // mppt — конфигурация доступа к веб-API ПАК «Малина» для мониторинга MPPT (КЭС)
-// через read_json.php?device=mppt. Заполняется в main() из malina.json.
+// через read_json.php?device=mppt. Заполняется в main() из раздела "mppt"
+// sunReceiver.json.
 var mppt *mpptSite
 
 var statusNames = map[uint16]string{
@@ -1025,8 +1060,9 @@ func main() {
 	}
 	var dbCfg *dbConfig
 	var meterSec *meterSection
+	var mpptSec *mpptSection
 	var err error
-	targets, dbCfg, meterSec, err = loadConfig(cfgPath)
+	targets, dbCfg, meterSec, mpptSec, err = loadConfig(cfgPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1041,8 +1077,9 @@ func main() {
 
 	log.Printf("poller started: config=%s targets=%v period=%s", cfgPath, targets, pollPeriod)
 
-	// Конфигурация веб-API ПАК «Малина» для мониторинга MPPT (КЭС) — из malina.json.
-	mppt = loadMPPTSite()
+	// Конфигурация веб-API ПАК «Малина» для мониторинга MPPT (КЭС) — раздел "mppt"
+	// sunReceiver.json (бывший malina.json).
+	mppt = loadMPPTSite(mpptSec)
 	// Конфигурация электросчётчика DDS238 — раздел "meter" sunReceiver.json
 	// или файл dds238.json (обратная совместимость).
 	meterCfg := loadMeterConfig(meterSec)

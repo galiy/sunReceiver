@@ -9,8 +9,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"time"
 )
 
@@ -19,8 +17,8 @@ import (
 const requestTimeout = 3 * time.Second
 
 // mpptSite — конфигурация доступа к веб-API ПАК «Малина» для мониторинга MPPT
-// (КЭС) через read_json.php?device=mppt. Источник — скрытый конфиг malina.json
-// (base_url, путь read_json_mppt, Basic-auth login/password); файл исключён из git.
+// (КЭС) через read_json.php?device=mppt. Источник — раздел "mppt" sunReceiver.json
+// (base_url, mppt_path, login/password); пароль в открытом виде, файл в git не выгружается.
 type mpptSite struct {
 	BaseURL  string
 	MPPTPath string
@@ -32,61 +30,24 @@ type mpptSite struct {
 	authHdr string // "Basic base64(login:password)"
 }
 
-// siteConfig — структура разбора malina.json.
-type siteConfig struct {
-	Site struct {
-		BaseURL string `json:"base_url"`
-		URLs    struct {
-			ReadJSONMPPT string `json:"read_json_mppt"`
-		} `json:"urls"`
-		Auth struct {
-			Login    string `json:"login"`
-			Password string `json:"password"`
-		} `json:"auth"`
-	} `json:"site"`
-}
-
-// mpptSitePath возвращает путь к malina.json в каталоге исполняемого файла
-// (аналогично configPath/sunReceiver.json); при `go run .` — fallback в CWD.
-func mpptSitePath() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return "malina.json"
-	}
-	return filepath.Join(filepath.Dir(exe), "malina.json")
-}
-
-// loadMPPTSite читает и собирает mpptSite из malina.json. Если файла нет или
-// поля не полностью заданы — возвращает nil (MPPT-цели будут пропускаться).
-// Путь ищем как у sunReceiver.json: рядом с бинарником, при `go run .` — CWD.
-func loadMPPTSite() *mpptSite {
-	path := mpptSitePath()
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		// `go run .`: бинарник во временном каталоге go-сборки — ищем malina.json в CWD.
-		path = "malina.json"
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		log.Printf("mppt site: %s не найден (%v) — мониторинг MPPT через API отключён", path, err)
+// loadMPPTSite собирает mpptSite из раздела "mppt" sunReceiver.json (mpptSection).
+// Если секция отсутствует или поля не полностью заданы — возвращает nil
+// (MPPT-контроллеры не опрашиваются).
+func loadMPPTSite(sec *mpptSection) *mpptSite {
+	if sec == nil {
 		return nil
 	}
-	var sc siteConfig
-	if err := json.Unmarshal(b, &sc); err != nil {
-		log.Printf("mppt site: parse %s: %v", path, err)
+	if sec.BaseURL == "" || sec.MPPTPath == "" || sec.Login == "" || sec.Password == "" {
+		log.Printf("mppt site: раздел mppt неполный (нужны base_url, mppt_path, login, password) — мониторинг MPPT отключён")
 		return nil
 	}
-	if sc.Site.BaseURL == "" || sc.Site.URLs.ReadJSONMPPT == "" ||
-		sc.Site.Auth.Login == "" || sc.Site.Auth.Password == "" {
-		log.Printf("mppt site: %s: неполный конфиг (нужны base_url, urls.read_json_mppt, auth.login/password)", path)
-		return nil
-	}
-	tok := base64.StdEncoding.EncodeToString([]byte(sc.Site.Auth.Login + ":" + sc.Site.Auth.Password))
-	host := hostOf(sc.Site.BaseURL)
+	tok := base64.StdEncoding.EncodeToString([]byte(sec.Login + ":" + sec.Password))
+	host := hostOf(sec.BaseURL)
 	return &mpptSite{
-		BaseURL:  sc.Site.BaseURL,
-		MPPTPath: sc.Site.URLs.ReadJSONMPPT,
-		Login:    sc.Site.Auth.Login,
-		Password: sc.Site.Auth.Password,
+		BaseURL:  sec.BaseURL,
+		MPPTPath: sec.MPPTPath,
+		Login:    sec.Login,
+		Password: sec.Password,
 		Host:     host,
 		client:   &http.Client{Timeout: 5 * time.Second},
 		authHdr:  "Basic " + tok,
