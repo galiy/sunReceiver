@@ -180,25 +180,24 @@ h1 { font-size:22px; margin:0 0 4px; }
 .pivot-table td.p-unit { color:#8a93a1; font-weight:400; }
 .pivot-table td.p-empty { color:#4a5464; }
 .pivot-table tr:nth-child(even) td { background:#1b212b; }
-.kpi { display:flex; align-items:stretch; gap:16px; margin-bottom:20px; }
-.kpi-plate { flex:1; background:linear-gradient(135deg,#1d2430,#202a3a); border:1px solid #2a3342; border-radius:12px; padding:18px 22px; display:flex; flex-direction:column; gap:4px; }
-.kpi-label { font-size:12px; color:#8a93a1; text-transform:uppercase; letter-spacing:.06em; }
-.kpi-value { font-size:52px; font-weight:700; line-height:1; font-variant-numeric:tabular-nums; }
-.kpi-unit { font-size:20px; font-weight:400; color:#8a93a1; margin-left:6px; }
-.kpi-sub { font-size:12px; color:#6b7280; }
-/* Плашка электросчётчика (самый верх) */
-.meter-plate { background:#10161f; border:1px solid #2a3342; border-radius:12px; padding:14px 18px; margin:0 0 16px; }
-.meter-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:10px; }
-.meter-title { font-size:14px; font-weight:700; color:#e6e6e6; }
-.meter-ts { font-size:12px; color:#6b7280; }
-.meter-stats { display:flex; flex-wrap:wrap; gap:10px; }
-.meter-stat { background:#181c24; border:1px solid #252b36; border-radius:8px; padding:8px 14px; min-width:120px; }
-.meter-stat .lbl { font-size:11px; color:#8a93a1; text-transform:uppercase; letter-spacing:.04em; }
-.meter-stat .val { font-size:20px; font-weight:700; font-variant-numeric:tabular-nums; }
-.meter-stat .unit { font-size:12px; color:#8a93a1; font-weight:400; margin-left:4px; }
+/* Группы верхних плашек: общая рамка с заголовком и рядом плашек одинакового размера */
+.group { background:#10161f; border:1px solid #2a3342; border-radius:12px; padding:14px 16px; }
+.group-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:10px; }
+.group-title { font-size:14px; font-weight:700; color:#e6e6e6; margin-bottom:10px; }
+.group-head .group-title { margin-bottom:0; }
+.group-body { display:flex; flex-wrap:wrap; gap:10px; }
+.groups-row { display:flex; align-items:stretch; gap:16px; margin:0 0 16px; }
+.groups-row .group { flex:1 1 0; min-width:0; }
+/* Единая плашка (для счётчика, инверторов и МАП) — приводятся к одному размеру */
+.plate, .meter-stat { flex:1; background:linear-gradient(135deg,#1d2430,#202a3a); border:1px solid #2a3342; border-radius:10px; padding:10px 16px; min-width:130px; display:flex; flex-direction:column; gap:4px; }
+.plate .lbl, .meter-stat .lbl { font-size:11px; color:#8a93a1; text-transform:uppercase; letter-spacing:.05em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.plate .val, .meter-stat .val { font-size:26px; font-weight:700; line-height:1.1; font-variant-numeric:tabular-nums; }
+.plate .unit, .meter-stat .unit { font-size:14px; color:#8a93a1; font-weight:400; margin-left:5px; }
+.plate .sub, .meter-stat .sub, .kpi-sub { font-size:11px; color:#6b7280; }
 .meter-stat .pos { color:#6fd08a; } /* положительная величина / потребление */
 .meter-stat .neg { color:#ff6b6b; } /* отрицательная величина / отдача в сеть */
 .meter-stat .off { color:#ff9f43; } /* нулевое/неопределённое */
+.meter-ts { font-size:12px; color:#6b7280; }
 .meter-note { font-size:11px; color:#6b7280; margin-top:8px; }
 </style>
 </head>
@@ -212,50 +211,60 @@ h1 { font-size:22px; margin:0 0 4px; }
   <a class="nav-btn" href="/energy">Электроэнергия</a>
 </div>
 
-<div class="meter-plate">
-  <div class="meter-head">
-    <span class="meter-title">Электросчётчик DDS238 &mdash; текущие параметры</span>
+<div class="group">
+  <div class="group-head">
+    <span class="group-title">Электросчётчик DDS238 &mdash; текущие параметры</span>
     <span class="meter-ts" id="meterTs">&mdash;</span>
   </div>
-  <div class="meter-stats" id="meterStats"><span class="missing">Нет данных</span></div>
+  <div class="group-body" id="meterStats"><span class="missing">Нет данных</span></div>
   <div class="meter-note">Мощность с отрицательным знаком &mdash; отдача в сеть (генерация); положительная &mdash; потребление.</div>
 </div>
 
-<div class="kpi">
-  <div class="kpi-plate">
-    <div class="kpi-label">Суммарная активная мощность</div>
-    <div class="kpi-value"><span id="kpiTotal">—</span><span class="kpi-unit">W</span></div>
-    <div class="kpi-sub" id="kpiSub">Нет данных</div>
+<div class="groups-row">
+  <div class="group">
+    <div class="group-title">Данные МАП</div>
+    <div class="group-body">
+      <div class="plate">
+        <div class="lbl">Напряжение сети</div>
+        <div class="val"><span id="kpiGridV">—</span><span class="unit">V</span></div>
+        <div class="sub">МАП (батарея/сеть)</div>
+      </div>
+      <div class="plate">
+        <div class="lbl">Мощность сети</div>
+        <div class="val"><span id="kpiGridP">—</span><span class="unit">W</span></div>
+        <div class="sub">МАП (батарея/сеть)</div>
+      </div>
+      <div class="plate">
+        <div class="lbl">Напряжение батареи</div>
+        <div class="val"><span id="kpiBatV">—</span><span class="unit">V</span></div>
+        <div class="sub">МАП (батарея/сеть)</div>
+      </div>
+      <div class="plate">
+        <div class="lbl">Мощность батареи</div>
+        <div class="val"><span id="kpiBatP">—</span><span class="unit">W</span></div>
+        <div class="sub">МАП (батарея/сеть)</div>
+      </div>
+      <div class="plate">
+        <div class="lbl">Мощность потребления</div>
+        <div class="val"><span id="kpiConsP">—</span><span class="unit">W</span></div>
+        <div class="sub">Сеть + батарея</div>
+      </div>
+    </div>
   </div>
-  <div class="kpi-plate">
-    <div class="kpi-label">Суммарная мощность PV</div>
-    <div class="kpi-value"><span id="kpiPV">—</span><span class="kpi-unit">W</span></div>
-    <div class="kpi-sub" id="kpiPVSub">Нет данных</div>
-  </div>
-  <div class="kpi-plate">
-    <div class="kpi-label">Напряжение сети</div>
-    <div class="kpi-value"><span id="kpiGridV">—</span><span class="kpi-unit">V</span></div>
-    <div class="kpi-sub">МАП (батарея/сеть)</div>
-  </div>
-  <div class="kpi-plate">
-    <div class="kpi-label">Мощность сети</div>
-    <div class="kpi-value"><span id="kpiGridP">—</span><span class="kpi-unit">W</span></div>
-    <div class="kpi-sub">МАП (батарея/сеть)</div>
-  </div>
-  <div class="kpi-plate">
-    <div class="kpi-label">Напряжение батареи</div>
-    <div class="kpi-value"><span id="kpiBatV">—</span><span class="kpi-unit">V</span></div>
-    <div class="kpi-sub">МАП (батарея/сеть)</div>
-  </div>
-  <div class="kpi-plate">
-    <div class="kpi-label">Мощность батареи</div>
-    <div class="kpi-value"><span id="kpiBatP">—</span><span class="kpi-unit">W</span></div>
-    <div class="kpi-sub">МАП (батарея/сеть)</div>
-  </div>
-  <div class="kpi-plate">
-    <div class="kpi-label">Мощность потребления</div>
-    <div class="kpi-value"><span id="kpiConsP">—</span><span class="kpi-unit">W</span></div>
-    <div class="kpi-sub">Сеть + батарея</div>
+  <div class="group">
+    <div class="group-title">Мощности инверторов</div>
+    <div class="group-body">
+      <div class="plate">
+        <div class="lbl">Суммарная активная мощность</div>
+        <div class="val"><span id="kpiTotal">—</span><span class="unit">W</span></div>
+        <div class="sub" id="kpiSub">Нет данных</div>
+      </div>
+      <div class="plate">
+        <div class="lbl">Суммарная мощность PV</div>
+        <div class="val"><span id="kpiPV">—</span><span class="unit">W</span></div>
+        <div class="sub" id="kpiPVSub">Нет данных</div>
+      </div>
+    </div>
   </div>
 </div>
 
