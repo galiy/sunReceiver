@@ -196,10 +196,8 @@ CREATE TABLE IF NOT EXISTS sunreceiver.daily_tariffs (
 	import_night  double precision,
 	export_day    double precision,
 	export_night  double precision,
-	finalized    timestamptz
+	finalized timestamptz
 );
-CREATE INDEX IF NOT EXISTS daily_tariffs_finalized_idx
-	ON sunreceiver.daily_tariffs (finalized);
 `)
 	return err
 }

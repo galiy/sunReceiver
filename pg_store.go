@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS sunreceiver.averages (
 	values    jsonb       NOT NULL DEFAULT '{}'::jsonb,
 	PRIMARY KEY (ip, ts)
 );
-CREATE INDEX IF NOT EXISTS averages_ts_idx ON sunreceiver.averages (ts);
+CREATE INDEX IF NOT EXISTS averages_ts_ip_idx ON sunreceiver.averages (ts, ip);
+DROP INDEX IF EXISTS sunreceiver.averages_ts_idx;
 `)
 	if err != nil {
 		return fmt.Errorf("pg schema: %w", err)
@@ -84,15 +85,21 @@ ON CONFLICT (ip, ts) DO NOTHING`,
 	return nil
 }
 
-// Averages возвращает усреднённые точки за период [start, end] включительно,
-// отсортированные по времени. ts точек — начало соответствующего 5-минутного
-// промежутка.
-func (s *pgStore) Averages(start, end time.Time) ([]deviceSnapshot, error) {
-	rows, err := s.pool.Query(s.ctx, `
+// Averages возвращает усреднённые точки за период [start, end] включительно.
+// Необязательный фильтр ips ограничивает выборку конкретными устройствами
+// (nil или пустой — все устройства). Порядок не гарантируется — потребители
+// (дашборд, реставрация Redis) сортируют точки сами.
+func (s *pgStore) Averages(start, end time.Time, ips ...string) ([]deviceSnapshot, error) {
+	q := `
 SELECT ip, name, ts, device_sn, values
 FROM sunreceiver.averages
-WHERE ts >= $1 AND ts <= $2
-ORDER BY ts`, start.UTC(), end.UTC())
+WHERE ts >= $1 AND ts <= $2`
+	args := []interface{}{start.UTC(), end.UTC()}
+	if len(ips) > 0 {
+		q += ` AND ip = ANY($3)`
+		args = append(args, ips)
+	}
+	rows, err := s.pool.Query(s.ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("pg query averages: %w", err)
 	}
