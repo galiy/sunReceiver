@@ -103,6 +103,20 @@ export_day   = Export(23:00) - Export(07:00)
 export_night = (Export(07:00) - Export(00:00)) + (Export(00:00 след.дня) - Export(23:00))
 ```
 
+### Живой расчёт тарифов текущего дня
+
+Текущий день ещё не завершён (нет показания на 00:00 следующего дня), поэтому
+`daily_tariffs` для него не финализированы. Для рамки **«Потребление/Отдача за
+сегодня»** на дашборде тарифные величины текущих суток (00:00 → сейчас)
+считаются на лету из актуальных показаний счётчика (`meter_import`/`meter_export`
+в Redis) и граничных показаний текущего дня из PG (`MeterBoundaryValues`, метод
+`pg_store.go`). Разбивка по часам (`meterTariffToday` в `dashboard.go`):
+до 07:00 — всё ночь; 07:00–23:00 — ночь `07:00−00:00` + день `сейчас−07:00`;
+после 23:00 — день `23:00−07:00` + ночь `(07:00−00:00)+(сейчас−23:00)`.
+Недостающие (ещё не захваченные) границы пропускаются, отрицательные разности
+обнуляются. Результаты отдаются в `/api/current`: `meter_import_day`,
+`meter_import_night`, `meter_export_day`, `meter_export_night` (kWh).
+
 Если какая-то разность отрицательна (счётчик сброшен/заменён) — день не финализируется,
 граничные показания сохраняются для диагностики.
 
@@ -145,4 +159,5 @@ export_night = (Export(07:00) - Export(00:00)) + (Export(00:00 след.дня) 
   (`StoreMeterBoundary`, `finalizeMeterDay`, `ensureMeterTariffSchema`).
 - `meter_backfill.go` — добор пропущенных границ (`runMeterBackfill`, `nearestMeterReading`).
 - `main.go` — загрузка конфига и запуск `runMeterPoll`.
-- `pg_store.go` — вызов `ensureMeterTariffSchema` из `ensureSchema`.
+- `pg_store.go` — вызов `ensureMeterTariffSchema` из `ensureSchema`; метод
+  `MeterBoundaryValues` (граничные показания дня для живого расчёта текущих суток).
