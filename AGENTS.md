@@ -208,9 +208,20 @@ fallback в CWD при `go run .`), в git НЕ коммитится; шабло
 12. ~~Электросчётчик DDS238~~ — готово (см. секцию «Электросчётчик DDS238…»): непрерывный опрос (1 с), мгновенные значения `meter_*` в Redis+PG, посуточные тарифы в `sunreceiver.daily_tariffs`, добор пропущенных границ из Redis.
 
 ## Запуск и эксплуатация
-- **Прод-процесс** (собранный бинарник, непрерывно): `go build -o sunReceiver .` затем `./sunReceiver` как **persistent-фоновый процесс** (в Kilo — `background_process` с `persistent: true`, чтоб переживал сессии/завершение). Дашборд слушает `:8080`, счётчик и инверторы опрашиваются постоянно. Для теста — `go run .` (fallback конфигов в CWD).
-- Локальный пурлер работает от конфига **`sunReceiver.json`** рядом с бинарником (все разделы: invertors, map, mppt, db, meter — в одном файле; файл приватный, в git не попадает). При `go run .` fallback в CWD.
-- **При перезапуске после правок кода**: остановить старый persistent-процесс (kill PID старого `sunReceiver`), пересобрать бинарник, запустить заново как persistent.
+- **Прод развёрнут НЕ на машине разработки (Mac)**, а на сервере **192.168.13.253** (хост `gsrv`, Ubuntu 22.04, **x86_64/amd64**), как **systemd-сервис `sunreceiver.service`**:
+  - Юнит: `/etc/systemd/system/sunreceiver.service` (`Type=simple`, `WorkingDirectory=/opt/sunreceiver`, `ExecStart=/opt/sunreceiver/sunReceiver`, `Restart=always`, `RestartSec=5`).
+  - Бинарник и приватный конфиг: `/opt/sunreceiver/sunReceiver` + `/opt/sunreceiver/sunReceiver.json` (рядом через `os.Executable()`; разделы `db`/`meter` уже там).
+  - PostgreSQL 16 и Redis тоже на 192.168.13.253 (адреса/DSN — в разделе `db` конфига). Дашборд слушает `:8080`.
+  - SSH-доступ: `root@192.168.13.253`, пароль в `/Users/galinskiy.a/src/cleaning253/.kilo/ssh-access.md`. ВАЖНО: SSH запускать только с `-o PreferredAuthentications=password -o PubkeyAuthentication=no` (иначе отказ в доступе — публичный ключ отклоняется).
+- Локальная разработка/тест — `go run .` (fallback конфигов в CWD). Локальный пурлер работает от конфига **`sunReceiver.json`** рядом с бинарником (все разделы: invertors, map, mppt, db, meter — в одном файле; файл приватный, в git не попадает).
+
+### Деплой (обновление прода)
+Продукт собирается на Mac, бинарник передаётся на сервер, сервис перезапускается:
+1. Собрать **под Linux** (иначе бинарник не запустится на 253): `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o sunReceiver-linux .`
+2. Передать на сервер: `sshpass -p '<пароль>' scp -o PreferredAuthentications=password -o PubkeyAuthentication=no sunReceiver-linux root@192.168.13.253:/opt/sunreceiver/sunReceiver` (бинарник кладётся поверх/замещая старый). Конфиг `sunReceiver.json` на сервере не трогаем.
+3. Перезапустить сервис: `sshpass -p '<пароль>' ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no root@192.168.13.253 "systemctl restart sunreceiver.service"` и проверить: `systemctl status sunreceiver.service`.
+
+**При перезапуске после правок кода**: собрать linux-бинарник, scp поверх `/opt/sunreceiver/sunReceiver`, `systemctl restart sunreceiver.service`.
 
 ## Окружение
 - Репо: github.com/galiy/sunReceiver (remote git@github.com:galiy/sunReceiver.git, branch main).
