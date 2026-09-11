@@ -12,6 +12,7 @@ sunReceiver.json
 
 # бинарники сборки
 sunReceiver
+sunReceiver-linux
 solarman-probe
 
 # справочные материалы МАП (не закоммичены, лежат локально)

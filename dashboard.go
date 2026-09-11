@@ -59,7 +59,17 @@ type currentResponse struct {
 	MeterImportNight float64 `json:"meter_import_night"`
 	MeterExportDay   float64 `json:"meter_export_day"`
 	MeterExportNight float64 `json:"meter_export_night"`
-	Devices          []deviceSnapshot `json:"devices"`
+	// То же за текущий месяц (MM.YYYY) и текущий год (YYYY): сумма финализированных
+	// дней периода + незавершённый сегодняшний день.
+	MeterImportDayMonth   float64 `json:"meter_import_day_month"`
+	MeterImportNightMonth float64 `json:"meter_import_night_month"`
+	MeterExportDayMonth   float64 `json:"meter_export_day_month"`
+	MeterExportNightMonth float64 `json:"meter_export_night_month"`
+	MeterImportDayYear    float64 `json:"meter_import_day_year"`
+	MeterImportNightYear  float64 `json:"meter_import_night_year"`
+	MeterExportDayYear    float64 `json:"meter_export_day_year"`
+	MeterExportNightYear  float64 `json:"meter_export_night_year"`
+	Devices               []deviceSnapshot `json:"devices"`
 }
 
 // seriesPoint — одна точка временного ряда: время + значение.
@@ -202,6 +212,9 @@ h1 { font-size:22px; margin:0 0 4px; }
 .group-title { font-size:14px; font-weight:700; color:#e6e6e6; margin-bottom:10px; }
 .group-head .group-title { margin-bottom:0; }
 .group-body { display:flex; flex-wrap:wrap; gap:10px; }
+/* Рамки «Потребление/Отдача» (сегодня/месяц/год): плашки в 2 ряда × 2 колонки */
+.group.tariff-grid .group-body { display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; gap:10px; }
+.group.tariff-grid .plate { min-width:0; }
 .groups-row { display:flex; align-items:stretch; gap:16px; margin:0 0 16px; }
 .groups-row .group { flex:1 1 0; min-width:0; }
 /* Единая плашка (для счётчика, инверторов и МАП) — приводятся к одному размеру */
@@ -234,6 +247,84 @@ h1 { font-size:22px; margin:0 0 4px; }
   </div>
   <div class="group-body" id="meterStats"><span class="missing">Нет данных</span></div>
   <div class="meter-note">Мощность с отрицательным знаком &mdash; отдача в сеть (генерация); положительная &mdash; потребление.</div>
+</div>
+
+<div class="groups-row">
+  <div class="group tariff-grid">
+    <div class="group-title">Потребление/Отдача за сегодня</div>
+    <div class="group-body">
+      <div class="plate">
+        <div class="lbl">Потребление день</div>
+        <div class="val"><span id="kpiImpDay">—</span><span class="unit">kWh</span></div>
+        <div class="sub">День 07:00–23:00</div>
+      </div>
+      <div class="plate">
+        <div class="lbl">Отдача день</div>
+        <div class="val"><span id="kpiExpDay">—</span><span class="unit">kWh</span></div>
+        <div class="sub">День 07:00–23:00</div>
+      </div>
+      <div class="plate">
+        <div class="lbl">Потребление ночь</div>
+        <div class="val"><span id="kpiImpNight">—</span><span class="unit">kWh</span></div>
+        <div class="sub">Ночь 23:00–07:00</div>
+      </div>
+      <div class="plate">
+        <div class="lbl">Отдача ночь</div>
+        <div class="val"><span id="kpiExpNight">—</span><span class="unit">kWh</span></div>
+        <div class="sub">Ночь 23:00–07:00</div>
+      </div>
+    </div>
+  </div>
+  <div class="group tariff-grid">
+    <div class="group-title" id="tariffMonthTitle">Потребление/Отдача за месяц</div>
+    <div class="group-body">
+      <div class="plate">
+        <div class="lbl">Потребление день</div>
+        <div class="val"><span id="kpiImpDayM">—</span><span class="unit">kWh</span></div>
+        <div class="sub">День 07:00–23:00</div>
+      </div>
+      <div class="plate">
+        <div class="lbl">Отдача день</div>
+        <div class="val"><span id="kpiExpDayM">—</span><span class="unit">kWh</span></div>
+        <div class="sub">День 07:00–23:00</div>
+      </div>
+      <div class="plate">
+        <div class="lbl">Потребление ночь</div>
+        <div class="val"><span id="kpiImpNightM">—</span><span class="unit">kWh</span></div>
+        <div class="sub">Ночь 23:00–07:00</div>
+      </div>
+      <div class="plate">
+        <div class="lbl">Отдача ночь</div>
+        <div class="val"><span id="kpiExpNightM">—</span><span class="unit">kWh</span></div>
+        <div class="sub">Ночь 23:00–07:00</div>
+      </div>
+    </div>
+  </div>
+  <div class="group tariff-grid">
+    <div class="group-title" id="tariffYearTitle">Потребление/Отдача за год</div>
+    <div class="group-body">
+      <div class="plate">
+        <div class="lbl">Потребление день</div>
+        <div class="val"><span id="kpiImpDayY">—</span><span class="unit">kWh</span></div>
+        <div class="sub">День 07:00–23:00</div>
+      </div>
+      <div class="plate">
+        <div class="lbl">Отдача день</div>
+        <div class="val"><span id="kpiExpDayY">—</span><span class="unit">kWh</span></div>
+        <div class="sub">День 07:00–23:00</div>
+      </div>
+      <div class="plate">
+        <div class="lbl">Потребление ночь</div>
+        <div class="val"><span id="kpiImpNightY">—</span><span class="unit">kWh</span></div>
+        <div class="sub">Ночь 23:00–07:00</div>
+      </div>
+      <div class="plate">
+        <div class="lbl">Отдача ночь</div>
+        <div class="val"><span id="kpiExpNightY">—</span><span class="unit">kWh</span></div>
+        <div class="sub">Ночь 23:00–07:00</div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div class="groups-row">
@@ -279,34 +370,6 @@ h1 { font-size:22px; margin:0 0 4px; }
         <div class="lbl">Суммарная мощность PV</div>
         <div class="val"><span id="kpiPV">—</span><span class="unit">W</span></div>
         <div class="sub" id="kpiPVSub">Нет данных</div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="groups-row">
-  <div class="group">
-    <div class="group-title">Потребление/Отдача за сегодня</div>
-    <div class="group-body">
-      <div class="plate">
-        <div class="lbl">Потребление день</div>
-        <div class="val"><span id="kpiImpDay">—</span><span class="unit">kWh</span></div>
-        <div class="sub">День 07:00–23:00</div>
-      </div>
-      <div class="plate">
-        <div class="lbl">Потребление ночь</div>
-        <div class="val"><span id="kpiImpNight">—</span><span class="unit">kWh</span></div>
-        <div class="sub">Ночь 23:00–07:00</div>
-      </div>
-      <div class="plate">
-        <div class="lbl">Отдача день</div>
-        <div class="val"><span id="kpiExpDay">—</span><span class="unit">kWh</span></div>
-        <div class="sub">День 07:00–23:00</div>
-      </div>
-      <div class="plate">
-        <div class="lbl">Отдача ночь</div>
-        <div class="val"><span id="kpiExpNight">—</span><span class="unit">kWh</span></div>
-        <div class="sub">Ночь 23:00–07:00</div>
       </div>
     </div>
   </div>
@@ -504,6 +567,20 @@ async function tick(){
 		setKpi2('kpiImpNight', data.meter_import_night);
 		setKpi2('kpiExpDay', data.meter_export_day);
 		setKpi2('kpiExpNight', data.meter_export_night);
+		// Плашки «Потребление/Отдача за месяц/год» (kWh).
+		setKpi2('kpiImpDayM', data.meter_import_day_month);
+		setKpi2('kpiImpNightM', data.meter_import_night_month);
+		setKpi2('kpiExpDayM', data.meter_export_day_month);
+		setKpi2('kpiExpNightM', data.meter_export_night_month);
+		setKpi2('kpiImpDayY', data.meter_import_day_year);
+		setKpi2('kpiImpNightY', data.meter_import_night_year);
+		setKpi2('kpiExpDayY', data.meter_export_day_year);
+		setKpi2('kpiExpNightY', data.meter_export_night_year);
+		// Заголовки рамок: «Потребление/Отдача за MM.YYYY» и «... за YYYY год».
+		var now=new Date();
+		function p2(x){ return (x<10?'0':'')+x; }
+		document.getElementById('tariffMonthTitle').textContent='Потребление/Отдача за '+p2(now.getMonth()+1)+'.'+now.getFullYear();
+		document.getElementById('tariffYearTitle').textContent='Потребление/Отдача за '+now.getFullYear()+' год';
 		// Плашка электросчётчика (вверху).
 		var meter=null;
 		for(var i=0;i<data.devices.length;i++) if(isMeterDevice(data.devices[i])){ meter=data.devices[i]; break; }
@@ -1301,6 +1378,20 @@ func max0f(v float64) float64 {
 	return v
 }
 
+// addTariffs складывает тарифные величины посуточных финализированных дней периода
+// (days) с тарифами текущего незавершённого дня (tDay/tNight/eDay/eNight). Возвращает
+// итоговые значения периода (kWh): потребление/отдачу «День»/«Ночь».
+func addTariffs(days []meterDayStat, tDay, tNight, eDay, eNight float64) (float64, float64, float64, float64) {
+	var d, n, ed, en float64
+	for _, st := range days {
+		d += st.ImportDay
+		n += st.ImportNight
+		ed += st.ExportDay
+		en += st.ExportNight
+	}
+	return d + tDay, n + tNight, ed + eDay, en + eNight
+}
+
 func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	devices, err := h.store.Current()
 	if err != nil {
@@ -1370,16 +1461,43 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	impDay, impNight, expDay, expNight := 0.0, 0.0, 0.0, 0.0
+	impDayM, impNightM, expDayM, expNightM := 0.0, 0.0, 0.0, 0.0
+	impDayY, impNightY, expDayY, expNightY := 0.0, 0.0, 0.0, 0.0
 	if h.pg != nil && hasImp && hasExp {
-		start, _ := dayBounds(now, time.Local)
-		if b, err := h.pg.MeterBoundaryValues(start); err == nil {
+		loc := time.Local
+		start, _ := dayBounds(now, loc)
+		var b *meterBoundaryRow
+		if bb, err := h.pg.MeterBoundaryValues(start); err == nil {
+			b = bb
 			impDay, impNight, expDay, expNight = meterTariffToday(now, impNow, expNow, b)
-			impDay, impNight, expDay, expNight = math.Round(impDay*100)/100, math.Round(impNight*100)/100,
-				math.Round(expDay*100)/100, math.Round(expNight*100)/100
 		} else {
 			log.Printf("dashboard: meter tariff today: %v", err)
 		}
+		// Месяц и год: финализированные прошедшие дни периода + незавершённый сегодняшний.
+		y, mo, _ := now.In(loc).Date()
+		monthStart := time.Date(y, mo, 1, 0, 0, 0, 0, loc)
+		monthEnd := monthStart.AddDate(0, 1, 0)
+		yearStart := time.Date(y, 1, 1, 0, 0, 0, 0, loc)
+		yearEnd := yearStart.AddDate(1, 0, 0)
+		if b != nil {
+			if days, err := h.pg.DailyTariffsRange(monthStart, monthEnd); err == nil {
+				impDayM, impNightM, expDayM, expNightM = addTariffs(days, impDay, impNight, expDay, expNight)
+			} else {
+				log.Printf("dashboard: meter tariff month: %v", err)
+			}
+			if days, err := h.pg.DailyTariffsRange(yearStart, yearEnd); err == nil {
+				impDayY, impNightY, expDayY, expNightY = addTariffs(days, impDay, impNight, expDay, expNight)
+			} else {
+				log.Printf("dashboard: meter tariff year: %v", err)
+			}
+		}
 	}
+	impDay, impNight, expDay, expNight = math.Round(impDay*100)/100, math.Round(impNight*100)/100,
+		math.Round(expDay*100)/100, math.Round(expNight*100)/100
+	impDayM, impNightM, expDayM, expNightM = math.Round(impDayM*100)/100, math.Round(impNightM*100)/100,
+		math.Round(expDayM*100)/100, math.Round(expNightM*100)/100
+	impDayY, impNightY, expDayY, expNightY = math.Round(impDayY*100)/100, math.Round(impNightY*100)/100,
+		math.Round(expDayY*100)/100, math.Round(expNightY*100)/100
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -1396,6 +1514,14 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 		MeterImportNight: impNight,
 		MeterExportDay:   expDay,
 		MeterExportNight: expNight,
+		MeterImportDayMonth: impDayM,
+		MeterImportNightMonth: impNightM,
+		MeterExportDayMonth:   expDayM,
+		MeterExportNightMonth: expNightM,
+		MeterImportDayYear:    impDayY,
+		MeterImportNightYear:  impNightY,
+		MeterExportDayYear:    expDayY,
+		MeterExportNightYear:  expNightY,
 		Devices: devices,
 	})
 }
