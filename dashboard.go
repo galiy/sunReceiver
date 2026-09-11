@@ -52,7 +52,14 @@ type currentResponse struct {
 	MapBatV     float64          `json:"map_battery_voltage"`
 	MapBatP     float64          `json:"map_battery_power"`
 	MapCons     float64          `json:"map_consumption"`
-	Devices     []deviceSnapshot `json:"devices"`
+	// Расчётные тарифные величины счётчика за текущие календарные сутки (kWh):
+	// потребление/отдача «День»/«Ночь», посчитанные из актуальных показаний
+	// счётчика (Redis) и фиксированных граничных показаний (PG daily_tariffs).
+	MeterImportDay   float64 `json:"meter_import_day"`
+	MeterImportNight float64 `json:"meter_import_night"`
+	MeterExportDay   float64 `json:"meter_export_day"`
+	MeterExportNight float64 `json:"meter_export_night"`
+	Devices          []deviceSnapshot `json:"devices"`
 }
 
 // seriesPoint — одна точка временного ряда: время + значение.
@@ -126,6 +133,15 @@ func snapFloat(v valuesContract, key string) (float64, bool) {
 // плашках и графиках, а не в сумме по инверторам.
 func isMAPDevice(v valuesContract) bool {
 	_, ok := v["battery_voltage"]
+	return ok
+}
+
+// isMeterDevice возвращает true, если снимок принадлежит электросчётчику DDS238
+// (маркер — наличие тега meter_voltage, которого нет у инверторов и МАП). Аналог
+// JS-функции isMeterDevice; используется в apiCurrent для поиска актуальных
+// показаний счётчика (Import/Export) при расчёте тарифов текущего дня.
+func isMeterDevice(v valuesContract) bool {
+	_, ok := v["meter_voltage"]
 	return ok
 }
 
@@ -263,6 +279,31 @@ h1 { font-size:22px; margin:0 0 4px; }
         <div class="lbl">Суммарная мощность PV</div>
         <div class="val"><span id="kpiPV">—</span><span class="unit">W</span></div>
         <div class="sub" id="kpiPVSub">Нет данных</div>
+      </div>
+    </div>
+  </div>
+  <div class="group">
+    <div class="group-title">Потребление/Отдача за сегодня</div>
+    <div class="group-body">
+      <div class="plate">
+        <div class="lbl">Потребление день</div>
+        <div class="val"><span id="kpiImpDay">—</span><span class="unit">kWh</span></div>
+        <div class="sub">День 07:00–23:00</div>
+      </div>
+      <div class="plate">
+        <div class="lbl">Потребление ночь</div>
+        <div class="val"><span id="kpiImpNight">—</span><span class="unit">kWh</span></div>
+        <div class="sub">Ночь 23:00–07:00</div>
+      </div>
+      <div class="plate">
+        <div class="lbl">Отдача день</div>
+        <div class="val"><span id="kpiExpDay">—</span><span class="unit">kWh</span></div>
+        <div class="sub">День 07:00–23:00</div>
+      </div>
+      <div class="plate">
+        <div class="lbl">Отдача ночь</div>
+        <div class="val"><span id="kpiExpNight">—</span><span class="unit">kWh</span></div>
+        <div class="sub">Ночь 23:00–07:00</div>
       </div>
     </div>
   </div>
@@ -454,6 +495,12 @@ async function tick(){
 		setKpi('kpiBatV', data.map_battery_voltage);
 		setKpi('kpiBatP', data.map_battery_power);
 		setKpi('kpiConsP', data.map_consumption);
+		// Плашки «Потребление/Отдача за сегодня» (kWh): считаются из актуальных
+		// показаний счётчика и фиксированных граничных точек тарифов.
+		setKpi2('kpiImpDay', data.meter_import_day);
+		setKpi2('kpiImpNight', data.meter_import_night);
+		setKpi2('kpiExpDay', data.meter_export_day);
+		setKpi2('kpiExpNight', data.meter_export_night);
 		// Плашка электросчётчика (вверху).
 		var meter=null;
 		for(var i=0;i<data.devices.length;i++) if(isMeterDevice(data.devices[i])){ meter=data.devices[i]; break; }
@@ -467,6 +514,15 @@ function setKpi(id, v){
 	var n=Number(v);
 	if(isFinite(n)){
 		document.getElementById(id).textContent=n.toLocaleString('ru-RU',{maximumFractionDigits:1});
+	}else{
+		document.getElementById(id).textContent='—';
+	}
+}
+// setKpi2 заполняет плашку kWh-величиной (до 2 знаков) или прочерком, если нет данных.
+function setKpi2(id, v){
+	var n=Number(v);
+	if(isFinite(n)){
+		document.getElementById(id).textContent=n.toLocaleString('ru-RU',{maximumFractionDigits:2});
 	}else{
 		document.getElementById(id).textContent='—';
 	}
@@ -1174,6 +1230,74 @@ func (h *dashboardHandler) index(w http.ResponseWriter, r *http.Request) {
 	_ = dashboardTmpl.Execute(w, nil)
 }
 
+// meterTariffToday вычисляет тарифные величины счётчика за текущие календарные
+// сутки [00:00, now): потребление/отдачу «День» и «Ночь» (kWh). День = 07:00–23:00,
+// ночь = 00:00–07:00 и 23:00–24:00. Используются актуальные показания (impNow/expNow,
+// из Redis) и фиксированные границы дня (b, из pg.daily_tariffs). Границы, которые
+// ещё не наступили или не захвачены, отсутствуют (nil) — расчёт строится только из
+// доступных показаний; величины приводятся к ≥0 (сброс счётчика игнорируется).
+func meterTariffToday(now time.Time, impNow, expNow float64, b *meterBoundaryRow) (impDay, impNight, expDay, expNight float64) {
+	hour := now.In(time.Local).Hour()
+	// Ночная зона [00:00, 07:00): весь прирост с начала суток — ночь.
+	if hour < meterDayStartH {
+		if b.Import0000 != nil {
+			impNight = impNow - *b.Import0000
+		}
+		if b.Export0000 != nil {
+			expNight = expNow - *b.Export0000
+		}
+		return 0, max0f(impNight), 0, max0f(expNight)
+	}
+	// Дневная зона [07:00, 23:00): ночь уже сформирована [00:00,07:00], день растёт от 07:00.
+	if hour < meterDayEndH {
+		if b.Import0000 != nil && b.Import0700 != nil {
+			impNight = *b.Import0700 - *b.Import0000
+		}
+		if b.Export0000 != nil && b.Export0700 != nil {
+			expNight = *b.Export0700 - *b.Export0000
+		}
+		if b.Import0700 != nil {
+			impDay = impNow - *b.Import0700
+		} else if b.Import0000 != nil {
+			impDay = impNow - *b.Import0000
+		}
+		if b.Export0700 != nil {
+			expDay = expNow - *b.Export0700
+		} else if b.Export0000 != nil {
+			expDay = expNow - *b.Export0000
+		}
+		return max0f(impDay), max0f(impNight), max0f(expDay), max0f(expNight)
+	}
+	// Ночная зона [23:00, 24:00): день полон [07:00,23:00], ночь = [00:00,07:00] + [23:00,now].
+	if b.Import0700 != nil && b.Import2300 != nil {
+		impDay = *b.Import2300 - *b.Import0700
+	}
+	if b.Export0700 != nil && b.Export2300 != nil {
+		expDay = *b.Export2300 - *b.Export0700
+	}
+	if b.Import0000 != nil && b.Import0700 != nil {
+		impNight = *b.Import0700 - *b.Import0000
+	}
+	if b.Export0000 != nil && b.Export0700 != nil {
+		expNight = *b.Export0700 - *b.Export0000
+	}
+	if b.Import2300 != nil {
+		impNight += impNow - *b.Import2300
+	}
+	if b.Export2300 != nil {
+		expNight += expNow - *b.Export2300
+	}
+	return max0f(impDay), max0f(impNight), max0f(expDay), max0f(expNight)
+}
+
+// max0f возвращает v, если v ≥ 0, иначе 0 (отрицательные разности при сбросе счётчика).
+func max0f(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	return v
+}
+
 func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	devices, err := h.store.Current()
 	if err != nil {
@@ -1225,6 +1349,35 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	gridP = math.Round(gridP*10) / 10
 	batV = math.Round(batV*10) / 10
 	batP = math.Round(batP*10) / 10
+
+	// Расчёт тарифных величин сегодняшнего дня: актуальные показания счётчика
+	// (Redis, device с тегами meter_*) и фиксированные граничные (PG daily_tariffs).
+	now := time.Now()
+	var impNow, expNow float64
+	hasImp, hasExp := false, false
+	for _, d := range devices {
+		if isMeterDevice(d.Values) {
+			if v, ok := snapFloat(d.Values, "meter_import"); ok {
+				impNow, hasImp = v, true
+			}
+			if v, ok := snapFloat(d.Values, "meter_export"); ok {
+				expNow, hasExp = v, true
+			}
+			break
+		}
+	}
+	impDay, impNight, expDay, expNight := 0.0, 0.0, 0.0, 0.0
+	if h.pg != nil && hasImp && hasExp {
+		start, _ := dayBounds(now, time.Local)
+		if b, err := h.pg.MeterBoundaryValues(start); err == nil {
+			impDay, impNight, expDay, expNight = meterTariffToday(now, impNow, expNow, b)
+			impDay, impNight, expDay, expNight = math.Round(impDay*100)/100, math.Round(impNight*100)/100,
+				math.Round(expDay*100)/100, math.Round(expNight*100)/100
+		} else {
+			log.Printf("dashboard: meter tariff today: %v", err)
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(currentResponse{
@@ -1236,7 +1389,11 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 		MapBatV:     batV,
 		MapBatP:     batP,
 		MapCons:     gridP + batP,
-		Devices:     devices,
+		MeterImportDay: impDay,
+		MeterImportNight: impNight,
+		MeterExportDay:   expDay,
+		MeterExportNight: expNight,
+		Devices: devices,
 	})
 }
 

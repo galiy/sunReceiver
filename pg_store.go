@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -165,6 +167,43 @@ ORDER BY day ASC`, start, end)
 		return nil, fmt.Errorf("pg daily_tariffs range rows: %w", err)
 	}
 	return got, nil
+}
+
+// meterBoundaryRow — фиксированные граничные показания Import/Export (kWh) одного
+// календарного дня из daily_tariffs. Поля могут быть nil, если граница ещё не
+// захвачена (показание NULL в БД).
+type meterBoundaryRow struct {
+	Import0000 *float64 // на 00:00 дня
+	Import0700 *float64 // на 07:00 дня
+	Import2300 *float64 // на 23:00 дня
+	ImportNext *float64 // на 00:00 следующего дня (закрытие ночного тарифа дня)
+	Export0000 *float64
+	Export0700 *float64
+	Export2300 *float64
+	ExportNext *float64
+}
+
+// MeterBoundaryValues возвращает фиксированные граничные показания счётчика за
+// календарный день day (локальная зона). Используется дашбордом для расчёта
+// незавершённых тарифных величин текущих суток: день ещё не финализирован, но
+// уже есть захваченные на 00:00/07:00/23:00 показания. day передаётся в локальной
+// зоне (начало суток).
+func (s *pgStore) MeterBoundaryValues(day time.Time) (*meterBoundaryRow, error) {
+	var row meterBoundaryRow
+	err := s.pool.QueryRow(s.ctx, `
+SELECT import_0000, import_0700, import_2300, import_next,
+       export_0000, export_0700, export_2300, export_next
+FROM sunreceiver.daily_tariffs
+WHERE day = $1`, day).Scan(
+		&row.Import0000, &row.Import0700, &row.Import2300, &row.ImportNext,
+		&row.Export0000, &row.Export0700, &row.Export2300, &row.ExportNext)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return &meterBoundaryRow{}, nil
+		}
+		return nil, fmt.Errorf("pg meter boundary values: %w", err)
+	}
+	return &row, nil
 }
 
 // MigrateLegacy конвертирует старую таблицу сырых снимков snapshots в
