@@ -81,10 +81,15 @@ type configInverter struct {
 
 // mapSection — отдельный блок настройки МАП Титанатор («КЭС», батарея/сеть) в
 // sunReceiver.json. Не входит в invertors: это устройство Modbus TCP, а не инвертор.
+// Disabled — ОБЯЗАТЕЛЬНОЕ поле (отсутствие = ошибка конфига): false = МАП
+// опрашивается через Modbus TCP (как раньше); true = пулер по Modbus НЕ запускается,
+// а все параметры МАП (батарея/сеть) берутся из веб-API ПАК «Малина»
+// read_json.php?device=map (для этого требуется настроенный раздел "mppt").
 type mapSection struct {
-	Name string `json:"name"`
-	IP   string `json:"ip"`
-	Unit int    `json:"unit,omitempty"`
+	Name     string `json:"name"`
+	IP       string `json:"ip"`
+	Unit     int    `json:"unit,omitempty"`
+	Disabled *bool  `json:"disabled"`
 }
 
 // dbConfig — расположение баз данных. Задаётся в sunReceiver.json в разделе "db".
@@ -176,8 +181,13 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mpptSectio
 		targets = append(targets, invTarget{IP: t.IP, Name: t.Name, LoggerSN: t.LoggerSN, Kind: kind, Unit: 1, Slot: -1})
 	}
 
-	// МАП (батарея/сеть) — отдельный блок "map".
+	// МАП (батарея/сеть) — отдельный блок "map". Disabled обязателен: false —
+	// Modbus TCP, true — данные берутся из веб-API ПАК «Малина» (mapAPI). При true
+	// цель в targets не добавляется (обычный Modbus-пулер не запускается).
 	if cf.Map != nil {
+		if cf.Map.Disabled == nil {
+			return nil, nil, nil, nil, fmt.Errorf("config %s: в разделе map не задано обязательное поле disabled (false/true)", path)
+		}
 		if cf.Map.IP == "" {
 			return nil, nil, nil, nil, fmt.Errorf("config %s: пустой ip в разделе map", path)
 		}
@@ -185,15 +195,26 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mpptSectio
 		if name == "" {
 			name = "MAP (батарея/сеть)"
 		}
-		unit := byte(1)
-		if cf.Map.Unit > 0 {
-			unit = byte(cf.Map.Unit)
+		if *cf.Map.Disabled {
+			log.Printf("config: МАП (%s) disabled=true — опрашивается через веб-API ПАК «Малина», а не через Modbus", name)
+			mapAPI = &mapAPISource{name: name, ip: cf.Map.IP}
+		} else {
+			unit := byte(1)
+			if cf.Map.Unit > 0 {
+				unit = byte(cf.Map.Unit)
+			}
+			targets = append(targets, invTarget{IP: cf.Map.IP, Name: name, Kind: kindMAP, Unit: unit, Slot: -1})
 		}
-		targets = append(targets, invTarget{IP: cf.Map.IP, Name: name, Kind: kindMAP, Unit: unit, Slot: -1})
 	}
 
-	if len(targets) == 0 {
-		return nil, nil, nil, nil, fmt.Errorf("config %s: нет ни одного активного устройства", path)
+	if len(targets) == 0 && mapAPI == nil {
+		// Если активными остались только MPPT-контроллеры из API ПАК «Малина»,
+		// targets может быть пуст — это допустимо: цели собираются динамически.
+		mpptOk := cf.MPPT != nil && cf.MPPT.BaseURL != "" && cf.MPPT.MPPTPath != "" &&
+			cf.MPPT.Login != "" && cf.MPPT.Password != ""
+		if !mpptOk {
+			return nil, nil, nil, nil, fmt.Errorf("config %s: нет ни одного активного устройства", path)
+		}
 	}
 	return targets, cf.DB, cf.Meter, cf.MPPT, nil
 }
@@ -236,6 +257,18 @@ var targets []invTarget
 // через read_json.php?device=mppt. Заполняется в main() из раздела "mppt"
 // sunReceiver.json.
 var mppt *mpptSite
+
+// mapAPI — когда МАП опрашивается НЕ через Modbus, а через веб-API ПАК «Малина»
+// (read_json.php?device=map). Заполняется в loadConfig, если в разделе "map"
+// sunReceiver.json задано disabled=true. name/ip — логическое имя и ключ устройства
+// (IP МАП из конфига, тот же devKey, что у МАП по Modbus). Если nil — МАП
+// опрашивается через Modbus по-прежнему.
+var mapAPI *mapAPISource
+
+type mapAPISource struct {
+	name string
+	ip   string
+}
 
 var statusNames = map[uint16]string{
 	0: "standby", 1: "self-checking", 2: "normal", 3: "fault", 4: "permanent",
@@ -1006,7 +1039,7 @@ func saveWindowSnapshot(store *redisStore, t invTarget, res DeviceResult, now ti
 func pollAndSaveMap(store *redisStore, now time.Time) {
 	var wg sync.WaitGroup
 	activeMPPT := map[string]struct{}{}
-	// МАП (батарея/сеть) — из targets, фиксированно.
+	// МАП (батарея/сеть) — из targets (Modbus) или через веб-API ПАК «Малина».
 	for i := range targets {
 		t := targets[i]
 		if t.Kind != kindMAP {
@@ -1017,6 +1050,16 @@ func pollAndSaveMap(store *redisStore, now time.Time) {
 			defer wg.Done()
 			saveWindowSnapshot(store, t, pollDevice(t), now)
 		}(t)
+	}
+	// МАП через веб-API (map.disabled=true): Modbus-пулер не запущен (цели kindMAP в
+	// targets нет), параметры батареи/сети берём из read_json.php?device=map.
+	if mapAPI != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			t := invTarget{IP: mapAPI.ip, Name: mapAPI.name, Kind: kindMAP, Slot: -1}
+			saveWindowSnapshot(store, t, pollMAPAPI(), now)
+		}()
 	}
 	// MPPT-контроллеры — по факту подключённых из API. Состав определяется
 	// фактически подключёнными к ПАК «Малина» контроллерами (один HTTP-запрос
@@ -1080,6 +1123,11 @@ func main() {
 	// Конфигурация веб-API ПАК «Малина» для мониторинга MPPT (КЭС) — раздел "mppt"
 	// sunReceiver.json (бывший malina.json).
 	mppt = loadMPPTSite(mpptSec)
+	// Если МАП опрашивается через веб-API (map.disabled=true), обязателен доступ к
+	// ПАК «Малина» (раздел "mppt") — иначе неоткуда взять параметры батареи/сети.
+	if mapAPI != nil && mppt == nil {
+		log.Fatalf("config: МАП настроен через веб-API (map.disabled=true), но раздел mppt неполный — нужны base_url, mppt_path, login, password")
+	}
 	// Конфигурация электросчётчика DDS238 — раздел "meter" sunReceiver.json
 	// или файл dds238.json (обратная совместимость).
 	meterCfg := loadMeterConfig(meterSec)

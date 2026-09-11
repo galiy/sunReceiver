@@ -13,7 +13,8 @@
   "map": {
     "name": "MAP (батарея/сеть)",
     "ip": "192.168.0.20",
-    "unit": 1
+    "unit": 1,
+    "disabled": false
   },
   "mppt": {
     "base_url": "http://192.168.0.30",

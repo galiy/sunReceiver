@@ -125,7 +125,7 @@ Modbus-гейте МАП:
 | Раздел | Поля |
 |---|---|
 | `invertors[]` | `ip`, `name`, `type` (`deye`/`sofar`), `logger_sn`, `disabled` (обязательное) |
-| `map` | `name`, `ip`, `unit` (Modbus, умолч. 1) |
+| `map` | `name`, `ip`, `unit` (Modbus, умолч. 1), `disabled` (обязательное: `false`=Modbus, `true`=веб-API ПАК «Малина», нужен раздел `mppt`) |
 | `mppt` | `base_url`, `mppt_path`, `login`, `password` |
 | `db` | `redis` (host:port), `pg` (DSN с паролем) |
 | `meter` | `name`, `ip`, `port`, `unit`, `first_reg`, `register_count` |
