@@ -282,6 +282,9 @@ h1 { font-size:22px; margin:0 0 4px; }
       </div>
     </div>
   </div>
+</div>
+
+<div class="groups-row">
   <div class="group">
     <div class="group-title">Потребление/Отдача за сегодня</div>
     <div class="group-body">
