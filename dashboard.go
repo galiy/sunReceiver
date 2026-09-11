@@ -19,6 +19,13 @@ import (
 // всех 4 запросов в один реальный read из Redis/PG.
 const rangeCacheTTL = 15 * time.Second
 
+// tariffCacheTTL — срок жизни кеша тарифных исходников (границ текущего дня и
+// сумм финализированных дней месяца/года). Главная страница обновляется каждую
+// секунду, но эти данные в PG меняются редко: границы сегодня — 3 раза в сутки,
+// набор финализированных дней — раз в сутки. Поэтому 60-секундный кеш снимает
+// 3 запроса к PG/сек (7200/мин) до ~1 раза в минуту без заметной задержки.
+const tariffCacheTTL = 60 * time.Second
+
 // dashboardHandler — веб-дашборд: отдаёт три HTML-страницы и JSON API.
 //  - Главная страница (/) — текущие параметры: плашки, электросчётчик, сводная
 //    таблица; обновляются каждую секунду из Redis.
@@ -34,6 +41,18 @@ type dashboardHandler struct {
 	// read из Redis/PG. Ключ — от (start, end).
 	cacheMu sync.Mutex
 	cache   map[string]cachedRange
+
+	// Кэш тарифных исходников /api/current (TTL tariffCacheTTL): границы текущего
+	// дня и суммы финализированных прошедших дней месяца/года. Главная страница
+	// опрашивает /api/current каждую секунду, но эти данные в PG меняются редко
+	// (границы — 3 раза/сутки, набор финализированных дней — раз/сутки), поэтому
+	// кеш снижает фоновые запросы к PG с 3/сек до ~1/мин. Текущий день и живые
+	// показания счётчика пересчитываются в каждом запросе отдельно.
+	tariffMu sync.Mutex
+	tariffAt time.Time
+	tariffB  *meterBoundaryRow // границы текущего дня (00:00/07:00/23:00)
+	tariffM  [4]float64        // месяц: [importDay, importNight, exportDay, exportNight]
+	tariffY  [4]float64        // год:  [importDay, importNight, exportDay, exportNight]
 }
 
 // cachedRange — кешированный результат loadRange.
@@ -208,6 +227,7 @@ h1 { font-size:22px; margin:0 0 4px; }
 .pivot-table tr:nth-child(even) td { background:#1b212b; }
 /* Группы верхних плашек: общая рамка с заголовком и рядом плашек одинакового размера */
 .group { background:#10161f; border:1px solid #2a3342; border-radius:12px; padding:14px 16px; }
+.group-top { margin-bottom:16px; }
 .group-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:10px; }
 .group-title { font-size:14px; font-weight:700; color:#e6e6e6; margin-bottom:10px; }
 .group-head .group-title { margin-bottom:0; }
@@ -240,7 +260,7 @@ h1 { font-size:22px; margin:0 0 4px; }
   <a class="nav-btn" href="/energy">Электроэнергия</a>
 </div>
 
-<div class="group">
+<div class="group group-top">
   <div class="group-head">
     <span class="group-title">Электросчётчик DDS238 &mdash; текущие параметры</span>
     <span class="meter-ts" id="meterTs">&mdash;</span>
@@ -1392,6 +1412,53 @@ func addTariffs(days []meterDayStat, tDay, tNight, eDay, eNight float64) (float6
 	return d + tDay, n + tNight, ed + eDay, en + eNight
 }
 
+// loadTariffData возвращает кешированные исходники тарифов для /api/current:
+// границы текущего дня (b), сумму финализированных прошедших дней текущего
+// месяца (m: [importDay, importNight, exportDay, exportNight]) и года (y). Текущий
+// день сюда НЕ входит (он считается отдельно на каждом запросе из живых
+// показаний счётчика). Результат кешируется на tariffCacheTTL — данные в PG
+// меняются редко, а /api/current опрашивается каждую секунду.
+func (h *dashboardHandler) loadTariffData(now time.Time) (*meterBoundaryRow, [4]float64, [4]float64) {
+	h.tariffMu.Lock()
+	defer h.tariffMu.Unlock()
+	if !h.tariffAt.IsZero() && now.Sub(h.tariffAt) < tariffCacheTTL {
+		return h.tariffB, h.tariffM, h.tariffY
+	}
+	var b *meterBoundaryRow
+	var m, y [4]float64
+	if h.pg != nil {
+		loc := time.Local
+		start, _ := dayBounds(now, loc)
+		if bb, err := h.pg.MeterBoundaryValues(start); err == nil {
+			b = bb
+		} else {
+			log.Printf("dashboard: meter tariff today: %v", err)
+		}
+		if b != nil {
+			yy, mo, _ := now.In(loc).Date()
+			monthStart := time.Date(yy, mo, 1, 0, 0, 0, 0, loc)
+			monthEnd := monthStart.AddDate(0, 1, 0)
+			yearStart := time.Date(yy, 1, 1, 0, 0, 0, 0, loc)
+			yearEnd := yearStart.AddDate(1, 0, 0)
+			if days, err := h.pg.DailyTariffsRange(monthStart, monthEnd); err == nil {
+				m[0], m[1], m[2], m[3] = addTariffs(days, 0, 0, 0, 0)
+			} else {
+				log.Printf("dashboard: meter tariff month: %v", err)
+			}
+			if days, err := h.pg.DailyTariffsRange(yearStart, yearEnd); err == nil {
+				y[0], y[1], y[2], y[3] = addTariffs(days, 0, 0, 0, 0)
+			} else {
+				log.Printf("dashboard: meter tariff year: %v", err)
+			}
+		}
+	}
+	h.tariffAt = now
+	h.tariffB = b
+	h.tariffM = m
+	h.tariffY = y
+	return h.tariffB, h.tariffM, h.tariffY
+}
+
 func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	devices, err := h.store.Current()
 	if err != nil {
@@ -1463,34 +1530,17 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	impDay, impNight, expDay, expNight := 0.0, 0.0, 0.0, 0.0
 	impDayM, impNightM, expDayM, expNightM := 0.0, 0.0, 0.0, 0.0
 	impDayY, impNightY, expDayY, expNightY := 0.0, 0.0, 0.0, 0.0
-	if h.pg != nil && hasImp && hasExp {
-		loc := time.Local
-		start, _ := dayBounds(now, loc)
-		var b *meterBoundaryRow
-		if bb, err := h.pg.MeterBoundaryValues(start); err == nil {
-			b = bb
-			impDay, impNight, expDay, expNight = meterTariffToday(now, impNow, expNow, b)
-		} else {
-			log.Printf("dashboard: meter tariff today: %v", err)
-		}
-		// Месяц и год: финализированные прошедшие дни периода + незавершённый сегодняшний.
-		y, mo, _ := now.In(loc).Date()
-		monthStart := time.Date(y, mo, 1, 0, 0, 0, 0, loc)
-		monthEnd := monthStart.AddDate(0, 1, 0)
-		yearStart := time.Date(y, 1, 1, 0, 0, 0, 0, loc)
-		yearEnd := yearStart.AddDate(1, 0, 0)
+	if hasImp && hasExp && h.pg != nil {
+		// Исходники (границы дня и суммы финализированных прошедших дней месяца/года)
+		// берём из TTL-кеша; сегодняшний день и живые показания счётчика (impNow/expNow)
+		// пересчитываются на каждом запросе — так плашки остаются актуальными без лишних
+		// запросов к PG (данные прошедших дней в PG неизменны).
+		b, mSum, ySum := h.loadTariffData(now)
 		if b != nil {
-			if days, err := h.pg.DailyTariffsRange(monthStart, monthEnd); err == nil {
-				impDayM, impNightM, expDayM, expNightM = addTariffs(days, impDay, impNight, expDay, expNight)
-			} else {
-				log.Printf("dashboard: meter tariff month: %v", err)
-			}
-			if days, err := h.pg.DailyTariffsRange(yearStart, yearEnd); err == nil {
-				impDayY, impNightY, expDayY, expNightY = addTariffs(days, impDay, impNight, expDay, expNight)
-			} else {
-				log.Printf("dashboard: meter tariff year: %v", err)
-			}
+			impDay, impNight, expDay, expNight = meterTariffToday(now, impNow, expNow, b)
 		}
+		impDayM, impNightM, expDayM, expNightM = mSum[0]+impDay, mSum[1]+impNight, mSum[2]+expDay, mSum[3]+expNight
+		impDayY, impNightY, expDayY, expNightY = ySum[0]+impDay, ySum[1]+impNight, ySum[2]+expDay, ySum[3]+expNight
 	}
 	impDay, impNight, expDay, expNight = math.Round(impDay*100)/100, math.Round(impNight*100)/100,
 		math.Round(expDay*100)/100, math.Round(expNight*100)/100
