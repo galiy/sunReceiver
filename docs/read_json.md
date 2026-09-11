@@ -30,6 +30,15 @@ read_json.php?device=bat
 
 ## `device=map` — параметры МАП Титанатор
 
+> **Источник данных kindMAP (батарея/сеть) при `map.disabled=true` в `sunReceiver.json`.**
+> В этом режиме Modbus-пулер МАП не запускается, а контрактные теги
+> (`battery_voltage`, `battery_power`, `grid_voltage`, `grid_power`, `l1_voltage`,
+> `l1_current`, `ac_active_power`, `grid_frequency`) строятся из этого ответа
+> (`mpptSite.FetchMAP` + `mapMAPAPI` в `mppt_api.go`). Источник общий с MPPT —
+> раздел `mppt` (`base_url` + `mppt_path` + Basic-auth); `mppt_path` указывает на
+> `read_json.php?device=mppt`, а значение параметра `device` подменяется на `map`
+> функцией `mpptSite.apiURL`.
+
 Один объект JSON. Ключи совпадают с ячейками RAM МАП (см. `docs/map/map/protocol_MAP_cells_2023_06_27.doc`).
 Пример ответа (2026-09-07, 21:44:17):
 
