@@ -11,6 +11,13 @@ import (
 // 5-минутных промежутков в час (0:00, 0:05, ..., 0:55).
 const avgStep = 5 * time.Minute
 
+// avgDelay — отсрочка усреднения завершённого промежутка после его границы.
+// Усредняем не сразу по завершении периода, а спустя эту задержку, чтобы успеть
+// собрать «запаздывающие» снимки медленных инверторов (логгеры шлют кадры с
+// паузами/pacing, ответ может прийти чуть позже границы). Меньше avgStep
+// (2 мин < 5 мин), поэтому цикл не дрейфует относительно границ.
+const avgDelay = 2 * time.Minute
+
 // floorToStep возвращает начало (down to nearest) 5-минутного промежутка для t.
 func floorToStep(t time.Time) time.Time {
 	return t.Truncate(avgStep)
@@ -169,31 +176,63 @@ func backfillAccumulator(store *redisStore, pg *pgStore, now time.Time) {
 
 // runAccumulator — фоновый процесс усреднения и записи в PostgreSQL:
 //   1) конвертирует накопленные в Redis данные (первичная загрузка);
-//   2) далее по завершении каждого 5-минутного промежутка (12 раз в час)
-//      читает накопленное из Redis и пишет усреднённую точку в PG.
-// Останавливается по закрытию канала stop.
+//   2) далее по завершении каждого 5-минутного промежутка (12 раз в час) НЕ
+//      сразу усредняет его, а ждёт avgDelay (2 мин), чтобы собрать запаздывающие
+//      снимки медленных инверторов, и уже потом читает накопленное из Redis и
+//      пишет усреднённую точку в PG (см. averageBucket).
+//
+// Граница b фиксируется в момент срабатывания таймера (а НЕ берётся от текущего
+// времени после задержки), поэтому при любых задержках в цикле усредняется именно
+// завершённый промежуток [b-avgStep, b), а не смежный/незавершённый.
+//
+// Сам averageBucket выполняется в отдельной горутине с обработкой stop: медленное
+// усреднение (QuerySeries + вставка в PG) не задерживает планировщик и не смещает
+// границы следующих итераций. Так как avgDelay (2 мин) < avgStep (5 мин), между
+// усреднением промежутка b (в b+2 мин) и следующей границей (b+5 мин) есть запас
+// ~3 минуты — цикл не дрейфует. Останавливается по закрытию канала stop.
 func runAccumulator(store *redisStore, pg *pgStore, stop <-chan struct{}) {
 	if pg == nil {
 		return
 	}
-	log.Printf("avg: старт; период=%s, 12 промежутков в час", avgStep)
+	log.Printf("avg: старт; период=%s, отсрочка усреднения=%s, 12 промежутков в час", avgStep, avgDelay)
 	backfillAccumulator(store, pg, time.Now())
 
 	for {
 		now := time.Now()
-		timer := time.NewTimer(time.Until(nextBoundary(now)))
+		// 1) Ждём ближайшую границу 5-минутного промежутка и фиксируем её.
+		boundary := time.NewTimer(time.Until(nextBoundary(now)))
+		var b time.Time
 		select {
-		case <-timer.C:
-			b := floorToStep(time.Now())
-			averageBucket(store, pg, b.Add(-avgStep), b)
+		case <-boundary.C:
+			b = floorToStep(time.Now())
 		case <-stop:
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
+			stopTimer(boundary)
 			return
+		}
+
+		// 2) Ждём отсрочку, чтобы собрать запаздывающие снимки промежутка
+		//    [b-avgStep, b), затем усредняем в отдельной горутине.
+		delay := time.NewTimer(avgDelay)
+		select {
+		case <-delay.C:
+			start, end := b.Add(-avgStep), b
+			go func() {
+				averageBucket(store, pg, start, end)
+			}()
+		case <-stop:
+			stopTimer(delay)
+			return
+		}
+	}
+}
+
+// stopTimer останавливает таймер и, если сигнал уже в канале, вычитывает его
+// (иначе срабатывание таймера могло бы утечь и повлиять на следующий select).
+func stopTimer(t *time.Timer) {
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
 		}
 	}
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"math"
 	"time"
 )
 
@@ -203,7 +204,8 @@ CREATE TABLE IF NOT EXISTS sunreceiver.daily_tariffs (
 }
 
 // round3 округляет вещественное до 3 знаков (счётчики имеют 2 знака после
-// запятой; 3 знака оставляют запас от float-шумов).
+// запятой; 3 знака оставляют запас от float-шумов). math.Round корректно
+// округляет и отрицательные значения.
 func round3(v float64) float64 {
-	return float64(int64(v*1000+0.5)) / 1000
+	return math.Round(v*1000) / 1000
 }
