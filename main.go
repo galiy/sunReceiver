@@ -11,6 +11,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -24,7 +26,6 @@ const (
 	port       = "8899"
 	pollPeriod = 10 * time.Second
 	timeout    = 15 * time.Second
-	outDir     = "data"
 )
 
 type targetKind int
@@ -396,23 +397,26 @@ func (v valuesContract) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// DeviceResult — результат опроса одного инвертора. Поля для JSON-файла
-// отдельные (см. deviceSnapshot).
+// DeviceResult — результат опроса одного инвертора. Поля для снимка
+// (см. deviceSnapshot) отдельные.
 type DeviceResult struct {
-	OK       bool
-	HasData  bool
-	DeviceSN string
-	Values   valuesContract
-	Time     time.Time // время актуальности данных (для MPPT API — timestamp ответа)
+	OK         bool
+	HasData    bool
+	DeviceSN   string // серийный номер даталоггера (десятичный)
+	InverterSN string // серийный номер инвертора (строка; для Sofar это ASCII-строка HW-регистров)
+	Values     valuesContract
+	Time       time.Time // время актуальности данных (для MPPT API — timestamp ответа)
 }
 
-// deviceSnapshot — структура, сохраняемая в JSON-файл инвертора.
+// deviceSnapshot — структура снимка, сохраняемого в Redis (HASH current и
+// временной ряд series). JSON-представление — контракт для дашборда и PG.
 type deviceSnapshot struct {
-	Name      string         `json:"name"`
-	IP        string         `json:"ip"`
-	Timestamp string         `json:"timestamp"`
-	DeviceSN  string         `json:"device_sn,omitempty"`
-	Values    valuesContract `json:"values"`
+	Name       string         `json:"name"`
+	IP         string         `json:"ip"`
+	Timestamp  string         `json:"timestamp"`
+	DeviceSN   string         `json:"device_sn,omitempty"`
+	InverterSN string         `json:"inverter_sn,omitempty"`
+	Values     valuesContract `json:"values"`
 }
 
 func int16val(v uint16) int {
@@ -837,6 +841,43 @@ func mapMAPRegisters(cells map[uint16]byte) valuesContract {
 	return out
 }
 
+// asciiFromRegisters собирает ASCII-строку из регистров (2 байта/регистр,
+// старший байт первый — как в строках SN-областей Deye и Sofar). Не-печатные
+// байты (напр. регистр длины 0x2000 у Sofar) пропускаются.
+func asciiFromRegisters(vals []uint16) string {
+	var b strings.Builder
+	for _, v := range vals {
+		hi := byte(v >> 8)
+		lo := byte(v & 0xFF)
+		if hi >= 0x20 && hi <= 0x7E {
+			b.WriteByte(hi)
+		}
+		if lo >= 0x20 && lo <= 0x7E {
+			b.WriteByte(lo)
+		}
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return b.String()
+}
+
+// sofarVersionsRe — суффикс версий HW-строки Sofar: три подряд идущих токена
+// «V<цифры>» в конце (аппаратная/программная/польз. платформы), напр.
+// "…V480V100V480". Такие версии выводить в качестве серийного номера НЕ нужно.
+var sofarVersionsRe = regexp.MustCompile(`V\d+V\d+V\d+$`)
+
+// trimSofarVersions отрезает от HW-строки Sofar хвост-версии (если он есть),
+// оставляя только серийный код инвертора. Напр. "SA3ES033KAQ846V480V100V480" →
+// "SA3ES033KAQ846".
+func trimSofarVersions(s string) string {
+	loc := sofarVersionsRe.FindStringIndex(s)
+	if loc == nil || loc[0] == 0 {
+		return s
+	}
+	return s[:loc[0]]
+}
+
 func pollDevice(t invTarget) DeviceResult {
 	res := DeviceResult{OK: true}
 	client := clientFor(t.IP, t.LoggerSN)
@@ -868,6 +909,25 @@ func pollDevice(t invTarget) DeviceResult {
 		if len(result) > 0 {
 			res.HasData = true
 			res.Values = mapDeyeRegisters(result)
+		}
+		// Серийный номер инвертора Deye — ASCII-строка в регистрах 0x0003-0x0007
+		// (10 цифр; проверено на живых .70/.79/.91/.92/.93, напр. .70 = "2405018274").
+		// Чтение с ретраями: логгер иногда молчит/отвечает не полностью.
+		for attempt := 1; attempt <= 3 && res.InverterSN == ""; attempt++ {
+			pdus, _, err := client.ReadRegistersDeye(0x0003, 0x0005, 1)
+			if err != nil {
+				log.Printf("%s: serial func03 read err (attempt %d): %v", t.IP, attempt, err)
+				continue
+			}
+			for _, p := range pdus {
+				if p.CRC != p.CRCCalc {
+					continue
+				}
+				if sn := asciiFromRegisters(p.Values); sn != "" {
+					res.InverterSN = sn
+					break
+				}
+			}
 		}
 
 	case kindSofar:
@@ -907,6 +967,25 @@ func pollDevice(t invTarget) DeviceResult {
 		if len(result) > 0 {
 			res.HasData = true
 			res.Values = mapSofarRegisters(result)
+		}
+		// Серийный номер инвертора Sofar — ASCII-строка HW-диапазона 0x2000-0x200D
+		// (func 04; первые 2 байта = длина строки, затем ASCII на 2 байта/регистр).
+		// Может быть НЕ числом (строка), напр. .76 = "SA3ES127LC1055V480V100V480".
+		for attempt := 1; attempt <= 3 && res.InverterSN == ""; attempt++ {
+			hwpdus, _, herr := client.ReadRegistersDeyeFn(0x2000, 0x000E, 1, 0x04)
+			if herr != nil {
+				log.Printf("%s: serial func04 read err (attempt %d): %v", t.IP, attempt, herr)
+				continue
+			}
+			for _, p := range hwpdus {
+				if p.CRC != p.CRCCalc {
+					continue
+				}
+				if sn := asciiFromRegisters(p.Values); sn != "" {
+					res.InverterSN = trimSofarVersions(sn)
+					break
+				}
+			}
 		}
 
 	case kindMAP:
@@ -949,7 +1028,7 @@ func pollDevice(t invTarget) DeviceResult {
 
 	for _, f := range frames {
 		if f.DeviceSN != 0 {
-			res.DeviceSN = fmt.Sprintf("%08x", f.DeviceSN)
+			res.DeviceSN = strconv.FormatUint(uint64(f.DeviceSN), 10)
 			break
 		}
 	}
@@ -988,8 +1067,8 @@ func pollMPPTFromArr(t invTarget, arr []mpptRaw) DeviceResult {
 // runMapPoll — отдельный 1-секундный цикл опроса быстрых целей — МАП (kindMAP,
 // Modbus TCP) и MPPT-контроллеров (веб-API ПАК «Малина») — и записи в Redis через
 // SaveSnapshotWindow: в пределах каждого 10-секундного окна остаётся ровно одна
-// (последняя) строка на устройство. МАП-цели исключены из общего 10-сек цикла
-// doPoll; MPPT не регистрируются в конфиге вовсе (см. pollAndSaveMap).
+// (последняя) строка на устройство. МАП-цели исключены из 10-сек циклов инверторов
+// (см. runInverterPoll); MPPT не регистрируются в конфиге вовсе (см. pollAndSaveMap).
 func runMapPoll(store *redisStore, stop <-chan struct{}) {
 	const pollEvery = time.Second
 	ticker := time.NewTicker(pollEvery)
@@ -1027,9 +1106,10 @@ func saveWindowSnapshot(store *redisStore, t invTarget, res DeviceResult, now ti
 	snap := deviceSnapshot{
 		Name:      t.Name,
 		IP:        devKey(t),
-		Timestamp: ts.Format(time.RFC3339),
-		DeviceSN:  res.DeviceSN,
-		Values:    res.Values,
+		Timestamp:  ts.Format(time.RFC3339),
+		DeviceSN:   res.DeviceSN,
+		InverterSN: res.InverterSN,
+		Values:     res.Values,
 	}
 	if err := store.SaveSnapshotWindow(snap, ts); err != nil {
 		log.Printf("redis save %s: %v", devKey(t), err)
@@ -1114,7 +1194,6 @@ func main() {
 	redisAddr := flag.String("redis", defaultRedisAddr(dbCfg), "адрес Redis (хост:порт)")
 	pgDSN := flag.String("pg", defaultPGDSN(dbCfg), "DSN PostgreSQL для persistent-хранилища (пустая строка — выключить)")
 	restoreWindow := flag.Duration("pg-restore-window", 30*24*time.Hour, "окно РЕСТАВРАЦИИ Redis из PG при пустом Redis")
-	saveFiles := flag.Bool("file", false, "дополнительно писать JSON-файлы в data/ (по умолчанию выключено)")
 	dashboardAddr := flag.String("dashboard", ":8080", "адрес веб-дашборда (пустая строка — выключить)")
 	flag.Parse()
 
@@ -1197,65 +1276,61 @@ func main() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
+	// Каждый инвертор (Deye/Sofar) опрашивается в СВОЁМ независимом цикле с
+	// периодом pollPeriod (10 с). Завис/таймаутит один текущий опрос одного
+	// инвертора — остальные продолжают опрашиваться и сохранять снимки строго
+	// раз в 10 секунд, влияния друг на друга нет вовсе. Снятие делается по
+	// закрытию stopBG (см. defer close(stopBG)).
+	for _, t := range targets {
+		if t.Kind == kindMAP || t.Kind == kindMPPT {
+			continue // МАП и MPPT API опрашиваются отдельным 1-сек циклом (runMapPoll)
+		}
+		go runInverterPoll(store, t, stopBG)
+	}
+
+	<-sig
+	log.Println("shutting down")
+}
+
+// runInverterPoll — непрерывный цикл опроса ОДНОГО инвертора (Deye/Sofar) с
+// периодом pollPeriod. Каждая итерация:
+//   - ждёт тик собственного таймера (отсчитывается от старта итерации, поэтому
+//     интервал остаётся ровно pollPeriod независимо от длительности опроса);
+//   - опрашивает инвертор (pollDevice) и, если данные получены, пишет снимок в
+//     Redis СРАЗУ, с фактическим временем получения.
+//
+// Так как у каждого инвертора свой таймер и своя горутина, зависший/таймаутящий
+// инвертор никак не влияет на периодичность и запись других. Клиент solarman на
+// этот IP используется только из этой горутины (инвариант «один IP — один
+// опрос», см. clientsByKey). Останавливается по закрытию канала stop.
+func runInverterPoll(store *redisStore, t invTarget, stop <-chan struct{}) {
 	ticker := time.NewTicker(pollPeriod)
 	defer ticker.Stop()
-
-	doPoll := func() {
-		now := time.Now()
-		results := make([]DeviceResult, len(targets))
-		var wg sync.WaitGroup
-		for i, t := range targets {
-			if t.Kind == kindMAP || t.Kind == kindMPPT {
-				continue // МАП и MPPT API опрашиваются отдельным 1-сек циклом (runMapPoll)
-			}
-			wg.Add(1)
-			go func(i int, t invTarget) {
-				defer wg.Done()
-				t0 := time.Now()
-				results[i] = pollDevice(t)
-				log.Printf("%s: %s (%s)", t.IP, describeResult(results[i]), time.Since(t0).Round(time.Millisecond))
-			}(i, t)
-		}
-		wg.Wait()
-
-		ts := now.Format(time.RFC3339)
-		var savedAny bool
-		for i, res := range results {
+	for {
+		select {
+		case <-ticker.C:
+			t0 := time.Now()
+			res := pollDevice(t)
+			now := time.Now() // фактическое время получения данных этого инвертора
+			log.Printf("%s: %s (%s)", t.IP, describeResult(res), now.Sub(t0).Round(time.Millisecond))
 			if !res.OK || !res.HasData {
 				// heartbeat_only / no data / ошибка — снимок не сохраняем
 				continue
 			}
 			snap := deviceSnapshot{
-				Name:      targets[i].Name,
-				IP:        targets[i].IP,
-				Timestamp: ts,
-				DeviceSN:  res.DeviceSN,
-				Values:    res.Values,
+				Name:      t.Name,
+				IP:        t.IP,
+				Timestamp: now.Format(time.RFC3339),
+				DeviceSN:   res.DeviceSN,
+				InverterSN: res.InverterSN,
+				Values:     res.Values,
 			}
 			if err := store.SaveSnapshot(snap, now); err != nil {
-				log.Printf("redis save %s: %v", targets[i].IP, err)
+				log.Printf("redis save %s: %v", t.IP, err)
 				continue
 			}
-			savedAny = true
-			log.Printf("saved %s: %s", targets[i].Name, targets[i].IP)
-		}
-		if !savedAny {
-			log.Println("no snapshot saved this cycle")
-		}
-
-		// JSON-файлы в data/ пишутся только по флагу -file.
-		if *saveFiles {
-			writeFiles(results, now, ts)
-		}
-	}
-
-	doPoll()
-	for {
-		select {
-		case <-ticker.C:
-			doPoll()
-		case <-sig:
-			log.Println("shutting down")
+			log.Printf("saved %s: %s", t.Name, t.IP)
+		case <-stop:
 			return
 		}
 	}
@@ -1269,41 +1344,6 @@ func describeResult(res DeviceResult) string {
 		return "data=OK registers"
 	}
 	return "heartbeat_only"
-}
-
-// writeFiles сохраняет снимки в JSON-файлы в data/<YYYY-MM-DD>/<IP>-<HHMMSS>.json.
-// Вызывается только при флаге -file: по умолчанию данные пишутся в Redis.
-// Пишет ТОЛЬКО инверторы из 10-секундного цикла doPoll; МАП/MPPT и электросчётчик
-// (отдельный 1-сек цикл runMapPoll/runMeterPoll) в файлы не попадают.
-func writeFiles(results []DeviceResult, now time.Time, ts string) {
-	dayDir := filepath.Join(outDir, now.Format("2006-01-02"))
-	if err := os.MkdirAll(dayDir, 0o755); err != nil {
-		log.Printf("mkdir %s: %v", dayDir, err)
-		return
-	}
-	for i, res := range results {
-		if !res.OK || !res.HasData {
-			continue
-		}
-		snap := deviceSnapshot{
-			Name:      targets[i].Name,
-			IP:        targets[i].IP,
-			Timestamp: ts,
-			DeviceSN:  res.DeviceSN,
-			Values:    res.Values,
-		}
-		b, err := json.MarshalIndent(snap, "", "  ")
-		if err != nil {
-			log.Printf("marshal %s: %v", targets[i].IP, err)
-			continue
-		}
-		path := filepath.Join(dayDir, targets[i].IP+"-"+now.Format("150405")+".json")
-		if err := os.WriteFile(path, b, 0o644); err != nil {
-			log.Printf("write %s: %v", path, err)
-			continue
-		}
-		log.Printf("saved %s", path)
-	}
 }
 
 // restoreRedisFromPG восстанавливает Redis из persistent-хранилища PostgreSQL

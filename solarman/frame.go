@@ -82,11 +82,18 @@ func BuildReadFrame(deviceSN uint32, serial uint16, startReg, regCount uint16) [
 // BuildDeyeReadFrame — кадр чтения регистров для Deye-даталоггеров (Solarman V5,
 // но 14-байтный datafield-заголовок, как в kbialek/deye-inverter-mqtt).
 // deviceSN — реальный SN логгера; unit — Modbus-адрес устройства (обычно 0x01);
-// serial — порядковый номер кадра (LE u16).
+// serial — порядковый номер кадра (LE u16). Функция чтения — func 03 (holding).
 func BuildDeyeReadFrame(deviceSN, unit uint32, serial uint16, startReg, regCount uint16) []byte {
+	return BuildDeyeReadFrameFn(deviceSN, unit, serial, startReg, regCount, 0x03)
+}
+
+// BuildDeyeReadFrameFn — BuildDeyeReadFrame с произвольной Modbus-функцией чтения
+// (0x03 holding / 0x04 input). Используется для чтения HW-диапазона (0x2000..) Sofar,
+// который отдаётся только через func 04.
+func BuildDeyeReadFrameFn(deviceSN, unit uint32, serial uint16, startReg, regCount uint16, fn byte) []byte {
 	pdu := make([]byte, 8)
 	pdu[0] = byte(unit)
-	pdu[1] = 0x03
+	pdu[1] = fn
 	binary.BigEndian.PutUint16(pdu[2:4], startReg)
 	binary.BigEndian.PutUint16(pdu[4:6], regCount)
 	crc := CRC16Modbus(pdu[:6])

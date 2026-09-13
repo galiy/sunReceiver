@@ -108,7 +108,13 @@ func (c *Client) ReadRegisters(startReg, regCount uint16) ([]ModbusPDU, []Frame,
 // ReadRegistersDeye — запрос чтения для Deye-даталоггеров (15-байтный datafield,
 // реальный SN логгера обязателен). Unit — Modbus-адрес устройства (обычно 0x01).
 func (c *Client) ReadRegistersDeye(startReg, regCount uint16, unit uint32) ([]ModbusPDU, []Frame, error) {
-	frames, err := c.Exchange(BuildDeyeReadFrame(c.DeviceSN, unit, c.nextSerial(), startReg, regCount))
+	return c.ReadRegistersDeyeFn(startReg, regCount, unit, 0x03)
+}
+
+// ReadRegistersDeyeFn — ReadRegistersDeye с произвольной Modbus-функцией чтения
+// (0x03 holding / 0x04 input). Для HW-диапазона Sofar нужен func 04.
+func (c *Client) ReadRegistersDeyeFn(startReg, regCount uint16, unit uint32, fn byte) ([]ModbusPDU, []Frame, error) {
+	frames, err := c.Exchange(BuildDeyeReadFrameFn(c.DeviceSN, unit, c.nextSerial(), startReg, regCount, fn))
 	if err != nil {
 		return nil, nil, err
 	}

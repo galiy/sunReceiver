@@ -163,8 +163,7 @@ go run .                     # запуск из исходников (конф�
 ```
 
 Флаги: `-redis <addr>` (умолч. из конфига), `-pg <dsn>` (пустая строка — выключить
-PG), `-pg-restore-window <dur>` (окно реставрации Redis из PG), `-dashboard <addr>`,
-`-file` (дополнительно писать JSON-файлы в `data/`).
+PG), `-pg-restore-window <dur>` (окно реставрации Redis из PG), `-dashboard <addr>`.
 
 ## Документация
 
