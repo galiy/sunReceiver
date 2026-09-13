@@ -37,6 +37,11 @@ const (
 	kindMPPT // MPPT-контроллер (КЭС) через веб-API read_json.php?device=mppt ПАК «Малина»
 )
 
+// mpptOrderBase — базовый порядок для MPPT-контроллеров (динамических, из API ПАК
+// «Малина»): они всегда размещаются на дашборде последними, после всех статических
+// устройств из конфига (инверторы + МАП). Order = mpptOrderBase + slot.
+const mpptOrderBase = 10000
+
 // String — короткое имя типа для логов.
 func (k targetKind) String() string {
 	switch k {
@@ -67,6 +72,7 @@ type invTarget struct {
 	Kind     targetKind
 	Unit     byte
 	Slot     int
+	Order    int // порядок устройства на дашборде (индекс в конфиге; MPPT — всегда последними)
 }
 
 // configInverter — запись инвертора (Deye/Sofar) в sunReceiver.json разделе "invertors".
@@ -150,6 +156,7 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mpptSectio
 		return nil, nil, nil, nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	targets := make([]invTarget, 0, len(cf.Invertors)+1)
+	nextOrder := 0 // порядок устройства на дашборде = позиция в конфиге (в порядке invertors, затем map)
 
 	// Инверторы (Deye/Sofar) из invertors; отключённые (disabled=true) пропускаются.
 	for _, t := range cf.Invertors {
@@ -179,7 +186,8 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mpptSectio
 		if t.Name == "" {
 			return nil, nil, nil, nil, fmt.Errorf("config %s: пустое имя name для %s", path, t.IP)
 		}
-		targets = append(targets, invTarget{IP: t.IP, Name: t.Name, LoggerSN: t.LoggerSN, Kind: kind, Unit: 1, Slot: -1})
+		targets = append(targets, invTarget{IP: t.IP, Name: t.Name, LoggerSN: t.LoggerSN, Kind: kind, Unit: 1, Slot: -1, Order: nextOrder})
+		nextOrder++
 	}
 
 	// МАП (батарея/сеть) — отдельный блок "map". Disabled обязателен: false —
@@ -198,13 +206,14 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mpptSectio
 		}
 		if *cf.Map.Disabled {
 			log.Printf("config: МАП (%s) disabled=true — опрашивается через веб-API ПАК «Малина», а не через Modbus", name)
-			mapAPI = &mapAPISource{name: name, ip: cf.Map.IP}
+			mapAPI = &mapAPISource{name: name, ip: cf.Map.IP, order: nextOrder}
 		} else {
 			unit := byte(1)
 			if cf.Map.Unit > 0 {
 				unit = byte(cf.Map.Unit)
 			}
-			targets = append(targets, invTarget{IP: cf.Map.IP, Name: name, Kind: kindMAP, Unit: unit, Slot: -1})
+			targets = append(targets, invTarget{IP: cf.Map.IP, Name: name, Kind: kindMAP, Unit: unit, Slot: -1, Order: nextOrder})
+			nextOrder++
 		}
 	}
 
@@ -267,8 +276,9 @@ var mppt *mpptSite
 var mapAPI *mapAPISource
 
 type mapAPISource struct {
-	name string
-	ip   string
+	name  string
+	ip    string
+	order int
 }
 
 var statusNames = map[uint16]string{
@@ -416,6 +426,7 @@ type deviceSnapshot struct {
 	Timestamp  string         `json:"timestamp"`
 	DeviceSN   string         `json:"device_sn,omitempty"`
 	InverterSN string         `json:"inverter_sn,omitempty"`
+	Order      int            `json:"order,omitempty"`
 	Values     valuesContract `json:"values"`
 }
 
@@ -1091,6 +1102,7 @@ func runMapPoll(store *redisStore, stop <-chan struct{}) {
 //     sunReceiver.json. Поэтому MPPT появляются/исчезают с дашборда по факту наличия
 //     в ответе API; исчезнувшие удаляются и из HASH current (их строка не числится
 //     «актуальной».
+//
 // saveWindowSnapshot складывает результат опроса в deviceSnapshot (ts = res.Time
 // при наличии, иначе now) и пишет в Redis через SaveSnapshotWindow. Общий для
 // МАП- и MPPT-веток pollAndSaveMap.
@@ -1104,11 +1116,12 @@ func saveWindowSnapshot(store *redisStore, t invTarget, res DeviceResult, now ti
 		ts = res.Time
 	}
 	snap := deviceSnapshot{
-		Name:      t.Name,
-		IP:        devKey(t),
+		Name:       t.Name,
+		IP:         devKey(t),
 		Timestamp:  ts.Format(time.RFC3339),
 		DeviceSN:   res.DeviceSN,
 		InverterSN: res.InverterSN,
+		Order:      t.Order,
 		Values:     res.Values,
 	}
 	if err := store.SaveSnapshotWindow(snap, ts); err != nil {
@@ -1137,7 +1150,7 @@ func pollAndSaveMap(store *redisStore, now time.Time) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			t := invTarget{IP: mapAPI.ip, Name: mapAPI.name, Kind: kindMAP, Slot: -1}
+			t := invTarget{IP: mapAPI.ip, Name: mapAPI.name, Kind: kindMAP, Slot: -1, Order: mapAPI.order}
 			saveWindowSnapshot(store, t, pollMAPAPI(), now)
 		}()
 	}
@@ -1156,7 +1169,7 @@ func pollAndSaveMap(store *redisStore, now time.Time) {
 				wg.Add(1)
 				go func(slot int) {
 					defer wg.Done()
-					t := invTarget{IP: mppt.Host, Name: fmt.Sprintf("MPPT-%d", slot+1), Kind: kindMPPT, Slot: slot}
+					t := invTarget{IP: mppt.Host, Name: fmt.Sprintf("MPPT-%d", slot+1), Kind: kindMPPT, Slot: slot, Order: mpptOrderBase + slot}
 					saveWindowSnapshot(store, t, pollMPPTFromArr(t, arr), now)
 				}(slot)
 			}
@@ -1318,11 +1331,12 @@ func runInverterPoll(store *redisStore, t invTarget, stop <-chan struct{}) {
 				continue
 			}
 			snap := deviceSnapshot{
-				Name:      t.Name,
-				IP:        t.IP,
-				Timestamp: now.Format(time.RFC3339),
+				Name:       t.Name,
+				IP:         t.IP,
+				Timestamp:  now.Format(time.RFC3339),
 				DeviceSN:   res.DeviceSN,
 				InverterSN: res.InverterSN,
+				Order:      t.Order,
 				Values:     res.Values,
 			}
 			if err := store.SaveSnapshot(snap, now); err != nil {

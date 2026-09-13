@@ -27,12 +27,12 @@ const rangeCacheTTL = 15 * time.Second
 const tariffCacheTTL = 60 * time.Second
 
 // dashboardHandler — веб-дашборд: отдаёт три HTML-страницы и JSON API.
-//  - Главная страница (/) — текущие параметры: плашки, электросчётчик, сводная
-//    таблица; обновляются каждую секунду из Redis.
-//  - Страница графиков (/charts) — временные ряды инверторов, МАП и счётчика за
-//    выбранный период (Redis полное разрешение за 2 суток + PG 5-минутные средние).
-//  - Страница электроэнергии (/energy) — посуточные и помесячные тарифы счётчика
-//    (потребление/отдача «День»/«Ночь») из daily_tariffs с независимыми диапазонами.
+//   - Главная страница (/) — текущие параметры: плашки, электросчётчик, сводная
+//     таблица; обновляются каждую секунду из Redis.
+//   - Страница графиков (/charts) — временные ряды инверторов, МАП и счётчика за
+//     выбранный период (Redis полное разрешение за 2 суток + PG 5-минутные средние).
+//   - Страница электроэнергии (/energy) — посуточные и помесячные тарифы счётчика
+//     (потребление/отдача «День»/«Ночь») из daily_tariffs с независимыми диапазонами.
 type dashboardHandler struct {
 	store *redisStore
 	pg    *pgStore
@@ -63,14 +63,14 @@ type cachedRange struct {
 
 // currentResponse отвечает на GET /api/current.
 type currentResponse struct {
-	GeneratedAt string           `json:"generated_at"`
-	TotalPower  float64          `json:"total_power"`
-	TotalPV     float64          `json:"total_pv"`
-	MapGridV    float64          `json:"map_grid_voltage"`
-	MapGridP    float64          `json:"map_grid_power"`
-	MapBatV     float64          `json:"map_battery_voltage"`
-	MapBatP     float64          `json:"map_battery_power"`
-	MapCons     float64          `json:"map_consumption"`
+	GeneratedAt string  `json:"generated_at"`
+	TotalPower  float64 `json:"total_power"`
+	TotalPV     float64 `json:"total_pv"`
+	MapGridV    float64 `json:"map_grid_voltage"`
+	MapGridP    float64 `json:"map_grid_power"`
+	MapBatV     float64 `json:"map_battery_voltage"`
+	MapBatP     float64 `json:"map_battery_power"`
+	MapCons     float64 `json:"map_consumption"`
 	// Расчётные тарифные величины счётчика за текущие календарные сутки (kWh):
 	// потребление/отдача «День»/«Ночь», посчитанные из актуальных показаний
 	// счётчика (Redis) и фиксированных граничных показаний (PG daily_tariffs).
@@ -80,14 +80,14 @@ type currentResponse struct {
 	MeterExportNight float64 `json:"meter_export_night"`
 	// То же за текущий месяц (MM.YYYY) и текущий год (YYYY): сумма финализированных
 	// дней периода + незавершённый сегодняшний день.
-	MeterImportDayMonth   float64 `json:"meter_import_day_month"`
-	MeterImportNightMonth float64 `json:"meter_import_night_month"`
-	MeterExportDayMonth   float64 `json:"meter_export_day_month"`
-	MeterExportNightMonth float64 `json:"meter_export_night_month"`
-	MeterImportDayYear    float64 `json:"meter_import_day_year"`
-	MeterImportNightYear  float64 `json:"meter_import_night_year"`
-	MeterExportDayYear    float64 `json:"meter_export_day_year"`
-	MeterExportNightYear  float64 `json:"meter_export_night_year"`
+	MeterImportDayMonth   float64          `json:"meter_import_day_month"`
+	MeterImportNightMonth float64          `json:"meter_import_night_month"`
+	MeterExportDayMonth   float64          `json:"meter_export_day_month"`
+	MeterExportNightMonth float64          `json:"meter_export_night_month"`
+	MeterImportDayYear    float64          `json:"meter_import_day_year"`
+	MeterImportNightYear  float64          `json:"meter_import_night_year"`
+	MeterExportDayYear    float64          `json:"meter_export_day_year"`
+	MeterExportNightYear  float64          `json:"meter_export_night_year"`
 	Devices               []deviceSnapshot `json:"devices"`
 }
 
@@ -132,10 +132,10 @@ type meterDailyResponse struct {
 
 // meterDayStat — тарифные величины одного календарного дня (kWh).
 type meterDayStat struct {
-	Day        string  `json:"day"` // YYYY-MM-DD
-	ImportDay  float64 `json:"import_day"`
+	Day         string  `json:"day"` // YYYY-MM-DD
+	ImportDay   float64 `json:"import_day"`
 	ImportNight float64 `json:"import_night"`
-	ExportDay  float64 `json:"export_day"`
+	ExportDay   float64 `json:"export_day"`
 	ExportNight float64 `json:"export_night"`
 }
 
@@ -1467,10 +1467,17 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sort.SliceStable(devices, func(i, j int) bool {
-		// Сначала сетевые инверторы, MPPT-контроллеры — последними, внутри — по имени.
+		// MPPT-контроллеры — всегда последними; остальные — в порядке конфигурации
+		// (поле order снимка = позиция устройства в sunReceiver.json: инверторы в
+		// порядке invertors, затем МАП). При равных order (напр. старые снимки без order)
+		// — стабильно по имени.
 		mi, mj := isMPPTKey(devices[i].IP), isMPPTKey(devices[j].IP)
 		if mi != mj {
 			return !mi
+		}
+		oi, oj := devices[i].Order, devices[j].Order
+		if oi != oj {
+			return oi < oj
 		}
 		return devices[i].Name < devices[j].Name
 	})
@@ -1553,19 +1560,19 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(currentResponse{
-		GeneratedAt: time.Now().Format(time.RFC3339),
-		TotalPower:  total,
-		TotalPV:     totalPV,
-		MapGridV:    gridV,
-		MapGridP:    gridP,
-		MapBatV:     batV,
-		MapBatP:     batP,
-		MapCons:     gridP + batP,
-		MeterImportDay: impDay,
-		MeterImportNight: impNight,
-		MeterExportDay:   expDay,
-		MeterExportNight: expNight,
-		MeterImportDayMonth: impDayM,
+		GeneratedAt:           time.Now().Format(time.RFC3339),
+		TotalPower:            total,
+		TotalPV:               totalPV,
+		MapGridV:              gridV,
+		MapGridP:              gridP,
+		MapBatV:               batV,
+		MapBatP:               batP,
+		MapCons:               gridP + batP,
+		MeterImportDay:        impDay,
+		MeterImportNight:      impNight,
+		MeterExportDay:        expDay,
+		MeterExportNight:      expNight,
+		MeterImportDayMonth:   impDayM,
 		MeterImportNightMonth: impNightM,
 		MeterExportDayMonth:   expDayM,
 		MeterExportNightMonth: expNightM,
@@ -1573,7 +1580,7 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 		MeterImportNightYear:  impNightY,
 		MeterExportDayYear:    expDayY,
 		MeterExportNightYear:  expNightY,
-		Devices: devices,
+		Devices:               devices,
 	})
 }
 
