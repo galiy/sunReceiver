@@ -1,0 +1,19 @@
+[Unit]
+Description=BMS listener (ANT BMS passive reader -> System V shm 2018)
+After=local-fs.target
+RequiresMountsFor=/dev
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/bmslistener
+# On-failure: Restart=always перезапускает и после чистого systemctl stop
+# (юнит нельзя было бы остановить), а при crash-лупе дёргал бы PL2303 каждые 3 с.
+Restart=on-failure
+RestartSec=3
+StartLimitIntervalSec=60
+StartLimitBurst=5
+User=root
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target
