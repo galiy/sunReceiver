@@ -108,28 +108,74 @@ func (s *bmsApiClient) fetch() (*bmsCollection, error) {
 // ПАК «Малина»; данные — C-демон bmslistener, shm 2018) и записи актуального
 // состояния в отдельный Redis-ключ (HASH sunreceiver:bms). В общем снимке
 // sunreceiver:current BMS не участвует (нет универсального контракта values).
-func runBmsPoll(store *redisStore, stop <-chan struct{}) {
+//
+// Параллельно 1-секундные снимки накапливаются в памяти (bmsAccumulator) в
+// 5-минутные усреднённые точки: по завершении каждого промежутка точка
+// пишется в Redis (месячный ZSET sunreceiver:bms:series, окно 2 календарных
+// суток) и в PostgreSQL (sunreceiver.bms_averages, вечно). При остановке
+// пулера накопленный (возможно неполный) промежуток дописывается.
+func runBmsPoll(store *redisStore, pg *pgStore, stop <-chan struct{}) {
 	const pollEvery = time.Second
 	ticker := time.NewTicker(pollEvery)
 	defer ticker.Stop()
+	acc := newBmsAccumulator()
+	log.Printf("bms avg: накопление 5-минутных усреднённых точек (в памяти процесса; PG %v)", pg != nil)
 	for {
 		select {
 		case <-ticker.C:
-			pollAndSaveBMS(store)
+			col := pollAndSaveBMS(store)
+			if col != nil {
+				now := time.Now()
+				for i := range col.Devices {
+					acc.add(col.Devices[i], now)
+				}
+			}
+			saveBMSClosedBuckets(store, pg, acc.closed(time.Now()), false)
 		case <-stop:
+			saveBMSClosedBuckets(store, pg, acc.drain(), true)
+			// Небольшая пауза, чтобы записи при остановке успели завершиться
+			// раньше, чем main закроет пул PG/Redis (те же defer, что у всех
+			// фоновых процессов).
+			time.Sleep(500 * time.Millisecond)
 			return
+		}
+	}
+}
+
+// saveBMSClosedBuckets пишет готовые 5-минутные точки BMS в Redis (месячный
+// ZSET, окно удержания 2 календарных суток — чистка PurgeOld) и в PG (вечно).
+// partial=true — промежутки выгружаются при остановке (неполные).
+func saveBMSClosedBuckets(store *redisStore, pg *pgStore, pts []bmsAvgPoint, partial bool) {
+	for _, p := range pts {
+		if p.avg.Samples == 0 {
+			continue
+		}
+		sp := bmsSeriesPoint{Name: p.name, Ts: p.start.Format(time.RFC3339)}
+		sp.bmsAveraged = p.avg
+		if err := store.SaveBMSSeries(sp, p.start); err != nil {
+			log.Printf("bms avg redis %s %s: %v", p.name, p.start.Format(time.RFC3339), err)
+		}
+		if pg != nil {
+			if err := pg.InsertBMSAveraged(p.name, p.start, p.avg); err != nil {
+				log.Printf("bms avg pg %s %s: %v", p.name, p.start.Format(time.RFC3339), err)
+			}
+		}
+		if partial {
+			log.Printf("bms avg: дописан неполный 5-минутный промежуток %s %s (снимков: %d)",
+				p.name, p.start.Format(time.RFC3339), p.avg.Samples)
 		}
 	}
 }
 
 // pollAndSaveBMS делает один запрос read_bms.php и обновляет коллекцию в
 // Redis: устройство появляется/исчезает с дашборда по факту наличия в ответе
-// (как MPPT). При ошибке запроса предыдущее состояние в Redis сохраняется.
-func pollAndSaveBMS(store *redisStore) {
+// (как MPPT). При ошибке запроса предыдущее состояние в Redis сохраняется
+// (возвращается nil).
+func pollAndSaveBMS(store *redisStore) *bmsCollection {
 	col, err := bmsSite.fetch()
 	if err != nil {
 		log.Printf("bms api: %v", err)
-		return
+		return nil
 	}
 	active := make(map[string]string, len(col.Devices))
 	for i := range col.Devices {
@@ -147,4 +193,5 @@ func pollAndSaveBMS(store *redisStore) {
 	if err := store.SetBMS(active); err != nil {
 		log.Printf("bms redis: %v", err)
 	}
+	return col
 }
