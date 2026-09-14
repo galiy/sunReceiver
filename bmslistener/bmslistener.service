@@ -2,6 +2,11 @@
 Description=BMS listener (ANT BMS passive reader -> System V shm 2018)
 After=local-fs.target
 RequiresMountsFor=/dev
+# Лимит частоты стартов: на systemd ≥229 читается ТОЛЬКО из [Unit] (в [Service]
+# игнорируется с warning). На 215 (Малина) имя *_Sec не распознаётся → безвредный
+# игнор, работает глобальный лимит 5/10 с (строже, ок).
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -10,8 +15,6 @@ ExecStart=/usr/sbin/bmslistener
 # (юнит нельзя было бы остановить), а при crash-лупе дёргал бы PL2303 каждые 3 с.
 Restart=on-failure
 RestartSec=3
-StartLimitIntervalSec=60
-StartLimitBurst=5
 User=root
 Nice=-5
 
