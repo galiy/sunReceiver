@@ -74,3 +74,56 @@ func TestRedisStoreQuerySeriesPeriod(t *testing.T) {
 		t.Fatalf("QuerySeries len=%d, want 3", len(got))
 	}
 }
+
+func TestRedisStoreBMSSeriesRoundtrip(t *testing.T) {
+	s := testStore(t)
+	rdb := s.rdb
+	rdb.FlushDB(s.ctx)
+	defer rdb.FlushDB(s.ctx)
+
+	now := time.Now()
+	ts1 := floorToStep(now.Add(-10 * time.Minute))
+	ts2 := floorToStep(now.Add(-5 * time.Minute))
+	p1 := bmsSeriesPoint{Name: "AntBms 320 A/h", Ts: ts1.Format(time.RFC3339)}
+	p1.bmsAveraged = bmsAveraged{CurrentA: 1.0, RemainingAh: 100, Samples: 30}
+	p2 := bmsSeriesPoint{Name: "AntBms 320 A/h", Ts: ts2.Format(time.RFC3339)}
+	p2.bmsAveraged = bmsAveraged{CurrentA: 2.0, RemainingAh: 101, Samples: 30}
+	p3 := bmsSeriesPoint{Name: "Other BMS", Ts: ts2.Format(time.RFC3339)}
+	p3.bmsAveraged = bmsAveraged{CurrentA: 9.0, Samples: 30}
+
+	for _, pp := range []struct {
+		p  bmsSeriesPoint
+		ts time.Time
+	}{{p1, ts1}, {p2, ts2}, {p3, ts2}} {
+		if err := s.SaveBMSSeries(pp.p, pp.ts); err != nil {
+			t.Fatalf("SaveBMSSeries %s: %v", pp.p.Name, err)
+		}
+	}
+
+	// Точный срез по имени: только 2 точки нашей BMS, без Other BMS.
+	got, err := s.QueryBMSSeries("AntBms 320 A/h", now.Add(-30*time.Minute), now)
+	if err != nil {
+		t.Fatalf("QueryBMSSeries: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("QueryBMSSeries len=%d, want 2: %+v", len(got), got)
+	}
+	if got[0].CurrentA != 1.0 || got[1].CurrentA != 2.0 {
+		t.Fatalf("порядок/значения: %+v", got)
+	}
+
+	// PurgeOld удаляет из BMS-ряда точки старше окна 2 календарных суток.
+	old := ts1.AddDate(0, 0, -3)
+	po := bmsSeriesPoint{Name: "AntBms 320 A/h", Ts: old.Format(time.RFC3339)}
+	if err := s.SaveBMSSeries(po, old); err != nil {
+		t.Fatalf("SaveBMSSeries old: %v", err)
+	}
+	s.PurgeOld(now)
+	got2, err := s.QueryBMSSeries("AntBms 320 A/h", old, now)
+	if err != nil {
+		t.Fatalf("QueryBMSSeries after purge: %v", err)
+	}
+	if len(got2) != 2 {
+		t.Fatalf("после PurgeOld len=%d, want 2 (старая точка удалена): %+v", len(got2), got2)
+	}
+}

@@ -1367,6 +1367,8 @@ const bmsDetailPage = `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BMS — SunReceiver</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <style>
 :root { color-scheme: dark; }
 * { box-sizing: border-box; }
@@ -1409,6 +1411,12 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 .tbar { flex:1; height:10px; background:#10141b; border-radius:5px; overflow:hidden; }
 .tbar-fill { height:100%; border-radius:5px; transition:width .4s; }
 .trow .tval { width:52px; text-align:right; font-variant-numeric:tabular-nums; }
+.trow .tname { flex:0 0 150px; width:150px; }
+.tnote { color:#6b7280; font-size:11px; margin:10px 0 0; line-height:1.4; }
+.bms-charts { display:flex; flex-wrap:wrap; gap:16px; margin-top:24px; }
+.bms-charts-title { margin:28px 0 12px; font-size:16px; }
+.bms-charts .card { margin-bottom:0; }
+.bms-charts .chart-wrap { position:relative; height:300px; }
 .mos-row { display:flex; gap:10px; flex-wrap:wrap; margin-top:4px; }
 .mos { padding:7px 14px; border-radius:18px; font-size:13px; font-weight:600; border:1px solid #333b49; background:#181c24; color:#6b7280; }
 .mos.on { background:#123524; border-color:#00b894; color:#00b894; }
@@ -1429,7 +1437,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 
 <div class="cards">
   <div class="card">
-    <h2>Напряжения ячеек, mV <span class="delta" id="cellDelta"></span></h2>
+    <h2>Напряжения ячеек, V <span class="delta" id="cellDelta"></span></h2>
     <div class="legend">
       <span><i style="background:#ff6b6b"></i>максимальное</span>
       <span><i style="background:#4dabf7"></i>минимальное</span>
@@ -1440,9 +1448,20 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
   <div class="card">
     <h2>Температуры, &deg;C</h2>
     <div class="temps" id="tempsWrap"></div>
+    <p class="tnote">T1–T6 — NTC-датчики температуры. Производитель не публикует точное соответствие каналов и мест; подписи реконструированы по даташиту AFE (2 внешних датчика + датчик платы), мануалу ANT (до 4 внешних датчиков) и параметрам защит (температура батареи / силовых ключей). В нашей установке все каналы показывают одинаковую температуру (батарея и плата в одном корпусе).</p>
     <h2 style="margin-top:20px">Мощностные ключи</h2>
     <div class="mos-row" id="mosWrap"></div>
   </div>
+</div>
+
+<h2 class="bms-charts-title">Графики за последние сутки (5-минутные средние, Redis)</h2>
+<div class="charts bms-charts">
+  <div class="card"><h2>Остаточная ёмкость, А·ч</h2><div class="chart-wrap"><canvas id="bmsCapChart"></canvas></div></div>
+  <div class="card"><h2>Напряжение пакета, V</h2><div class="chart-wrap"><canvas id="bmsVoltChart"></canvas></div></div>
+  <div class="card"><h2>Ток, A</h2><div class="chart-wrap"><canvas id="bmsCurChart"></canvas></div></div>
+  <div class="card"><h2>Мощность, W</h2><div class="chart-wrap"><canvas id="bmsPwrChart"></canvas></div></div>
+  <div class="card"><h2>Напряжения ячеек, V</h2><div class="chart-wrap"><canvas id="bmsCellsChart"></canvas></div></div>
+  <div class="card"><h2>Температуры T1–T4 (батарея, силовые ключи, плата), &deg;C</h2><div class="chart-wrap"><canvas id="bmsTempChart"></canvas></div></div>
 </div>
 
 <p class="foot" id="bmsFoot"></p>
@@ -1458,7 +1477,8 @@ var NAME = decodeURIComponent(location.pathname.replace(/^\/bms\//,''));
 var CELL_COLOR={ max:'#ff6b6b', min:'#4dabf7', normal:'#00b894' };
 // Заполнение батарейки ячейки по напряжению (шкала LiFePO4 3.00–3.65 В).
 function cellFillPct(v){ var p=(v-3.00)/(3.65-3.00)*100; return Math.max(4,Math.min(100,p)); }
-function cellColor(d,i){ if(i===d.max_cell_idx) return 'max'; if(i===d.min_cell_idx) return 'min'; return 'normal'; }
+// Индексы max/min из кадра BMS — 1-based (ячейка №1 = 1), а i в цикле — 0-based.
+function cellColor(d,i){ if(i+1===d.max_cell_idx) return 'max'; if(i+1===d.min_cell_idx) return 'min'; return 'normal'; }
 
 function renderKPIs(d){
   var soc=Math.max(0,Math.min(100,Number(d.soc)||0));
@@ -1484,19 +1504,20 @@ function renderCells(d){
   var cells=(d.cells_v||[]).slice(0,d.cell_count);
   var h='';
   for(var i=0;i<cells.length;i++){
-    var mv=Math.round(cells[i]*1000);
     var c=cellColor(d,i);
     h+='<div class="cell '+c+'">'
       +'<div class="cell-batt"><div class="cell-fill" style="height:'+cellFillPct(cells[i])+'%;background:'+CELL_COLOR[c]+'"></div></div>'
-      +'<div class="mv">'+mv+'</div>'
+      +'<div class="mv">'+cells[i].toFixed(3)+'</div>'
       +'<div class="idx">'+(i+1)+'</div>'
       +'</div>';
   }
   document.getElementById('cellsGrid').innerHTML=h;
-  var delta=Math.round((d.max_cell_v-d.min_cell_v)*1000);
-  document.getElementById('cellDelta').textContent='разброс: '+delta+' мВ (макс '+Math.round(d.max_cell_v*1000)+' / мин '+Math.round(d.min_cell_v*1000)+')';
+  var delta=(d.max_cell_v-d.min_cell_v);
+  document.getElementById('cellDelta').textContent='разброс: '+delta.toFixed(3)+' В (макс '+d.max_cell_v.toFixed(3)+' / мин '+d.min_cell_v.toFixed(3)+' В)';
 }
 
+// Подписи каналов T1–T6 (реконструкция — см. docs/antbms/antbms-protocol-status-frame.md).
+var TEMP_NAMES=['Батарея 1','Батарея 2','Силовая плата','Плата управления','Резерв','Резерв'];
 function renderTemps(d){
   var t=d.temperatures_c||[];
   var h='';
@@ -1504,7 +1525,8 @@ function renderTemps(d){
     var v=Number(t[i]);
     var w=Math.max(2,Math.min(100,v/60*100));
     var col= v<15?'#4dabf7':(v<=40?'#00b894':(v<=55?'#ff9f43':'#ff6b6b'));
-    h+='<div class="trow"><span class="tname">T'+(i+1)+'</span>'
+    var n=TEMP_NAMES[i]||('датчик '+(i+1));
+    h+='<div class="trow"><span class="tname">T'+(i+1)+' · '+n+'</span>'
       +'<span class="tbar"><span class="tbar-fill" style="width:'+w+'%;background:'+col+';display:block"></span></span>'
       +'<span class="tval">'+fmtNum(v,0)+' &deg;C</span></div>';
   }
@@ -1534,6 +1556,78 @@ async function load(){
     document.getElementById('bmsFoot').textContent='Порт: '+d.port+' · счётчик кадров: '+d.frames+' · обновляется каждую секунду';
   }catch(e){}
 }
+// ---------- Графики за последние сутки (5-минутные средние из Redis) ----------
+var CHART_COLORS=['#4ecdc4','#ff6b6b','#4dabf7','#ffd166','#00b894','#a29bfe','#ff9f43','#e84393','#55efc4','#fd79a8','#74b9ff','#ffeaa7','#dfe6e9','#fab1a0','#81ecec','#6c5ce7'];
+function mkBmsDs(label,color,data){ return { label:label, data:data, borderColor:color, backgroundColor:color, pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false }; }
+function packVolt(p){ var s=0, c=p.cells_v||[]; for(var i=0;i<c.length;i++) s+=c[i]; return s; }
+// bmsRender — линейный график; zero=true — симметричная ось с нулём посередине.
+function bmsRender(id, datasets, yTitle, legend, zero){
+  var y={ beginAtZero:false, title:{ display:!!yTitle, text:yTitle||'' } };
+  if(zero){
+    var m=0;
+    datasets.forEach(function(ds){ (ds.data||[]).forEach(function(p){ if(isFinite(p.y)){ var a=Math.abs(p.y); if(a>m)m=a; } }); });
+    m=m>0?m:1; y.min=-m; y.max=m;
+  }
+  window[id]=new Chart(document.getElementById(id),{
+    type:'line', data:{datasets:datasets},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{ mode:'index', intersect:false },
+      animation:{ duration:200 },
+      plugins:{ legend: legend? { display:true, labels:{ boxWidth:14, padding:10, font:{ size:10 } } } : { display:false } },
+      scales:{
+        x:{ type:'time', time:{ unit:'hour', displayFormats:{ hour:'HH:mm' } }, ticks:{ maxRotation:0, autoSkipPadding:16 } },
+        y:y
+      }
+    }
+  });
+}
+function buildBmsCharts(points){
+  if(!points||!points.length) return;
+  // 1. Остаточная ёмкость
+  bmsRender('bmsCapChart',[mkBmsDs('Остаток','#4ecdc4',points.map(function(p){ return {x:new Date(p.ts), y:p.remaining_ah}; }))],'А·ч',false,false);
+  // 2. Напряжение пакета (сумма ячеек)
+  bmsRender('bmsVoltChart',[mkBmsDs('Пакет','#ffd166',points.map(function(p){ return {x:new Date(p.ts), y:packVolt(p)}; }))],'V',false,false);
+  // 3. Ток (± ось посередине)
+  bmsRender('bmsCurChart',[mkBmsDs('Ток','#4dabf7',points.map(function(p){ return {x:new Date(p.ts), y:p.current_a}; }))],'A',false,true);
+  // 4. Мощность (± ось посередине)
+  bmsRender('bmsPwrChart',[mkBmsDs('Мощность','#ff6b6b',points.map(function(p){ return {x:new Date(p.ts), y:p.power_w}; }))],'W',false,true);
+  // 5. Напряжения всех ячеек на одном графике
+  var ncells=0; points.forEach(function(p){ var l=(p.cells_v||[]).length; if(l>ncells)ncells=l; });
+  var cds=[];
+  for(var i=0;i<ncells;i++){
+    (function(i){
+      cds.push(mkBmsDs('Ячейка '+(i+1),CHART_COLORS[i%CHART_COLORS.length],points.map(function(p){
+        var c=p.cells_v||[]; return {x:new Date(p.ts), y:(i<c.length? c[i] : null)};
+      })));
+    })(i);
+  }
+  bmsRender('bmsCellsChart',cds,'V',true,false);
+  // 6. Температуры: батарея (T1/T2), силовые ключи (T3), плата (T4)
+  var tnames=['T1 · Батарея 1','T2 · Батарея 2','T3 · Силовая плата','T4 · Плата управления'];
+  var tcols=['#00b894','#55efc4','#ff9f43','#a29bfe'];
+  var tds=[];
+  for(var t=0;t<4;t++){
+    (function(t){
+      tds.push(mkBmsDs(tnames[t],tcols[t],points.map(function(p){
+        var arr=p.temperatures_c||[]; return {x:new Date(p.ts), y:(t<arr.length? arr[t] : null)};
+      })));
+    })(t);
+  }
+  bmsRender('bmsTempChart',tds,'°C',true,false);
+}
+async function loadBmsCharts(){
+  try{
+    var to=new Date(), from=new Date(Date.now()-24*3600*1000);
+    var url='/api/bms/'+encodeURIComponent(NAME)+'/series?from='+encodeURIComponent(from.toISOString())+'&to='+encodeURIComponent(to.toISOString());
+    var r=await fetch(url);
+    if(!r.ok) return;
+    var data=await r.json();
+    buildBmsCharts(data.points||[]);
+  }catch(e){}
+}
+loadBmsCharts();
+
 load(); setInterval(load,1000);
 </script>
 </body>
@@ -1580,10 +1674,16 @@ func (h *dashboardHandler) apiBMS(w http.ResponseWriter, r *http.Request) {
 
 // apiBMSOne отдаёт актуальное состояние одной ANT BMS по deviceName
 // (/api/bms/<name>) для страницы деталей (обновление раз в секунду).
+// /api/bms/<name>/series — временной ряд 5-минутных усреднённых точек
+// (см. apiBMSSeries).
 func (h *dashboardHandler) apiBMSOne(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/api/bms/")
 	if name == "" {
 		http.Error(w, "не указано имя BMS", http.StatusBadRequest)
+		return
+	}
+	if strings.HasSuffix(name, "/series") {
+		h.apiBMSSeries(w, r, strings.TrimSuffix(name, "/series"))
 		return
 	}
 	raw, err := h.store.BMSOne(name)
@@ -1600,6 +1700,39 @@ func (h *dashboardHandler) apiBMSOne(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write([]byte(raw))
+}
+
+// apiBMSSeries отдаёт 5-минутные усреднённые точки BMS (/api/bms/<name>/series)
+// за период [from, to] (RFC3339; по умолч. — последние 24 часа) из Redis-ряда
+// (окно удержания 2 календарных суток). Точки — bmsSeriesPoint: ts +
+// усреднённые параметры (см. bms_accumulator.go).
+func (h *dashboardHandler) apiBMSSeries(w http.ResponseWriter, r *http.Request, name string) {
+	now := time.Now()
+	to := now
+	if s := r.URL.Query().Get("to"); s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			to = t
+		}
+	}
+	from := to.Add(-24 * time.Hour)
+	if s := r.URL.Query().Get("from"); s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			from = t
+		}
+	}
+	pts, err := h.store.QueryBMSSeries(name, from, to)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"name":   name,
+		"from":   from.Format(time.RFC3339),
+		"to":     to.Format(time.RFC3339),
+		"points": pts,
+	})
 }
 
 // bmsDetail — страница деталей ANT BMS (/bms/<name>): все текущие параметры

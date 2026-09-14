@@ -31,6 +31,12 @@ const (
 	// BMS-пулером 1 раз в секунду (bms_poller.go), чистится при исчезновении
 	// устройства из коллекции.
 	redisBMSKey = "sunreceiver:bms"
+	// redisBMSSeriesPrefix — временной ряд 5-минутных усреднённых точек ANT BMS
+	// (bms_accumulator.go). Ключи вида sunreceiver:bms:series:<YYYY-MM>, каждый —
+	// ZSET: score=Unix (сек., начало 5-минутного промежутка), member=JSON
+	// bmsSeriesPoint (name + ts + значения). Хранятся последние 2 календарных
+	// суток (чистка PurgeOld), как и ряд инверторов.
+	redisBMSSeriesPrefix = "sunreceiver:bms:series:"
 )
 
 // redisStore — тонкая обёртка над клиентом Redis для текущих значений и временного ряда.
@@ -65,6 +71,12 @@ func openRedis(addr string) (*redis.Client, error) {
 // redisSeriesKey возвращает ключ месячного сегмента временного ряда для ts.
 func redisSeriesKey(ts time.Time) string {
 	return redisSeriesPrefix + ts.Format("2006-01")
+}
+
+// bmsSeriesKey возвращает ключ месячного сегмента ряда 5-минутных усреднённых
+// точек BMS для ts.
+func bmsSeriesKey(ts time.Time) string {
+	return redisBMSSeriesPrefix + ts.Format("2006-01")
 }
 
 // SaveSnapshot пишет снимок в Redis одной транзакцией:
@@ -256,6 +268,61 @@ func (s *redisStore) BMSOne(name string) (string, error) {
 	return v, err
 }
 
+// SaveBMSSeries кладёт одну 5-минутную усреднённую точку BMS в месячный ZSET
+// ряда (score = Unix-секунды начала промежутка). Хранение — последние 2
+// календарных суток (чистка PurgeOld), как и ряд инверторов.
+func (s *redisStore) SaveBMSSeries(p bmsSeriesPoint, ts time.Time) error {
+	b, err := json.Marshal(p)
+	if err != nil {
+		return fmt.Errorf("marshal bms series %s: %w", p.Name, err)
+	}
+	key := bmsSeriesKey(ts)
+	pipe := s.rdb.TxPipeline()
+	pipe.ZAdd(s.ctx, key, redis.Z{Score: float64(ts.Unix()), Member: string(b)})
+	pipe.Expire(s.ctx, key, 40*24*time.Hour)
+	_, err = pipe.Exec(s.ctx)
+	if err != nil {
+		return fmt.Errorf("save bms series %s: %w", p.Name, err)
+	}
+	return nil
+}
+
+// QueryBMSSeries возвращает 5-минутные усреднённые точки одной BMS (по
+// deviceName) за период [start, end] включительно из Redis-ряда, по
+// возрастанию времени. Читает месячные сегменты ZRANGEBYSCORE (в пределах
+// окна удержания 2 календарных суток); отфильтрованные по имени точки —
+// точный срез для графиков конкретной BMS.
+func (s *redisStore) QueryBMSSeries(name string, start, end time.Time) ([]bmsSeriesPoint, error) {
+	if start.After(end) {
+		return nil, errors.New("start after end")
+	}
+	min := strconv.FormatInt(start.Unix(), 10)
+	max := strconv.FormatInt(end.Unix(), 10)
+	var all []bmsSeriesPoint
+	eachMonth(start, end, func(y int, m time.Month) bool {
+		key := bmsSeriesKey(time.Date(y, m, 1, 0, 0, 0, 0, time.Local))
+		vals, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{
+			Min: min,
+			Max: max,
+		}).Result()
+		if err != nil {
+			return false
+		}
+		for _, v := range vals {
+			var p bmsSeriesPoint
+			if e := json.Unmarshal([]byte(v), &p); e != nil {
+				continue
+			}
+			if p.Name != name {
+				continue
+			}
+			all = append(all, p)
+		}
+		return true
+	})
+	return all, nil
+}
+
 // eachMonth вызывает fn для каждого года/месяца, покрывающего [start, end] включительно.// Возвращает false, если fn хочет остановиться.
 func eachMonth(start, end time.Time, fn func(y int, m time.Month) bool) {
 	y, m := start.Year(), start.Month()
@@ -276,18 +343,17 @@ func eachMonth(start, end time.Time, fn func(y int, m time.Month) bool) {
 	}
 }
 
-// scanSeriesKeys возвращает все месячные ключи временного ряда (prefix*) через
-// SCAN — не блокирует Redis в отличие от KEYS. Вызывается очисткой (PurgeOld) и
-// проверкой пустоты (IsEmpty).
-func (s *redisStore) scanSeriesKeys() ([]string, error) {
+// scanPrefixKeys возвращает все ключи с данным префиксом через SCAN — не
+// блокирует Redis в отличие от KEYS.
+func (s *redisStore) scanPrefixKeys(prefix string) ([]string, error) {
 	var (
-		keys  []string
+		keys   []string
 		cursor uint64
 	)
 	for {
-		batch, next, err := s.rdb.Scan(s.ctx, cursor, redisSeriesPrefix+"*", 200).Result()
+		batch, next, err := s.rdb.Scan(s.ctx, cursor, prefix, 200).Result()
 		if err != nil {
-			return nil, fmt.Errorf("scan series keys: %w", err)
+			return nil, fmt.Errorf("scan keys %s: %w", prefix, err)
 		}
 		keys = append(keys, batch...)
 		cursor = next
@@ -296,6 +362,12 @@ func (s *redisStore) scanSeriesKeys() ([]string, error) {
 		}
 	}
 	return keys, nil
+}
+
+// scanSeriesKeys возвращает все месячные ключи временного ряда инверторов
+// (prefix*) — для проверки пустоты (IsEmpty).
+func (s *redisStore) scanSeriesKeys() ([]string, error) {
+	return s.scanPrefixKeys(redisSeriesPrefix + "*")
 }
 
 // IsEmpty возвращает true, если в Redis нет ни текущего состояния, ни одного
@@ -326,10 +398,11 @@ func recentCutoff(t time.Time) time.Time {
 	return startOfToday.AddDate(0, 0, -1)
 }
 
-// PurgeOld удаляет из временного ряда Redis (месячные сегменты) все точки,
-// timestamp которых строго старше окна последних 2 календарных суток
-// (recentCutoff). Пустые сегменты удаляются целиком. Текущий HASH current
-// не трогается — последнее состояние инвертора хранится всегда.
+// PurgeOld удаляет из временных рядов Redis (месячные сегменты инверторов и
+// 5-минутных усреднённых точек BMS) все точки, timestamp которых строго
+// старше окна последних 2 календарных суток (recentCutoff). Пустые сегменты
+// удаляются целиком. Текущие HASH (current, sunreceiver:bms) не трогается —
+// последнее состояние устройств хранится всегда.
 // Вызывается фоновым процессом (см. runRedisCleanup).
 func (s *redisStore) PurgeOld(now time.Time) {
 	cutoff := recentCutoff(now)
@@ -337,6 +410,13 @@ func (s *redisStore) PurgeOld(now time.Time) {
 	if err != nil {
 		log.Printf("redis cleanup keys: %v", err)
 		return
+	}
+	// Ряд 5-минутных усреднённых точек BMS чистится тем же окном.
+	bmsKeys, err := s.scanPrefixKeys(redisBMSSeriesPrefix + "*")
+	if err != nil {
+		log.Printf("redis cleanup bms keys: %v", err)
+	} else {
+		keys = append(keys, bmsKeys...)
 	}
 	// Операцию выполняем так, чтобы «строго старше cutoff», т.е. ZRemRangeByScore
 	// убирает [ -inf ; cutoff-1 ], поэтому ровно cutoff остаётся в ряде.

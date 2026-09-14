@@ -1279,10 +1279,12 @@ func main() {
 	// опрашиваются отдельно, 1 раз в секунду, и пишутся в Redis со специальной
 	// логикой «одна строка за 10 с» (см. SaveSnapshotWindow).
 	go runMapPoll(store, stopBG)
-	// ANT BMS (read_bms.php) — 1 раз в секунду, актуальное состояние в отдельном
-	// Redis-ключе (HASH sunreceiver:bms), см. bms_poller.go.
+	// ANT BMS (read_bms.php) — 1 раз в секунду: актуальное состояние в отдельном
+	// Redis-ключе (HASH sunreceiver:bms) + накопление 5-минутных усреднённых
+	// точек в Redis (ряд, окно 2 суток) и PG (bms_averages), см. bms_poller.go
+	// и bms_accumulator.go.
 	if bmsSite != nil {
-		go runBmsPoll(store, stopBG)
+		go runBmsPoll(store, pg, stopBG)
 	}
 	// Электросчётчик DDS238 — 1 раз в секунду (мгновенные значения в Redis +
 	// посуточные тарифные захваты в PG, см. runMeterPoll и meter_tariff.go).

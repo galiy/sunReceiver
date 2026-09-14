@@ -66,6 +66,18 @@ DROP INDEX IF EXISTS sunreceiver.averages_ts_idx;
 	if err := ensureMeterTariffSchema(s); err != nil {
 		return fmt.Errorf("pg meter tariff schema: %w", err)
 	}
+	// Таблица 5-минутных усреднённых точек ANT BMS (name = deviceName).
+	// PK (name, ts) — эффективная выборка «конкретная BMS за диапазон времени»
+	// (узкий индексный range-scan по первичному ключу).
+	if _, err := s.pool.Exec(s.ctx, `
+CREATE TABLE IF NOT EXISTS sunreceiver.bms_averages (
+	name   text        NOT NULL,
+	ts     timestamptz NOT NULL,
+	values jsonb       NOT NULL DEFAULT '{}'::jsonb,
+	PRIMARY KEY (name, ts)
+);`); err != nil {
+		return fmt.Errorf("pg bms_averages schema: %w", err)
+	}
 	return nil
 }
 
@@ -133,6 +145,61 @@ WHERE ts >= $1 AND ts <= $2`
 		return nil, fmt.Errorf("pg rows: %w", err)
 	}
 	return snaps, nil
+}
+
+// InsertBMSAveraged сохраняет одну усреднённую за 5 минут точку BMS
+// (ts — начало промежутка). Идемпотентна по (name, ts): повторная запись
+// игнорируется (первый, более полный, вариант побеждает).
+func (s *pgStore) InsertBMSAveraged(name string, ts time.Time, avg bmsAveraged) error {
+	vals, err := json.Marshal(avg)
+	if err != nil {
+		return fmt.Errorf("pg marshal bms avg %s: %w", name, err)
+	}
+	_, err = s.pool.Exec(s.ctx, `
+INSERT INTO sunreceiver.bms_averages (name, ts, values)
+VALUES ($1, $2, $3)
+ON CONFLICT (name, ts) DO NOTHING`,
+		name, ts.UTC(), vals)
+	if err != nil {
+		return fmt.Errorf("pg insert bms avg %s: %w", name, err)
+	}
+	return nil
+}
+
+// BMSAverages возвращает 5-минутные усреднённые точки одной BMS (deviceName)
+// за период [start, end] включительно, по возрастанию ts. Выборка идёт по
+// PK (name, ts) — узкий индексный range-scan по конкретной BMS (эффективно
+// для построения графиков за произвольный диапазон времени).
+func (s *pgStore) BMSAverages(name string, start, end time.Time) ([]bmsSeriesPoint, error) {
+	rows, err := s.pool.Query(s.ctx, `
+SELECT ts, values
+FROM sunreceiver.bms_averages
+WHERE name = $1 AND ts >= $2 AND ts <= $3
+ORDER BY ts ASC`, name, start.UTC(), end.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("pg query bms averages: %w", err)
+	}
+	defer rows.Close()
+
+	pts := []bmsSeriesPoint{}
+	for rows.Next() {
+		var ts time.Time
+		var vals json.RawMessage
+		if err := rows.Scan(&ts, &vals); err != nil {
+			return nil, fmt.Errorf("pg scan bms avg: %w", err)
+		}
+		p := bmsSeriesPoint{Name: name, Ts: ts.Format(time.RFC3339)}
+		if len(vals) > 0 {
+			if err := json.Unmarshal(vals, &p.bmsAveraged); err != nil {
+				continue
+			}
+		}
+		pts = append(pts, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pg bms averages rows: %w", err)
+	}
+	return pts, nil
 }
 
 // DailyTariffsRange возвращает финализированные посуточные тарифы счётчика
