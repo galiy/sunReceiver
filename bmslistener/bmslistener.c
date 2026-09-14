@@ -270,7 +270,7 @@ static int bms_parse_frame(bmsdev_t *d, const unsigned char *f) {
 
     for (int i = 0; i < 32; i++) {
         int off = 6 + i * 2;
-        /* off = 6..66, off+1 <= 67 < 140 — переполнение не грозит */
+        /* off = 6..68 (чётные), off+1 ≤ 69 < 140 — переполнение не грозит */
         d->cells_v[i] = rd16be(f, off) / 1000.0;   /* mV -> V */
     }
 
@@ -365,7 +365,7 @@ static int dev_is_bms(const char *dev) {
     int got = 0;
     unsigned char buf[512];
     time_t t0 = time(NULL);
-    while (!got && (time(NULL) - t0) < (time_t)(PROBE_TIMEOUT_MS / 1000)) {
+    while (!got && !g_stop && (time(NULL) - t0) < (time_t)(PROBE_TIMEOUT_MS / 1000)) {
         ssize_t r = read(fd, buf, sizeof buf);
         if (r > 0) {
             bms_feed(&t, buf, (int)r);
@@ -381,7 +381,7 @@ static int dev_is_bms(const char *dev) {
     return fd;
 }
 
-/* ---------- публикация коллекции в shm (ключ 2018, единый JSON-массив + #EOF) ---------- */
+/* ---------- публикация коллекции в shm (ключ 2018, объект {"updated":...,"devices":[...]} + #EOF) ---------- */
 static void publish_all(bmsdev_t *devs, int n) {
     static char *shm = NULL;
     static int shmid = -1;
@@ -454,6 +454,8 @@ static void scan_for_new(bmsdev_t *devs, int n) {
     time_t probe_deadline = now_ts() + PROBE_BUDGET_SEC;
     while ((e = readdir(dp)) != NULL) {
         if (strncmp(e->d_name, "ttyUSB", 6) != 0) continue;
+        /* d_name до 255 симв.; "/dev/"+имя+NUL должен уместиться в path[DEVPATH_MAX] */
+        if (strlen(e->d_name) > DEVPATH_MAX - 6) continue;
         char path[DEVPATH_MAX];
         snprintf(path, sizeof path, "/dev/%s", e->d_name);
 
@@ -488,12 +490,17 @@ static void scan_for_new(bmsdev_t *devs, int n) {
             probe_bad_add(path);
             continue;
         }
-        probe_bad_clear(path);
 
         /* находим свободный слот в devs[] */
         int slot = -1;
         for (int i = 0; i < n; i++) if (devs[i].fd < 0 && devs[i].dev[0] == 0) { slot = i; break; }
-        if (slot < 0) { bms_log("no free slot for %s\n", path); close(probe_fd); break; }
+        if (slot < 0) {
+            bms_log("no free slot for %s\n", path);
+            close(probe_fd);
+            probe_bad_add(path); /* не влезло — отложим повторную пробу на PROBE_BACKOFF */
+            break;
+        }
+        probe_bad_clear(path);
 
         bmsdev_t *b = &devs[slot];
         bms_reset(b);
