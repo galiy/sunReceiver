@@ -19,6 +19,7 @@
   "mppt": {
     "base_url": "http://192.168.0.30",
     "mppt_path": "/read_json.php?device=mppt",
+    "bms_path": "/read_bms.php",
     "login": "admin",
     "password": "CHANGE_ME"
   },

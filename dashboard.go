@@ -248,6 +248,15 @@ h1 { font-size:22px; margin:0 0 4px; }
 .meter-stat .off { color:#ff9f43; } /* нулевое/неопределённое */
 .meter-ts { font-size:12px; color:#6b7280; }
 .meter-note { font-size:11px; color:#6b7280; margin-top:8px; }
+/* BMS (ANT батарея) — крупные кнопки-батарейки (высота ~4 см): заполнение =
+   остаточный заряд (SOC). */
+.bms-btn { flex:0 0 auto; display:flex; flex-direction:column; align-items:center; gap:10px; background:linear-gradient(135deg,#1d2430,#202a3a); border:1px solid #2a3342; border-radius:14px; padding:18px 22px 14px; text-decoration:none; min-width:170px; }
+.bms-btn:hover { border-color:#2f6fed; }
+.bms-batt { position:relative; width:56px; height:150px; border:3px solid #8a93a1; border-radius:11px; background:#10141b; }
+.bms-batt::before { content:''; position:absolute; top:-9px; left:50%; transform:translateX(-50%); width:26px; height:7px; background:#8a93a1; border-radius:3px 3px 0 0; }
+.bms-batt-fill { position:absolute; left:4px; right:4px; bottom:4px; border-radius:6px; transition:height .6s; }
+.bms-batt-soc { position:absolute; left:0; right:0; top:50%; transform:translateY(-50%); text-align:center; font-size:26px; font-weight:700; color:#fff; text-shadow:0 1px 4px rgba(0,0,0,.9); font-variant-numeric:tabular-nums; }
+.bms-name { font-size:15px; font-weight:600; color:#e6e6e6; white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -258,6 +267,14 @@ h1 { font-size:22px; margin:0 0 4px; }
   </div>
   <a class="nav-btn" href="/charts">Открыть графики</a>
   <a class="nav-btn" href="/energy">Электроэнергия</a>
+</div>
+
+<div class="group group-top">
+  <div class="group-head">
+    <span class="group-title">BMS (ANT батарея)</span>
+    <span class="meter-ts">обновление раз в минуту</span>
+  </div>
+  <div class="group-body" id="bmsList"><span class="missing">Загрузка...</span></div>
 </div>
 
 <div class="group group-top">
@@ -629,7 +646,36 @@ function setKpi2(id, v){
 	}
 }
 
+// ---------- BMS (ANT батарея) ----------
+// Кнопки-батарейки: заполнение = остаточный заряд (SOC), клик — страница
+// деталей батареи (/bms/<name>). Обновление раз в минуту (отдельно от
+// 1-секундного tick главной страницы).
+function bmsSocColor(soc){ return soc<20?'#ff6b6b':(soc<50?'#ff9f43':(soc<80?'#f9ca24':'#00b894')); }
+async function tickBMS(){
+  try{
+    var r=await fetch('/api/bms');
+    if(!r.ok) return;
+    var data=await r.json();
+    var list=data.bms||[];
+    var el=document.getElementById('bmsList');
+    if(!list.length){ el.innerHTML='<span class="missing">BMS не найдены (или опрос отключён)</span>'; return; }
+    var h='';
+    for(var i=0;i<list.length;i++){
+      var d=list[i];
+      var soc=Math.max(0,Math.min(100,Number(d.soc)||0));
+      h+='<a class="bms-btn" href="/bms/'+encodeURIComponent(d.deviceName)+'" title="Порт: '+esc(d.port)+'">'
+        +'<div class="bms-batt">'
+        +'<div class="bms-batt-fill" style="height:'+Math.max(4,soc)+'%;background:'+bmsSocColor(soc)+'"></div>'
+        +'<span class="bms-batt-soc">'+soc+'%</span>'
+        +'</div>'
+        +'<div class="bms-name">'+esc(d.deviceName)+'</div>'
+        +'</a>';
+    }
+    el.innerHTML=h;
+  }catch(e){}
+}
 tick(); setInterval(tick,1000);
+tickBMS(); setInterval(tickBMS,60000);
 </script>
 </body>
 </html>`
@@ -1311,6 +1357,190 @@ initEnergyPanel({
 
 var energyTmpl = template.Must(template.New("energy").Parse(energyPage))
 
+// bmsDetailPage — страница деталей ANT BMS (/bms/<name>): актуальные параметры
+// одной батареи из HASH sunreceiver:bms (обновление раз в секунду). Имя берётся
+// из URL; данные — /api/bms/<name>. Ячейки: самая высокая — красная, самая
+// низкая — синяя, остальные — зелёные; рядом с заголовком — разброс (mV).
+const bmsDetailPage = `<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BMS — SunReceiver</title>
+<style>
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0f1115; color:#e6e6e6; margin:0; padding:20px; overflow-x:hidden; }
+.top-nav { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+.top-nav .ttl { margin:0; font-size:22px; }
+.top-nav .sub { color:#8a93a1; margin:4px 0 0; font-size:13px; }
+.nav-btn { background:#2f6fed; color:#fff; border:none; border-radius:8px; padding:9px 16px; font-size:14px; font-weight:600; cursor:pointer; text-decoration:none; white-space:nowrap; }
+.nav-btn.secondary { background:#252b36; border:1px solid #333b49; color:#e6e6e6; }
+.kpi-row { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:16px; }
+.kpi { flex:1 1 150px; min-width:140px; background:linear-gradient(135deg,#1d2430,#202a3a); border:1px solid #2a3342; border-radius:10px; padding:12px 16px; }
+.kpi .lbl { font-size:11px; color:#8a93a1; text-transform:uppercase; letter-spacing:.05em; }
+.kpi .val { font-size:26px; font-weight:700; line-height:1.15; font-variant-numeric:tabular-nums; margin-top:4px; }
+.kpi .unit { font-size:14px; color:#8a93a1; font-weight:400; margin-left:5px; }
+.kpi .sub { font-size:11px; color:#6b7280; margin-top:2px; }
+.kpi .pos { color:#6fd08a; } .kpi .neg { color:#ff9f43; }
+.kpi .socval { display:flex; align-items:center; gap:12px; }
+.mini-batt { position:relative; width:22px; height:40px; border:2px solid #8a93a1; border-radius:5px; background:#10141b; flex:0 0 auto; }
+.mini-batt::before { content:''; position:absolute; top:-6px; left:50%; transform:translateX(-50%); width:10px; height:4px; background:#8a93a1; border-radius:2px 2px 0 0; }
+.mini-batt-fill { position:absolute; left:2px; right:auto; top:2px; bottom:2px; border-radius:2px; }
+.cards { display:flex; flex-wrap:wrap; gap:16px; }
+.card { background:#181c24; border:1px solid #252b36; border-radius:10px; padding:16px; flex:1 1 440px; min-width:min(440px,100%); }
+.card h2 { margin:0 0 12px; font-size:15px; font-weight:600; }
+.card h2 .delta { color:#ff9f43; font-size:13px; font-weight:600; margin-left:10px; }
+.legend { display:flex; flex-wrap:wrap; gap:14px; font-size:11px; color:#8a93a1; margin:0 0 12px; }
+.legend span { display:inline-flex; align-items:center; gap:5px; }
+.legend i { width:10px; height:10px; border-radius:3px; display:inline-block; }
+.cells { display:flex; flex-wrap:wrap; gap:12px; }
+.cell { display:flex; flex-direction:column; align-items:center; gap:4px; }
+.cell-batt { position:relative; width:28px; height:56px; border:2px solid #8a93a1; border-radius:6px; background:#10141b; }
+.cell-batt::before { content:''; position:absolute; top:-6px; left:50%; transform:translateX(-50%); width:11px; height:4px; background:#8a93a1; border-radius:2px 2px 0 0; }
+.cell-fill { position:absolute; left:2px; right:2px; bottom:2px; border-radius:3px; transition:height .4s; }
+.cell.mv { font-size:11px; font-variant-numeric:tabular-nums; color:#e6e6e6; }
+.cell.idx { font-size:10px; color:#6b7280; }
+.cell.max .cell-batt { border-color:#ff6b6b; }
+.cell.min .cell-batt { border-color:#4dabf7; }
+.temps { display:flex; flex-direction:column; gap:7px; }
+.trow { display:flex; align-items:center; gap:10px; font-size:13px; }
+.trow .tname { width:26px; color:#8a93a1; font-size:12px; }
+.tbar { flex:1; height:10px; background:#10141b; border-radius:5px; overflow:hidden; }
+.tbar-fill { height:100%; border-radius:5px; transition:width .4s; }
+.trow .tval { width:52px; text-align:right; font-variant-numeric:tabular-nums; }
+.mos-row { display:flex; gap:10px; flex-wrap:wrap; margin-top:4px; }
+.mos { padding:7px 14px; border-radius:18px; font-size:13px; font-weight:600; border:1px solid #333b49; background:#181c24; color:#6b7280; }
+.mos.on { background:#123524; border-color:#00b894; color:#00b894; }
+.foot { color:#6b7280; font-size:12px; margin-top:16px; }
+.missing { color:#6b7280; font-style:italic; }
+</style>
+</head>
+<body>
+<div class="top-nav">
+  <div>
+    <h1 class="ttl" id="bmsTitle">ANT BMS</h1>
+    <p class="sub" id="bmsSub">Загрузка...</p>
+  </div>
+  <a class="nav-btn secondary" href="/">&larr; На главную</a>
+</div>
+
+<div class="kpi-row" id="kpiRow"><div class="missing">Загрузка...</div></div>
+
+<div class="cards">
+  <div class="card">
+    <h2>Напряжения ячеек, mV <span class="delta" id="cellDelta"></span></h2>
+    <div class="legend">
+      <span><i style="background:#ff6b6b"></i>максимальное</span>
+      <span><i style="background:#4dabf7"></i>минимальное</span>
+      <span><i style="background:#00b894"></i>остальные</span>
+    </div>
+    <div class="cells" id="cellsGrid"></div>
+  </div>
+  <div class="card">
+    <h2>Температуры, &deg;C</h2>
+    <div class="temps" id="tempsWrap"></div>
+    <h2 style="margin-top:20px">Мощностные ключи</h2>
+    <div class="mos-row" id="mosWrap"></div>
+  </div>
+</div>
+
+<p class="foot" id="bmsFoot"></p>
+
+<script>
+'use strict';
+function esc(s){ return String(s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+function fmtNum(n,digits){ return isFinite(n)? n.toLocaleString('ru-RU',{maximumFractionDigits:digits}) : '—'; }
+
+var NAME = decodeURIComponent(location.pathname.replace(/^\/bms\//,''));
+
+// Цвет заполнения ячейки: max — красная, min — синяя, остальные — зелёные.
+var CELL_COLOR={ max:'#ff6b6b', min:'#4dabf7', normal:'#00b894' };
+// Заполнение батарейки ячейки по напряжению (шкала LiFePO4 3.00–3.65 В).
+function cellFillPct(v){ var p=(v-3.00)/(3.65-3.00)*100; return Math.max(4,Math.min(100,p)); }
+function cellColor(d,i){ if(i===d.max_cell_idx) return 'max'; if(i===d.min_cell_idx) return 'min'; return 'normal'; }
+
+function renderKPIs(d){
+  var soc=Math.max(0,Math.min(100,Number(d.soc)||0));
+  var socCol= soc<20?'#ff6b6b':(soc<50?'#ff9f43':(soc<80?'#f9ca24':'#00b894'));
+  var cells=(d.cells_v||[]).slice(0,d.cell_count);
+  var packV=0; for(var i=0;i<cells.length;i++) packV+=cells[i];
+  var iCls= d.current_a>=0? 'pos':'neg';
+  var pCls= d.power_w>=0? 'pos':'neg';
+  var h='';
+  h+='<div class="kpi"><div class="lbl">Заряд (SOC)</div><div class="val socval">'
+    +'<span class="mini-batt"><span class="mini-batt-fill" style="width:'+soc+'%;background:'+socCol+';display:block"></span></span>'
+    +'<span>'+soc+'<span class="unit">%</span></span></div>'
+    +'<div class="sub">остаток '+fmtNum(d.remaining_ah,1)+' А·ч из '+fmtNum(d.capacity_ah,0)+' А·ч</div></div>';
+  h+='<div class="kpi"><div class="lbl">Напряжение пакета</div><div class="val">'+fmtNum(packV,2)+'<span class="unit">V</span></div>'
+    +'<div class="sub">'+d.cell_count+' ячеек, сред. '+fmtNum(d.avg_cell_v,3)+' В/яч</div></div>';
+  h+='<div class="kpi"><div class="lbl">Ток</div><div class="val '+iCls+'">'+fmtNum(d.current_a,1)+'<span class="unit">A</span></div></div>';
+  h+='<div class="kpi"><div class="lbl">Мощность</div><div class="val '+pCls+'">'+fmtNum(d.power_w,1)+'<span class="unit">W</span></div></div>';
+  h+='<div class="kpi"><div class="lbl">Ёмкость</div><div class="val">'+fmtNum(d.capacity_ah,0)+'<span class="unit">А·ч</span></div></div>';
+  document.getElementById('kpiRow').innerHTML=h;
+}
+
+function renderCells(d){
+  var cells=(d.cells_v||[]).slice(0,d.cell_count);
+  var h='';
+  for(var i=0;i<cells.length;i++){
+    var mv=Math.round(cells[i]*1000);
+    var c=cellColor(d,i);
+    h+='<div class="cell '+c+'">'
+      +'<div class="cell-batt"><div class="cell-fill" style="height:'+cellFillPct(cells[i])+'%;background:'+CELL_COLOR[c]+'"></div></div>'
+      +'<div class="mv">'+mv+'</div>'
+      +'<div class="idx">'+(i+1)+'</div>'
+      +'</div>';
+  }
+  document.getElementById('cellsGrid').innerHTML=h;
+  var delta=Math.round((d.max_cell_v-d.min_cell_v)*1000);
+  document.getElementById('cellDelta').textContent='разброс: '+delta+' мВ (макс '+Math.round(d.max_cell_v*1000)+' / мин '+Math.round(d.min_cell_v*1000)+')';
+}
+
+function renderTemps(d){
+  var t=d.temperatures_c||[];
+  var h='';
+  for(var i=0;i<t.length;i++){
+    var v=Number(t[i]);
+    var w=Math.max(2,Math.min(100,v/60*100));
+    var col= v<15?'#4dabf7':(v<=40?'#00b894':(v<=55?'#ff9f43':'#ff6b6b'));
+    h+='<div class="trow"><span class="tname">T'+(i+1)+'</span>'
+      +'<span class="tbar"><span class="tbar-fill" style="width:'+w+'%;background:'+col+';display:block"></span></span>'
+      +'<span class="tval">'+fmtNum(v,0)+' &deg;C</span></div>';
+  }
+  document.getElementById('tempsWrap').innerHTML=h;
+}
+
+function renderMos(d){
+  function pill(label,on){ return '<span class="mos'+(on?' on':'')+'">'+label+': '+(on?'ВКЛ':'ВЫКЛ')+'</span>'; }
+  document.getElementById('mosWrap').innerHTML=pill('Заряд',d.charge_mos===1)+pill('Разряд',d.discharge_mos===1)+pill('Балансировка',d.balancer===1);
+}
+
+async function load(){
+  if(!NAME){ document.getElementById('bmsTitle').textContent='BMS не выбрана'; return; }
+  try{
+    var r=await fetch('/api/bms/'+encodeURIComponent(NAME));
+    if(r.status===404){
+      document.getElementById('bmsTitle').textContent='BMS не найдена';
+      document.getElementById('bmsSub').textContent='Устройство отсутствует в Redis (опрос отключён или батарея отключена)';
+      return;
+    }
+    if(!r.ok) return;
+    var d=await r.json();
+    document.title=d.deviceName+' — SunReceiver';
+    document.getElementById('bmsTitle').textContent=d.deviceName;
+    document.getElementById('bmsSub').textContent='ANT BMS · порт '+d.port+' · актуально: '+d.time;
+    renderKPIs(d); renderCells(d); renderTemps(d); renderMos(d);
+    document.getElementById('bmsFoot').textContent='Порт: '+d.port+' · счётчик кадров: '+d.frames+' · обновляется каждую секунду';
+  }catch(e){}
+}
+load(); setInterval(load,1000);
+</script>
+</body>
+</html>`
+
+var bmsDetailTmpl = template.Must(template.New("bmsdetail").Parse(bmsDetailPage))
+
 func (h *dashboardHandler) charts(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -1321,6 +1551,64 @@ func (h *dashboardHandler) energy(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = energyTmpl.Execute(w, nil)
+}
+
+// apiBMS отдаёт актуальное состояние всех ANT BMS (HASH sunreceiver:bms,
+// пулер bms_poller.go) для батареек на главной странице (обновление раз в минуту).
+func (h *dashboardHandler) apiBMS(w http.ResponseWriter, r *http.Request) {
+	m, err := h.store.BMSCurrent()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	devs := make([]bmsDevice, 0, len(m))
+	for _, raw := range m {
+		var d bmsDevice
+		if err := json.Unmarshal([]byte(raw), &d); err != nil {
+			continue
+		}
+		devs = append(devs, d)
+	}
+	sort.Slice(devs, func(i, j int) bool { return devs[i].DeviceName < devs[j].DeviceName })
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"generated_at": time.Now().Format(time.RFC3339),
+		"bms":          devs,
+	})
+}
+
+// apiBMSOne отдаёт актуальное состояние одной ANT BMS по deviceName
+// (/api/bms/<name>) для страницы деталей (обновление раз в секунду).
+func (h *dashboardHandler) apiBMSOne(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/api/bms/")
+	if name == "" {
+		http.Error(w, "не указано имя BMS", http.StatusBadRequest)
+		return
+	}
+	raw, err := h.store.BMSOne(name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if raw == "" {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "BMS не найдена"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write([]byte(raw))
+}
+
+// bmsDetail — страница деталей ANT BMS (/bms/<name>): все текущие параметры
+// выбранной батареи, обновление раз в секунду. JS берёт имя из URL и
+// опрашивает /api/bms/<name>.
+func (h *dashboardHandler) bmsDetail(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = bmsDetailTmpl.Execute(w, nil)
 }
 
 var dashboardTmpl = template.Must(template.New("dash").Parse(dashboardPage))
@@ -1931,9 +2219,12 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore) {
 	mux.HandleFunc("/", h.index)
 	mux.HandleFunc("/charts", h.charts)
 	mux.HandleFunc("/energy", h.energy)
+	mux.HandleFunc("/bms/", h.bmsDetail)
 	mux.HandleFunc("/api/current", h.apiCurrent)
 	mux.HandleFunc("/api/series", h.apiSeries)
 	mux.HandleFunc("/api/tariffs", h.apiTariffs)
+	mux.HandleFunc("/api/bms", h.apiBMS)
+	mux.HandleFunc("/api/bms/", h.apiBMSOne)
 	srv := &http.Server{Addr: addr, Handler: mux}
 	log.Printf("dashboard: http://%s/ (графики — http://%s/charts)", addr, addr)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
