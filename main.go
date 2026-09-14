@@ -123,6 +123,7 @@ type meterSection struct {
 type mpptSection struct {
 	BaseURL  string `json:"base_url"`
 	MPPTPath string `json:"mppt_path"`
+	BMSPath  string `json:"bms_path"` // путь к read_bms.php (ANT BMS); пусто — BMS не опрашивается
 	Login    string `json:"login"`
 	Password string `json:"password"`
 }
@@ -1215,6 +1216,12 @@ func main() {
 	// Конфигурация веб-API ПАК «Малина» для мониторинга MPPT (КЭС) — раздел "mppt"
 	// sunReceiver.json (бывший malina.json).
 	mppt = loadMPPTSite(mpptSec)
+	// ANT BMS (ANT BMS, web-API read_bms.php ПАК «Малина») — отдельный 1-сек цикл,
+	// актуальное состояние в отдельном Redis-ключе (HASH sunreceiver:bms).
+	bmsSite = loadBmsSite(mpptSec)
+	if bmsSite != nil {
+		log.Printf("bms: опрос ANT BMS через %s (1 раз в секунду, ключ Redis %s)", bmsSite.url, redisBMSKey)
+	}
 	// Если МАП опрашивается через веб-API (map.disabled=true), обязателен доступ к
 	// ПАК «Малина» (раздел "mppt") — иначе неоткуда взять параметры батареи/сети.
 	if mapAPI != nil && mppt == nil {
@@ -1272,6 +1279,11 @@ func main() {
 	// опрашиваются отдельно, 1 раз в секунду, и пишутся в Redis со специальной
 	// логикой «одна строка за 10 с» (см. SaveSnapshotWindow).
 	go runMapPoll(store, stopBG)
+	// ANT BMS (read_bms.php) — 1 раз в секунду, актуальное состояние в отдельном
+	// Redis-ключе (HASH sunreceiver:bms), см. bms_poller.go.
+	if bmsSite != nil {
+		go runBmsPoll(store, stopBG)
+	}
 	// Электросчётчик DDS238 — 1 раз в секунду (мгновенные значения в Redis +
 	// посуточные тарифные захваты в PG, см. runMeterPoll и meter_tariff.go).
 	if meterCfg != nil {

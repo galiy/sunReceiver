@@ -24,6 +24,13 @@ const (
 	// Месячная сегментация: чтение произвольного периода — это несколько ZRANGEBYSCORE
 	// по затронутым месяцам, отсортированных по времени.
 	redisSeriesPrefix = "sunreceiver:series:"
+	// redisBMSKey — HASH текущего состояния ANT BMS (bmslistener → read_bms.php
+	// ПАК «Малина»): поле = deviceName (напр. "AntBms 320 A/h"), значение = JSON
+	// устройства bmsDevice. Отдельный ключ — BMS не входит в общий снимок
+	// sunreceiver:current (нет универсального контракта значений). Пишется
+	// BMS-пулером 1 раз в секунду (bms_poller.go), чистится при исчезновении
+	// устройства из коллекции.
+	redisBMSKey = "sunreceiver:bms"
 )
 
 // redisStore — тонкая обёртка над клиентом Redis для текущих значений и временного ряда.
@@ -201,8 +208,55 @@ func (s *redisStore) PruneMPPT(active map[string]struct{}) {
 	s.mapMu.Unlock()
 }
 
-// eachMonth вызывает fn для каждого года/месяца, покрывающего [start, end] включительно.
-// Возвращает false, если fn хочет остановиться.
+// SetBMS обновляет коллекцию BMS-устройств в HASH sunreceiver:bms одной
+// транзакцией: пишет все активные (поле = deviceName, значение = JSON bmsDevice)
+// и удаляет те, которых нет в active (устройство исчезло из коллекции —
+// адаптер отключился/замолчал, bmslistener уже забыл его).
+func (s *redisStore) SetBMS(active map[string]string) error {
+	cur, err := s.rdb.HGetAll(s.ctx, redisBMSKey).Result()
+	if err != nil {
+		return fmt.Errorf("bms HGETALL: %w", err)
+	}
+	var stale []string
+	for k := range cur {
+		if _, ok := active[k]; !ok {
+			stale = append(stale, k)
+		}
+	}
+	pipe := s.rdb.TxPipeline()
+	for k, v := range active {
+		pipe.HSet(s.ctx, redisBMSKey, k, v)
+	}
+	if len(stale) > 0 {
+		pipe.HDel(s.ctx, redisBMSKey, stale...)
+	}
+	if _, err := pipe.Exec(s.ctx); err != nil {
+		return fmt.Errorf("bms set: %w", err)
+	}
+	return nil
+}
+
+// BMSCurrent возвращает текущее состояние всех BMS-устройств (поле = deviceName,
+// значение = JSON bmsDevice).
+func (s *redisStore) BMSCurrent() (map[string]string, error) {
+	m, err := s.rdb.HGetAll(s.ctx, redisBMSKey).Result()
+	if err != nil {
+		return nil, fmt.Errorf("bms HGETALL: %w", err)
+	}
+	return m, nil
+}
+
+// BMSOne возвращает текущее состояние одного BMS-устройства по deviceName;
+// пустая строка, если устройство отсутствует.
+func (s *redisStore) BMSOne(name string) (string, error) {
+	v, err := s.rdb.HGet(s.ctx, redisBMSKey, name).Result()
+	if errors.Is(err, redis.Nil) {
+		return "", nil
+	}
+	return v, err
+}
+
+// eachMonth вызывает fn для каждого года/месяца, покрывающего [start, end] включительно.// Возвращает false, если fn хочет остановиться.
 func eachMonth(start, end time.Time, fn func(y int, m time.Month) bool) {
 	y, m := start.Year(), start.Month()
 	for {
