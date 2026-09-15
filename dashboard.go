@@ -431,6 +431,7 @@ h1 { font-size:22px; margin:0 0 4px; }
 .pivot-table td.p-val { font-variant-numeric:tabular-nums; font-weight:600; }
 .pivot-table tr.p-power td.p-val { color:#66ff99; }
 .pivot-table td.stale-time { color:#ff6b6b; }
+.pivot-table td.stale-keep { color:#8a93a1; }
 .pivot-table td.p-unit { color:#8a93a1; font-weight:400; }
 .pivot-table td.p-empty { color:#4a5464; }
 .pivot-table tr:nth-child(even) td { background:#1b212b; }
@@ -711,7 +712,11 @@ function renderPivot(devices){
 	h+='<tr class="p-power"><td class="p-label">Реактивная мощность (var)</td>'+rowCells(grid,mpts,function(d){return isStaleDev(d)?null:devValue(d,'ac_reactive_power');})+'</tr>';
 	for(var p=0;p<PARAMS.length;p++){
 		var tag=PARAMS[p][0], label=PARAMS[p][1], unit=PARAMS[p][2];
-		h+='<tr><td class="p-label">'+esc(label)+' ('+esc(unit)+')</td>'+rowCells(grid,mpts,function(d){return isStaleDev(d)?null:devValue(d,tag);})+'</tr>';
+		// Накопительная выработка у offline-инвертора — последнее зарегистрированное
+		// значение (сколько выработал за день/всего до остановки) — оставляем,
+		// но серым (td.stale-keep).
+		var keepStale=(tag==='energy_today'||tag==='energy_total');
+		h+='<tr><td class="p-label">'+esc(label)+' ('+esc(unit)+')</td>'+rowCells(grid,mpts,function(d){return (!keepStale && isStaleDev(d))?null:devValue(d,tag);},null,keepStale?function(d){return isStaleDev(d)?'stale-keep':'';}:null)+'</tr>';
 	}
 	// Нижняя кромка рамок групп.
 	h+='<tr><td></td>';
