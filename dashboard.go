@@ -633,6 +633,7 @@ h1 { font-size:22px; margin:0 0 4px; }
 
 <div class="pivot-wrap" id="cards"><div class="missing">Загрузка...</div></div>
 
+<script>{{template "mjs"}}</script>
 <script>
 'use strict';
 
@@ -888,7 +889,6 @@ tick(); setInterval(tick,1000);
 tickBMS(); setInterval(tickBMS,60000);
 </script>
 {{template "mnav" .}}
-<script>{{template "mjs"}}</script>
 </body>
 </html>`
 
@@ -1012,6 +1012,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
   </div>
 </div>
 
+<script>{{template "mjs"}}</script>
 <script>
 'use strict';
 var SR_COARSE = ('ontouchstart' in window) || navigator.maxTouchPoints > 0 || (window.matchMedia && matchMedia('(pointer: coarse)').matches);
@@ -1451,7 +1452,6 @@ if(SR_COARSE){
 }
 </script>
 {{template "mnav" .}}
-<script>{{template "mjs"}}</script>
 </body>
 </html>`
 
@@ -1544,6 +1544,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
   <div class="chart-wrap"><canvas id="monthlyTariffChart"></canvas></div>
 </div>
 
+<script>{{template "mjs"}}</script>
 <script>
 'use strict';
 var SR_COARSE = ('ontouchstart' in window) || navigator.maxTouchPoints > 0 || (window.matchMedia && matchMedia('(pointer: coarse)').matches);
@@ -1730,7 +1731,6 @@ initEnergyPanel({
 });
 </script>
 {{template "mnav" .}}
-<script>{{template "mjs"}}</script>
 </body>
 </html>`
 
@@ -1908,6 +1908,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 
 <p class="foot" id="bmsFoot"></p>
 
+<script>{{template "mjs"}}</script>
 <script>
 'use strict';
 var SR_COARSE = ('ontouchstart' in window) || navigator.maxTouchPoints > 0 || (window.matchMedia && matchMedia('(pointer: coarse)').matches);
@@ -2305,7 +2306,6 @@ if(SR_COARSE){
 load(); setInterval(load,1000);
 </script>
 {{template "mnav" .}}
-<script>{{template "mjs"}}</script>
 </body>
 </html>`
 
