@@ -1214,7 +1214,7 @@ func main() {
 	// Дефолты адресов БД берутся из раздела "db" sunReceiver.json, иначе — локальные.
 	redisAddr := flag.String("redis", defaultRedisAddr(dbCfg), "адрес Redis (хост:порт)")
 	pgDSN := flag.String("pg", defaultPGDSN(dbCfg), "DSN PostgreSQL для persistent-хранилища (пустая строка — выключить)")
-	restoreWindow := flag.Duration("pg-restore-window", 30*24*time.Hour, "окно РЕСТАВРАЦИИ Redis из PG при пустом Redis")
+	restoreWindow := flag.Duration("pg-restore-window", 30*24*time.Hour, "окно РЕСТАВРАЦИИ Redis из PG при пустом Redis (фактическое окно не больше 2 календарных суток — recentCutoff)")
 	dashboardAddr := flag.String("dashboard", ":8080", "адрес веб-дашборда (пустая строка — выключить)")
 	flag.Parse()
 
