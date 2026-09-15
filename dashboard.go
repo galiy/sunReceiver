@@ -278,7 +278,9 @@ window.srBindChip = function(b, fnToggle, fnIsolate){
 //     страницы не блокируется: touch-action: pan-y);
 //   - щипок двумя пальцами — зум/у-зум (окно зафиксировано под серединой пальцев);
 //   - двойной тап — сброс зума;
-//   - тап — onTap(px) (показать значение в точке).
+//   - тап — onTap(px), если задан. На страницах графиков хинт со значениями на
+//     мобильной версии отключён (onHover не вызывает chart.update на каждый
+//     touchmove — он мешал зуму), поэтому onTap не передаётся.
 // Плагин chartjs-plugin-zoom на touch-устройствах отключён (pan/wheel/pinch),
 // чтобы его Hammer не перехватывал жесты и не мешал скроллу страницы.
 window.srTouchChart = function(getChart, canvasId, minSpan, onTap){
@@ -305,15 +307,19 @@ window.srTouchChart = function(getChart, canvasId, minSpan, onTap){
   }
   canvas.addEventListener('touchstart', function(e){
     var c=getChart(); if(!c){ st=null; return; }
-    if(e.touches.length===2){ beginPinch(c, e); }
-    else if(e.touches.length===1){
+    if(e.touches.length>=2){
+      // preventDefault на двухпальцевом жесте — браузер не перехватывает его
+      // под нативные жесты (зум/скролл страницы).
+      e.preventDefault();
+      beginPinch(c, e);
+    } else if(e.touches.length===1){
       st={mode:'maybe', x0:e.touches[0].clientX, y0:e.touches[0].clientY, lastX:e.touches[0].clientX, t:Date.now(), decided:null};
     }
-  }, {passive:true});
+  }, {passive:false});
   canvas.addEventListener('touchmove', function(e){
     if(!st) return;
     var c=getChart(); if(!c) return;
-    if(e.touches.length===2){
+    if(e.touches.length>=2){
       if(st.mode!=='pinch') beginPinch(c, e);
       e.preventDefault();
       doPinch(c, e);
@@ -332,6 +338,13 @@ window.srTouchChart = function(getChart, canvasId, minSpan, onTap){
     }
   }, {passive:false});
   canvas.addEventListener('touchend', function(e){
+    // Палец отпущен во время щипка: не роняем жест — продолжаем панораму
+    // оставшимся пальцем.
+    if(st && st.mode==='pinch' && e.touches.length===1){
+      var t0=e.touches[0];
+      st={mode:'maybe', x0:t0.clientX, y0:t0.clientY, lastX:t0.clientX, t:Date.now(), decided:'pan'};
+      return;
+    }
     if(!st || st.mode!=='maybe' || st.decided==='pan'){ st=null; return; }
     var dt=Date.now()-st.t;
     var t=e.changedTouches[0];
@@ -1194,7 +1207,10 @@ function chartOpts(withLegend,yTitle,extra){
 		maintainAspectRatio:false,
 		interaction:{ mode:'index', intersect:false },
 		animation:{ duration:300 },
-		onHover:function(event, elements, chart){
+		// На touch onHover отключён: Chart.js вызывает его на каждый touchmove
+		// (каждый палец), и chart.update() + перерисовка хинта со значениями
+		// мешали pinch-зуму (срывали жест, жрали кадры).
+		onHover: SR_COARSE ? undefined : function(event, elements, chart){
 			if(chart && chart.canvas){
 				if(event && isFinite(event.x)) hoverPix[chart.canvas.id]=event.x;
 				try{ chart.update('none'); }catch(e){}
@@ -1417,13 +1433,11 @@ document.getElementById('toPick').value=toInputDate(dayStart(selRange.to));
 document.getElementById('datePick').value=toInputDate(selRange.from);
 loadAll(); setInterval(function(){ preserveZoom=true; loadAll(); },60000);
 // Мобильная версия: touch-жесты по графикам (щипок — зум, свайп — панорама,
-// двойной тап — сброс зума, тап — значение в точке через cursorTooltip).
+// двойной тап — сброс зума; хинт со значениями на мобильной отключён — он
+// мешал зуму).
 if(SR_COARSE){
 	['powerChart','totalChart','gridVChart','gridPChart'].forEach(function(id){
-		srTouchChart(function(){ return window[id]; }, id, 60*1000, function(px){
-			hoverPix[id]=px;
-			try{ if(window[id]) window[id].update('none'); }catch(e){}
-		});
+		srTouchChart(function(){ return window[id]; }, id, 60*1000);
 	});
 }
 </script>
@@ -2270,19 +2284,10 @@ loadBmsCharts();
 setInterval(function(){ preserveZoom=true; loadBmsCharts(); },60000);
 
 // Мобильная версия: touch-жесты по графикам BMS (щипок — зум, свайп — панорама,
-// двойной тап — сброс зума, тап — стандартный tooltip Chart.js в точке).
+// двойной тап — сброс зума; tooltip на тап отключён — мешал зуму).
 if(SR_COARSE){
   BMS_CHART_IDS.forEach(function(id){
-    srTouchChart(function(){ return BMS_CHARTS[id]; }, id, 5*60*1000, function(px){
-      var c=BMS_CHARTS[id]; if(!c || !c.chartArea) return;
-      try{
-        var els=c.getElementsAtEventForMode({x:px, y:c.chartArea.top+10}, 'index', {intersect:false}, true);
-        if(els.length){
-          c.tooltip.setActiveElements(els.map(function(el){ return {datasetIndex:el.datasetIndex, index:el.index}; }), true);
-          c.update();
-        }
-      }catch(e){}
-    });
+    srTouchChart(function(){ return BMS_CHARTS[id]; }, id, 5*60*1000);
   });
 }
 
