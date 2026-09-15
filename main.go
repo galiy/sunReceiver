@@ -1133,6 +1133,7 @@ func saveWindowSnapshot(store *redisStore, t invTarget, res DeviceResult, now ti
 func pollAndSaveMap(store *redisStore, now time.Time) {
 	var wg sync.WaitGroup
 	activeMPPT := map[string]struct{}{}
+	fetchOK := false // MPPT-состав чистим из current только при успешном ответе API
 	// МАП (батарея/сеть) — из targets (Modbus) или через веб-API ПАК «Малина».
 	for i := range targets {
 		t := targets[i]
@@ -1163,7 +1164,11 @@ func pollAndSaveMap(store *redisStore, now time.Time) {
 		arr, err := mppt.FetchMPPTs()
 		if err != nil {
 			log.Printf("mppt api: %v", err)
+			// При ошибке запроса НЕ чистим «исчезнувшие» контроллеры: одиночный
+			// сбой (таймаут, перезапуск Малины) не должен вычистить все MPPT из
+			// current. Чистим только когда API ответил, но контроллера нет в ответе.
 		} else {
+			fetchOK = true
 			for slot := range arr {
 				slot := slot
 				activeMPPT[saveMPPTKey(slot)] = struct{}{}
@@ -1179,7 +1184,9 @@ func pollAndSaveMap(store *redisStore, now time.Time) {
 	wg.Wait()
 	// Исчезнувшие MPPT-контроллеры (не в ответе API) убираем из HASH current, чтобы
 	// их строка не показывалась на дашборде как актуальная.
-	store.PruneMPPT(activeMPPT)
+	if fetchOK {
+		store.PruneMPPT(activeMPPT)
+	}
 }
 
 // saveMPPTKey возвращает devKey (поле IP снимка) для MPPT-слота: host#mppt<slot>.
