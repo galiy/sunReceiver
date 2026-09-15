@@ -1255,6 +1255,13 @@ function renderChart(id, datasets, opts){
 		saved={min:old.scales.x.min, max:old.scales.x.max};
 	}
 	if(old){ captureHidden(id, old); try{ old.destroy(); }catch(e){} }
+	// При сохранении окна чарт создаём сразу С ЭТИМ окном: первый draw на полном
+	// диапазоне через afterDraw(checkZoomSync) «раскачал бы» остальные чарты
+	// транзиторным диапазоном — после догрузки/обновления график «прыгал
+	// обратно» на полный период.
+	if(preserveZoom && saved.min!==null && saved.max!==null){
+		opts.scales.x.min=saved.min; opts.scales.x.max=saved.max;
+	}
 	canvas.getContext('2d');
 	window[id]=new Chart(canvas,{ type:'line', data:{datasets:datasets}, options:opts, plugins:[cursorTooltipPlugin] });
 	if(!canvas.__srMLBound){ canvas.__srMLBound=true; canvas.addEventListener('mouseleave',function(){ delete hoverPix[id]; try{ window[id]&&window[id].update('none'); }catch(e){} }); }
@@ -1286,11 +1293,13 @@ function chartOpts(withLegend,yTitle,extra){
 		plugins:{
 			tooltip:{ enabled:false },
 			zoom:{
-				// onPan/onPanComplete — в подобъекте pan (плагин читает options.pan.*),
+				// onPanComplete — в подобъекте pan (плагин читает options.pan.*),
 				// onZoomComplete — в корне zoom (плагин читает options.zoom.onZoomComplete).
+				// Триггер догрузки — только в КОНЦЕ жеста (onPanComplete/onZoomComplete):
+				// догрузка посреди драга (по onPan) пересоздаёт чарт под курсором и
+				// ломает жест — график «прыгает» на позицию до завершения сдвига.
 				pan:{ enabled:!SR_COARSE, mode:'x',
-					onPan:function(){ scheduleExtendCheck(); },
-					onPanComplete:function(){ if(extDebounce){ clearTimeout(extDebounce); extDebounce=null; } maybeExtendAndLoad(); } },
+					onPanComplete:function(){ maybeExtendAndLoad(); } },
 				zoom:{ wheel:{ enabled:!SR_COARSE, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:!SR_COARSE }, mode:'x' },
 				limits:{ x:{ minRange: 60*1000 } },
 				onZoomComplete:function(){ maybeExtendAndLoad(); }
@@ -1361,18 +1370,10 @@ async function loadAll(){
 // Догрузка данных при сдвиге (панорама) за пределы загруженных точек:
 // если видимое окно по X ушло за границы selRange, расширяем диапазон и
 // перечитываем /api/series, сохраняя текущее окно (preserveZoom). Вызывается
-// по завершении панорамы/зума (onPanComplete/onZoomComplete — десктоп,
-// onPanEnd в srTouchChart — mobile).
+// только по ЗАВЕРШЕНИИ жеста (onPanComplete/onZoomComplete — десктоп,
+// onPanEnd в srTouchChart — mobile): запуск посреди драга пересоздаёт чарты
+// под курсором и ломает жест.
 var extLoading=false;
-// scheduleExtendCheck — дебаунс-фолбэк: onPan срабатывает на каждый шаг панорамы;
-// по остановке (350 мс тишины) запускаем догрузку. Работает даже если onPanComplete
-// не сработал (напр. синтетические/неполные жесты). В реальной панели onPanComplete
-// отменяет ожидающий дебаунс и срабатывает сразу.
-var extDebounce=null;
-function scheduleExtendCheck(){
-	if(extDebounce) clearTimeout(extDebounce);
-	extDebounce=setTimeout(function(){ extDebounce=null; maybeExtendAndLoad(); }, 350);
-}
 function maybeExtendAndLoad(){
 	if(extLoading) return;
 	var c=window.powerChart || (typeof Chart!=='undefined'? Chart.getChart('powerChart') : null);
@@ -1541,6 +1542,14 @@ document.getElementById('fromPick').value=toInputDate(dayStart(selRange.from));
 document.getElementById('toPick').value=toInputDate(dayStart(selRange.to));
 document.getElementById('datePick').value=toInputDate(selRange.from);
 loadAll(); setInterval(function(){ preserveZoom=true; loadAll(); },60000);
+// Фолбэк, если hammer panend (onPanComplete) не сработал: любое отпускание
+// указателя (конец драга) → проверка догрузки ПОСЛЕ жеста. Посреди драга не
+// срабатывает (только при отпускании); если окно в пределах данных — no-op.
+var extUpDebounce=null;
+window.addEventListener('pointerup',function(){
+	if(extUpDebounce) clearTimeout(extUpDebounce);
+	extUpDebounce=setTimeout(function(){ extUpDebounce=null; maybeExtendAndLoad(); }, 80);
+});
 // Мобильная версия: touch-жесты по графикам (щипок — зум, свайп — панорама,
 // двойной тап — сброс зума; хинт со значениями на мобильной отключён — он
 // мешал зуму).
@@ -2399,40 +2408,44 @@ function bmsRender(id, datasets, yTitle, legend, zero){
     datasets.forEach(function(ds){ (ds.data||[]).forEach(function(p){ if(isFinite(p.y)){ var a=Math.abs(p.y); if(a>m)m=a; } }); });
     m=m>0?m:1; y.min=-m; y.max=m;
   }
+  var bmsOpts={
+    responsive:true, maintainAspectRatio:false,
+    interaction:{ mode:'index', intersect:false },
+    animation:{ duration:200 },
+    plugins:{
+      legend: { display:false },
+      zoom:{
+        // onPanComplete — в подобъекте pan (плагин читает options.pan.*),
+        // onZoomComplete — в корне zoom (как и на странице графиков).
+        // Догрузка — только в КОНЦЕ жеста (без onPan-дебаунса: запуск
+        // посреди свайпа пересоздаёт чарты и ломает жест).
+        pan:{ enabled:!SR_COARSE, mode:'x',
+          onPanComplete:function(){ bmsMaybeExtend(); } },
+        zoom:{ wheel:{ enabled:!SR_COARSE, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:!SR_COARSE }, mode:'x' },
+        limits:{ x:{ minRange: 5*60*1000 } },
+        onZoomComplete:function(){ bmsMaybeExtend(); }
+      }
+    },
+    scales:{
+      x:{ type:'time', time:{ unit:'hour', displayFormats:{ hour:'HH:mm' } }, ticks:{ maxRotation:0, autoSkipPadding:16 } },
+      y:y
+    }
+  };
+  // При сохранении окна чарт создаём сразу С ЭТИМ окном (как на странице
+  // графиков): первый draw на полном диапазоне транзитно «раскачивает»
+  // остальные графики страницы через afterDraw-синхронизацию.
+  if(preserveZoom && saved.min!==null && saved.max!==null){
+    bmsOpts.scales.x.min=saved.min; bmsOpts.scales.x.max=saved.max;
+  }
   BMS_CHARTS[id]=new Chart(document.getElementById(id),{
     type:'line', data:{datasets:datasets},
     plugins:[bmsZoomSyncPlugin],
-    options:{
-      responsive:true, maintainAspectRatio:false,
-      interaction:{ mode:'index', intersect:false },
-      animation:{ duration:200 },
-      plugins:{
-        legend: { display:false },
-        zoom:{
-          // onPan/onPanComplete — в подобъекте pan (плагин читает options.pan.*),
-          // onZoomComplete — в корне zoom (как и на странице графиков).
-          pan:{ enabled:!SR_COARSE, mode:'x',
-            onPan:function(){ scheduleBmsExtend(); },
-            onPanComplete:function(){ if(bmsExtDebounce){ clearTimeout(bmsExtDebounce); bmsExtDebounce=null; } bmsMaybeExtend(); } },
-          zoom:{ wheel:{ enabled:!SR_COARSE, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:!SR_COARSE }, mode:'x' },
-          limits:{ x:{ minRange: 5*60*1000 } },
-          onZoomComplete:function(){ bmsMaybeExtend(); }
-        }
-      },
-      scales:{
-        x:{ type:'time', time:{ unit:'hour', displayFormats:{ hour:'HH:mm' } }, ticks:{ maxRotation:0, autoSkipPadding:16 } },
-        y:y
-      }
-    }
+    options:bmsOpts
   });
   // На touch встроенный tooltip Chart.js отключён (показывается по тапу — хинт).
   // __srTouched — страховка, если SR_COARSE на устройстве не сработал.
   if(SR_COARSE || window.__srTouched){ BMS_CHARTS[id].options.plugins.tooltip.enabled=false; }
   var needUpdate=false;
-  if(preserveZoom && saved.min!==null && saved.max!==null){
-    BMS_CHARTS[id].options.scales.x.min=saved.min; BMS_CHARTS[id].options.scales.x.max=saved.max;
-    needUpdate=true;
-  }
   if(bmsApplyHidden(id, BMS_CHARTS[id])) needUpdate=true;
   if(needUpdate){ BMS_CHARTS[id].update('none'); }
   if(legend){ lgKit(id, id+'Lg').build(BMS_CHARTS[id]); }
@@ -2500,13 +2513,8 @@ async function loadBmsCharts(){
 // Догрузка 5-минутных точек BMS при сдвиге (панорама) за пределы загруженных:
 // если видимое окно по X ушло за selRange, расширяем диапазон и перечитываем
 // /api/bms/<name>/series, сохраняя текущее окно (preserveZoom + bmsCaptureState).
+// Триггер — только завершение жеста (onPanComplete/onZoomComplete/onPanEnd).
 var bmsExtLoading=false;
-// scheduleBmsExtend — дебаунс-фолбэк (см. scheduleExtendCheck на странице графиков).
-var bmsExtDebounce=null;
-function scheduleBmsExtend(){
-	if(bmsExtDebounce) clearTimeout(bmsExtDebounce);
-	bmsExtDebounce=setTimeout(function(){ bmsExtDebounce=null; bmsMaybeExtend(); }, 350);
-}
 function bmsMaybeExtend(){
   if(bmsExtLoading) return;
   var c=BMS_CHARTS['bmsCapChart'];
@@ -2571,6 +2579,14 @@ document.getElementById('datePick').value=toInputDate(selRange.from);
 setActiveBtn('btnToday');
 loadBmsCharts();
 setInterval(function(){ preserveZoom=true; loadBmsCharts(); },60000);
+// Фолбэк, если hammer panend (onPanComplete) не сработал: любое отпускание
+// указателя (конец свайпа) → проверка догрузки ПОСЛЕ жеста. Посреди свайпа не
+// срабатывает; если окно в пределах данных — no-op.
+var bmsUpDebounce=null;
+window.addEventListener('pointerup',function(){
+  if(bmsUpDebounce) clearTimeout(bmsUpDebounce);
+  bmsUpDebounce=setTimeout(function(){ bmsUpDebounce=null; bmsMaybeExtend(); }, 80);
+});
 
 // Мобильная версия: touch-жесты по графикам BMS (щипок — зум, свайп — панорама,
 // двойной тап — сброс зума; tooltip на тап отключён — мешал зуму).
