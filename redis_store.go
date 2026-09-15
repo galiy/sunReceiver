@@ -57,8 +57,15 @@ type mapWinMember struct {
 }
 
 // openRedis создаёт клиент Redis. Retry-логику оставляем библиотеке go-redis.
+// Read/Write-таймауты ограничивают зависшую операцию (повисший Redis без
+// OOM-свопа/сбоев TCP не должен замораживать всех пулеров и дашборд);
+// go-redis сам переподнимает зависшее соединение.
 func openRedis(addr string) (*redis.Client, error) {
-	rdb := redis.NewClient(&redis.Options{Addr: addr})
+	rdb := redis.NewClient(&redis.Options{
+		Addr:         addr,
+		ReadTimeout:  3 * time.Second,
+		WriteTimeout: 2 * time.Second,
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {

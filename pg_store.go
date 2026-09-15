@@ -25,14 +25,32 @@ type pgStore struct {
 	ctx  context.Context
 }
 
+// pgStatementTimeout — серверный лимит на одно SQL-выражение для всех
+// соединений пула: «повисший» PG (черная дыра) не должен копить зависшие
+// горутины/соединения (каждый averageBucket — своя горутина).
+const pgStatementTimeout = "15s"
+
 // openPG открывает пул соединений PostgreSQL и применяет схему + миграцию.
 func openPG(dsn string) (*pgStore, error) {
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("pg config: %w", err)
+	}
+	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		_, err := conn.Exec(ctx, "SET statement_timeout = '"+pgStatementTimeout+"'")
+		return err
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("pg pool: %w", err)
 	}
-	if err := pool.Ping(ctx); err != nil {
+	// Ограничение по времени на Ping: мёртвый/фильтруемый хост не должен
+	// блокировать старт на время TCP-ретрансмитов (~2 мин).
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	err = pool.Ping(pingCtx)
+	cancel()
+	if err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("pg ping: %w", err)
 	}
