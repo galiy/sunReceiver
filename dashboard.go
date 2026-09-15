@@ -800,6 +800,24 @@ Chart.register(ChartZoom);
 
 var preserveZoom=false;
 var hoverPix={};
+// hiddenSets[chartId] — метки датасетов, которые пользователь скрыл кликом по
+// легенде. При пересоздании графика (обновление по таймеру) выбор восстанавливается,
+// чтобы отключённые линии не «восставали» сами по себе.
+var hiddenSets={};
+function captureHidden(id, oldChart){
+	if(!oldChart || !oldChart.data || !oldChart.data.datasets) return;
+	var hidden=[];
+	oldChart.data.datasets.forEach(function(ds,i){ if(!oldChart.isDatasetVisible(i)) hidden.push(ds.label); });
+	hiddenSets[id]=hidden;
+}
+// applyHidden скрывает в новом графике те датасеты, что были скрыты ранее.
+// Возвращает true, если применил (тогда нужен update).
+function applyHidden(id, chart){
+	var hidden=hiddenSets[id]||[];
+	if(!hidden.length || !chart || !chart.data || !chart.data.datasets) return false;
+	chart.data.datasets.forEach(function(ds,i){ if(hidden.indexOf(ds.label)>=0) chart.setDatasetVisibility(i,false); });
+	return true;
+}
 // TOOLTIP_MAX_GAP — максимальный возраст «ближайшей точки слева» (мс), который
 // считается актуальным в хинте. Устройства, замолчавшие дольше этого (простои,
 // исчезновение с дашборда), не должны показываться как продолжающие выдавать
@@ -909,14 +927,17 @@ function renderChart(id, datasets, opts){
 	if(old && old.scales && old.scales.x && isFinite(old.scales.x.min) && isFinite(old.scales.x.max)){
 		saved={min:old.scales.x.min, max:old.scales.x.max};
 	}
-	if(old){ try{ old.destroy(); }catch(e){} }
+	if(old){ captureHidden(id, old); try{ old.destroy(); }catch(e){} }
 	canvas.getContext('2d');
 	window[id]=new Chart(canvas,{ type:'line', data:{datasets:datasets}, options:opts, plugins:[cursorTooltipPlugin] });
 	canvas.addEventListener('mouseleave',function(){ delete hoverPix[id]; try{ window[id]&&window[id].update('none'); }catch(e){} });
+	var needUpdate=false;
 	if(preserveZoom && saved.min!==null && saved.max!==null){
 		window[id].options.scales.x.min=saved.min; window[id].options.scales.x.max=saved.max;
-		window[id].update('none');
+		needUpdate=true;
 	}
+	if(applyHidden(id, window[id])) needUpdate=true;
+	if(needUpdate){ window[id].update('none'); }
 	return window[id];
 }
 function chartOpts(withLegend,yTitle,extra){
@@ -1228,6 +1249,21 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 <script>
 'use strict';
 var TARIFF_COLORS={ import_day:'#d0663a', import_night:'#8c5bbf', export_day:'#3fbf7f', export_night:'#2c8f6a' };
+// hiddenSets[chartId] — метки скрытых пользователем столбцов (клик по легенде).
+// Восстанавливаются при пересоздании графика (смена диапазона/пресета).
+var hiddenSets={};
+function captureHidden(id, oldChart){
+	if(!oldChart || !oldChart.data || !oldChart.data.datasets) return;
+	var hidden=[];
+	oldChart.data.datasets.forEach(function(ds,i){ if(!oldChart.isDatasetVisible(i)) hidden.push(ds.label); });
+	hiddenSets[id]=hidden;
+}
+function applyHidden(id, chart){
+	var hidden=hiddenSets[id]||[];
+	if(!hidden.length || !chart || !chart.data || !chart.data.datasets) return false;
+	chart.data.datasets.forEach(function(ds,i){ if(hidden.indexOf(ds.label)>=0) chart.setDatasetVisibility(i,false); });
+	return true;
+}
 
 function toD(d){ function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
 function dayStart(d){ var r=new Date(d); r.setHours(0,0,0,0); return r; }
@@ -1240,7 +1276,7 @@ function endOfYear(){ var d=new Date(); return new Date(d.getFullYear(),11,31,23
 
 function renderEnergyChart(canvasId, labels, datasets){
 	var canvas=document.getElementById(canvasId);
-	var old=window[canvasId]; if(old){ try{ old.destroy(); }catch(e){} }
+	var old=window[canvasId]; if(old){ captureHidden(canvasId, old); try{ old.destroy(); }catch(e){} }
 	canvas.getContext('2d');
 	window[canvasId]=new Chart(canvas,{
 		type:'bar',
@@ -1253,6 +1289,7 @@ function renderEnergyChart(canvasId, labels, datasets){
 			scales:{ x:{ ticks:{ autoSkip:true, maxTicksLimit:24 } }, y:{ beginAtZero:true, title:{ display:true, text:'kWh' } } }
 		}
 	});
+	if(applyHidden(canvasId, window[canvasId])) window[canvasId].update('none');
 	return window[canvasId];
 }
 
@@ -1369,6 +1406,7 @@ const bmsDetailPage = `<!DOCTYPE html>
 <title>BMS — SunReceiver</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 <style>
 :root { color-scheme: dark; }
 * { box-sizing: border-box; }
@@ -1417,6 +1455,16 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 .bms-charts-title { margin:28px 0 12px; font-size:16px; }
 .bms-charts .card { margin-bottom:0; }
 .bms-charts .chart-wrap { position:relative; height:300px; }
+.period-panel { display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px; font-size:13px; color:#8a93a1; }
+.period-panel button { background:#252b36; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:5px 12px; cursor:pointer; font-size:13px; }
+.period-panel button:hover { background:#2f3644; }
+.period-panel button.active { background:#2f6fed; border-color:#2f6fed; color:#fff; }
+.period-panel input[type=date] { background:#181c24; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:4px 8px; font-size:13px; color-scheme:dark; }
+.period-panel input[type=date]:focus { outline:none; border-color:#2f6fed; }
+.period-panel .nav-arrow { padding:5px 10px; font-size:16px; line-height:1; }
+.chart-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:10px 12px; margin:0 0 8px; font-size:13px; color:#8a93a1; }
+.chart-toolbar button { background:#252b36; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:4px 10px; cursor:pointer; font-size:13px; }
+.chart-toolbar button:hover { background:#2f3644; }
 .mos-row { display:flex; gap:10px; flex-wrap:wrap; margin-top:4px; }
 .mos { padding:7px 14px; border-radius:18px; font-size:13px; font-weight:600; border:1px solid #333b49; background:#181c24; color:#6b7280; }
 .mos.on { background:#123524; border-color:#00b894; color:#00b894; }
@@ -1454,14 +1502,54 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
   </div>
 </div>
 
-<h2 class="bms-charts-title">Графики за последние сутки (5-минутные средние, Redis)</h2>
+<h2 class="bms-charts-title">Графики (5-минутные средние, Redis)</h2>
+<div class="period-panel">
+  <button id="btnToday">Сегодня</button>
+  <button id="btnYesterday">Вчера</button>
+  <button id="btn7d">7 дней</button>
+  <button id="btnMonth">Месяц</button>
+  <button id="btnPeriodPrev" class="nav-arrow" title="Предыдущий период">&lsaquo;</button>
+  <input type="date" id="datePick" title="Выбрать день">
+  <button id="btnDate">За выбранный день</button>
+  <span style="color:#555">С</span>
+  <input type="date" id="fromPick" title="Начало периода">
+  <span style="color:#555">по</span>
+  <input type="date" id="toPick" title="Конец периода">
+  <button id="btnRange">Показать период</button>
+  <button id="btnPeriodNext" title="Следующий период">&rsaquo;</button>
+  <button id="btnRefresh" title="Принудительно обновить графики">Обновить графики</button>
+</div>
 <div class="charts bms-charts">
-  <div class="card"><h2>Остаточная ёмкость, А·ч</h2><div class="chart-wrap"><canvas id="bmsCapChart"></canvas></div></div>
-  <div class="card"><h2>Напряжение пакета, V</h2><div class="chart-wrap"><canvas id="bmsVoltChart"></canvas></div></div>
-  <div class="card"><h2>Ток, A</h2><div class="chart-wrap"><canvas id="bmsCurChart"></canvas></div></div>
-  <div class="card"><h2>Мощность, W</h2><div class="chart-wrap"><canvas id="bmsPwrChart"></canvas></div></div>
-  <div class="card"><h2>Напряжения ячеек, V</h2><div class="chart-wrap"><canvas id="bmsCellsChart"></canvas></div></div>
-  <div class="card"><h2>Температуры T1–T4 (батарея, силовые ключи, плата), &deg;C</h2><div class="chart-wrap"><canvas id="bmsTempChart"></canvas></div></div>
+  <div class="card">
+    <h2>Заряд (SOC), %</h2>
+    <div class="chart-toolbar"><span id="bmsCapChartRange"></span><button id="btnBmsCapReset">Сброс зума</button><span>Зум: колесо / drag&ndash;панорама</span></div>
+    <div class="chart-wrap"><canvas id="bmsCapChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Напряжение пакета, V</h2>
+    <div class="chart-toolbar"><span id="bmsVoltChartRange"></span><button id="btnBmsVoltReset">Сброс зума</button><span>Зум: колесо / drag&ndash;панорама</span></div>
+    <div class="chart-wrap"><canvas id="bmsVoltChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Ток, A</h2>
+    <div class="chart-toolbar"><span id="bmsCurChartRange"></span><button id="btnBmsCurReset">Сброс зума</button><span>Зум: колесо / drag&ndash;панорама</span></div>
+    <div class="chart-wrap"><canvas id="bmsCurChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Мощность, W</h2>
+    <div class="chart-toolbar"><span id="bmsPwrChartRange"></span><button id="btnBmsPwrReset">Сброс зума</button><span>Зум: колесо / drag&ndash;панорама</span></div>
+    <div class="chart-wrap"><canvas id="bmsPwrChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Напряжения ячеек, V</h2>
+    <div class="chart-toolbar"><span id="bmsCellsChartRange"></span><button id="btnBmsCellsReset">Сброс зума</button><span>Зум: колесо / drag&ndash;панорама</span></div>
+    <div class="chart-wrap"><canvas id="bmsCellsChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Температуры T1–T4 (батарея, силовые ключи, плата), &deg;C</h2>
+    <div class="chart-toolbar"><span id="bmsTempChartRange"></span><button id="btnBmsTempReset">Сброс зума</button><span>Зум: колесо / drag&ndash;панорама</span></div>
+    <div class="chart-wrap"><canvas id="bmsTempChart"></canvas></div>
+  </div>
 </div>
 
 <p class="foot" id="bmsFoot"></p>
@@ -1556,36 +1644,159 @@ async function load(){
     document.getElementById('bmsFoot').textContent='Порт: '+d.port+' · счётчик кадров: '+d.frames+' · обновляется каждую секунду';
   }catch(e){}
 }
-// ---------- Графики за последние сутки (5-минутные средние из Redis) ----------
+// ---------- Графики (5-минутные средние из Redis) ----------
+Chart.register(ChartZoom);
 var CHART_COLORS=['#4ecdc4','#ff6b6b','#4dabf7','#ffd166','#00b894','#a29bfe','#ff9f43','#e84393','#55efc4','#fd79a8','#74b9ff','#ffeaa7','#dfe6e9','#fab1a0','#81ecec','#6c5ce7'];
+var BMS_CHART_IDS=['bmsCapChart','bmsVoltChart','bmsCurChart','bmsPwrChart','bmsCellsChart','bmsTempChart'];
+var BMS_RESET_BTN={ bmsCapChart:'btnBmsCapReset', bmsVoltChart:'btnBmsVoltReset', bmsCurChart:'btnBmsCurReset', bmsPwrChart:'btnBmsPwrReset', bmsCellsChart:'btnBmsCellsReset', bmsTempChart:'btnBmsTempReset' };
 function mkBmsDs(label,color,data){ return { label:label, data:data, borderColor:color, backgroundColor:color, pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false }; }
 function packVolt(p){ var s=0, c=p.cells_v||[]; for(var i=0;i<c.length;i++) s+=c[i]; return s; }
+function fmtDate(t){ var d=new Date(t); function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes()); }
+function setBmsRangeLabels(){
+  var txt='Диапазон: '+fmtDate(selRange.from)+' — '+fmtDate(selRange.to);
+  BMS_CHART_IDS.forEach(function(id){ var el=document.getElementById(id+'Range'); if(el) el.textContent=txt; });
+}
+
+// ---------- Выбор периода (общий для всех графиков BMS) ----------
+var preserveZoom=false;
+var selRange={from:startOfToday(), to:endOfToday()};
+var periodMode='day';
+function startOfToday(){ var d=new Date(); d.setHours(0,0,0,0); return d; }
+function endOfToday(){ var d=new Date(); d.setHours(23,59,59,999); return d; }
+function startOfYesterday(){ var d=new Date(); d.setDate(d.getDate()-1); d.setHours(0,0,0,0); return d; }
+function dayFromStr(s){ var p=String(s).split('-').map(Number); return new Date(p[0], p[1]-1, p[2], 0,0,0,0); }
+function toInputDate(d){ function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
+function endOfDay(d){ var e=new Date(d); e.setHours(23,59,59,999); return e; }
+function dayStart(d){ var r=new Date(d); r.setHours(0,0,0,0); return r; }
+function addDays(d,n){ var r=new Date(d); r.setDate(r.getDate()+n); return r; }
+function addMonths(d,n){ var r=new Date(d); r.setMonth(r.getMonth()+n); return r; }
+function startOfMonthOf(d){ return dayStart(new Date(d.getFullYear(), d.getMonth(), 1)); }
+function endOfMonthOf(d){ var f=new Date(d.getFullYear(), d.getMonth(), 1); return new Date(f.getFullYear(), f.getMonth()+1, 0, 23,59,59,999); }
+var PERIOD_BTNS=['btnToday','btnYesterday','btn7d','btnMonth'];
+function setActiveBtn(activeBtn){ for(var i=0;i<PERIOD_BTNS.length;i++) document.getElementById(PERIOD_BTNS[i]).classList.remove('active'); if(activeBtn) document.getElementById(activeBtn).classList.add('active'); }
+// setPeriod — выставляет диапазон, режим (day/week/month/custom), синхронизирует поля
+// и перерисовывает все графики BMS. Сбрасывает зум (новое окно = полный период).
+function setPeriod(from,to,mode,activeBtn){
+  selRange.from=from; selRange.to=to; periodMode=mode;
+  preserveZoom=false;
+  setActiveBtn(activeBtn);
+  var dFrom=dayStart(from), dTo=dayStart(to);
+  document.getElementById('fromPick').value=toInputDate(dFrom);
+  document.getElementById('toPick').value=toInputDate(dTo);
+  document.getElementById('datePick').value=toInputDate(mode==='day'?from:dFrom);
+  loadBmsCharts();
+}
+function shiftPeriod(delta){
+  var from=selRange.from, to=selRange.to;
+  var newFrom, newTo;
+  if(periodMode==='day'){ newFrom=addDays(dayStart(from), delta); newTo=endOfDay(newFrom); }
+  else if(periodMode==='month'){ newFrom=addMonths(dayStart(from), delta); newTo=endOfMonthOf(newFrom); }
+  else{ var span=to-from; newFrom=new Date(from.getTime()+delta*span); newTo=new Date(to.getTime()+delta*span); }
+  setPeriod(newFrom,newTo,periodMode,null);
+}
+
+// ---------- Синхронизация зума между графиками BMS (по X) ----------
+var lastXWindow={};
+var zoomSyncing=false;
+var bmsRebuilding=false;
+function checkBmsZoomSync(chart){
+  if(zoomSyncing || bmsRebuilding) return;
+  var x=chart&&chart.scales&&chart.scales.x;
+  if(!x||!isFinite(x.min)||!isFinite(x.max)||x.max<=x.min) return;
+  var key=x.min.toFixed(3)+','+x.max.toFixed(3);
+  if(lastXWindow[chart.canvas.id]!==undefined && lastXWindow[chart.canvas.id]!==key) syncBmsZoomToOthers(chart);
+  lastXWindow[chart.canvas.id]=key;
+}
+function syncBmsZoomToOthers(fromChart){
+  if(zoomSyncing) return;
+  var sx=fromChart&&fromChart.scales&&fromChart.scales.x;
+  if(!sx||!isFinite(sx.min)||!isFinite(sx.max)||sx.max<=sx.min) return;
+  var m=sx.min, M=sx.max;
+  zoomSyncing=true;
+  try{
+    BMS_CHART_IDS.forEach(function(id){
+      var c=BMS_CHARTS[id];
+      if(!c || c===fromChart) return;
+      try{ c.zoomScale('x',{min:m,max:M},'none'); }catch(e){}
+    });
+  }finally{ zoomSyncing=false; }
+}
+var bmsZoomSyncPlugin={ id:'bmsZoomSync', afterDraw:function(chart){ try{ checkBmsZoomSync(chart); }catch(e){} } };
+
 // bmsRender — линейный график; zero=true — симметричная ось с нулём посередине.
+// Инстансы хранятся в BMS_CHARTS (НЕ в window[id] — там элемент canvas с этим
+// id: window.bmsCapChart отдаёт канвас, а не Chart, и destroy() по нему падает).
+// Zум по X (колесо с Ctrl / pinch / drag-панорама) синхронизируется между всеми
+// графиками страницы (bmsZoomSyncPlugin). Выбор линий через легенду и зум
+// сохраняются при обновлении по таймеру (bmsCaptureState/bmsApplyHidden/bmsSavedZoom).
+var BMS_CHARTS={};
+var bmsHiddenSets={};
+var bmsSavedZoom={};
+// bmsCaptureState запоминает скрытые пользователем линии и текущий зум каждого
+// графика до его уничтожения (вызывается до destroyBmsCharts).
+function bmsCaptureState(){
+  Object.keys(BMS_CHARTS).forEach(function(id){
+    var c=BMS_CHARTS[id];
+    if(!c) return;
+    if(c.data && c.data.datasets){
+      var hidden=[];
+      c.data.datasets.forEach(function(ds,i){ if(!c.isDatasetVisible(i)) hidden.push(ds.label); });
+      bmsHiddenSets[id]=hidden;
+    }
+    if(c.scales && c.scales.x && isFinite(c.scales.x.min) && isFinite(c.scales.x.max)){
+      bmsSavedZoom[id]={min:c.scales.x.min, max:c.scales.x.max};
+    }
+  });
+}
+// bmsApplyHidden скрывает в новом графике ранее скрытые линии. Возвращает true,
+// если применил (тогда нужен update).
+function bmsApplyHidden(id, chart){
+  var hidden=bmsHiddenSets[id]||[];
+  if(!hidden.length || !chart || !chart.data || !chart.data.datasets) return false;
+  chart.data.datasets.forEach(function(ds,i){ if(hidden.indexOf(ds.label)>=0) chart.setDatasetVisibility(i,false); });
+  return true;
+}
 function bmsRender(id, datasets, yTitle, legend, zero){
+  var saved=bmsSavedZoom[id]||{min:null,max:null};
   var y={ beginAtZero:false, title:{ display:!!yTitle, text:yTitle||'' } };
   if(zero){
     var m=0;
     datasets.forEach(function(ds){ (ds.data||[]).forEach(function(p){ if(isFinite(p.y)){ var a=Math.abs(p.y); if(a>m)m=a; } }); });
     m=m>0?m:1; y.min=-m; y.max=m;
   }
-  window[id]=new Chart(document.getElementById(id),{
+  BMS_CHARTS[id]=new Chart(document.getElementById(id),{
     type:'line', data:{datasets:datasets},
+    plugins:[bmsZoomSyncPlugin],
     options:{
       responsive:true, maintainAspectRatio:false,
       interaction:{ mode:'index', intersect:false },
       animation:{ duration:200 },
-      plugins:{ legend: legend? { display:true, labels:{ boxWidth:14, padding:10, font:{ size:10 } } } : { display:false } },
+      plugins:{
+        legend: legend? { display:true, labels:{ boxWidth:14, padding:10, font:{ size:10 } } } : { display:false },
+        zoom:{
+          pan:{ enabled:true, mode:'x' },
+          zoom:{ wheel:{ enabled:true, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:true }, mode:'x' },
+          limits:{ x:{ minRange: 5*60*1000 } }
+        }
+      },
       scales:{
         x:{ type:'time', time:{ unit:'hour', displayFormats:{ hour:'HH:mm' } }, ticks:{ maxRotation:0, autoSkipPadding:16 } },
         y:y
       }
     }
   });
+  var needUpdate=false;
+  if(preserveZoom && saved.min!==null && saved.max!==null){
+    BMS_CHARTS[id].options.scales.x.min=saved.min; BMS_CHARTS[id].options.scales.x.max=saved.max;
+    needUpdate=true;
+  }
+  if(bmsApplyHidden(id, BMS_CHARTS[id])) needUpdate=true;
+  if(needUpdate){ BMS_CHARTS[id].update('none'); }
 }
 function buildBmsCharts(points){
   if(!points||!points.length) return;
-  // 1. Остаточная ёмкость
-  bmsRender('bmsCapChart',[mkBmsDs('Остаток','#4ecdc4',points.map(function(p){ return {x:new Date(p.ts), y:p.remaining_ah}; }))],'А·ч',false,false);
+  // 1. Заряд (SOC)
+  bmsRender('bmsCapChart',[mkBmsDs('SOC','#4ecdc4',points.map(function(p){ return {x:new Date(p.ts), y:p.soc}; }))],'%',false,false);
   // 2. Напряжение пакета (сумма ячеек)
   bmsRender('bmsVoltChart',[mkBmsDs('Пакет','#ffd166',points.map(function(p){ return {x:new Date(p.ts), y:packVolt(p)}; }))],'V',false,false);
   // 3. Ток (± ось посередине)
@@ -1616,17 +1827,74 @@ function buildBmsCharts(points){
   }
   bmsRender('bmsTempChart',tds,'°C',true,false);
 }
+// Обновление раз в минуту: старые Chart-инстансы уничтожаются и строятся заново
+// (число датасетов — напр. ячеек — может меняться). Скрытые линии и зум
+// запоминаются заранее (bmsCaptureState) и восстанавливаются в bmsRender.
+function destroyBmsCharts(){
+  Object.keys(BMS_CHARTS).forEach(function(id){
+    BMS_CHARTS[id].destroy();
+    delete BMS_CHARTS[id];
+  });
+}
 async function loadBmsCharts(){
   try{
-    var to=new Date(), from=new Date(Date.now()-24*3600*1000);
+    var from=selRange.from, to=selRange.to;
     var url='/api/bms/'+encodeURIComponent(NAME)+'/series?from='+encodeURIComponent(from.toISOString())+'&to='+encodeURIComponent(to.toISOString());
     var r=await fetch(url);
     if(!r.ok) return;
     var data=await r.json();
-    buildBmsCharts(data.points||[]);
+    bmsCaptureState();
+    destroyBmsCharts();
+    bmsRebuilding=true;
+    try{
+      lastXWindow={};
+      buildBmsCharts(data.points||[]);
+    }finally{ bmsRebuilding=false; }
+    setBmsRangeLabels();
   }catch(e){}
 }
+
+// Кнопки периода BMS.
+document.getElementById('btnToday').addEventListener('click',function(){ setPeriod(startOfToday(), endOfToday(), 'day', 'btnToday'); });
+document.getElementById('btnYesterday').addEventListener('click',function(){ var y=startOfYesterday(); setPeriod(y, endOfDay(y), 'day', 'btnYesterday'); });
+document.getElementById('btn7d').addEventListener('click',function(){
+  var to=new Date(); var from=new Date(); from.setDate(from.getDate()-7);
+  setPeriod(from, to, 'week', 'btn7d');
+});
+document.getElementById('btnMonth').addEventListener('click',function(){
+  var f=new Date(); f.setHours(0,0,0,0);
+  setPeriod(startOfMonthOf(f), endOfMonthOf(f), 'month', 'btnMonth');
+});
+document.getElementById('btnDate').addEventListener('click',function(){
+  var el=document.getElementById('datePick');
+  if(!el.value) return;
+  var from=dayFromStr(el.value);
+  setPeriod(from, endOfDay(from), 'day', null);
+});
+document.getElementById('btnPeriodPrev').addEventListener('click',function(){ shiftPeriod(-1); });
+document.getElementById('btnPeriodNext').addEventListener('click',function(){ shiftPeriod(1); });
+document.getElementById('btnRange').addEventListener('click',function(){
+  var f=document.getElementById('fromPick'), t=document.getElementById('toPick');
+  if(!f.value||!t.value) return;
+  var from=dayFromStr(f.value), to=dayFromStr(t.value); to.setHours(23,59,59,999);
+  setPeriod(from, to, 'custom', null);
+});
+document.getElementById('btnRefresh').addEventListener('click',function(){ preserveZoom=false; loadBmsCharts(); });
+// Кнопки «Сброс зума» по каждому графику BMS.
+for(var _b=0;_b<BMS_CHART_IDS.length;_b++){
+  (function(id){
+    var btn=document.getElementById(BMS_RESET_BTN[id]);
+    if(btn) btn.addEventListener('click',function(){ var c=BMS_CHARTS[id]; if(c) try{ c.resetZoom(); }catch(e){} });
+  })(BMS_CHART_IDS[_b]);
+}
+// Инициализация полей периода и первичная загрузка; дальше — раз в минуту (зум
+// и выбор линий сохраняются), параметры батареи — каждую секунду.
+document.getElementById('fromPick').value=toInputDate(dayStart(selRange.from));
+document.getElementById('toPick').value=toInputDate(dayStart(selRange.to));
+document.getElementById('datePick').value=toInputDate(selRange.from);
+setActiveBtn('btnToday');
 loadBmsCharts();
+setInterval(function(){ preserveZoom=true; loadBmsCharts(); },60000);
 
 load(); setInterval(load,1000);
 </script>

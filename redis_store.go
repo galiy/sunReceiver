@@ -271,13 +271,42 @@ func (s *redisStore) BMSOne(name string) (string, error) {
 // SaveBMSSeries кладёт одну 5-минутную усреднённую точку BMS в месячный ZSET
 // ряда (score = Unix-секунды начала промежутка). Хранение — последние 2
 // календарных суток (чистка PurgeOld), как и ряд инверторов.
+//
+// Тот же (устройство, промежуток) может записываться дважды: при остановке
+// пулера дописывается неполный промежуток (drain), а новый процесс пишет
+// продолжение того же промежутка. Голый ZADD оставил бы в ZSET два разных
+// member с одинаковым score — две точки в один и тот же момент времени на
+// графике («ступенька»). Поэтому перед записью удаляются старые версии того
+// же устройства на этом score: в Redis остаётся ровно одна точка на
+// (устройство, 5-минутный промежуток), последняя (более полная) запись
+// побеждает.
 func (s *redisStore) SaveBMSSeries(p bmsSeriesPoint, ts time.Time) error {
 	b, err := json.Marshal(p)
 	if err != nil {
 		return fmt.Errorf("marshal bms series %s: %w", p.Name, err)
 	}
 	key := bmsSeriesKey(ts)
+	score := strconv.FormatInt(ts.Unix(), 10)
+	// Старые версии этого же устройства на том же моменте (score): ищем среди
+	// member'ов с точным score, разбираем и собираем для удаления.
+	old, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: score, Max: score}).Result()
+	if err != nil {
+		return fmt.Errorf("bms series dedup %s: %w", key, err)
+	}
+	var stale []any
+	for _, m := range old {
+		var q bmsSeriesPoint
+		if json.Unmarshal([]byte(m), &q) != nil {
+			continue
+		}
+		if q.Name == p.Name {
+			stale = append(stale, m)
+		}
+	}
 	pipe := s.rdb.TxPipeline()
+	if len(stale) > 0 {
+		pipe.ZRem(s.ctx, key, stale...)
+	}
 	pipe.ZAdd(s.ctx, key, redis.Z{Score: float64(ts.Unix()), Member: string(b)})
 	pipe.Expire(s.ctx, key, 40*24*time.Hour)
 	_, err = pipe.Exec(s.ctx)

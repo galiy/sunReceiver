@@ -148,8 +148,11 @@ WHERE ts >= $1 AND ts <= $2`
 }
 
 // InsertBMSAveraged сохраняет одну усреднённую за 5 минут точку BMS
-// (ts — начало промежутка). Идемпотентна по (name, ts): повторная запись
-// игнорируется (первый, более полный, вариант побеждает).
+// (ts — начало промежутка). Идемпотентна по (name, ts), но повторная запись
+// ОБНОВЛЯЕТ строку: поздняя запись того же промежутка полнее ранней (напр.
+// при остановке пулера дописан неполный промежуток, а новый процесс пишет
+// его продолжение). Это согласует PG с рядом Redis, где SaveBMSSeries
+// делает то же самое — заменяет старую точку того же устройства.
 func (s *pgStore) InsertBMSAveraged(name string, ts time.Time, avg bmsAveraged) error {
 	vals, err := json.Marshal(avg)
 	if err != nil {
@@ -158,7 +161,7 @@ func (s *pgStore) InsertBMSAveraged(name string, ts time.Time, avg bmsAveraged) 
 	_, err = s.pool.Exec(s.ctx, `
 INSERT INTO sunreceiver.bms_averages (name, ts, values)
 VALUES ($1, $2, $3)
-ON CONFLICT (name, ts) DO NOTHING`,
+ON CONFLICT (name, ts) DO UPDATE SET values = EXCLUDED.values`,
 		name, ts.UTC(), vals)
 	if err != nil {
 		return fmt.Errorf("pg insert bms avg %s: %w", name, err)
@@ -198,6 +201,43 @@ ORDER BY ts ASC`, name, start.UTC(), end.UTC())
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("pg bms averages rows: %w", err)
+	}
+	return pts, nil
+}
+
+// BMSAveragesAll возвращает 5-минутные усреднённые точки BMS ВСЕХ устройств
+// за период [start, end] включительно, по возрастанию ts. Используется для
+// реставрации Redis-ряда sunreceiver:bms:series из PG при полностью пустом
+// Redis (см. restoreRedisFromPG).
+func (s *pgStore) BMSAveragesAll(start, end time.Time) ([]bmsSeriesPoint, error) {
+	rows, err := s.pool.Query(s.ctx, `
+SELECT name, ts, values
+FROM sunreceiver.bms_averages
+WHERE ts >= $1 AND ts <= $2
+ORDER BY ts ASC`, start.UTC(), end.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("pg query bms averages all: %w", err)
+	}
+	defer rows.Close()
+
+	pts := []bmsSeriesPoint{}
+	for rows.Next() {
+		var name string
+		var ts time.Time
+		var vals json.RawMessage
+		if err := rows.Scan(&name, &ts, &vals); err != nil {
+			return nil, fmt.Errorf("pg scan bms avg all: %w", err)
+		}
+		p := bmsSeriesPoint{Name: name, Ts: ts.Format(time.RFC3339)}
+		if len(vals) > 0 {
+			if err := json.Unmarshal(vals, &p.bmsAveraged); err != nil {
+				continue
+			}
+		}
+		pts = append(pts, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pg bms averages all rows: %w", err)
 	}
 	return pts, nil
 }
