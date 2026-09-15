@@ -1628,6 +1628,9 @@ function renderEnergyChart(canvasId, labels, datasets){
 			animation:{ duration:300 },
 			plugins:{
 				legend:{ display:false },
+				// На touch встроенный tooltip отключён (хинт по тапу); __srTouched —
+				// страховка, если SR_COARSE на устройстве не сработал.
+				tooltip:{ enabled:!(SR_COARSE || window.__srTouched) },
 				// Зум по X: Ctrl+колесо / drag-панорама (десктоп), щипок/свайп —
 				// через srTouchChart (mobile). Category-шкала: min/max — индексы столбцов.
 				zoom:{
@@ -2202,7 +2205,8 @@ function bmsRender(id, datasets, yTitle, legend, zero){
     }
   });
   // На touch встроенный tooltip Chart.js отключён (показывается по тапу — хинт).
-  if(SR_COARSE){ BMS_CHARTS[id].options.plugins.tooltip.enabled=false; }
+  // __srTouched — страховка, если SR_COARSE на устройстве не сработал.
+  if(SR_COARSE || window.__srTouched){ BMS_CHARTS[id].options.plugins.tooltip.enabled=false; }
   var needUpdate=false;
   if(preserveZoom && saved.min!==null && saved.max!==null){
     BMS_CHARTS[id].options.scales.x.min=saved.min; BMS_CHARTS[id].options.scales.x.max=saved.max;
