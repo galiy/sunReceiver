@@ -181,11 +181,198 @@ func isMPPTKey(ip string) bool {
 	return strings.Contains(ip, "#mppt")
 }
 
+// mobileCommon — общие части мобильной (тачскрин) версии всех страниц:
+//   - {{mcss}} — иная раскладка при ширине ≤900px (стекированные группы, 2-колоночные
+//     плашки, нижняя навигация, увеличенные touch-цели, горизонтальный скролл сводной
+//     таблицы с закреплённой первой колонкой);
+//   - {{mjs}} — touch-управление: чипы легенды (tap — вкл/выкл, long tap — только эта
+//     линия) и графики (щипок двумя пальцами — зум, горизонтальный свайп — панорама,
+//     двойной тап — сброс зума, тап — значение в точке); работает только на coarse-устройствах;
+//   - {{mnav}} — нижняя навигация (Главная/Графики/Электроэнергия), активный пункт
+//     передаётся в Execute через .active.
+const mobileCommon = `
+{{define "mcss"}}
+@media (max-width: 900px) {
+  html { -webkit-text-size-adjust: 100%; }
+  body { padding:12px 12px calc(16px + 56px + env(safe-area-inset-bottom, 0px)); }
+  .top-nav { margin-bottom:12px; }
+  .top-nav .ttl { font-size:19px; }
+  .top-nav .sub { font-size:12px; margin-bottom:0; }
+  .top-nav .nav-btn { display:none; }
+  .mnav { position:fixed; left:0; right:0; bottom:0; z-index:60; display:flex; background:#151b26; border-top:1px solid #2a3342; padding-bottom:env(safe-area-inset-bottom, 0px); }
+  .mnav a { flex:1 1 0; text-align:center; padding:9px 2px 10px; color:#8a93a1; font-size:12px; font-weight:600; text-decoration:none; border-top:2px solid transparent; -webkit-tap-highlight-color:transparent; }
+  .mnav a.active { color:#fff; border-top-color:#2f6fed; background:rgba(47,111,237,0.10); }
+  button, .lg-chip, .bms-btn { -webkit-tap-highlight-color:transparent; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
+  .groups-row { flex-direction:column; gap:12px; margin-bottom:12px; }
+  .group-top { margin-bottom:12px; }
+  .group { padding:12px; }
+  .group-body .plate, .group-body .meter-stat { flex:1 1 44%; min-width:44%; }
+  .plate .val, .meter-stat .val { font-size:21px; }
+  .bms-btn { min-width:120px; padding:12px 14px 10px; }
+  .bms-batt { width:44px; height:96px; border-width:2px; }
+  .bms-batt::before { top:-8px; width:20px; height:6px; }
+  .bms-batt-soc { font-size:19px; }
+  .bms-name { font-size:13px; }
+  .pivot-wrap { margin:12px 0; padding:10px; -webkit-overflow-scrolling:touch; }
+  .pivot-table { min-width:600px; font-size:12px; }
+  .pivot-table th, .pivot-table td { padding:5px 8px; }
+  .pivot-table th:first-child, .pivot-table td:first-child { position:sticky; left:0; z-index:2; background:#202630; box-shadow:1px 0 0 0 #333b49; }
+  .pivot-table tbody tr:nth-child(even) td:first-child { background:#1b212b; }
+  .charts { gap:12px; margin-bottom:12px; }
+  .charts #chartbox { min-width:100%; }
+  #chartbox { padding:12px; }
+  #chartbox h2 { font-size:14px; }
+  .chart-wrap { height:290px; }
+  .period-panel { gap:8px; margin-bottom:12px; }
+  .period-panel button, .range-panel button, .chart-toolbar button { min-height:40px; padding:9px 14px; font-size:13px; }
+  .period-panel input[type=date], .range-panel input[type=date] { min-height:40px; padding:8px 10px; font-size:14px; }
+  .lg-chips { gap:8px; }
+  .lg-chip { padding:8px 14px 8px 10px; font-size:13px; }
+  .lg-hint { margin-bottom:8px; }
+  .kpi-row { gap:8px; }
+  .kpi { flex:1 1 46%; min-width:150px; padding:10px 12px; }
+  .kpi .val { font-size:22px; }
+  .cards { gap:12px; }
+  .card { flex:1 1 100%; min-width:0; padding:12px; }
+  .trow .tname { flex:0 0 110px; width:110px; font-size:11px; }
+  .tnote { font-size:10px; }
+  .bms-charts { gap:12px; margin-top:16px; }
+  .bms-charts-title { margin:20px 0 10px; font-size:15px; }
+  .bms-charts .chart-wrap { height:250px; }
+  .cell { width:34px; }
+  .cell-batt { width:24px; height:48px; }
+  .cell .mv { font-size:10px; }
+  .foot { font-size:11px; }
+}
+{{end}}
+{{define "mjs"}}
+(function(){
+'use strict';
+var SR_COARSE = window.matchMedia && matchMedia('(pointer: coarse)').matches;
+if(!SR_COARSE) return;
+// Чипы легенды: tap — вкл/выкл, long tap (≥450 мс без движения) — только эта линия.
+// Вызывается из lgKit (каждой страницы) при создании чипа.
+window.srBindChip = function(b, fnToggle, fnIsolate){
+  var timer=null, sx=0, sy=0, moved=false;
+  b.addEventListener('touchstart', function(e){
+    if(e.touches.length!==1) return;
+    var t=e.touches[0]; sx=t.clientX; sy=t.clientY; moved=false;
+    timer=setTimeout(function(){ timer=null; fnIsolate(); }, 450);
+  }, {passive:true});
+  b.addEventListener('touchmove', function(e){
+    if(!timer) return;
+    var t=e.touches[0];
+    if(Math.abs(t.clientX-sx)>14 || Math.abs(t.clientY-sy)>14){ moved=true; clearTimeout(timer); timer=null; }
+  }, {passive:true});
+  b.addEventListener('touchend', function(){
+    if(!timer) return;
+    clearTimeout(timer); timer=null;
+    if(!moved) fnToggle();
+  }, {passive:true});
+  b.addEventListener('touchcancel', function(){ if(timer){ clearTimeout(timer); timer=null; } }, {passive:true});
+  // Синтетический click после touchend не должен дойти до десктопного обработчика чипа.
+  b.addEventListener('click', function(e){ e.preventDefault(); e.stopPropagation(); }, true);
+};
+// Touch-управление графиком:
+//   - горизонтальный свайп одним пальцем — панорама по времени (вертикальный скролл
+//     страницы не блокируется: touch-action: pan-y);
+//   - щипок двумя пальцами — зум/у-зум (окно зафиксировано под серединой пальцев);
+//   - двойной тап — сброс зума;
+//   - тап — onTap(px) (показать значение в точке).
+// Плагин chartjs-plugin-zoom на touch-устройствах отключён (pan/wheel/pinch),
+// чтобы его Hammer не перехватывал жесты и не мешал скроллу страницы.
+window.srTouchChart = function(getChart, canvasId, minSpan, onTap){
+  var canvas=document.getElementById(canvasId);
+  if(!canvas) return;
+  canvas.style.touchAction='pan-y';
+  var st=null, lastTap={t:0, px:0};
+  function tdist(e){ var a=e.touches[0], b=e.touches[1]; return Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY); }
+  function xwin(c){ var x=c.scales && c.scales.x; return (x && isFinite(x.min) && isFinite(x.max) && x.max>x.min) ? {min:x.min, max:x.max} : null; }
+  function beginPinch(c, e){
+    var w=xwin(c); if(!w || !c.chartArea){ st=null; return; }
+    var rect=canvas.getBoundingClientRect();
+    var midX=(e.touches[0].clientX+e.touches[1].clientX)/2;
+    var fx=(midX-rect.left-c.chartArea.left)/c.chartArea.width;
+    st={mode:'pinch', d0:Math.max(20,tdist(e)), min0:w.min, max0:w.max, fx:Math.max(0,Math.min(1,fx))};
+  }
+  function doPinch(c, e){
+    if(!st || st.mode!=='pinch') return;
+    var span0=st.max0-st.min0;
+    var span=span0*(st.d0/Math.max(20,tdist(e)));
+    span=Math.max(minSpan, Math.min(span0, span));
+    var mid0=st.min0+st.fx*span0;
+    try{ c.zoomScale('x', {min:mid0-st.fx*span, max:mid0-st.fx*span+span}, 'none'); }catch(err){}
+  }
+  canvas.addEventListener('touchstart', function(e){
+    var c=getChart(); if(!c){ st=null; return; }
+    if(e.touches.length===2){ beginPinch(c, e); }
+    else if(e.touches.length===1){
+      st={mode:'maybe', x0:e.touches[0].clientX, y0:e.touches[0].clientY, lastX:e.touches[0].clientX, t:Date.now(), decided:null};
+    }
+  }, {passive:true});
+  canvas.addEventListener('touchmove', function(e){
+    if(!st) return;
+    var c=getChart(); if(!c) return;
+    if(e.touches.length===2){
+      if(st.mode!=='pinch') beginPinch(c, e);
+      e.preventDefault();
+      doPinch(c, e);
+    } else if(e.touches.length===1 && st.mode==='maybe'){
+      var dx=e.touches[0].clientX-st.x0, dy=e.touches[0].clientY-st.y0;
+      if(st.decided===null && (Math.abs(dx)>12 || Math.abs(dy)>12)) st.decided=(Math.abs(dx)>Math.abs(dy)*1.2)?'pan':'scroll';
+      if(st.decided==='pan'){
+        e.preventDefault();
+        var w=xwin(c);
+        if(w && c.chartArea){
+          var dData=-(e.touches[0].clientX-st.lastX)/c.chartArea.width*(w.max-w.min);
+          try{ c.zoomScale('x', {min:w.min+dData, max:w.max+dData}, 'none'); }catch(err){}
+        }
+        st.lastX=e.touches[0].clientX;
+      }
+    }
+  }, {passive:false});
+  canvas.addEventListener('touchend', function(e){
+    if(!st || st.mode!=='maybe' || st.decided==='pan'){ st=null; return; }
+    var dt=Date.now()-st.t;
+    var t=e.changedTouches[0];
+    if(dt<300 && t){
+      var rect=canvas.getBoundingClientRect();
+      var px=t.clientX-rect.left;
+      var c=getChart();
+      if(c && c.chartArea && px>=c.chartArea.left && px<=c.chartArea.right){
+        if(Date.now()-lastTap.t<320 && Math.abs(px-lastTap.px)<40){
+          try{ c.resetZoom(); }catch(err){}
+        } else if(onTap){ onTap(px); }
+        lastTap={t:Date.now(), px:px};
+      }
+    }
+    st=null;
+  }, {passive:true});
+  canvas.addEventListener('touchcancel', function(){ st=null; }, {passive:true});
+};
+// Подсказки: мышиные инструкции заменяем на тачские.
+document.querySelectorAll('.lg-hint').forEach(function(s){
+  s.textContent='Тап по чипу — вкл/выкл · long tap — только этот показатель · «Все» — показать все';
+});
+document.querySelectorAll('.chart-toolbar span').forEach(function(s){
+  if(!s.id && /зум/i.test(s.textContent)) s.textContent='Щипок — зум · свайп — сдвиг · двойной тап — сброс';
+});
+})();
+{{end}}
+{{define "mnav"}}
+<div class="mnav">
+  <a href="/" {{if eq .active "home"}}class="active"{{end}}>Главная</a>
+  <a href="/charts" {{if eq .active "charts"}}class="active"{{end}}>Графики</a>
+  <a href="/energy" {{if eq .active "energy"}}class="active"{{end}}>Электроэнергия</a>
+</div>
+{{end}}
+`
+
 const dashboardPage = `<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>SunReceiver</title>
 <style>
 :root { color-scheme: dark; }
@@ -257,9 +444,12 @@ h1 { font-size:22px; margin:0 0 4px; }
 .bms-batt-fill { position:absolute; left:4px; right:4px; bottom:4px; border-radius:6px; transition:height .6s; }
 .bms-batt-soc { position:absolute; left:0; right:0; top:50%; transform:translateY(-50%); text-align:center; font-size:26px; font-weight:700; color:#fff; text-shadow:0 1px 4px rgba(0,0,0,.9); font-variant-numeric:tabular-nums; }
 .bms-name { font-size:15px; font-weight:600; color:#e6e6e6; white-space:nowrap; }
+/* Мобильная версия: панель периодов на главной — безделка (графиков на главной нет). */
+@media (max-width: 900px) { #mainPeriod { display:none; } }
 </style>
 </head>
 <body>
+<style>{{template "mcss"}}</style>
 <div class="top-nav">
   <div>
     <h1 class="ttl">SunReceiver</h1>
@@ -412,7 +602,7 @@ h1 { font-size:22px; margin:0 0 4px; }
   </div>
 </div>
 
-<div class="period-panel">
+<div class="period-panel" id="mainPeriod">
   <button id="btnToday">Сегодня</button>
   <button id="btnYesterday">Вчера</button>
   <button id="btn7d">7 дней</button>
@@ -677,6 +867,8 @@ async function tickBMS(){
 tick(); setInterval(tick,1000);
 tickBMS(); setInterval(tickBMS,60000);
 </script>
+{{template "mnav" .}}
+<script>{{template "mjs"}}</script>
 </body>
 </html>`
 
@@ -686,7 +878,7 @@ const chartsPage = `<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Графики — SunReceiver</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -728,6 +920,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 </style>
 </head>
 <body>
+<style>{{template "mcss"}}</style>
 <div class="top-nav">
   <div>
     <h1 class="ttl">Графики</h1>
@@ -801,6 +994,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 
 <script>
 'use strict';
+var SR_COARSE = window.matchMedia ? matchMedia('(pointer: coarse)').matches : false;
 
 function fmt(t){ var d=new Date(t); function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes()); }
 function fmtSec(t){ var d=new Date(t); function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds()); }
@@ -853,11 +1047,15 @@ function lgKit(canvasId, chipsId){
 			b.title='ЛКМ — вкл/выкл · двойной ЛКМ — только эта линия';
 			var sw=document.createElement('i'); sw.style.background=swatch(ds);
 			b.appendChild(sw); b.appendChild(document.createTextNode(ds.label));
-			var clickTimer=null;
-			b.addEventListener('click', function(){
-				if(clickTimer){ clearTimeout(clickTimer); clickTimer=null; isolate(chart,i); }
-				else { clickTimer=setTimeout(function(){ clickTimer=null; toggle(chart,i); }, 250); }
-			});
+			if(window.srBindChip){
+				srBindChip(b, function(){ toggle(chart,i); }, function(){ isolate(chart,i); });
+			}else{
+				var clickTimer=null;
+				b.addEventListener('click', function(){
+					if(clickTimer){ clearTimeout(clickTimer); clickTimer=null; isolate(chart,i); }
+					else { clickTimer=setTimeout(function(){ clickTimer=null; toggle(chart,i); }, 250); }
+				});
+			}
 			row.appendChild(b);
 		});
 		var all=document.createElement('button'); all.type='button'; all.className='lg-chip lg-all';
@@ -1005,8 +1203,8 @@ function chartOpts(withLegend,yTitle,extra){
 		plugins:{
 			tooltip:{ enabled:false },
 			zoom:{
-				pan:{ enabled:true, mode:'x' },
-				zoom:{ wheel:{ enabled:true, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:true }, mode:'x' },
+				pan:{ enabled:!SR_COARSE, mode:'x' },
+				zoom:{ wheel:{ enabled:!SR_COARSE, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:!SR_COARSE }, mode:'x' },
 				limits:{ x:{ minRange: 60*1000 } }
 			}
 		},
@@ -1218,11 +1416,23 @@ document.getElementById('fromPick').value=toInputDate(dayStart(selRange.from));
 document.getElementById('toPick').value=toInputDate(dayStart(selRange.to));
 document.getElementById('datePick').value=toInputDate(selRange.from);
 loadAll(); setInterval(function(){ preserveZoom=true; loadAll(); },60000);
+// Мобильная версия: touch-жесты по графикам (щипок — зум, свайп — панорама,
+// двойной тап — сброс зума, тап — значение в точке через cursorTooltip).
+if(SR_COARSE){
+	['powerChart','totalChart','gridVChart','gridPChart'].forEach(function(id){
+		srTouchChart(function(){ return window[id]; }, id, 60*1000, function(px){
+			hoverPix[id]=px;
+			try{ if(window[id]) window[id].update('none'); }catch(e){}
+		});
+	});
+}
 </script>
+{{template "mnav" .}}
+<script>{{template "mjs"}}</script>
 </body>
 </html>`
 
-var chartsTmpl = template.Must(template.New("charts").Parse(chartsPage))
+var chartsTmpl = template.Must(template.New("charts").Parse(mobileCommon + chartsPage))
 
 // energyPage — страница «Электроэнергия»: посуточные и помесячные тарифы
 // электросчётчика (потребление/отдача «День»/«Ночь») с независимыми
@@ -1231,7 +1441,7 @@ const energyPage = `<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Электроэнергия — SunReceiver</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
@@ -1265,6 +1475,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 </style>
 </head>
 <body>
+<style>{{template "mcss"}}</style>
 <div class="top-nav">
   <div>
     <h1 class="ttl">Электроэнергия</h1>
@@ -1312,6 +1523,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 
 <script>
 'use strict';
+var SR_COARSE = window.matchMedia ? matchMedia('(pointer: coarse)').matches : false;
 var TARIFF_COLORS={ import_day:'#d0663a', import_night:'#8c5bbf', export_day:'#3fbf7f', export_night:'#2c8f6a' };
 // hiddenSets[chartId] — метки скрытых пользователем столбцов (клик по легенде).
 // Восстанавливаются при пересоздании графика (смена диапазона/пресета).
@@ -1349,11 +1561,15 @@ function lgKit(canvasId, chipsId){
 			b.title='ЛКМ — вкл/выкл · двойной ЛКМ — только этот показатель';
 			var sw=document.createElement('i'); sw.style.background=swatch(ds);
 			b.appendChild(sw); b.appendChild(document.createTextNode(ds.label));
-			var clickTimer=null;
-			b.addEventListener('click', function(){
-				if(clickTimer){ clearTimeout(clickTimer); clickTimer=null; isolate(chart,i); }
-				else { clickTimer=setTimeout(function(){ clickTimer=null; toggle(chart,i); }, 250); }
-			});
+			if(window.srBindChip){
+				srBindChip(b, function(){ toggle(chart,i); }, function(){ isolate(chart,i); });
+			}else{
+				var clickTimer=null;
+				b.addEventListener('click', function(){
+					if(clickTimer){ clearTimeout(clickTimer); clickTimer=null; isolate(chart,i); }
+					else { clickTimer=setTimeout(function(){ clickTimer=null; toggle(chart,i); }, 250); }
+				});
+			}
 			row.appendChild(b);
 		});
 		var all=document.createElement('button'); all.type='button'; all.className='lg-chip lg-all';
@@ -1490,10 +1706,12 @@ initEnergyPanel({
 	defaultFrom:startOfYear, defaultTo:endOfYear
 });
 </script>
+{{template "mnav" .}}
+<script>{{template "mjs"}}</script>
 </body>
 </html>`
 
-var energyTmpl = template.Must(template.New("energy").Parse(energyPage))
+var energyTmpl = template.Must(template.New("energy").Parse(mobileCommon + energyPage))
 
 // bmsDetailPage — страница деталей ANT BMS (/bms/<name>): актуальные параметры
 // одной батареи из HASH sunreceiver:bms (обновление раз в секунду). Имя берётся
@@ -1503,7 +1721,7 @@ const bmsDetailPage = `<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>BMS — SunReceiver</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -1582,6 +1800,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 </style>
 </head>
 <body>
+<style>{{template "mcss"}}</style>
 <div class="top-nav">
   <div>
     <h1 class="ttl" id="bmsTitle">ANT BMS</h1>
@@ -1668,6 +1887,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 
 <script>
 'use strict';
+var SR_COARSE = window.matchMedia ? matchMedia('(pointer: coarse)').matches : false;
 function esc(s){ return String(s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
 function fmtNum(n,digits){ return isFinite(n)? n.toLocaleString('ru-RU',{maximumFractionDigits:digits}) : '—'; }
 
@@ -1855,11 +2075,15 @@ function lgKit(canvasId, chipsId){
 			b.title='ЛКМ — вкл/выкл · двойной ЛКМ — только эта линия';
 			var sw=document.createElement('i'); sw.style.background=swatch(ds);
 			b.appendChild(sw); b.appendChild(document.createTextNode(ds.label));
-			var clickTimer=null;
-			b.addEventListener('click', function(){
-				if(clickTimer){ clearTimeout(clickTimer); clickTimer=null; isolate(chart,i); }
-				else { clickTimer=setTimeout(function(){ clickTimer=null; toggle(chart,i); }, 250); }
-			});
+			if(window.srBindChip){
+				srBindChip(b, function(){ toggle(chart,i); }, function(){ isolate(chart,i); });
+			}else{
+				var clickTimer=null;
+				b.addEventListener('click', function(){
+					if(clickTimer){ clearTimeout(clickTimer); clickTimer=null; isolate(chart,i); }
+					else { clickTimer=setTimeout(function(){ clickTimer=null; toggle(chart,i); }, 250); }
+				});
+			}
 			row.appendChild(b);
 		});
 		var all=document.createElement('button'); all.type='button'; all.className='lg-chip lg-all';
@@ -1922,8 +2146,8 @@ function bmsRender(id, datasets, yTitle, legend, zero){
       plugins:{
         legend: { display:false },
         zoom:{
-          pan:{ enabled:true, mode:'x' },
-          zoom:{ wheel:{ enabled:true, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:true }, mode:'x' },
+          pan:{ enabled:!SR_COARSE, mode:'x' },
+          zoom:{ wheel:{ enabled:!SR_COARSE, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:!SR_COARSE }, mode:'x' },
           limits:{ x:{ minRange: 5*60*1000 } }
         }
       },
@@ -2045,23 +2269,42 @@ setActiveBtn('btnToday');
 loadBmsCharts();
 setInterval(function(){ preserveZoom=true; loadBmsCharts(); },60000);
 
+// Мобильная версия: touch-жесты по графикам BMS (щипок — зум, свайп — панорама,
+// двойной тап — сброс зума, тап — стандартный tooltip Chart.js в точке).
+if(SR_COARSE){
+  BMS_CHART_IDS.forEach(function(id){
+    srTouchChart(function(){ return BMS_CHARTS[id]; }, id, 5*60*1000, function(px){
+      var c=BMS_CHARTS[id]; if(!c || !c.chartArea) return;
+      try{
+        var els=c.getElementsAtEventForMode({x:px, y:c.chartArea.top+10}, 'index', {intersect:false}, true);
+        if(els.length){
+          c.tooltip.setActiveElements(els.map(function(el){ return {datasetIndex:el.datasetIndex, index:el.index}; }), true);
+          c.update();
+        }
+      }catch(e){}
+    });
+  });
+}
+
 load(); setInterval(load,1000);
 </script>
+{{template "mnav" .}}
+<script>{{template "mjs"}}</script>
 </body>
 </html>`
 
-var bmsDetailTmpl = template.Must(template.New("bmsdetail").Parse(bmsDetailPage))
+var bmsDetailTmpl = template.Must(template.New("bmsdetail").Parse(mobileCommon + bmsDetailPage))
 
 func (h *dashboardHandler) charts(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = chartsTmpl.Execute(w, nil)
+	_ = chartsTmpl.Execute(w, map[string]any{"active": "charts"})
 }
 
 func (h *dashboardHandler) energy(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = energyTmpl.Execute(w, nil)
+	_ = energyTmpl.Execute(w, map[string]any{"active": "energy"})
 }
 
 // apiBMS отдаёт актуальное состояние всех ANT BMS (HASH sunreceiver:bms,
@@ -2158,15 +2401,15 @@ func (h *dashboardHandler) apiBMSSeries(w http.ResponseWriter, r *http.Request, 
 func (h *dashboardHandler) bmsDetail(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = bmsDetailTmpl.Execute(w, nil)
+	_ = bmsDetailTmpl.Execute(w, map[string]any{"active": "home"})
 }
 
-var dashboardTmpl = template.Must(template.New("dash").Parse(dashboardPage))
+var dashboardTmpl = template.Must(template.New("dash").Parse(mobileCommon + dashboardPage))
 
 func (h *dashboardHandler) index(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = dashboardTmpl.Execute(w, nil)
+	_ = dashboardTmpl.Execute(w, map[string]any{"active": "home"})
 }
 
 // meterTariffToday вычисляет тарифные величины счётчика за текущие календарные
