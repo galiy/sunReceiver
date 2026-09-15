@@ -19,15 +19,37 @@ func testStore(t *testing.T) *redisStore {
 	return &redisStore{rdb: rdb, ctx: context.Background()}
 }
 
+// cleanTestKeys удаляет только ключи приложения (sunreceiver:*), а не всю
+// БД (FlushDB): на машине разработки с живым локальным Redis, хранящим
+// реальные данные, `go test ./...` не должен стирать их.
+func cleanTestKeys(t *testing.T, s *redisStore) {
+	t.Helper()
+	var cursor uint64
+	for {
+		keys, cur, err := s.rdb.Scan(s.ctx, cursor, "sunreceiver:*", 100).Result()
+		if err != nil {
+			t.Fatalf("scan sunreceiver:*: %v", err)
+		}
+		if len(keys) > 0 {
+			if err := s.rdb.Del(s.ctx, keys...).Err(); err != nil {
+				t.Fatalf("del sunreceiver:*: %v", err)
+			}
+		}
+		if cur == 0 {
+			return
+		}
+		cursor = cur
+	}
+}
+
 func snap(name string, ip string, ts time.Time, values valuesContract) deviceSnapshot {
 	return deviceSnapshot{Name: name, IP: ip, Timestamp: ts.Format(time.RFC3339), Values: values}
 }
 
 func TestRedisStoreCurrentSorted(t *testing.T) {
 	s := testStore(t)
-	rdb := s.rdb
-	rdb.FlushDB(s.ctx)
-	defer rdb.FlushDB(s.ctx)
+	cleanTestKeys(t, s)
+	t.Cleanup(func() { cleanTestKeys(t, s) })
 
 	now := time.Now()
 	for _, sp := range []deviceSnapshot{
@@ -53,9 +75,8 @@ func TestRedisStoreCurrentSorted(t *testing.T) {
 
 func TestRedisStoreQuerySeriesPeriod(t *testing.T) {
 	s := testStore(t)
-	rdb := s.rdb
-	rdb.FlushDB(s.ctx)
-	defer rdb.FlushDB(s.ctx)
+	cleanTestKeys(t, s)
+	t.Cleanup(func() { cleanTestKeys(t, s) })
 
 	// Три точки: 2 текущего месяца, 1 — пересечение, чтобы проверить сегментацию месяцев.
 	base := time.Now()
@@ -77,9 +98,8 @@ func TestRedisStoreQuerySeriesPeriod(t *testing.T) {
 
 func TestRedisStoreBMSSeriesRoundtrip(t *testing.T) {
 	s := testStore(t)
-	rdb := s.rdb
-	rdb.FlushDB(s.ctx)
-	defer rdb.FlushDB(s.ctx)
+	cleanTestKeys(t, s)
+	t.Cleanup(func() { cleanTestKeys(t, s) })
 
 	now := time.Now()
 	ts1 := floorToStep(now.Add(-10 * time.Minute))
@@ -136,9 +156,8 @@ func TestRedisStoreBMSSeriesRoundtrip(t *testing.T) {
 // затрагиваются.
 func TestRedisStoreBMSSeriesReplace(t *testing.T) {
 	s := testStore(t)
-	rdb := s.rdb
-	rdb.FlushDB(s.ctx)
-	defer rdb.FlushDB(s.ctx)
+	cleanTestKeys(t, s)
+	t.Cleanup(func() { cleanTestKeys(t, s) })
 
 	now := time.Now()
 	ts := floorToStep(now)
