@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -3123,8 +3124,10 @@ func dayBounds(now time.Time, loc *time.Location) (time.Time, time.Time) {
 	return start, end
 }
 
-// serveDashboard запускает HTTP-сервер дашборда в отдельной горутине.
-func serveDashboard(addr string, store *redisStore, pg *pgStore) {
+// serveDashboard — HTTP-сервер веб-дашборда. При закрытии stop аккуратно
+// завершает сервер (http.Server.Shutdown, бюджет 5 с), чтобы main мог закрыть
+// пулы Redis/PG после завершения всех фоновых горутин (bgWg).
+func serveDashboard(addr string, store *redisStore, pg *pgStore, stop <-chan struct{}) {
 	h := &dashboardHandler{store: store, pg: pg}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.index)
@@ -3137,6 +3140,12 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore) {
 	mux.HandleFunc("/api/bms", h.apiBMS)
 	mux.HandleFunc("/api/bms/", h.apiBMSOne)
 	srv := &http.Server{Addr: addr, Handler: mux}
+	go func() {
+		<-stop
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	}()
 	log.Printf("dashboard: http://%s/ (графики — http://%s/charts)", addr, addr)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Printf("dashboard: %v", err)

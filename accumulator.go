@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"math"
+	"sync"
 	"time"
 )
 
@@ -197,6 +198,11 @@ func runAccumulator(store *redisStore, pg *pgStore, stop <-chan struct{}) {
 	log.Printf("avg: старт; период=%s, отсрочка усреднения=%s, 12 промежутков в час", avgStep, avgDelay)
 	backfillAccumulator(store, pg, time.Now())
 
+	// bucketWg — запущенные, но ещё не завершённые averageBucket: при stop
+	// ждём их завершения, чтобы main закрыл пул PG только после последней записи.
+	var bucketWg sync.WaitGroup
+	waitBuckets := func() { bucketWg.Wait() }
+
 	for {
 		now := time.Now()
 		// 1) Ждём ближайшую границу 5-минутного промежутка и фиксируем её.
@@ -207,6 +213,7 @@ func runAccumulator(store *redisStore, pg *pgStore, stop <-chan struct{}) {
 			b = floorToStep(time.Now())
 		case <-stop:
 			stopTimer(boundary)
+			waitBuckets()
 			return
 		}
 
@@ -216,11 +223,14 @@ func runAccumulator(store *redisStore, pg *pgStore, stop <-chan struct{}) {
 		select {
 		case <-delay.C:
 			start, end := b.Add(-avgStep), b
+			bucketWg.Add(1)
 			go func() {
+				defer bucketWg.Done()
 				averageBucket(store, pg, start, end)
 			}()
 		case <-stop:
 			stopTimer(delay)
+			waitBuckets()
 			return
 		}
 	}

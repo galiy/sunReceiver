@@ -132,11 +132,10 @@ func runBmsPoll(store *redisStore, pg *pgStore, stop <-chan struct{}) {
 			}
 			saveBMSClosedBuckets(store, pg, acc.closed(time.Now()), false)
 		case <-stop:
+			// Drain неполного 5-минутного промежутка в Redis+PG. main() ждёт
+			// завершение этой горутины (bgWg) ДО закрытия пулов Redis/PG,
+			// поэтому записи не гоняются с закрытыми пулами.
 			saveBMSClosedBuckets(store, pg, acc.drain(), true)
-			// Небольшая пауза, чтобы записи при остановке успели завершиться
-			// раньше, чем main закроет пул PG/Redis (те же defer, что у всех
-			// фоновых процессов).
-			time.Sleep(500 * time.Millisecond)
 			return
 		}
 	}
