@@ -491,6 +491,20 @@ func (s *redisStore) Current() ([]deviceSnapshot, error) {
 	return snaps, nil
 }
 
+// CurrentOne возвращает один последний снимок из current-HASH по IP
+// (для донаса аппаратных серийных номеров в runInverterPoll).
+func (s *redisStore) CurrentOne(ip string) (deviceSnapshot, error) {
+	v, err := s.rdb.HGet(s.ctx, redisCurrentKey, ip).Result()
+	if err != nil {
+		return deviceSnapshot{}, err
+	}
+	var snap deviceSnapshot
+	if e := json.Unmarshal([]byte(v), &snap); e != nil {
+		return deviceSnapshot{}, e
+	}
+	return snap, nil
+}
+
 // QuerySeries возвращает все снимки за период [start, end] включительно из временного ряда.
 // Читает по одному месячному сегменту ZRANGEBYSCORE, объединяя в порядке времени.
 func (s *redisStore) QuerySeries(start, end time.Time) ([]deviceSnapshot, error) {

@@ -1340,11 +1340,25 @@ func runInverterPoll(store *redisStore, t invTarget, stop <-chan struct{}) {
 			res := pollDevice(t)
 			now := time.Now() // фактическое время получения данных этого инвертора
 			log.Printf("%s: %s (%s)", t.IP, describeResult(res), now.Sub(t0).Round(time.Millisecond))
-			if !res.OK || !res.HasData {
-				// heartbeat_only / no data / ошибка — снимок не сохраняем
-				continue
+		if !res.OK || !res.HasData {
+			// heartbeat_only / no data / ошибка — снимок не сохраняем
+			continue
+		}
+		// Аппаратные серийные номера постоянны: если в этом цикле не удалось их
+		// прочитать (инвертор выключился на закате, регистры/диапазон HW не
+		// отдались), берём из предыдущего снимка — иначе номер «пропадает» в
+		// таблице у оффлайн-инвертора.
+		if res.InverterSN == "" || res.DeviceSN == "" {
+			if prev, err := store.CurrentOne(t.IP); err == nil {
+				if res.InverterSN == "" {
+					res.InverterSN = prev.InverterSN
+				}
+				if res.DeviceSN == "" {
+					res.DeviceSN = prev.DeviceSN
+				}
 			}
-			snap := deviceSnapshot{
+		}
+		snap := deviceSnapshot{
 				Name:       t.Name,
 				IP:         t.IP,
 				Timestamp:  now.Format(time.RFC3339),
