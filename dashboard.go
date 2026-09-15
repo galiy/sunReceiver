@@ -429,6 +429,7 @@ h1 { font-size:22px; margin:0 0 4px; }
 .pivot-table thead th { font-size:12px; font-weight:600; color:#e6e6e6; background:#202630; }
 .pivot-table .p-label { text-align:left; color:#aab3bf; width:auto; }
 .pivot-table td.p-val { font-variant-numeric:tabular-nums; font-weight:600; }
+.pivot-table tr.p-power td.p-val { color:#66ff99; }
 .pivot-table td.p-unit { color:#8a93a1; font-weight:400; }
 .pivot-table td.p-empty { color:#4a5464; }
 .pivot-table tr:nth-child(even) td { background:#1b212b; }
@@ -650,7 +651,6 @@ function endOfToday(){ var d=new Date(); d.setHours(23,59,59,999); return d; }
 var PARAMS = [
 	['pv1_voltage','Напряжение PV1','V'], ['pv1_current','Ток PV1','A'], ['pv1_power','Мощность PV1','W'],
 	['pv2_voltage','Напряжение PV2','V'], ['pv2_current','Ток PV2','A'], ['pv2_power','Мощность PV2','W'],
-	['ac_active_power','Активная мощность','W'], ['ac_reactive_power','Реактивная мощность','var'],
 	['grid_frequency','Частота сети','Hz'],
 	['l1_voltage','Напряжение L1','V'], ['l1_current','Ток L1','A'], ['l1_power','Мощность L1','W'],
 	['energy_today','Выработка сегодня','kWh'], ['energy_total','Выработка всего','kWh']
@@ -698,6 +698,9 @@ function renderPivot(devices){
 	h+='<tr><td class="p-label">Актуально</td>'+rowCells(grid,mpts,function(d){return d.timestamp?fmtSec(d.timestamp):null;},'11px')+'</tr>';
 	h+='<tr><td class="p-label">Серийный номер инвертора</td>'+rowCells(grid,mpts,function(d){return d.inverter_sn||null;},'11px')+'</tr>';
 	h+='<tr><td class="p-label">Серийный номер логгера</td>'+rowCells(grid,mpts,function(d){return d.device_sn||null;},'11px')+'</tr>';
+	// Мощности — сразу после серийных номеров; значения — ярко-светло-зелёные (tr.p-power).
+	h+='<tr class="p-power"><td class="p-label">Активная мощность (W)</td>'+rowCells(grid,mpts,function(d){return devValue(d,'ac_active_power');})+'</tr>';
+	h+='<tr class="p-power"><td class="p-label">Реактивная мощность (var)</td>'+rowCells(grid,mpts,function(d){return devValue(d,'ac_reactive_power');})+'</tr>';
 	for(var p=0;p<PARAMS.length;p++){
 		var tag=PARAMS[p][0], label=PARAMS[p][1], unit=PARAMS[p][2];
 		h+='<tr><td class="p-label">'+esc(label)+' ('+esc(unit)+')</td>'+rowCells(grid,mpts,function(d){return devValue(d,tag);})+'</tr>';
