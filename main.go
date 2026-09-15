@@ -1254,6 +1254,11 @@ func main() {
 	// пишутся фоновым процессом аккумуляции (см. accumulator.go) после накопления
 	// данных за 5 минут. Реставрация Redis при пустом хранилище.
 	stopBG := make(chan struct{})
+	// bgWg — все фоновые горутины, пишущие в Redis/PG: при завершении main
+	// закрывает stopBG, ЖДЁТ их (bgWg.Wait()) и только потом defer'ы закрывают
+	// пулы rdb/pg — записи при остановке (BMS-drain, averageBucket, снимок
+	// текущего опроса) не гоняются с закрытыми пулами.
+	var bgWg sync.WaitGroup
 	var pg *pgStore
 	if *pgDSN != "" {
 		pg, err = openPG(*pgDSN)
@@ -1266,12 +1271,16 @@ func main() {
 			if merr := pg.MigrateLegacy(); merr != nil {
 				log.Printf("pg legacy миграция: %v", merr)
 			}
-			// Если Redis пуст — восстановить в нём данные из PG в фоне.
+			// Если Redis пуст — восстановить в нём данные из PG в фоне (с учётом stop).
 			empty, cerr := store.IsEmpty()
 			if cerr != nil {
 				log.Printf("redis empty-check: %v", cerr)
 			} else if empty {
-				go restoreRedisFromPG(store, pg, *restoreWindow)
+				bgWg.Add(1)
+				go func() {
+					defer bgWg.Done()
+					restoreRedisFromPG(store, pg, *restoreWindow, stopBG)
+				}()
 			}
 		}
 	} else {
@@ -1280,31 +1289,58 @@ func main() {
 
 	// Фоновые процессы: усреднение данных за 5 минут в PG и очистка старых
 	// данных Redis (старше 2 календарных суток).
-	go runAccumulator(store, pg, stopBG)
-	go runRedisCleanup(store, stopBG)
+	bgWg.Add(1)
+	go func() {
+		defer bgWg.Done()
+		runAccumulator(store, pg, stopBG)
+	}()
+	bgWg.Add(1)
+	go func() {
+		defer bgWg.Done()
+		runRedisCleanup(store, stopBG)
+	}()
 	// МАП («КЭС», Modbus TCP) и MPPT-контроллеры (веб-API ПАК «Малина»)
 	// опрашиваются отдельно, 1 раз в секунду, и пишутся в Redis со специальной
 	// логикой «одна строка за 10 с» (см. SaveSnapshotWindow).
-	go runMapPoll(store, stopBG)
+	bgWg.Add(1)
+	go func() {
+		defer bgWg.Done()
+		runMapPoll(store, stopBG)
+	}()
 	// ANT BMS (read_bms.php) — 1 раз в секунду: актуальное состояние в отдельном
 	// Redis-ключе (HASH sunreceiver:bms) + накопление 5-минутных усреднённых
 	// точек в Redis (ряд, окно 2 суток) и PG (bms_averages), см. bms_poller.go
 	// и bms_accumulator.go.
 	if bmsSite != nil {
-		go runBmsPoll(store, pg, stopBG)
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			runBmsPoll(store, pg, stopBG)
+		}()
 	}
 	// Электросчётчик DDS238 — 1 раз в секунду (мгновенные значения в Redis +
 	// посуточные тарифные захваты в PG, см. runMeterPoll и meter_tariff.go).
 	if meterCfg != nil {
-		go runMeterPoll(store, pg, meterCfg, stopBG)
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			runMeterPoll(store, pg, meterCfg, stopBG)
+		}()
 		// Добор пропущенных тарифных границ («ближайшее из зафиксированного»),
 		// см. meter_backfill.go.
-		go runMeterBackfill(store, pg, meterCfg, stopBG)
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			runMeterBackfill(store, pg, meterCfg, stopBG)
+		}()
 	}
-	defer close(stopBG)
 
 	if *dashboardAddr != "" {
-		go serveDashboard(*dashboardAddr, store, pg)
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			serveDashboard(*dashboardAddr, store, pg, stopBG)
+		}()
 	}
 
 	sig := make(chan os.Signal, 1)
@@ -1314,16 +1350,25 @@ func main() {
 	// периодом pollPeriod (10 с). Завис/таймаутит один текущий опрос одного
 	// инвертора — остальные продолжают опрашиваться и сохранять снимки строго
 	// раз в 10 секунд, влияния друг на друга нет вовсе. Снятие делается по
-	// закрытию stopBG (см. defer close(stopBG)).
+	// закрытию stopBG.
 	for _, t := range targets {
 		if t.Kind == kindMAP || t.Kind == kindMPPT {
 			continue // МАП и MPPT API опрашиваются отдельным 1-сек циклом (runMapPoll)
 		}
-		go runInverterPoll(store, t, stopBG)
+		bgWg.Add(1)
+		go func(t invTarget) {
+			defer bgWg.Done()
+			runInverterPoll(store, t, stopBG)
+		}(t)
 	}
 
 	<-sig
 	log.Println("shutting down")
+	// Закрытие пулов rdb/pg — в defer'ах выше (LIFO: после этого кода).
+	close(stopBG)
+	// Ждём завершения фоновых горутин (их записи в Redis/PG), ПОСЛЕ чего
+	// defer'ы закрывают пулы — гонки «запись в закрытый пул» нет.
+	bgWg.Wait()
 }
 
 // runInverterPoll — непрерывный цикл опроса ОДНОГО инвертора (Deye/Sofar) с
@@ -1403,7 +1448,7 @@ func describeResult(res DeviceResult) string {
 //     ZSET ряда;
 //   - 5-минутные усреднённые точки ANT BMS (pg.BMSAveragesAll) — SaveBMSSeries
 //     в ряд sunreceiver:bms:series:<YYYY-MM>.
-func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration) {
+func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, stop <-chan struct{}) {
 	end := time.Now()
 	start := recentCutoff(end)
 	if w := end.Add(-window); w.After(start) {
@@ -1418,6 +1463,12 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration) {
 	}
 	var restored int
 	for _, snap := range snaps {
+		select {
+		case <-stop:
+			log.Printf("pg restore: остановлено по сигналу (восстановлено точек: %d)", restored)
+			return
+		default:
+		}
 		ts, perr := time.Parse(time.RFC3339, snap.Timestamp)
 		if perr != nil {
 			continue
@@ -1439,6 +1490,12 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration) {
 	}
 	var bmsRestored int
 	for _, p := range bmsPts {
+		select {
+		case <-stop:
+			log.Printf("pg restore: остановлено по сигналу (BMS восстановлено точек: %d)", bmsRestored)
+			return
+		default:
+		}
 		ts, perr := time.Parse(time.RFC3339, p.Ts)
 		if perr != nil {
 			continue
