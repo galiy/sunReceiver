@@ -430,6 +430,8 @@ h1 { font-size:22px; margin:0 0 4px; }
 .pivot-table .p-label { text-align:left; color:#aab3bf; width:auto; }
 .pivot-table td.p-val { font-variant-numeric:tabular-nums; font-weight:600; }
 .pivot-table tr.p-power td.p-val { color:#66ff99; }
+.pivot-table td.stale-time { color:#ff6b6b; }
+.pivot-table td.p-val.stale { opacity:0.4; }
 .pivot-table td.p-unit { color:#8a93a1; font-weight:400; }
 .pivot-table td.p-empty { color:#4a5464; }
 .pivot-table tr:nth-child(even) td { background:#1b212b; }
@@ -695,15 +697,21 @@ function renderPivot(devices){
 	for(var i=0;i<mpts.length;i++) h+='<th>'+esc(mpts[i].name)+'</th>';
 	h+='</tr></thead><tbody>';
 	// Общие строки. Первый столбец — заголовок строки; аудитория по обеим группам.
-	h+='<tr><td class="p-label">Актуально</td>'+rowCells(grid,mpts,function(d){return d.timestamp?fmtSec(d.timestamp):null;},'11px')+'</tr>';
+	// «Актуально» у offline-устройства (снимок старше STALE_MS) — красное с возрастом.
+	h+='<tr><td class="p-label">Актуально</td>'+rowCells(grid,mpts,function(d){
+		if(!d.timestamp) return null;
+		return isStaleDev(d) ? fmtSec(d.timestamp)+' · '+agoStr(new Date(d.timestamp).getTime()) : fmtSec(d.timestamp);
+	},'11px',function(d){ return isStaleDev(d)?'stale-time':''; })+'</tr>';
 	h+='<tr><td class="p-label">Серийный номер инвертора</td>'+rowCells(grid,mpts,function(d){return d.inverter_sn||null;},'11px')+'</tr>';
 	h+='<tr><td class="p-label">Серийный номер логгера</td>'+rowCells(grid,mpts,function(d){return d.device_sn||null;},'11px')+'</tr>';
 	// Мощности — сразу после серийных номеров; значения — ярко-светло-зелёные (tr.p-power).
-	h+='<tr class="p-power"><td class="p-label">Активная мощность (W)</td>'+rowCells(grid,mpts,function(d){return devValue(d,'ac_active_power');})+'</tr>';
-	h+='<tr class="p-power"><td class="p-label">Реактивная мощность (var)</td>'+rowCells(grid,mpts,function(d){return devValue(d,'ac_reactive_power');})+'</tr>';
+	// Offline-устройства (stale) приглушены — значение не текущее.
+	var staleCls=function(d){ return isStaleDev(d)?'stale':''; };
+	h+='<tr class="p-power"><td class="p-label">Активная мощность (W)</td>'+rowCells(grid,mpts,function(d){return devValue(d,'ac_active_power');},null,staleCls)+'</tr>';
+	h+='<tr class="p-power"><td class="p-label">Реактивная мощность (var)</td>'+rowCells(grid,mpts,function(d){return devValue(d,'ac_reactive_power');},null,staleCls)+'</tr>';
 	for(var p=0;p<PARAMS.length;p++){
 		var tag=PARAMS[p][0], label=PARAMS[p][1], unit=PARAMS[p][2];
-		h+='<tr><td class="p-label">'+esc(label)+' ('+esc(unit)+')</td>'+rowCells(grid,mpts,function(d){return devValue(d,tag);})+'</tr>';
+		h+='<tr><td class="p-label">'+esc(label)+' ('+esc(unit)+')</td>'+rowCells(grid,mpts,function(d){return devValue(d,tag);},null,staleCls)+'</tr>';
 	}
 	// Нижняя кромка рамок групп.
 	h+='<tr><td></td>';
@@ -715,19 +723,20 @@ function renderPivot(devices){
 }
 // rowCells формирует ячейки строки по колонкам обеих групп. Первая колонка группы
 // получает цветную левую, последняя — цветную правую рамку (вертикальные стороны).
-function rowCells(grid,mpts,getter,font){
+function rowCells(grid,mpts,getter,font,clsFn){
 	var h='';
-	for(var i=0;i<grid.length;i++) h+=cellTd(grid[i],getter,i===0,i===grid.length-1,GRID_COLOR,font);
-	for(var i=0;i<mpts.length;i++) h+=cellTd(mpts[i],getter,i===0,i===mpts.length-1,MPPT_COLOR,font);
+	for(var i=0;i<grid.length;i++) h+=cellTd(grid[i],getter,i===0,i===grid.length-1,GRID_COLOR,font,clsFn);
+	for(var i=0;i<mpts.length;i++) h+=cellTd(mpts[i],getter,i===0,i===mpts.length-1,MPPT_COLOR,font,clsFn);
 	return h;
 }
-function cellTd(d,getter,isFirst,isLast,color,font){
+function cellTd(d,getter,isFirst,isLast,color,font,clsFn){
 	var v=getter(d);
 	var st='';
 	if(isFirst) st+='border-left:1px solid '+color+';';
 	if(isLast) st+='border-right:1px solid '+color+';';
 	if(font) st+='font-size:'+font+';';
 	var cls=v===null?'p-empty':'p-val';
+	if(clsFn){ var extra=clsFn(d); if(extra) cls+=' '+extra; }
 	return '<td class="'+cls+'" style="'+st+'">'+(v===null?'':esc(v))+'</td>';
 }
 // edgeCell формирует пустую ячейку нижней кромки группы с цветной горизонтальной чертой.
@@ -743,6 +752,25 @@ function edgeCell(color,isFirst,isLast){
 function isMeterDevice(d){ return !!(d && d.values && d.values.meter_voltage !== undefined); }
 // isMAPDeviceJS — маркер устройства МАП (батарея/сеть) в JS (аналог isMAPDevice в Go).
 function isMAPDeviceJS(d){ return !!(d && d.values && d.values.battery_voltage !== undefined); }
+// STALE_MS — окно «молчания» устройства: если последний снимок старше 20 минут
+// (то же окно, что TOOLTIP_MAX_GAP на графиках), устройство считаем оффлайн —
+// напр. ночью, когда инверторы выключены и перестали присылать данные.
+// Таблица при этом показывает последнее известное значение, но приглушает его
+// (td.stale), «Актуально» краснеет с возрастом, «инверторов онлайн» и суммарная
+// мощность (/api/current) offline-устройства не включают.
+var STALE_MS=20*60*1000;
+function isStaleDev(d){
+	var t=(d && d.timestamp) ? new Date(d.timestamp).getTime() : NaN;
+	return !isFinite(t) || (Date.now()-t)>STALE_MS;
+}
+function agoStr(t){
+	var m=Math.floor((Date.now()-t)/60000);
+	if(m<1) return 'меньше минуты';
+	if(m<60) return m+' мин';
+	var h=Math.floor(m/60);
+	if(h<24) return h+' ч '+(m%60)+' мин';
+	return Math.floor(h/24)+' д '+(h%24)+' ч';
+}
 
 // METER_PARAMS — параметры счётчика для плашки: [тег, подпись, единица, знаковый].
 // Знаковые (активная/реактивная мощность) окрашиваются: отрицательная — отдача.
@@ -791,10 +819,12 @@ async function tick(){
 		var n=Number(data.total_power);
 		if(isFinite(n) && data.total_power>0){
 			kpiEl.textContent=n.toLocaleString('ru-RU',{maximumFractionDigits:1});
-			// Число инверторов онлайн — без устройства МАП (батарея/сеть) и счётчика.
+			// Число инверторов онлайн — без устройства МАП (батарея/сеть), счётчика
+			// и offline-устройств (последний снимок старше STALE_MS, напр. ночью).
 			var invCount=0;
-			for(var i=0;i<data.devices.length;i++) if(!isMAPDeviceJS(data.devices[i]) && !isMeterDevice(data.devices[i])) invCount++;
-			document.getElementById('kpiSub').textContent=invCount+' инверторов онлайн';
+			for(var i=0;i<data.devices.length;i++) if(!isMAPDeviceJS(data.devices[i]) && !isMeterDevice(data.devices[i]) && !isStaleDev(data.devices[i])) invCount++;
+			function invPlural(n){ var m10=n%10, m100=n%100; if(m10===1 && m100!==11) return 'инвертор'; if(m10>=2 && m10<=4 && (m100<10||m100>=20)) return 'инвертора'; return 'инверторов'; }
+			document.getElementById('kpiSub').textContent=invCount+' '+invPlural(invCount)+' онлайн';
 		}else{
 			kpiEl.textContent='—';
 			document.getElementById('kpiSub').textContent='Нет данных';
@@ -2608,6 +2638,11 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	var total float64
 	var totalPV float64
 	var gridV, gridP, batV, batP float64
+	// Устройство считаем «живым», если снимок не старше 20 минут (то же окно
+	// STALE_MS, что на дашборде): инвертор, выключенный ночью, в текущую сумму
+	// не входит, а его устаревшее значение (напр. 9 Вт заката) не выставляется
+	// как текущая мощность.
+	staleCutoff := time.Now().Add(-20 * time.Minute)
 	for _, d := range devices {
 		// Мощности устройства МАП (батарея/сеть) в сумме по инверторам не участвуют:
 		// они отображаются только на плашках/графиках МАП.
@@ -2624,6 +2659,9 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 			if v, ok := snapFloat(d.Values, "battery_power"); ok {
 				batP = v
 			}
+			continue
+		}
+		if ts, err := time.Parse(time.RFC3339, d.Timestamp); err != nil || !ts.After(staleCutoff) {
 			continue
 		}
 		if v, ok := snapFloat(d.Values, "ac_active_power"); ok {
