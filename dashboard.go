@@ -716,6 +716,14 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 .chart-wrap { position:relative; height:340px; }
 .charts { display:flex; flex-wrap:wrap; gap:16px; margin-bottom:20px; }
 .charts #chartbox { flex:1 1 46%; min-width:min(420px,100%); margin-bottom:0; }
+.lg-chips { display:flex; flex-wrap:wrap; gap:6px; margin:2px 0 10px; }
+.lg-chip { display:inline-flex; align-items:center; gap:6px; background:#202630; border:1px solid #333b49; border-radius:14px; padding:3px 11px 3px 8px; font-size:12px; color:#e6e6e6; cursor:pointer; line-height:1.4; }
+.lg-chip:hover { border-color:#2f6fed; }
+.lg-chip i { width:10px; height:10px; border-radius:3px; display:inline-block; flex:0 0 auto; }
+.lg-chip.off { opacity:.4; }
+.lg-chip.off i { background:#5a6472 !important; }
+.lg-chip.lg-all { background:#2f6fed; border-color:#2f6fed; }
+.lg-hint { font-size:11px; color:#6b7280; margin:0 0 10px; }
 .missing { color:#6b7280; font-style:italic; }
 </style>
 </head>
@@ -745,6 +753,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
   <button id="btnRefresh" title="Принудительно обновить графики">Обновить графики</button>
 </div>
 
+<div class="lg-hint">ЛКМ по чипу — вкл/выкл линию · двойной ЛКМ — только эта линия · «Все» — показать все</div>
 <div class="charts">
   <div id="chartbox">
     <h2>Напряжение сети и батареи (МАП), V + напряжение счётчика</h2>
@@ -753,6 +762,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
       <button id="btnGridVReset">Сброс зума</button>
       <span>Зум: колесо / drag&ndash;панорама</span>
     </div>
+    <div class="lg-chips" id="gridVChartLg"></div>
     <div class="chart-wrap"><canvas id="gridVChart"></canvas></div>
   </div>
 
@@ -763,6 +773,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
       <button id="btnGridPReset">Сброс зума</button>
       <span>Зум: колесо / drag&ndash;панорама</span>
     </div>
+    <div class="lg-chips" id="gridPChartLg"></div>
     <div class="chart-wrap"><canvas id="gridPChart"></canvas></div>
   </div>
 
@@ -783,6 +794,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
       <button id="btnReset">Сброс зума</button>
       <span>Зум: колесо / drag&ndash;панорама</span>
     </div>
+    <div class="lg-chips" id="powerChartLg"></div>
     <div class="chart-wrap"><canvas id="powerChart"></canvas></div>
   </div>
 </div>
@@ -818,16 +830,43 @@ function applyHidden(id, chart){
 	chart.data.datasets.forEach(function(ds,i){ if(hidden.indexOf(ds.label)>=0) chart.setDatasetVisibility(i,false); });
 	return true;
 }
-// legendToggle — клик по легенде: обычный — показать ТОЛЬКО этот показатель
-// (остальные скрыть); с Ctrl/Cmd — переключить только этот показатель.
-function legendToggle(e, legendItem, legend){
-	var chart=legend.chart, idx=legendItem.datasetIndex;
-	if(e && (e.ctrlKey || e.metaKey)){
-		chart.setDatasetVisibility(idx, !chart.isDatasetVisible(idx));
-	}else{
-		chart.data.datasets.forEach(function(ds,i){ chart.setDatasetVisibility(i, i===idx); });
+// lgKit — HTML-легенда-чипы вместо встроенной легенды Chart.js. ЛКМ по чипу —
+// вкл/выкл эту линию (toggle); двойной ЛКМ — показать только эту линию; «Все» —
+// показать все. Чистый DOM: без модификаторов (на Mac Ctrl/Cmd-клик перехватывается
+// браузером) и без приватного API Chart.js. Состояние чипов синхронизировано с
+// видимостью датасетов (работает с captureHidden/applyHidden).
+function lgKit(canvasId, chipsId){
+	var canvas=document.getElementById(canvasId), row=document.getElementById(chipsId);
+	function swatch(ds){ return ds.borderColor || ds.backgroundColor || '#888'; }
+	function sync(chart){
+		var chips=row.querySelectorAll('.lg-chip:not(.lg-all)');
+		chart.data.datasets.forEach(function(ds,i){ if(chips[i]) chips[i].classList.toggle('off', !chart.isDatasetVisible(i)); });
 	}
-	chart.update();
+	function isolate(chart,i){ chart.data.datasets.forEach(function(ds,j){ chart.setDatasetVisibility(j, j===i); }); chart.update(); sync(chart); }
+	function toggle(chart,i){ chart.setDatasetVisibility(i, !chart.isDatasetVisible(i)); chart.update(); sync(chart); }
+	function showAll(chart){ chart.data.datasets.forEach(function(ds,j){ chart.setDatasetVisibility(j, true); }); chart.update(); sync(chart); }
+	function build(chart){
+		row.innerHTML='';
+		if(!chart.data.datasets || !chart.data.datasets.length) return;
+		chart.data.datasets.forEach(function(ds,i){
+			var b=document.createElement('button'); b.type='button'; b.className='lg-chip';
+			b.title='ЛКМ — вкл/выкл · двойной ЛКМ — только эта линия';
+			var sw=document.createElement('i'); sw.style.background=swatch(ds);
+			b.appendChild(sw); b.appendChild(document.createTextNode(ds.label));
+			var clickTimer=null;
+			b.addEventListener('click', function(){
+				if(clickTimer){ clearTimeout(clickTimer); clickTimer=null; isolate(chart,i); }
+				else { clickTimer=setTimeout(function(){ clickTimer=null; toggle(chart,i); }, 250); }
+			});
+			row.appendChild(b);
+		});
+		var all=document.createElement('button'); all.type='button'; all.className='lg-chip lg-all';
+		all.textContent='Все'; all.title='Показать все линии';
+		all.addEventListener('click', function(){ showAll(chart); });
+		row.appendChild(all);
+		sync(chart);
+	}
+	return { build: build };
 }
 // TOOLTIP_MAX_GAP — максимальный возраст «ближайшей точки слева» (мс), который
 // считается актуальным в хинте. Устройства, замолчавшие дольше этого (простои,
@@ -981,7 +1020,7 @@ function chartOpts(withLegend,yTitle,extra){
 		if(extra.limits){ o.plugins.zoom.limits=Object.assign(o.plugins.zoom.limits, extra.limits); }
 		if(extra.scales){ for(var k in extra.scales) o.scales[k]=extra.scales[k]; }
 	}
-	if(withLegend){ o.plugins.legend={ display:true, labels:{ boxWidth:20, padding:14 }, onClick: legendToggle }; }
+	if(withLegend){ o.plugins.legend={ display:false }; }
 	return o;
 }
 
@@ -1064,6 +1103,7 @@ function buildChart(data){
 			pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false });
 	}
 	renderChart('powerChart', datasets, chartOpts(true,'W'));
+	lgKit('powerChart','powerChartLg').build(window.powerChart);
 	return window.powerChart;
 }
 async function loadChart(){
@@ -1097,6 +1137,7 @@ function buildGridVChart(data){
 		limits:{ x:{minRange:60*1000}, y:{minRange:20}, y1:{minRange:20} },
 		scales:{ y1:{ type:'linear', position:'right', beginAtZero:false, title:{display:true, text:'Напряжение батареи, V'} } }
 	}));
+	lgKit('gridVChart','gridVChartLg').build(window.gridVChart);
 	return window.gridVChart;
 }
 async function loadGridVChart(){
@@ -1128,6 +1169,7 @@ function buildGridPChart(data){
 		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.2, cubicInterpolationMode:'monotone', fill:false }
 	];
 	renderChart('gridPChart', datasets, chartOpts(true,'W'));
+	lgKit('gridPChart','gridPChartLg').build(window.gridPChart);
 	return window.gridPChart;
 }
 async function loadGridPChart(){
@@ -1212,6 +1254,14 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 .range-panel input[type=date]:focus { outline:none; border-color:#2f6fed; }
 .chart-wrap { position:relative; height:360px; }
 .range-status { color:#ffa94d; font-style:italic; }
+.lg-chips { display:flex; flex-wrap:wrap; gap:6px; margin:2px 0 10px; }
+.lg-chip { display:inline-flex; align-items:center; gap:6px; background:#202630; border:1px solid #333b49; border-radius:14px; padding:3px 11px 3px 8px; font-size:12px; color:#e6e6e6; cursor:pointer; line-height:1.4; }
+.lg-chip:hover { border-color:#2f6fed; }
+.lg-chip i { width:10px; height:10px; border-radius:3px; display:inline-block; flex:0 0 auto; }
+.lg-chip.off { opacity:.4; }
+.lg-chip.off i { background:#5a6472 !important; }
+.lg-chip.lg-all { background:#2f6fed; border-color:#2f6fed; }
+.lg-hint { font-size:11px; color:#6b7280; margin:0 0 10px; }
 </style>
 </head>
 <body>
@@ -1223,6 +1273,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
   <a class="nav-btn secondary" href="/">&larr; Назад</a>
 </div>
 
+<div class="lg-hint">ЛКМ по чипу — вкл/выкл · двойной ЛКМ — только этот показатель · «Все» — показать все</div>
 <div id="chartbox">
   <h2>Потребление / отдача по тарифу «День» и «Ночь» по дням, kWh</h2>
   <div class="range-panel" id="r1">
@@ -1238,6 +1289,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
     <button id="d1Apply">Показать</button>
   </div>
   <div class="chart-toolbar"><span class="range-status" id="s1"></span></div>
+  <div class="lg-chips" id="dailyTariffChartLg"></div>
   <div class="chart-wrap"><canvas id="dailyTariffChart"></canvas></div>
 </div>
 
@@ -1254,6 +1306,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
     <button id="d2Apply">Показать</button>
   </div>
   <div class="chart-toolbar"><span class="range-status" id="s2"></span></div>
+  <div class="lg-chips" id="monthlyTariffChartLg"></div>
   <div class="chart-wrap"><canvas id="monthlyTariffChart"></canvas></div>
 </div>
 
@@ -1275,16 +1328,41 @@ function applyHidden(id, chart){
 	chart.data.datasets.forEach(function(ds,i){ if(hidden.indexOf(ds.label)>=0) chart.setDatasetVisibility(i,false); });
 	return true;
 }
-// legendToggle — клик по легенде: обычный — показать ТОЛЬКО этот показатель
-// (остальные скрыть); с Ctrl/Cmd — переключить только этот показатель.
-function legendToggle(e, legendItem, legend){
-	var chart=legend.chart, idx=legendItem.datasetIndex;
-	if(e && (e.ctrlKey || e.metaKey)){
-		chart.setDatasetVisibility(idx, !chart.isDatasetVisible(idx));
-	}else{
-		chart.data.datasets.forEach(function(ds,i){ chart.setDatasetVisibility(i, i===idx); });
+// lgKit — HTML-легенда-чипы вместо встроенной легенды Chart.js. ЛКМ по чипу —
+// вкл/выкл этот показатель (toggle); двойной ЛКМ — показать только его; «Все» —
+// показать все. Чистый DOM: без модификаторов и приватного API Chart.js.
+function lgKit(canvasId, chipsId){
+	var canvas=document.getElementById(canvasId), row=document.getElementById(chipsId);
+	function swatch(ds){ return ds.borderColor || ds.backgroundColor || '#888'; }
+	function sync(chart){
+		var chips=row.querySelectorAll('.lg-chip:not(.lg-all)');
+		chart.data.datasets.forEach(function(ds,i){ if(chips[i]) chips[i].classList.toggle('off', !chart.isDatasetVisible(i)); });
 	}
-	chart.update();
+	function isolate(chart,i){ chart.data.datasets.forEach(function(ds,j){ chart.setDatasetVisibility(j, j===i); }); chart.update(); sync(chart); }
+	function toggle(chart,i){ chart.setDatasetVisibility(i, !chart.isDatasetVisible(i)); chart.update(); sync(chart); }
+	function showAll(chart){ chart.data.datasets.forEach(function(ds,j){ chart.setDatasetVisibility(j, true); }); chart.update(); sync(chart); }
+	function build(chart){
+		row.innerHTML='';
+		if(!chart.data.datasets || !chart.data.datasets.length) return;
+		chart.data.datasets.forEach(function(ds,i){
+			var b=document.createElement('button'); b.type='button'; b.className='lg-chip';
+			b.title='ЛКМ — вкл/выкл · двойной ЛКМ — только этот показатель';
+			var sw=document.createElement('i'); sw.style.background=swatch(ds);
+			b.appendChild(sw); b.appendChild(document.createTextNode(ds.label));
+			var clickTimer=null;
+			b.addEventListener('click', function(){
+				if(clickTimer){ clearTimeout(clickTimer); clickTimer=null; isolate(chart,i); }
+				else { clickTimer=setTimeout(function(){ clickTimer=null; toggle(chart,i); }, 250); }
+			});
+			row.appendChild(b);
+		});
+		var all=document.createElement('button'); all.type='button'; all.className='lg-chip lg-all';
+		all.textContent='Все'; all.title='Показать все показатели';
+		all.addEventListener('click', function(){ showAll(chart); });
+		row.appendChild(all);
+		sync(chart);
+	}
+	return { build: build };
 }
 
 function toD(d){ function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
@@ -1307,11 +1385,12 @@ function renderEnergyChart(canvasId, labels, datasets){
 			responsive:true, maintainAspectRatio:false,
 			interaction:{ mode:'index', intersect:false },
 			animation:{ duration:300 },
-			plugins:{ legend:{ display:true, labels:{ boxWidth:16, padding:12 }, onClick: legendToggle } },
+			plugins:{ legend:{ display:false } },
 			scales:{ x:{ ticks:{ autoSkip:true, maxTicksLimit:24 } }, y:{ beginAtZero:true, title:{ display:true, text:'kWh' } } }
 		}
 	});
 	if(applyHidden(canvasId, window[canvasId])) window[canvasId].update('none');
+	lgKit(canvasId, canvasId+'Lg').build(window[canvasId]);
 	return window[canvasId];
 }
 
@@ -1491,6 +1570,14 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 .mos { padding:7px 14px; border-radius:18px; font-size:13px; font-weight:600; border:1px solid #333b49; background:#181c24; color:#6b7280; }
 .mos.on { background:#123524; border-color:#00b894; color:#00b894; }
 .foot { color:#6b7280; font-size:12px; margin-top:16px; }
+.lg-chips { display:flex; flex-wrap:wrap; gap:6px; margin:2px 0 10px; }
+.lg-chip { display:inline-flex; align-items:center; gap:6px; background:#202630; border:1px solid #333b49; border-radius:14px; padding:3px 11px 3px 8px; font-size:12px; color:#e6e6e6; cursor:pointer; line-height:1.4; }
+.lg-chip:hover { border-color:#2f6fed; }
+.lg-chip i { width:10px; height:10px; border-radius:3px; display:inline-block; flex:0 0 auto; }
+.lg-chip.off { opacity:.4; }
+.lg-chip.off i { background:#5a6472 !important; }
+.lg-chip.lg-all { background:#2f6fed; border-color:#2f6fed; }
+.lg-hint { font-size:11px; color:#6b7280; margin:0 0 10px; }
 .missing { color:#6b7280; font-style:italic; }
 </style>
 </head>
@@ -1541,6 +1628,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
   <button id="btnPeriodNext" title="Следующий период">&rsaquo;</button>
   <button id="btnRefresh" title="Принудительно обновить графики">Обновить графики</button>
 </div>
+<div class="lg-hint">ЛКМ по чипу — вкл/выкл линию · двойной ЛКМ — только эта линия · «Все» — показать все</div>
 <div class="charts bms-charts">
   <div class="card">
     <h2>Заряд (SOC), %</h2>
@@ -1565,11 +1653,13 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
   <div class="card">
     <h2>Напряжения ячеек, V</h2>
     <div class="chart-toolbar"><span id="bmsCellsChartRange"></span><button id="btnBmsCellsReset">Сброс зума</button><span>Зум: колесо / drag&ndash;панорама</span></div>
+    <div class="lg-chips" id="bmsCellsChartLg"></div>
     <div class="chart-wrap"><canvas id="bmsCellsChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Температуры T1–T4 (батарея, силовые ключи, плата), &deg;C</h2>
     <div class="chart-toolbar"><span id="bmsTempChartRange"></span><button id="btnBmsTempReset">Сброс зума</button><span>Зум: колесо / drag&ndash;панорама</span></div>
+    <div class="lg-chips" id="bmsTempChartLg"></div>
     <div class="chart-wrap"><canvas id="bmsTempChart"></canvas></div>
   </div>
 </div>
@@ -1744,16 +1834,41 @@ function syncBmsZoomToOthers(fromChart){
   }finally{ zoomSyncing=false; }
 }
 var bmsZoomSyncPlugin={ id:'bmsZoomSync', afterDraw:function(chart){ try{ checkBmsZoomSync(chart); }catch(e){} } };
-// legendToggle — клик по легенде: обычный — показать ТОЛЬКО этот показатель
-// (остальные скрыть); с Ctrl/Cmd — переключить только этот показатель.
-function legendToggle(e, legendItem, legend){
-	var chart=legend.chart, idx=legendItem.datasetIndex;
-	if(e && (e.ctrlKey || e.metaKey)){
-		chart.setDatasetVisibility(idx, !chart.isDatasetVisible(idx));
-	}else{
-		chart.data.datasets.forEach(function(ds,i){ chart.setDatasetVisibility(i, i===idx); });
+// lgKit — HTML-легенда-чипы вместо встроенной легенды Chart.js. ЛКМ по чипу —
+// вкл/выкл эту линию (toggle); двойной ЛКМ — показать только эту линию; «Все» —
+// показать все. Чистый DOM: без модификаторов и приватного API Chart.js.
+function lgKit(canvasId, chipsId){
+	var canvas=document.getElementById(canvasId), row=document.getElementById(chipsId);
+	function swatch(ds){ return ds.borderColor || ds.backgroundColor || '#888'; }
+	function sync(chart){
+		var chips=row.querySelectorAll('.lg-chip:not(.lg-all)');
+		chart.data.datasets.forEach(function(ds,i){ if(chips[i]) chips[i].classList.toggle('off', !chart.isDatasetVisible(i)); });
 	}
-	chart.update();
+	function isolate(chart,i){ chart.data.datasets.forEach(function(ds,j){ chart.setDatasetVisibility(j, j===i); }); chart.update(); sync(chart); }
+	function toggle(chart,i){ chart.setDatasetVisibility(i, !chart.isDatasetVisible(i)); chart.update(); sync(chart); }
+	function showAll(chart){ chart.data.datasets.forEach(function(ds,j){ chart.setDatasetVisibility(j, true); }); chart.update(); sync(chart); }
+	function build(chart){
+		row.innerHTML='';
+		if(!chart.data.datasets || !chart.data.datasets.length) return;
+		chart.data.datasets.forEach(function(ds,i){
+			var b=document.createElement('button'); b.type='button'; b.className='lg-chip';
+			b.title='ЛКМ — вкл/выкл · двойной ЛКМ — только эта линия';
+			var sw=document.createElement('i'); sw.style.background=swatch(ds);
+			b.appendChild(sw); b.appendChild(document.createTextNode(ds.label));
+			var clickTimer=null;
+			b.addEventListener('click', function(){
+				if(clickTimer){ clearTimeout(clickTimer); clickTimer=null; isolate(chart,i); }
+				else { clickTimer=setTimeout(function(){ clickTimer=null; toggle(chart,i); }, 250); }
+			});
+			row.appendChild(b);
+		});
+		var all=document.createElement('button'); all.type='button'; all.className='lg-chip lg-all';
+		all.textContent='Все'; all.title='Показать все линии';
+		all.addEventListener('click', function(){ showAll(chart); });
+		row.appendChild(all);
+		sync(chart);
+	}
+	return { build: build };
 }
 
 // bmsRender — линейный график; zero=true — симметричная ось с нулём посередине.
@@ -1805,7 +1920,7 @@ function bmsRender(id, datasets, yTitle, legend, zero){
       interaction:{ mode:'index', intersect:false },
       animation:{ duration:200 },
       plugins:{
-        legend: legend? { display:true, labels:{ boxWidth:14, padding:10, font:{ size:10 } }, onClick: legendToggle } : { display:false },
+        legend: { display:false },
         zoom:{
           pan:{ enabled:true, mode:'x' },
           zoom:{ wheel:{ enabled:true, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:true }, mode:'x' },
@@ -1825,6 +1940,7 @@ function bmsRender(id, datasets, yTitle, legend, zero){
   }
   if(bmsApplyHidden(id, BMS_CHARTS[id])) needUpdate=true;
   if(needUpdate){ BMS_CHARTS[id].update('none'); }
+  if(legend){ lgKit(id, id+'Lg').build(BMS_CHARTS[id]); }
 }
 function buildBmsCharts(points){
   if(!points||!points.length) return;
