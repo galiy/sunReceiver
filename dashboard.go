@@ -2443,9 +2443,11 @@ func (h *dashboardHandler) apiBMSOne(w http.ResponseWriter, r *http.Request) {
 }
 
 // apiBMSSeries отдаёт 5-минутные усреднённые точки BMS (/api/bms/<name>/series)
-// за период [from, to] (RFC3339; по умолч. — последние 24 часа) из Redis-ряда
-// (окно удержания 2 календарных суток). Точки — bmsSeriesPoint: ts +
-// усреднённые параметры (см. bms_accumulator.go).
+// за период [from, to] (RFC3339; по умолч. — последние 24 часа). Часть периода
+// вне окна удержания Redis (старше 2 календарных суток) — из PostgreSQL
+// (sunreceiver.bms_averages, вся история), рецентная часть — из Redis-ряда;
+// сшивка по recentCutoff (как loadRange для инверторов). Точки — bmsSeriesPoint:
+// ts + усреднённые параметры (см. bms_accumulator.go).
 func (h *dashboardHandler) apiBMSSeries(w http.ResponseWriter, r *http.Request, name string) {
 	now := time.Now()
 	to := now
@@ -2460,10 +2462,38 @@ func (h *dashboardHandler) apiBMSSeries(w http.ResponseWriter, r *http.Request, 
 			from = t
 		}
 	}
-	pts, err := h.store.QueryBMSSeries(name, from, to)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	cutoff := recentCutoff(now)
+	var pts []bmsSeriesPoint
+	// Старая часть периода (до cutoff) — из PostgreSQL (вся история).
+	// pgEnd = cutoff-1с: точка с ts == cutoff — начало 5-минутного промежутка,
+	// который уже в окне Redis, и дубль от обоих источников исключается.
+	if h.pg != nil && from.Before(cutoff) {
+		pgEnd := cutoff.Add(-time.Second)
+		if to.Before(pgEnd) {
+			pgEnd = to
+		}
+		old, err := h.pg.BMSAverages(name, from, pgEnd)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		pts = append(pts, old...)
+	}
+	// Рецентная часть (в пределах окна удержания) — из Redis-ряда.
+	redisStart := from
+	if redisStart.Before(cutoff) {
+		redisStart = cutoff
+	}
+	if to.After(redisStart) {
+		recent, err := h.store.QueryBMSSeries(name, redisStart, to)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		pts = append(pts, recent...)
+	}
+	if pts == nil {
+		pts = []bmsSeriesPoint{}
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
