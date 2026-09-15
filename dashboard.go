@@ -973,7 +973,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
     <div class="chart-toolbar">
       <span id="gridVChartRange"></span>
       <button id="btnGridVReset">Сброс зума</button>
-      <span>Зум: колесо / drag&ndash;панорама</span>
+      <span>Зум: Ctrl+колесо / drag&ndash;панорама</span>
     </div>
     <div class="lg-chips" id="gridVChartLg"></div>
     <div class="chart-wrap"><canvas id="gridVChart"></canvas></div>
@@ -984,7 +984,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
     <div class="chart-toolbar">
       <span id="gridPChartRange"></span>
       <button id="btnGridPReset">Сброс зума</button>
-      <span>Зум: колесо / drag&ndash;панорама</span>
+      <span>Зум: Ctrl+колесо / drag&ndash;панорама</span>
     </div>
     <div class="lg-chips" id="gridPChartLg"></div>
     <div class="chart-wrap"><canvas id="gridPChart"></canvas></div>
@@ -995,7 +995,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
     <div class="chart-toolbar">
       <span id="totalChartRange"></span>
       <button id="btnTotalReset">Сброс зума</button>
-      <span>Зум: колесо / drag&ndash;панорама</span>
+      <span>Зум: Ctrl+колесо / drag&ndash;панорама</span>
     </div>
     <div class="chart-wrap"><canvas id="totalChart"></canvas></div>
   </div>
@@ -1005,7 +1005,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
     <div class="chart-toolbar">
       <span id="chartRange"></span>
       <button id="btnReset">Сброс зума</button>
-      <span>Зум: колесо / drag&ndash;панорама</span>
+      <span>Зум: Ctrl+колесо / drag&ndash;панорама</span>
     </div>
     <div class="lg-chips" id="powerChartLg"></div>
     <div class="chart-wrap"><canvas id="powerChart"></canvas></div>
@@ -1467,6 +1467,7 @@ const energyPage = `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Электроэнергия — SunReceiver</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 <style>
 :root { color-scheme: dark; }
 * { box-sizing: border-box; }
@@ -1522,7 +1523,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
     <input type="date" id="d1To">
     <button id="d1Apply">Показать</button>
   </div>
-  <div class="chart-toolbar"><span class="range-status" id="s1"></span></div>
+  <div class="chart-toolbar"><span class="range-status" id="s1"></span><button id="btnD1Reset">Сброс зума</button></div>
   <div class="lg-chips" id="dailyTariffChartLg"></div>
   <div class="chart-wrap"><canvas id="dailyTariffChart"></canvas></div>
 </div>
@@ -1539,7 +1540,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
     <input type="date" id="d2To">
     <button id="d2Apply">Показать</button>
   </div>
-  <div class="chart-toolbar"><span class="range-status" id="s2"></span></div>
+  <div class="chart-toolbar"><span class="range-status" id="s2"></span><button id="btnD2Reset">Сброс зума</button></div>
   <div class="lg-chips" id="monthlyTariffChartLg"></div>
   <div class="chart-wrap"><canvas id="monthlyTariffChart"></canvas></div>
 </div>
@@ -1625,7 +1626,16 @@ function renderEnergyChart(canvasId, labels, datasets){
 			responsive:true, maintainAspectRatio:false,
 			interaction:{ mode:'index', intersect:false },
 			animation:{ duration:300 },
-			plugins:{ legend:{ display:false } },
+			plugins:{
+				legend:{ display:false },
+				// Зум по X: Ctrl+колесо / drag-панорама (десктоп), щипок/свайп —
+				// через srTouchChart (mobile). Category-шкала: min/max — индексы столбцов.
+				zoom:{
+					pan:{ enabled:!SR_COARSE, mode:'x' },
+					zoom:{ wheel:{ enabled:!SR_COARSE, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:!SR_COARSE }, mode:'x' },
+					limits:{ x:{ minRange:3 } }
+				}
+			},
 			scales:{ x:{ ticks:{ autoSkip:true, maxTicksLimit:24 } }, y:{ beginAtZero:true, title:{ display:true, text:'kWh' } } }
 		}
 	});
@@ -1729,6 +1739,16 @@ initEnergyPanel({
 	],
 	defaultFrom:startOfYear, defaultTo:endOfYear
 });
+// Кнопки «Сброс зума» по каждому тарифному графику.
+document.getElementById('btnD1Reset').addEventListener('click',function(){ try{ if(window.dailyTariffChart) window.dailyTariffChart.resetZoom(); }catch(e){} });
+document.getElementById('btnD2Reset').addEventListener('click',function(){ try{ if(window.monthlyTariffChart) window.monthlyTariffChart.resetZoom(); }catch(e){} });
+// Мобильная версия: touch-жесты по тарифным графикам (щипок — зум, свайп —
+// панорама, двойной тап — сброс; на touch плагин zoom отключён).
+if(SR_COARSE){
+	['dailyTariffChart','monthlyTariffChart'].forEach(function(id){
+		srTouchChart(function(){ return window[id]; }, id, 3);
+	});
+}
 </script>
 {{template "mnav" .}}
 </body>
@@ -1874,33 +1894,33 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 <div class="charts bms-charts">
   <div class="card">
     <h2>Заряд (SOC), %</h2>
-    <div class="chart-toolbar"><span id="bmsCapChartRange"></span><button id="btnBmsCapReset">Сброс зума</button><span>Зум: колесо / drag&ndash;панорама</span></div>
+    <div class="chart-toolbar"><span id="bmsCapChartRange"></span><button id="btnBmsCapReset">Сброс зума</button><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="chart-wrap"><canvas id="bmsCapChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Напряжение пакета, V</h2>
-    <div class="chart-toolbar"><span id="bmsVoltChartRange"></span><button id="btnBmsVoltReset">Сброс зума</button><span>Зум: колесо / drag&ndash;панорама</span></div>
+    <div class="chart-toolbar"><span id="bmsVoltChartRange"></span><button id="btnBmsVoltReset">Сброс зума</button><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="chart-wrap"><canvas id="bmsVoltChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Ток, A</h2>
-    <div class="chart-toolbar"><span id="bmsCurChartRange"></span><button id="btnBmsCurReset">Сброс зума</button><span>Зум: колесо / drag&ndash;панорама</span></div>
+    <div class="chart-toolbar"><span id="bmsCurChartRange"></span><button id="btnBmsCurReset">Сброс зума</button><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="chart-wrap"><canvas id="bmsCurChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Мощность, W</h2>
-    <div class="chart-toolbar"><span id="bmsPwrChartRange"></span><button id="btnBmsPwrReset">Сброс зума</button><span>Зум: колесо / drag&ndash;панорама</span></div>
+    <div class="chart-toolbar"><span id="bmsPwrChartRange"></span><button id="btnBmsPwrReset">Сброс зума</button><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="chart-wrap"><canvas id="bmsPwrChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Напряжения ячеек, V</h2>
-    <div class="chart-toolbar"><span id="bmsCellsChartRange"></span><button id="btnBmsCellsReset">Сброс зума</button><span>Зум: колесо / drag&ndash;панорама</span></div>
+    <div class="chart-toolbar"><span id="bmsCellsChartRange"></span><button id="btnBmsCellsReset">Сброс зума</button><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="lg-chips" id="bmsCellsChartLg"></div>
     <div class="chart-wrap"><canvas id="bmsCellsChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Температуры T1–T4 (батарея, силовые ключи, плата), &deg;C</h2>
-    <div class="chart-toolbar"><span id="bmsTempChartRange"></span><button id="btnBmsTempReset">Сброс зума</button><span>Зум: колесо / drag&ndash;панорама</span></div>
+    <div class="chart-toolbar"><span id="bmsTempChartRange"></span><button id="btnBmsTempReset">Сброс зума</button><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="lg-chips" id="bmsTempChartLg"></div>
     <div class="chart-wrap"><canvas id="bmsTempChart"></canvas></div>
   </div>
