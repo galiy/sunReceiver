@@ -943,6 +943,7 @@ const chartsPage = `<!DOCTYPE html>
 <title>Графики — SunReceiver</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 <style>
 :root { color-scheme: dark; }
@@ -1508,6 +1509,7 @@ const energyPage = `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Электроэнергия — SunReceiver</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 <style>
 :root { color-scheme: dark; }
@@ -1672,10 +1674,13 @@ function renderEnergyChart(canvasId, labels, datasets){
 				// На touch встроенный tooltip отключён (хинт по тапу); __srTouched —
 				// страховка, если SR_COARSE на устройстве не сработал.
 				tooltip:{ enabled:!(SR_COARSE || window.__srTouched) },
-				// Зум по X: Ctrl+колесо / drag-панорама (десктоп), щипок/свайп —
-				// через srTouchChart (mobile). Category-шкала: min/max — индексы столбцов.
+				// Зум по X: Ctrl+колесо (десктоп), щипок — через srTouchChart (mobile).
+				// Category-шкала: min/max — индексы столбцов. Плагинный pan на
+				// category-шкале не работает (шаг — только если дельта ОДНОГО
+				// события превышает ширину столбца) — drag-панорама сделана
+				// вручную: bindCategoryPan ниже, поэтому pan.enabled=false.
 				zoom:{
-					pan:{ enabled:!SR_COARSE, mode:'x' },
+					pan:{ enabled:false },
 					zoom:{ wheel:{ enabled:!SR_COARSE, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:!SR_COARSE }, mode:'x' },
 					limits:{ x:{ minRange:3 } }
 				}
@@ -1786,6 +1791,42 @@ initEnergyPanel({
 // Кнопки «Сброс зума» по каждому тарифному графику.
 document.getElementById('btnD1Reset').addEventListener('click',function(){ try{ if(window.dailyTariffChart) window.dailyTariffChart.resetZoom(); }catch(e){} });
 document.getElementById('btnD2Reset').addEventListener('click',function(){ try{ if(window.monthlyTariffChart) window.monthlyTariffChart.resetZoom(); }catch(e){} });
+// Drag-панорама на category-шкале (столбцы) десктопом: плагинный pan на
+// category-шкале перемещается только если дельта ОДНОГО mousemove превышает
+// ширину столбца — обычным движением мыши график не сдвинуть, поэтому панорама
+// сделана вручную: mousedown запоминает окно, mousemove сдвигает его на целое
+// число столбцов (через zoomScale — «Сброс зума» и лимиты продолжают работать).
+// На touch панораму делает srTouchChart, плагинный pan на странице выключен.
+function bindCategoryPan(canvasId){
+  if(SR_COARSE) return;
+  var canvas=document.getElementById(canvasId); if(!canvas) return;
+  var st=null;
+  canvas.addEventListener('mousedown', function(e){
+    if(e.button!==0) return;
+    var c=window[canvasId]; if(!c || !c.scales || !c.scales.x || !c.chartArea) return;
+    var x=c.scales.x;
+    st={x0:e.clientX, min0:x.min, max0:x.max, span:x.max-x.min, n:(c.data.labels||[]).length, w:x.width};
+    if(!st.w) { st=null; return; }
+    try{ c.options.plugins.tooltip.enabled=false; }catch(err){}
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', function(e){
+    if(!st) return;
+    var c=window[canvasId]; if(!c || !c.scales || !c.scales.x) { st=null; return; }
+    var step=Math.round((st.x0-e.clientX)/st.w*st.span);
+    var min=Math.max(0, Math.min(st.n-1-st.span, st.min0+step));
+    if(min!==c.scales.x.min){
+      try{ c.zoomScale('x', {min:min, max:min+st.span}, 'none'); }catch(err){}
+    }
+  });
+  window.addEventListener('mouseup', function(){
+    if(!st) return;
+    st=null;
+    var c=window[canvasId];
+    if(c){ try{ c.options.plugins.tooltip.enabled=!(SR_COARSE||window.__srTouched); c.update('none'); }catch(err){} }
+  });
+}
+['dailyTariffChart','monthlyTariffChart'].forEach(bindCategoryPan);
 // Мобильная версия: touch-жесты по тарифным графикам (щипок — зум, свайп —
 // панорама, двойной тап — сброс; на touch плагин zoom отключён).
 if(SR_COARSE){
@@ -1812,6 +1853,7 @@ const bmsDetailPage = `<!DOCTYPE html>
 <title>BMS — SunReceiver</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 <style>
 :root { color-scheme: dark; }
