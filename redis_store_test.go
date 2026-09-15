@@ -127,3 +127,46 @@ func TestRedisStoreBMSSeriesRoundtrip(t *testing.T) {
 		t.Fatalf("после PurgeOld len=%d, want 2 (старая точка удалена): %+v", len(got2), got2)
 	}
 }
+
+// TestRedisStoreBMSSeriesReplace: повторная запись той же точки (устройство,
+// 5-минутный промежуток) — ситуация «дрейн при остановке пулера + продолжение
+// того же промежутка новым процессом» — должна ЗАМЕНЯТЬ старую точку, а не
+// плодить второй member с тем же score (на графике это «ступенька» — два
+// агрегата в одну засечку времени). Чужие устройства на том же score не
+// затрагиваются.
+func TestRedisStoreBMSSeriesReplace(t *testing.T) {
+	s := testStore(t)
+	rdb := s.rdb
+	rdb.FlushDB(s.ctx)
+	defer rdb.FlushDB(s.ctx)
+
+	now := time.Now()
+	ts := floorToStep(now)
+	p1 := bmsSeriesPoint{Name: "B1", Ts: ts.Format(time.RFC3339)}
+	p1.bmsAveraged = bmsAveraged{CurrentA: 1.0, Samples: 120}
+	p2 := bmsSeriesPoint{Name: "B1", Ts: ts.Format(time.RFC3339)}
+	p2.bmsAveraged = bmsAveraged{CurrentA: 2.0, Samples: 180}
+	other := bmsSeriesPoint{Name: "B2", Ts: ts.Format(time.RFC3339)}
+	other.bmsAveraged = bmsAveraged{CurrentA: 9.0, Samples: 300}
+
+	for _, pp := range []bmsSeriesPoint{p1, other, p2} {
+		if err := s.SaveBMSSeries(pp, ts); err != nil {
+			t.Fatalf("SaveBMSSeries %s: %v", pp.Name, err)
+		}
+	}
+
+	got, err := s.QueryBMSSeries("B1", ts, now)
+	if err != nil {
+		t.Fatalf("QueryBMSSeries B1: %v", err)
+	}
+	if len(got) != 1 || got[0].CurrentA != 2.0 || got[0].Samples != 180 {
+		t.Fatalf("B1: %+v, want ровно 1 точка (новая версия current=2.0 samples=180)", got)
+	}
+	got2, err := s.QueryBMSSeries("B2", ts, now)
+	if err != nil {
+		t.Fatalf("QueryBMSSeries B2: %v", err)
+	}
+	if len(got2) != 1 || got2[0].CurrentA != 9.0 {
+		t.Fatalf("B2 задета заменой: %+v, want 1 точка current=9.0", got2)
+	}
+}

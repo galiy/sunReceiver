@@ -1375,10 +1375,13 @@ func describeResult(res DeviceResult) string {
 }
 
 // restoreRedisFromPG восстанавливает Redis из persistent-хранилища PostgreSQL
-// (5-минутные усреднённые точки) за период [now-window, now], но не старше окна
-// удержания Redis (последние 2 календарных суток), иначе фоновая очистка сразу
-// удалит восстановленное. Запускается в фоне при пустом Redis. Для каждой точки
-// вызывается SaveSnapshot (обновляет current и кладёт точку в месячный ZSET ряда).
+// за период [now-window, now], но не старше окна удержания Redis (последние 2
+// календарных суток), иначе фоновая очистка сразу удалит восстановленное.
+// Запускается в фоне при пустом Redis. Восстанавливаются ОБА ряда:
+//   - снимки инверторов/МАП/счётчика (pg.Averages) — SaveSnapshot в месячный
+//     ZSET ряда;
+//   - 5-минутные усреднённые точки ANT BMS (pg.BMSAveragesAll) — SaveBMSSeries
+//     в ряд sunreceiver:bms:series:<YYYY-MM>.
 func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration) {
 	end := time.Now()
 	start := recentCutoff(end)
@@ -1405,4 +1408,25 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration) {
 		restored++
 	}
 	log.Printf("pg restore: завершено, восстановлено точек: %d", restored)
+
+	// Ряд 5-минутных усреднённых точек ANT BMS — из pg.bms_averages в
+	// sunreceiver:bms:series:<YYYY-MM> (то же окно удержания).
+	bmsPts, err := pg.BMSAveragesAll(start, end)
+	if err != nil {
+		log.Printf("pg restore: bms query: %v", err)
+		return
+	}
+	var bmsRestored int
+	for _, p := range bmsPts {
+		ts, perr := time.Parse(time.RFC3339, p.Ts)
+		if perr != nil {
+			continue
+		}
+		if serr := store.SaveBMSSeries(p, ts); serr != nil {
+			log.Printf("pg restore: bms save %s: %v", p.Name, serr)
+			continue
+		}
+		bmsRestored++
+	}
+	log.Printf("pg restore: BMS восстановлено точек: %d", bmsRestored)
 }
