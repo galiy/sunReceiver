@@ -248,7 +248,11 @@ const mobileCommon = `
 {{define "mjs"}}
 (function(){
 'use strict';
-var SR_COARSE = window.matchMedia && matchMedia('(pointer: coarse)').matches;
+// Факт реального касания — глушит хинт со значениями (onHover) даже если
+// SR_COARSE не сработал (надёжнее, чем pointer:coarse один).
+document.addEventListener('touchstart', function(){ window.__srTouched = true; }, {passive:true, once:true});
+var SR_COARSE = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0)
+  || (window.matchMedia && matchMedia('(pointer: coarse)').matches);
 if(!SR_COARSE) return;
 // Чипы легенды: tap — вкл/выкл, long tap (≥450 мс без движения) — только эта линия.
 // Вызывается из lgKit (каждой страницы) при создании чипа.
@@ -317,13 +321,16 @@ window.srTouchChart = function(getChart, canvasId, minSpan, onTap){
     }
   }, {passive:false});
   canvas.addEventListener('touchmove', function(e){
-    if(!st) return;
     var c=getChart(); if(!c) return;
     if(e.touches.length>=2){
-      if(st.mode!=='pinch') beginPinch(c, e);
+      // Двухпальцевый жест — щипок, даже если первый touchstart потерян.
+      if(!st || st.mode!=='pinch') beginPinch(c, e);
       e.preventDefault();
       doPinch(c, e);
-    } else if(e.touches.length===1 && st.mode==='maybe'){
+      return;
+    }
+    if(!st) return;
+    if(e.touches.length===1 && st.mode==='maybe'){
       var dx=e.touches[0].clientX-st.x0, dy=e.touches[0].clientY-st.y0;
       if(st.decided===null && (Math.abs(dx)>12 || Math.abs(dy)>12)) st.decided=(Math.abs(dx)>Math.abs(dy)*1.2)?'pan':'scroll';
       if(st.decided==='pan'){
@@ -1007,7 +1014,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 
 <script>
 'use strict';
-var SR_COARSE = window.matchMedia ? matchMedia('(pointer: coarse)').matches : false;
+var SR_COARSE = ('ontouchstart' in window) || navigator.maxTouchPoints > 0 || (window.matchMedia && matchMedia('(pointer: coarse)').matches);
 
 function fmt(t){ var d=new Date(t); function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes()); }
 function fmtSec(t){ var d=new Date(t); function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds()); }
@@ -1086,6 +1093,7 @@ function lgKit(canvasId, chipsId){
 var TOOLTIP_MAX_GAP=20*60*1000;
 function drawCursorTooltip(chart){
 	try{
+		if(SR_COARSE || window.__srTouched) return; // touch: хинт со значениями отключён
 		var px=hoverPix[chart.canvas.id];
 		if(px===undefined) return;
 		var xScale=chart.scales&&chart.scales.x, yScale=chart.scales&&chart.scales.y;
@@ -1209,8 +1217,9 @@ function chartOpts(withLegend,yTitle,extra){
 		animation:{ duration:300 },
 		// На touch onHover отключён: Chart.js вызывает его на каждый touchmove
 		// (каждый палец), и chart.update() + перерисовка хинта со значениями
-		// мешали pinch-зуму (срывали жест, жрали кадры).
-		onHover: SR_COARSE ? undefined : function(event, elements, chart){
+		// мешали pinch-зуму. __srTouched — страховка, если SR_COARSE не сработал.
+		onHover:function(event, elements, chart){
+			if(SR_COARSE || window.__srTouched) return;
 			if(chart && chart.canvas){
 				if(event && isFinite(event.x)) hoverPix[chart.canvas.id]=event.x;
 				try{ chart.update('none'); }catch(e){}
@@ -1537,7 +1546,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 
 <script>
 'use strict';
-var SR_COARSE = window.matchMedia ? matchMedia('(pointer: coarse)').matches : false;
+var SR_COARSE = ('ontouchstart' in window) || navigator.maxTouchPoints > 0 || (window.matchMedia && matchMedia('(pointer: coarse)').matches);
 var TARIFF_COLORS={ import_day:'#d0663a', import_night:'#8c5bbf', export_day:'#3fbf7f', export_night:'#2c8f6a' };
 // hiddenSets[chartId] — метки скрытых пользователем столбцов (клик по легенде).
 // Восстанавливаются при пересоздании графика (смена диапазона/пресета).
@@ -1901,7 +1910,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 
 <script>
 'use strict';
-var SR_COARSE = window.matchMedia ? matchMedia('(pointer: coarse)').matches : false;
+var SR_COARSE = ('ontouchstart' in window) || navigator.maxTouchPoints > 0 || (window.matchMedia && matchMedia('(pointer: coarse)').matches);
 function esc(s){ return String(s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
 function fmtNum(n,digits){ return isFinite(n)? n.toLocaleString('ru-RU',{maximumFractionDigits:digits}) : '—'; }
 
@@ -2171,6 +2180,8 @@ function bmsRender(id, datasets, yTitle, legend, zero){
       }
     }
   });
+  // На touch встроенный tooltip Chart.js отключён (показывается по тапу — хинт).
+  if(SR_COARSE){ BMS_CHARTS[id].options.plugins.tooltip.enabled=false; }
   var needUpdate=false;
   if(preserveZoom && saved.min!==null && saved.max!==null){
     BMS_CHARTS[id].options.scales.x.min=saved.min; BMS_CHARTS[id].options.scales.x.max=saved.max;
