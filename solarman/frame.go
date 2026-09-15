@@ -80,7 +80,7 @@ func BuildReadFrame(deviceSN uint32, serial uint16, startReg, regCount uint16) [
 }
 
 // BuildDeyeReadFrame — кадр чтения регистров для Deye-даталоггеров (Solarman V5,
-// но 14-байтный datafield-заголовок, как в kbialek/deye-inverter-mqtt).
+// но 15-байтный datafield-заголовок, как в kbialek/deye-inverter-mqtt).
 // deviceSN — реальный SN логгера; unit — Modbus-адрес устройства (обычно 0x01);
 // serial — порядковый номер кадра (LE u16). Функция чтения — func 03 (holding).
 func BuildDeyeReadFrame(deviceSN, unit uint32, serial uint16, startReg, regCount uint16) []byte {
