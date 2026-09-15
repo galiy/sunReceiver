@@ -818,6 +818,17 @@ function applyHidden(id, chart){
 	chart.data.datasets.forEach(function(ds,i){ if(hidden.indexOf(ds.label)>=0) chart.setDatasetVisibility(i,false); });
 	return true;
 }
+// legendToggle — клик по легенде: обычный — показать ТОЛЬКО этот показатель
+// (остальные скрыть); с Ctrl/Cmd — переключить только этот показатель.
+function legendToggle(e, legendItem, legend){
+	var chart=legend.chart, idx=legendItem.datasetIndex;
+	if(e && (e.ctrlKey || e.metaKey)){
+		chart.setDatasetVisibility(idx, !chart.isDatasetVisible(idx));
+	}else{
+		chart.data.datasets.forEach(function(ds,i){ chart.setDatasetVisibility(i, i===idx); });
+	}
+	chart.update();
+}
 // TOOLTIP_MAX_GAP — максимальный возраст «ближайшей точки слева» (мс), который
 // считается актуальным в хинте. Устройства, замолчавшие дольше этого (простои,
 // исчезновение с дашборда), не должны показываться как продолжающие выдавать
@@ -970,7 +981,7 @@ function chartOpts(withLegend,yTitle,extra){
 		if(extra.limits){ o.plugins.zoom.limits=Object.assign(o.plugins.zoom.limits, extra.limits); }
 		if(extra.scales){ for(var k in extra.scales) o.scales[k]=extra.scales[k]; }
 	}
-	if(withLegend){ o.plugins.legend={ display:true, labels:{ boxWidth:20, padding:14 } }; }
+	if(withLegend){ o.plugins.legend={ display:true, labels:{ boxWidth:20, padding:14 }, onClick: legendToggle }; }
 	return o;
 }
 
@@ -1264,6 +1275,17 @@ function applyHidden(id, chart){
 	chart.data.datasets.forEach(function(ds,i){ if(hidden.indexOf(ds.label)>=0) chart.setDatasetVisibility(i,false); });
 	return true;
 }
+// legendToggle — клик по легенде: обычный — показать ТОЛЬКО этот показатель
+// (остальные скрыть); с Ctrl/Cmd — переключить только этот показатель.
+function legendToggle(e, legendItem, legend){
+	var chart=legend.chart, idx=legendItem.datasetIndex;
+	if(e && (e.ctrlKey || e.metaKey)){
+		chart.setDatasetVisibility(idx, !chart.isDatasetVisible(idx));
+	}else{
+		chart.data.datasets.forEach(function(ds,i){ chart.setDatasetVisibility(i, i===idx); });
+	}
+	chart.update();
+}
 
 function toD(d){ function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
 function dayStart(d){ var r=new Date(d); r.setHours(0,0,0,0); return r; }
@@ -1285,7 +1307,7 @@ function renderEnergyChart(canvasId, labels, datasets){
 			responsive:true, maintainAspectRatio:false,
 			interaction:{ mode:'index', intersect:false },
 			animation:{ duration:300 },
-			plugins:{ legend:{ display:true, labels:{ boxWidth:16, padding:12 } } },
+			plugins:{ legend:{ display:true, labels:{ boxWidth:16, padding:12 }, onClick: legendToggle } },
 			scales:{ x:{ ticks:{ autoSkip:true, maxTicksLimit:24 } }, y:{ beginAtZero:true, title:{ display:true, text:'kWh' } } }
 		}
 	});
@@ -1722,6 +1744,17 @@ function syncBmsZoomToOthers(fromChart){
   }finally{ zoomSyncing=false; }
 }
 var bmsZoomSyncPlugin={ id:'bmsZoomSync', afterDraw:function(chart){ try{ checkBmsZoomSync(chart); }catch(e){} } };
+// legendToggle — клик по легенде: обычный — показать ТОЛЬКО этот показатель
+// (остальные скрыть); с Ctrl/Cmd — переключить только этот показатель.
+function legendToggle(e, legendItem, legend){
+	var chart=legend.chart, idx=legendItem.datasetIndex;
+	if(e && (e.ctrlKey || e.metaKey)){
+		chart.setDatasetVisibility(idx, !chart.isDatasetVisible(idx));
+	}else{
+		chart.data.datasets.forEach(function(ds,i){ chart.setDatasetVisibility(i, i===idx); });
+	}
+	chart.update();
+}
 
 // bmsRender — линейный график; zero=true — симметричная ось с нулём посередине.
 // Инстансы хранятся в BMS_CHARTS (НЕ в window[id] — там элемент canvas с этим
@@ -1772,7 +1805,7 @@ function bmsRender(id, datasets, yTitle, legend, zero){
       interaction:{ mode:'index', intersect:false },
       animation:{ duration:200 },
       plugins:{
-        legend: legend? { display:true, labels:{ boxWidth:14, padding:10, font:{ size:10 } } } : { display:false },
+        legend: legend? { display:true, labels:{ boxWidth:14, padding:10, font:{ size:10 } }, onClick: legendToggle } : { display:false },
         zoom:{
           pan:{ enabled:true, mode:'x' },
           zoom:{ wheel:{ enabled:true, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:true }, mode:'x' },
