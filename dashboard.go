@@ -431,7 +431,6 @@ h1 { font-size:22px; margin:0 0 4px; }
 .pivot-table td.p-val { font-variant-numeric:tabular-nums; font-weight:600; }
 .pivot-table tr.p-power td.p-val { color:#66ff99; }
 .pivot-table td.stale-time { color:#ff6b6b; }
-.pivot-table td.p-val.stale { opacity:0.4; }
 .pivot-table td.p-unit { color:#8a93a1; font-weight:400; }
 .pivot-table td.p-empty { color:#4a5464; }
 .pivot-table tr:nth-child(even) td { background:#1b212b; }
@@ -697,21 +696,22 @@ function renderPivot(devices){
 	for(var i=0;i<mpts.length;i++) h+='<th>'+esc(mpts[i].name)+'</th>';
 	h+='</tr></thead><tbody>';
 	// Общие строки. Первый столбец — заголовок строки; аудитория по обеим группам.
-	// «Актуально» у offline-устройства (снимок старше STALE_MS) — красное с возрастом.
+	// «Актуально» у offline-устройства (снимок старше STALE_MS) — красное;
+	// время недоступности — второй строкой через <br> (не растягивает колонки).
 	h+='<tr><td class="p-label">Актуально</td>'+rowCells(grid,mpts,function(d){
 		if(!d.timestamp) return null;
-		return isStaleDev(d) ? fmtSec(d.timestamp)+' · '+agoStr(new Date(d.timestamp).getTime()) : fmtSec(d.timestamp);
-	},'11px',function(d){ return isStaleDev(d)?'stale-time':''; })+'</tr>';
+		return isStaleDev(d) ? fmtSec(d.timestamp)+'<br>'+agoStr(new Date(d.timestamp).getTime()) : fmtSec(d.timestamp);
+	},'11px',function(d){ return isStaleDev(d)?'stale-time':''; },true)+'</tr>';
 	h+='<tr><td class="p-label">Серийный номер инвертора</td>'+rowCells(grid,mpts,function(d){return d.inverter_sn||null;},'11px')+'</tr>';
 	h+='<tr><td class="p-label">Серийный номер логгера</td>'+rowCells(grid,mpts,function(d){return d.device_sn||null;},'11px')+'</tr>';
+	// Данные ниже серийных номеров у offline-устройства не выводятся — значения
+	// устарели (ночь/авария); серийные номера постоянны, они остаются.
 	// Мощности — сразу после серийных номеров; значения — ярко-светло-зелёные (tr.p-power).
-	// Offline-устройства (stale) приглушены — значение не текущее.
-	var staleCls=function(d){ return isStaleDev(d)?'stale':''; };
-	h+='<tr class="p-power"><td class="p-label">Активная мощность (W)</td>'+rowCells(grid,mpts,function(d){return devValue(d,'ac_active_power');},null,staleCls)+'</tr>';
-	h+='<tr class="p-power"><td class="p-label">Реактивная мощность (var)</td>'+rowCells(grid,mpts,function(d){return devValue(d,'ac_reactive_power');},null,staleCls)+'</tr>';
+	h+='<tr class="p-power"><td class="p-label">Активная мощность (W)</td>'+rowCells(grid,mpts,function(d){return isStaleDev(d)?null:devValue(d,'ac_active_power');})+'</tr>';
+	h+='<tr class="p-power"><td class="p-label">Реактивная мощность (var)</td>'+rowCells(grid,mpts,function(d){return isStaleDev(d)?null:devValue(d,'ac_reactive_power');})+'</tr>';
 	for(var p=0;p<PARAMS.length;p++){
 		var tag=PARAMS[p][0], label=PARAMS[p][1], unit=PARAMS[p][2];
-		h+='<tr><td class="p-label">'+esc(label)+' ('+esc(unit)+')</td>'+rowCells(grid,mpts,function(d){return devValue(d,tag);},null,staleCls)+'</tr>';
+		h+='<tr><td class="p-label">'+esc(label)+' ('+esc(unit)+')</td>'+rowCells(grid,mpts,function(d){return isStaleDev(d)?null:devValue(d,tag);})+'</tr>';
 	}
 	// Нижняя кромка рамок групп.
 	h+='<tr><td></td>';
@@ -723,13 +723,13 @@ function renderPivot(devices){
 }
 // rowCells формирует ячейки строки по колонкам обеих групп. Первая колонка группы
 // получает цветную левую, последняя — цветную правую рамку (вертикальные стороны).
-function rowCells(grid,mpts,getter,font,clsFn){
+function rowCells(grid,mpts,getter,font,clsFn,raw){
 	var h='';
-	for(var i=0;i<grid.length;i++) h+=cellTd(grid[i],getter,i===0,i===grid.length-1,GRID_COLOR,font,clsFn);
-	for(var i=0;i<mpts.length;i++) h+=cellTd(mpts[i],getter,i===0,i===mpts.length-1,MPPT_COLOR,font,clsFn);
+	for(var i=0;i<grid.length;i++) h+=cellTd(grid[i],getter,i===0,i===grid.length-1,GRID_COLOR,font,clsFn,raw);
+	for(var i=0;i<mpts.length;i++) h+=cellTd(mpts[i],getter,i===0,i===mpts.length-1,MPPT_COLOR,font,clsFn,raw);
 	return h;
 }
-function cellTd(d,getter,isFirst,isLast,color,font,clsFn){
+function cellTd(d,getter,isFirst,isLast,color,font,clsFn,raw){
 	var v=getter(d);
 	var st='';
 	if(isFirst) st+='border-left:1px solid '+color+';';
@@ -737,7 +737,9 @@ function cellTd(d,getter,isFirst,isLast,color,font,clsFn){
 	if(font) st+='font-size:'+font+';';
 	var cls=v===null?'p-empty':'p-val';
 	if(clsFn){ var extra=clsFn(d); if(extra) cls+=' '+extra; }
-	return '<td class="'+cls+'" style="'+st+'">'+(v===null?'':esc(v))+'</td>';
+	// raw — getter возвращает доверенный HTML (напр. <br>); иначе экранируем.
+	var txt=v===null?'':(raw?v:esc(v));
+	return '<td class="'+cls+'" style="'+st+'">'+txt+'</td>';
 }
 // edgeCell формирует пустую ячейку нижней кромки группы с цветной горизонтальной чертой.
 function edgeCell(color,isFirst,isLast){
