@@ -1240,7 +1240,7 @@ function renderChart(id, datasets, opts){
 	if(old){ captureHidden(id, old); try{ old.destroy(); }catch(e){} }
 	canvas.getContext('2d');
 	window[id]=new Chart(canvas,{ type:'line', data:{datasets:datasets}, options:opts, plugins:[cursorTooltipPlugin] });
-	canvas.addEventListener('mouseleave',function(){ delete hoverPix[id]; try{ window[id]&&window[id].update('none'); }catch(e){} });
+	if(!canvas.__srMLBound){ canvas.__srMLBound=true; canvas.addEventListener('mouseleave',function(){ delete hoverPix[id]; try{ window[id]&&window[id].update('none'); }catch(e){} }); }
 	var needUpdate=false;
 	if(preserveZoom && saved.min!==null && saved.max!==null){
 		window[id].options.scales.x.min=saved.min; window[id].options.scales.x.max=saved.max;
