@@ -1718,15 +1718,17 @@ function renderEnergyChart(canvasId, labels, datasets){
 				// На touch встроенный tooltip отключён (хинт по тапу); __srTouched —
 				// страховка, если SR_COARSE на устройстве не сработал.
 				tooltip:{ enabled:!(SR_COARSE || window.__srTouched) },
-				// Зум по X: Ctrl+колесо (десктоп), щипок — через srTouchChart (mobile).
-				// Category-шкала: min/max — индексы столбцов. Плагинный pan на
-				// category-шкале не работает (шаг — только если дельта ОДНОГО
-				// события превышает ширину столбца) — drag-панорама сделана
-				// вручную: bindCategoryPan ниже, поэтому pan.enabled=false.
+				// Зум/сдвиг по X: Ctrl+колесо (десктоп), щипок/свайп — srTouchChart (mobile).
+				// Category-шкала: min/max — индексы столбцов, окно зажимается в [0, N-1] —
+				// зум/сдвиг работают ВНУТРИ загруженных данных (как обычный график).
+				// Перезагрузки под новое окно НЕТ: у посуточных/помесячных тарифов нет
+				// суб-ежедневного разрешения, а перезагрузка сужала данные и ломала
+				// зум-аут/сдвиг за край (category-шкала не может выйти за загруженные столбцы).
+				// Плагинный pan на category-шкале неуправляем — drag-панорама вручную:
+				// bindCategoryPan ниже, поэтому pan.enabled=false.
 				zoom:{
 					pan:{ enabled:false },
-					zoom:{ wheel:{ enabled:!SR_COARSE, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:!SR_COARSE }, mode:'x',
-						onZoomComplete:function(){ energyWindowChanged(canvasId); } },
+					zoom:{ wheel:{ enabled:!SR_COARSE, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:!SR_COARSE }, mode:'x' },
 					limits:{ x:{ minRange:3 } }
 				}
 			},
@@ -1766,7 +1768,6 @@ function monthlyDatasets(days){
 
 // initEnergyPanel создаёт независимо управляемый график со своим диапазоном.
 // cfg: { canvasId, statusId, fromEl, toEl, applyBtn, isMonthly, presets:[{btn,range}], defaultFrom, defaultTo }
-var ENERGY_PANELS={};
 function initEnergyPanel(cfg){
 	var p={ selFrom:cfg.defaultFrom(), selTo:cfg.defaultTo() };
 	var presetIds=cfg.presets.map(function(pr){ return pr.btn; });
@@ -1808,8 +1809,6 @@ function initEnergyPanel(cfg){
 	document.getElementById(cfg.fromEl).value=toInputDateTime(p.selFrom);
 	document.getElementById(cfg.toEl).value=toInputDateTime(p.selTo);
 	load();
-	p.setRange=setRange;
-	ENERGY_PANELS[cfg.canvasId]={ p:p, isMonthly:cfg.isMonthly };
 	return p;
 }
 
@@ -1839,39 +1838,15 @@ initEnergyPanel({
 // Кнопки «Сброс зума» по каждому тарифному графику.
 document.getElementById('btnD1Reset').addEventListener('click',function(){ try{ if(window.dailyTariffChart) window.dailyTariffChart.resetZoom(); }catch(e){} });
 document.getElementById('btnD2Reset').addEventListener('click',function(){ try{ if(window.monthlyTariffChart) window.monthlyTariffChart.resetZoom(); }catch(e){} });
-// ---------- Перезагрузка данных после зума/сдвига (каждый график независимо) ----------
-// Category-шкала: окно X = индексы столбцов; границы переводятся в даты по
-// подписям (дневной — 'YYYY-MM-DD', месячный — 'YYYY-MM') и панель
-// перезагружается с бэкенда под новый диапазон.
-var energyReloadTimer={};
-function energyLabelStart(s){ var q=String(s).split('-').map(Number); if(q.length>=3) return new Date(q[0],q[1]-1,q[2],0,0,0,0); if(q.length===2) return new Date(q[0],q[1]-1,1,0,0,0,0); return null; }
-function energyLabelEnd(s){ var q=String(s).split('-').map(Number); if(q.length>=3) return new Date(q[0],q[1]-1,q[2],23,59,59,999); if(q.length===2) return new Date(q[0],q[1],0,23,59,59,999); return null; }
-function energyWindowChanged(canvasId){
-	if(energyReloadTimer[canvasId]) clearTimeout(energyReloadTimer[canvasId]);
-	energyReloadTimer[canvasId]=setTimeout(function(){
-		delete energyReloadTimer[canvasId];
-		var c=window[canvasId];
-		if(!c||!c.scales||!c.scales.x||!c.data||!c.data.labels) return;
-		var x=c.scales.x;
-		if(!isFinite(x.min)||!isFinite(x.max)||x.max<=x.min) return;
-		var labels=c.data.labels;
-		var lo=Math.max(0,Math.floor(x.min)), hi=Math.min(labels.length-1,Math.ceil(x.max));
-		if(hi<lo) hi=lo;
-		var from=energyLabelStart(labels[lo]), to=energyLabelEnd(labels[hi]);
-		if(!from||!to) return;
-		var pan=ENERGY_PANELS[canvasId];
-		if(!pan) return;
-		if(Math.round(from.getTime())===Math.round(pan.p.selFrom.getTime()) && Math.round(to.getTime())===Math.round(pan.p.selTo.getTime())) return;
-		pan.p.setRange(from,to,null);
-	},300);
-}
 // Drag-панорама на category-шкале (столбцы) десктопом: плагинный pan на
 // category-шкале перемещается только если дельта ОДНОГО mousemove превышает
 // ширину столбца — обычным движением мыши график не сдвинуть, поэтому панорама
 // сделана вручную: mousedown запоминает окно, mousemove сдвигает его на целое
 // число столбцов (через zoomScale — «Сброс зума» и лимиты продолжают работать).
+// Окно зажимается в [0, N-1] с СОХРАНЕНИЕМ ширины (span) — у краёв не сужается;
+// сдвиг работает ВНУТРИ загруженных данных, без перезагрузки под новое окно.
 // На touch панораму делает srTouchChart, плагинный pan на странице выключен.
-function bindCategoryPan(canvasId, onComplete){
+function bindCategoryPan(canvasId){
   if(SR_COARSE) return;
   var canvas=document.getElementById(canvasId); if(!canvas) return;
   var st=null;
@@ -1879,7 +1854,7 @@ function bindCategoryPan(canvasId, onComplete){
     if(e.button!==0) return;
     var c=window[canvasId]; if(!c || !c.scales || !c.scales.x || !c.chartArea) return;
     var x=c.scales.x;
-    st={x0:e.clientX, min0:x.min, max0:x.max, span:x.max-x.min, w:x.width, moved:false};
+    st={x0:e.clientX, min0:x.min, span:x.max-x.min, w:x.width};
     if(!st.w) { st=null; return; }
     try{ c.options.plugins.tooltip.enabled=false; }catch(err){}
     e.preventDefault();
@@ -1887,27 +1862,28 @@ function bindCategoryPan(canvasId, onComplete){
   window.addEventListener('mousemove', function(e){
     if(!st) return;
     var c=window[canvasId]; if(!c || !c.scales || !c.scales.x) { st=null; return; }
+    var n=c.data.labels.length, maxIndex=n-1;
+    var lo=0, hi=maxIndex-st.span; if(hi<lo) hi=lo;
     var step=Math.round((st.x0-e.clientX)/st.w*st.span);
-    var desiredMin=st.min0+step;
+    var desiredMin=Math.max(lo, Math.min(hi, st.min0+step));
     if(desiredMin!==c.scales.x.min){
-      try{ c.zoomScale('x', {min:desiredMin, max:desiredMin+st.span}, 'none'); st.moved=true; }catch(err){}
+      try{ c.zoomScale('x', {min:desiredMin, max:desiredMin+st.span}, 'none'); }catch(err){}
     }
   });
   window.addEventListener('mouseup', function(){
     if(!st) return;
-    var moved=st.moved;
     st=null;
     var c=window[canvasId];
     if(c){ try{ c.options.plugins.tooltip.enabled=!(SR_COARSE||window.__srTouched); c.update('none'); }catch(err){} }
-    if(moved && onComplete) onComplete();
   });
 }
-['dailyTariffChart','monthlyTariffChart'].forEach(function(id){ bindCategoryPan(id, function(){ energyWindowChanged(id); }); });
+['dailyTariffChart','monthlyTariffChart'].forEach(bindCategoryPan);
 // Мобильная версия: touch-жесты по тарифным графикам (щипок — зум по X,
 // свайп — панорама, двойной тап — сброс; на touch плагин zoom отключён).
+// Зум/сдвиг — внутри загруженных данных (без перезагрузки под новое окно).
 if(SR_COARSE){
 	['dailyTariffChart','monthlyTariffChart'].forEach(function(id){
-		srTouchChart(function(){ return window[id]; }, id, 3, null, function(){ energyWindowChanged(id); });
+		srTouchChart(function(){ return window[id]; }, id, 3, null);
 	});
 }
 </script>
