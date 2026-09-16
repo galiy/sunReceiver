@@ -3014,6 +3014,21 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	res.MeterVoltage = meterSeries(snaps, "meter_voltage")
 	res.MeterActivePower = meterSeries(snaps, "meter_active_power")
 
+	// Усреднение длинных серий: если в ряду больше maxSeriesPoints точек — диапазон
+	// [from, to] делится на равные периоды и точки в пределах периода схлопываются
+	// в одну усреднённую (см. downsampleSeries). Применяется ко всем рядам ответа.
+	res.Total = downsampleSeries(res.Total, from, to)
+	for i := range res.Series {
+		res.Series[i].Points = downsampleSeries(res.Series[i].Points, from, to)
+	}
+	res.MapGridVoltage = downsampleSeries(res.MapGridVoltage, from, to)
+	res.MapGridPower = downsampleSeries(res.MapGridPower, from, to)
+	res.MapBatVoltage = downsampleSeries(res.MapBatVoltage, from, to)
+	res.MapBatPower = downsampleSeries(res.MapBatPower, from, to)
+	res.MapCons = downsampleSeries(res.MapCons, from, to)
+	res.MeterVoltage = downsampleSeries(res.MeterVoltage, from, to)
+	res.MeterActivePower = downsampleSeries(res.MeterActivePower, from, to)
+
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(res)
@@ -3168,6 +3183,64 @@ func meterSeries(snaps []deviceSnapshot, key string) []seriesPoint {
 		pts = out
 	}
 	return pts
+}
+
+// maxSeriesPoints — порог размера серии /api/series: если точек больше, ряд
+// усредняется (downsampleSeries), чтобы фронт не тянул и не рендерил десятки
+// тысяч точек на длинных периодах.
+const maxSeriesPoints = 1000
+
+// downsampleSeries усредняет серию, если в ней больше maxSeriesPoints точек.
+// Запрошенный диапазон [from, to] делится на n равных периодов: n = min(1000,
+// кол-во секунд диапазона) — для диапазона короче 1000 с по одному периоду на
+// секунду. Все точки, попавшие в один период, усредняются: среднее значение,
+// временная метка первой точки периода; пустые периоды пропускаются. Ряд
+// короче порога возвращается как есть. Точки ожидаются отсортированными по T
+// (RFC3339), как их собирают помощники apiSeries.
+func downsampleSeries(pts []seriesPoint, from, to time.Time) []seriesPoint {
+	if len(pts) <= maxSeriesPoints {
+		return pts
+	}
+	span := to.Sub(from).Seconds()
+	if span < 1 {
+		return pts
+	}
+	n := int(span)
+	if n > maxSeriesPoints {
+		n = maxSeriesPoints
+	}
+	binSec := span / float64(n)
+	type acc struct {
+		t     string
+		sum   float64
+		count int
+	}
+	bins := make([]acc, n)
+	for _, p := range pts {
+		t, err := time.Parse(time.RFC3339, p.T)
+		if err != nil {
+			continue
+		}
+		i := int(t.Sub(from).Seconds() / binSec)
+		if i < 0 {
+			i = 0
+		} else if i >= n {
+			i = n - 1
+		}
+		if bins[i].count == 0 {
+			bins[i].t = p.T
+		}
+		bins[i].sum += p.V
+		bins[i].count++
+	}
+	out := make([]seriesPoint, 0, n)
+	for _, b := range bins {
+		if b.count == 0 {
+			continue
+		}
+		out = append(out, seriesPoint{T: b.t, V: math.Round(b.sum/float64(b.count)*10) / 10})
+	}
+	return out
 }
 
 // loadRange возвращает снимки за период [start, end]. Точки старше окна
