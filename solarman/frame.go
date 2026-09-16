@@ -181,15 +181,33 @@ type ModbusPDU struct {
 	CRCCalc   uint16
 }
 
-// ParseModbusPDU находит Modbus-ответ (01 03/04 | bytecount | data | crc16 LE)
-// в payload начиная с offsets (по умолчанию 14 — после 14-байтного заголовка
-// payload, проверено на Sofar и Deye). Возвращает все найденные PDU.
+// ParseModbusPDU находит Modbus-ответы (01 03/04 | bytecount | data | crc16 LE)
+// в payload. Без явных offsets — поиск по всему payload: каждое смещение с
+// паттерном `01 03/04 <vlen>` рассматривается как кандидат, принимается только
+// при чётном ненулевом vlen, полном размещении PDU в payload и совпадающем
+// CRC16 по `01 fn vlen data` (мусорные совпадения внутри значений регистров
+// отсеиваются CRC). На наших логгерах PDU лежит с offset 14 (после
+// 15-байтного заголовка), но padding/заголовок могут отличаться — фиксированное
+// смещение молча давало бы «no data». С явными offsets — проверяются только они
+// (без CRC-фильтра, валидация за вызывающим). Возвращает все найденные PDU.
 func ParseModbusPDU(payload []byte, offsets ...int) []ModbusPDU {
 	var starts []int
 	if len(offsets) > 0 {
 		starts = offsets
 	} else {
-		starts = []int{14}
+		for s := 0; s+5 <= len(payload); s++ {
+			if payload[s] != 0x01 || (payload[s+1] != 0x03 && payload[s+1] != 0x04) {
+				continue
+			}
+			vlen := int(payload[s+2])
+			if vlen == 0 || vlen%2 != 0 || s+3+vlen+2 > len(payload) {
+				continue
+			}
+			if CRC16Modbus(payload[s : s+3+vlen]) != binary.LittleEndian.Uint16(payload[s+3+vlen:s+5+vlen]) {
+				continue
+			}
+			starts = append(starts, s)
+		}
 	}
 	var pdus []ModbusPDU
 	for _, s := range starts {

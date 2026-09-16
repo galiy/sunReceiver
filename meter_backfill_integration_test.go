@@ -6,18 +6,28 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 const meterTestIP = "192.168.0.254"
 
+// meterSeededPoint — тестовая точка ряда: член ZSET + ключ месячного сегмента,
+// в который она попала (для точной очистки; точка может лечь в сегмент другого
+// месяца, чем ближайшая к ней граница).
+type meterSeededPoint struct {
+	key  string
+	member []byte
+}
+
 // seedMeterSeries кладёт в Redis временной ряд счётчика testIP снимки в заданных
-// точках и возвращает точные члены ZSET для последующей очистки.
+// точках и возвращает точные (ключ-сегмент, член) для последующей очистки.
 func seedMeterSeries(t *testing.T, store *redisStore, cfg *meterConfig, pts []struct {
 	ts  time.Time
 	imp float64
-}) [][]byte {
+}) []meterSeededPoint {
 	t.Helper()
-	var members [][]byte
+	var members []meterSeededPoint
 	for _, p := range pts {
 		snap := deviceSnapshot{
 			Name: cfg.Name, IP: cfg.IP, Timestamp: p.ts.Format(time.RFC3339), Values: valuesContract{
@@ -28,9 +38,17 @@ func seedMeterSeries(t *testing.T, store *redisStore, cfg *meterConfig, pts []st
 			t.Fatalf("seed %v: %v", p.ts, err)
 		}
 		mem, _ := json.Marshal(snap)
-		members = append(members, mem)
+		members = append(members, meterSeededPoint{key: redisSeriesKey(p.ts), member: mem})
 	}
 	return members
+}
+
+// cleanMeterSeeded удаляет тестовые точки ряда и текущий снимок testIP.
+func cleanMeterSeeded(rdb *redis.Client, ctx context.Context, members []meterSeededPoint) {
+	for _, m := range members {
+		rdb.ZRem(ctx, m.key, m.member)
+	}
+	rdb.HDel(ctx, redisCurrentKey, meterTestIP)
 }
 
 // TestMeterBackfillNearest — интеграционный тест добора пропущенной границы:
@@ -71,10 +89,7 @@ func TestMeterBackfillNearest(t *testing.T) {
 		{b.Add(5 * time.Minute), 1020},
 	})
 	defer func() {
-		for _, m := range members {
-			rdb.ZRem(ctx, redisSeriesKey(b), m)
-		}
-		rdb.HDel(ctx, redisCurrentKey, meterTestIP)
+		cleanMeterSeeded(rdb, ctx, members)
 		pgc.pool.Exec(ctx, `DELETE FROM sunreceiver.daily_tariffs WHERE day = $1`, day)
 	}()
 
@@ -97,9 +112,9 @@ func TestMeterBackfillNearest(t *testing.T) {
 }
 
 // TestMeterBackfillEndToEnd — полный сценарий добора: для тестового устройства
-// сеем показания вокруг сегодняшней границы 07:00 (без живого захвата), запускаем
-// backfillMeterBoundaries и проверяем, что граница дофиксирована ближайшим
-// показанием из ряда.
+// сеем показания вокруг границы (сегодняшнее 07:00 или вчерашнее 23:00 —
+// какая безопасно в прошлом), запускаем backfillMeterBoundaries и проверяем,
+// что граница дофиксирована ближайшим показанием из ряда.
 func TestMeterBackfillEndToEnd(t *testing.T) {
 	if os.Getenv("METER_PG_TEST") == "" {
 		t.Skip("METER_PG_TEST not set")
@@ -120,15 +135,19 @@ func TestMeterBackfillEndToEnd(t *testing.T) {
 	cfg := &meterConfig{Name: "test", IP: meterTestIP, Port: 502, Unit: 1}
 	loc := time.Local
 	now := time.Now()
-	y, mo, d := now.In(loc).Date()
-	// Граница 07:00 «сегодня»: если сейчас позже 07:10 — она безопасно в прошлом
-	// и подходит для добора; иначе берём ещё вчерашнюю (00:00), которая точно
-	// безопасно в прошлом и попадает в окно Redis.
-	boundary := time.Date(y, mo, d, meterDayStartH, 0, 0, 0, loc)
-	if now.Sub(boundary) < meterBackfillMinAge {
-		boundary = time.Date(y, mo, d, 0, 0, 0, 0, loc)
+	ny, nmo, nd := now.In(loc).Date()
+	// Граница: сегодняшнее 07:00, если оно уже безопасно в прошлом
+	// (> meterBackfillMinAge); иначе — ВЧЕРАШНЕЕ 23:00 (всегда >10 мин в прошлом
+	// и в окне Redis). Свое сегодняшнее 00:00 брать нельзя: в окне 00:00–00:10
+	// оно младше meterBackfillMinAge, добор его пропускает и тест флейчил.
+	var boundary time.Time
+	if b := time.Date(ny, nmo, nd, meterDayStartH, 0, 0, 0, loc); now.Sub(b) >= meterBackfillMinAge {
+		boundary = b
+	} else {
+		boundary = time.Date(ny, nmo, nd, meterDayEndH, 0, 0, 0, loc).AddDate(0, 0, -1)
 	}
-	day := time.Date(y, mo, d, 0, 0, 0, 0, loc)
+	by, bmo, bd := boundary.In(loc).Date()
+	day := time.Date(by, bmo, bd, 0, 0, 0, 0, loc)
 
 	pgc.pool.Exec(ctx, `DELETE FROM sunreceiver.daily_tariffs WHERE day = $1`, day)
 	rdb.HDel(ctx, redisCurrentKey, meterTestIP)
@@ -141,10 +160,7 @@ func TestMeterBackfillEndToEnd(t *testing.T) {
 		{boundary.Add(4 * time.Minute), 2030},
 	})
 	defer func() {
-		for _, m := range members {
-			rdb.ZRem(ctx, redisSeriesKey(boundary), m)
-		}
-		rdb.HDel(ctx, redisCurrentKey, meterTestIP)
+		cleanMeterSeeded(rdb, ctx, members)
 		pgc.pool.Exec(ctx, `DELETE FROM sunreceiver.daily_tariffs WHERE day = $1`, day)
 	}()
 

@@ -787,7 +787,8 @@ func mapClientFor(ip string, unit byte) *modbusmap.Client {
 //   - l1_voltage = напряжение АКБ МАП _UAcc_med_VH/VL (0x405/0x406), (VH*256+VL)/10.
 //     V_Bat самих контроллеров гейт МАП не отдаёт (проверено живьём 0x4D5=0),
 //     поэтому источник — то же напряжение АКБ, что заряжают контроллеры.
-//   - l1_current = ток АКБ _IAcc_med_A_u16_L/H (0x432/0x433), I[А]=(L+H*256)/16.
+//   - l1_current = ток АКБ _IAcc_med_A_u16_L/H (0x432/0x433), I[А]=(L+H*256)/16;
+//     в режиме заряда (MODE 0x400==4) — со знаком «минус» (как в API-ветке).
 //     Ток АКБ (а не токи отдельных MPPT-контроллеров 0x530+2*slot).
 //   - ac_active_power = l1_voltage × l1_current (W).
 //   - grid_frequency = 0 (частоты сети инвертор МППТ не отдаёт).
@@ -812,11 +813,24 @@ func mapMAPRegisters(cells map[uint16]byte) valuesContract {
 	// Ток АКБ: _IAcc_med_A_u16_L=0x432, _IAcc_med_A_u16_H=0x433,
 	// I[А] = (L + H*256)/16. Это более точный ток батареи (заряд/разряд АКБ);
 	// токи MPPT (0x530) — это токи контроллеров, а не ток самой АКБ.
+	//
+	// Знак: в режиме заряда (MODE=0x400 == 4) ток АКБ считаем ОТРИЦАТЕЛЬНЫМ —
+	// согласовано с API-веткой mapMAPAPI (_Iacc знаковый, заряд отрицательный),
+	// чтобы при переключении map.disabled (Modbus ↔ API) знак одного и того же
+	// контрактного тега l1_current/ac_active_power не менялся и графики двух
+	// источников были совместимы (раньше Modbus-ветка вела ток беззнаковым).
+	mapMode := byte(0)
+	if m, okM := cells[0x400]; okM {
+		mapMode = m
+	}
 	var iAcc float64
 	if l, okL := cells[0x432]; okL {
 		if h, okH := cells[0x433]; okH {
 			iAcc = float64(uint16(h)<<8|uint16(l)) / 16
 		}
+	}
+	if mapMode == 4 {
+		iAcc = -iAcc
 	}
 
 	out["l1_current"] = iAcc
@@ -1028,7 +1042,9 @@ func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 				if p.CRC != p.CRCCalc {
 					continue
 				}
-				if sn := asciiFromRegisters(p.Values); sn != "" {
+				// p.Values[0] = 0x2000 — регистр ДЛИНЫ строки; явно пропускаем
+				// (при длине ≥0x20 его lo-байт печатный и «подмешивался» в начало SN).
+				if sn := asciiFromRegisters(p.Values[1:]); sn != "" {
 					res.InverterSN = trimSofarVersions(sn)
 					break
 				}
@@ -1077,6 +1093,8 @@ func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 			res.DeviceSN = fmt.Sprintf("map-%s", devKey(t))
 		}
 
+	default:
+		log.Printf("%s: неизвестный kind %s — опрос пропущен", t.IP, t.Kind)
 	}
 
 	for _, f := range frames {
@@ -1433,8 +1451,9 @@ func main() {
 
 // runInverterPoll — непрерывный цикл опроса ОДНОГО инвертора (Deye/Sofar) с
 // периодом pollPeriod. Каждая итерация:
-//   - ждёт тик собственного таймера (отсчитывается от старта итерации, поэтому
-//     интервал остаётся ровно pollPeriod независимо от длительности опроса);
+//   - ждёт тик time.Ticker(pollPeriod); тики коалесцируются (не накапливаются),
+//     поэтому если pollDevice длиннее pollPeriod, фактический период =
+//     ceil(pollDur/pollPeriod)*pollPeriod (для Sofar с pacing ~90-100 с, а не 10 с);
 //   - опрашивает инвертор (pollDevice) и, если данные получены, пишет снимок в
 //     Redis СРАЗУ, с фактическим временем получения.
 //

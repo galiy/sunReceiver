@@ -75,7 +75,6 @@ CREATE TABLE IF NOT EXISTS sunreceiver.averages (
 	PRIMARY KEY (ip, ts)
 );
 CREATE INDEX IF NOT EXISTS averages_ts_ip_idx ON sunreceiver.averages (ts, ip);
-DROP INDEX IF EXISTS sunreceiver.averages_ts_idx;
 `)
 	if err != nil {
 		return fmt.Errorf("pg schema: %w", err)
@@ -173,10 +172,12 @@ WHERE ts >= $1 AND ts <= $2`
 
 // InsertBMSAveraged сохраняет одну усреднённую за 5 минут точку BMS
 // (ts — начало промежутка). Идемпотентна по (name, ts), но повторная запись
-// ОБНОВЛЯЕТ строку: поздняя запись того же промежутка полнее ранней (напр.
-// при остановке пулера дописан неполный промежуток, а новый процесс пишет
-// его продолжение). Это согласует PG с рядом Redis, где SaveBMSSeries
-// делает то же самое — заменяет старую точку того же устройства.
+// ОБНОВЛЯЕТ строку: last-write-wins — поздняя запись того же промежутка
+// побеждает, независимо от полноты (при рестарте посреди промежутка drain
+// старого процесса пишет частичный bucket, новый процесс пишет его продолжение
+// ПОЗЖЕ — останется поздняя, возможно менее полная; значение — корректное
+// среднее по реально набранным данным, поле samples это отражает). Это
+// согласует PG с рядом Redis, где SaveBMSSeries делает то же самое.
 func (s *pgStore) InsertBMSAveraged(name string, ts time.Time, avg bmsAveraged) error {
 	vals, err := json.Marshal(avg)
 	if err != nil {

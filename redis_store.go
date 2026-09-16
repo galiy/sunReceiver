@@ -291,8 +291,8 @@ func (s *redisStore) BMSOne(name string) (string, error) {
 // member с одинаковым score — две точки в один и тот же момент времени на
 // графике («ступенька»). Поэтому перед записью удаляются старые версии того
 // же устройства на этом score: в Redis остаётся ровно одна точка на
-// (устройство, 5-минутный промежуток), последняя (более полная) запись
-// побеждает.
+// (устройство, 5-минутный промежуток), last-write-wins — поздняя запись
+// побеждает (независимо от полноты; см. InsertBMSAveraged).
 func (s *redisStore) SaveBMSSeries(p bmsSeriesPoint, ts time.Time) error {
 	b, err := json.Marshal(p)
 	if err != nil {
