@@ -136,6 +136,38 @@ legacy-файлом `dds238.json`). Опрос Deye/Sofar — раз в 10 се�
 **Всегда сразу после любых правок кода — commit (по-русски) + push + деплой**
 (без ожидания отдельной команды пользователя).
 
+## Сборка релизов
+
+Релизы собираются через корневой **`Makefile`** (версия подставляется в имя файла и
+в `main.version` через `-ldflags "-X main.version=<версия>"`; по умолч. `dev`).
+`VERSION ?= dev`, `dist/` создаётся автоматически. Требуется установленный `zig`
+(только для цели `bmslistener`).
+
+```sh
+make VERSION=1.2.3 linux-x64     # dist/sunReceiver-linux-amd64-1.2.3
+make VERSION=1.2.3 win-x64       # dist/sunReceiver-windows-amd64-1.2.3.exe (-H windowsgui)
+make VERSION=1.2.3 bmslistener   # dist/bmslistener-armv7l-1.2.3 (zig, кросс-сборка под Малину)
+make VERSION=1.2.3 all           # все три
+make clean                       # rm -rf dist
+```
+
+Подробности и Windows-специфика — [`docs/README.md`](docs/README.md).
+
+**Windows (portable + tray)** — сборка с `-H windowsgui` (GUI-подсистема, консоль при
+запуске из проводника не мигает). Приложение сворачивается в системный трей
+(`fyne.io/systray`, файлы `tray_windows.go`/`tray_posix.go`; иконка `tray.ico`,
+embed; меню — только «Закрыть» → graceful shutdown; на POSIX `runTray` — no-op,
+завершение по SIGINT/SIGTERM). Логи на Windows — в `sunReceiver.log` рядом с exe
+(`setupLogging()` в `logfile_windows.go`; на POSIX — no-op: Linux journald/systemd,
+macOS консоль). Флаг `--version`/`-version` печатает `sunReceiver <версия>`, но из-за
+`-H windowsgui` в stdout при запуске из проводника не виден (запускать из cmd /
+перенаправлять).
+
+**bmslistener (Малина)** — кросс-сборка через `zig cc -target
+arm-linux-musleabihf -static` (статичный elf32 ARM); не зависит от libc платы,
+запускается и на старом Raspbian jessie. Артефакт кладётся в `dist/`, **на плату не
+переносится** (только артефакт/кросс-сборка).
+
 ## Окружение
 
 - Репо: github.com/galiy/sunReceiver (remote git@github.com:galiy/sunReceiver.git,
