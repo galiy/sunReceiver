@@ -1,5 +1,7 @@
 CC      = gcc
-CFLAGS  = -O2 -std=gnu99 -Wall -Wextra
+# Версия демона: зашивается макросом VERSION (поддерживается --version/-V).
+VERSION ?= dev
+CFLAGS  = -O2 -std=gnu99 -Wall -Wextra -DVERSION=\"$(VERSION)\"
 TARGET  = bmslistener
 SRC     = bmslistener.c
 

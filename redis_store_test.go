@@ -237,3 +237,55 @@ func TestSaveSnapshotWindowReplace(t *testing.T) {
 		t.Fatalf("members со score окна=%d, want 1 (замена в 10-с окне): %v", len(members), members)
 	}
 }
+
+// TestRedisStoreSnapshotDedup: две записи одного устройства в одну и ту же
+// секунду — в ZSET ряда остаётся ровно ОДИН member со score этой секунды
+// (вторая запись заменяет первую). Чужие устройства на том же score не
+// затрагиваются.
+func TestRedisStoreSnapshotDedup(t *testing.T) {
+	s := testStore(t)
+	cleanTestKeys(t, s)
+	t.Cleanup(func() { cleanTestKeys(t, s) })
+
+	now := time.Now()
+	ts := now.Truncate(time.Second)
+	ip := "192.168.13.77"
+	s1 := snap("A", ip, ts, valuesContract{"ac_active_power": 1.0})
+	s2 := snap("A", ip, ts.Add(500*time.Millisecond), valuesContract{"ac_active_power": 2.0})
+	other := snap("B", "192.168.13.78", ts, valuesContract{"ac_active_power": 9.0})
+
+	for _, sp := range []deviceSnapshot{s1, other, s2} {
+		if err := s.SaveSnapshot(sp, ts); err != nil {
+			t.Fatalf("SaveSnapshot %s: %v", sp.IP, err)
+		}
+	}
+
+	key := redisSeriesKey(ts)
+	score := strconv.FormatInt(ts.Unix(), 10)
+	members, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: score, Max: score}).Result()
+	if err != nil {
+		t.Fatalf("ZRangeByScore: %v", err)
+	}
+	if len(members) != 2 {
+		t.Fatalf("members со score секунды=%d, want 2 (A заменён на 1, B без изменений): %v", len(members), members)
+	}
+	got, err := s.QuerySeries(ts, ts)
+	if err != nil {
+		t.Fatalf("QuerySeries: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("точки за секунду: %+v, want 2 (A заменён на свежую, B без изменений)", got)
+	}
+	var a *deviceSnapshot
+	for i := range got {
+		if got[i].IP == ip {
+			a = &got[i]
+		}
+	}
+	if a == nil {
+		t.Fatalf("устройство %s не найдено: %+v", ip, got)
+	}
+	if a.Values["ac_active_power"] != 2.0 {
+		t.Fatalf("не заменена на свежую: %+v", a.Values)
+	}
+}

@@ -83,7 +83,10 @@ func averageValues(snaps []deviceSnapshot) valuesContract {
 	lastTS := map[string]time.Time{}
 	lastVal := map[string]float64{}
 	for _, sn := range snaps {
-		ts, _ := time.Parse(time.RFC3339, sn.Timestamp)
+		ts, perr := time.Parse(time.RFC3339, sn.Timestamp)
+		if perr != nil {
+			continue
+		}
 		for k, raw := range sn.Values {
 			f, ok := toFloat(raw)
 			if !ok {

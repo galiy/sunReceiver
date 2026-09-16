@@ -23,10 +23,21 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"fyne.io/systray"
 )
+
+// quitOnce гарантирует идемпотентное завершение: и пункт меню «Закрыть», и
+// SIGINT/SIGTERM посылают в quit ровно один раз (иначе второй писатель остаётся
+// невостребованным и считается утечкой).
+var quitOnce sync.Once
+
+// signalQuit инициирует graceful-завершение один раз через канал quit.
+func signalQuit(quit chan struct{}) {
+	quitOnce.Do(func() { quit <- struct{}{} })
+}
 
 //go:embed tray.ico
 var trayIcon []byte
@@ -51,7 +62,7 @@ func onReady(quit chan struct{}) func() {
 			<-mQuit.ClickedCh
 			log.Println("tray: Закрыть — завершение работы")
 			systray.Quit()
-			quit <- struct{}{}
+			signalQuit(quit)
 		}()
 	}
 }
@@ -63,7 +74,7 @@ func waitForQuit(quit chan struct{}) <-chan struct{} {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 		<-sig
-		quit <- struct{}{}
+		signalQuit(quit)
 	}()
 	return quit
 }

@@ -101,6 +101,10 @@ type invTarget struct {
 	Slot     int
 	UID      string // для kindMPPT: UID контроллера из read_json.php (стабильный идентификатор)
 	Order    int    // порядок устройства на дашборде (индекс в конфиге; MPPT — всегда последними)
+	// InverterSN — кэш серийного номера инвертора (для Deye/Sofar) на время жизни
+	// пулера: серийник постоянен, благодаря этому HW-диапазон не перечитывается с
+	// 3 ретраями на каждый опрос (см. runInverterPoll). Для остальных марок не используется.
+	InverterSN string
 }
 
 // configInverter — запись инвертора (Deye/Sofar) в sunReceiver.json разделе "invertors".
@@ -488,11 +492,12 @@ var commonContractTags = []string{
 
 // needsRounding — true, если тэг относится к величинам, которые округляются до
 // 1 знака после запятой (напряжение, ток, мощность, энергия, температура).
+// Частота (grid_frequency/meter_frequency) и коэффициент мощности
+// (meter_power_factor) НЕ округляются — входят в контракт с точностью с датчика.
 func needsRounding(tag string) bool {
 	return strings.HasSuffix(tag, "voltage") ||
 		strings.HasSuffix(tag, "current") ||
 		strings.HasSuffix(tag, "power") ||
-		strings.HasSuffix(tag, "frequency") ||
 		strings.Contains(tag, "energy") ||
 		strings.Contains(tag, "temperature")
 }
@@ -596,7 +601,23 @@ func faultNames(mask uint16) []string {
 // 1 знака (round1). Бренд-специфичные поля в values не попадают — они в raw_registers.
 
 // putSofarSimple пишет 16-битный регистр в контракт: int при ratio==1, иначе float.
+// Регистр трактуется как БЕЗЗНАКОВЫЙ (физические величины неотрицательны:
+// напряжения, токи, мощности, частота, энергия, времена, сопротивления изоляции).
 func putSofarSimple(out valuesContract, regs map[uint16]uint16, addr uint16, key string, ratio float64) {
+	v, ok := regs[addr]
+	if !ok {
+		return
+	}
+	if ratio == 1 {
+		out[key] = int(v)
+	} else {
+		out[key] = float64(v) * ratio
+	}
+}
+
+// putSofarSigned пишет 16-битный регистр ЗНАКОВОГО значения (может быть
+// отрицательным): реактивная мощность (var) и температуры модуля/инвертора.
+func putSofarSigned(out valuesContract, regs map[uint16]uint16, addr uint16, key string, ratio float64) {
 	v, ok := regs[addr]
 	if !ok {
 		return
@@ -650,7 +671,7 @@ func mapSofarRegisters(regs map[uint16]uint16) valuesContract {
 
 	// AC выход: активная W, реактивная var, частота Hz
 	putSofarSimple(out, regs, 0x000C, "ac_active_power", 10)
-	putSofarSimple(out, regs, 0x000D, "ac_reactive_power", 10) // ×0.01 kVar → var
+	putSofarSigned(out, regs, 0x000D, "ac_reactive_power", 10) // ×0.01 kVar → var (может быть <0)
 	putSofarSimple(out, regs, 0x000E, "grid_frequency", 0.01)
 
 	// Фазы L1/L2/L3 (V, A)
@@ -668,8 +689,8 @@ func mapSofarRegisters(regs map[uint16]uint16) valuesContract {
 	putSofarSimple(out, regs, 0x001A, "time_today", 1)        // min
 
 	// Температуры (C), шина
-	putSofarSimple(out, regs, 0x001B, "temperature_module", 1)
-	putSofarSimple(out, regs, 0x001C, "temperature_inner", 1)
+	putSofarSigned(out, regs, 0x001B, "temperature_module", 1)
+	putSofarSigned(out, regs, 0x001C, "temperature_inner", 1)
 	putSofarSimple(out, regs, 0x001D, "bus_voltage", 0.1)
 
 	// Диагностика Sofar
@@ -1085,23 +1106,28 @@ func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 		}
 		// Серийный номер инвертора Deye — ASCII-строка в регистрах 0x0003-0x0007
 		// (10 цифр; проверено на живых .70/.79/.91/.92/.93, напр. .70 = "2405018274").
-		// Чтение с ретраями: логгер иногда молчит/отвечает не полностью.
-		for attempt := 1; attempt <= 3 && res.InverterSN == ""; attempt++ {
-			if ctx.Err() != nil {
-				return res
-			}
-			pdus, _, err := client.ReadRegistersDeye(ctx, 0x0003, 0x0005, 1)
-			if err != nil {
-				log.Printf("%s: serial func03 read err (attempt %d): %v", t.IP, attempt, err)
-				continue
-			}
-			for _, p := range pdus {
-				if p.CRC != p.CRCCalc {
+		// Если серийник уже известен (кэш в runInverterPoll) — не читаем заново:
+		// он постоянен, а чтение с 3 ретраями лишнее на каждый опрос.
+		if t.InverterSN != "" {
+			res.InverterSN = t.InverterSN
+		} else {
+			for attempt := 1; attempt <= 3 && res.InverterSN == ""; attempt++ {
+				if ctx.Err() != nil {
+					return res
+				}
+				pdus, _, err := client.ReadRegistersDeye(ctx, 0x0003, 0x0005, 1)
+				if err != nil {
+					log.Printf("%s: serial func03 read err (attempt %d): %v", t.IP, attempt, err)
 					continue
 				}
-				if sn := asciiFromRegisters(p.Values); sn != "" {
-					res.InverterSN = sn
-					break
+				for _, p := range pdus {
+					if p.CRC != p.CRCCalc {
+						continue
+					}
+					if sn := asciiFromRegisters(p.Values); sn != "" {
+						res.InverterSN = sn
+						break
+					}
 				}
 			}
 		}
@@ -1147,24 +1173,31 @@ func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 		// Серийный номер инвертора Sofar — ASCII-строка HW-диапазона 0x2000-0x200D
 		// (func 04; первые 2 байта = длина строки, затем ASCII на 2 байта/регистр).
 		// Может быть НЕ числом (строка), напр. .76 = "SA3ES127LC1055V480V100V480".
-		for attempt := 1; attempt <= 3 && res.InverterSN == ""; attempt++ {
-			if ctx.Err() != nil {
-				return res
-			}
-			hwpdus, _, herr := client.ReadRegistersDeyeFn(ctx, 0x2000, 0x000E, 1, 0x04)
-			if herr != nil {
-				log.Printf("%s: serial func04 read err (attempt %d): %v", t.IP, attempt, herr)
-				continue
-			}
-			for _, p := range hwpdus {
-				if p.CRC != p.CRCCalc {
+		// Если серийник уже известен (кэш в runInverterPoll) — не читаем заново:
+		// он постоянен, а чтение недоступного HW-диапазона с 3 ретраями занимает
+		// до ~3 мин и на каждый опрос ломает цикл.
+		if t.InverterSN != "" {
+			res.InverterSN = t.InverterSN
+		} else {
+			for attempt := 1; attempt <= 3 && res.InverterSN == ""; attempt++ {
+				if ctx.Err() != nil {
+					return res
+				}
+				hwpdus, _, herr := client.ReadRegistersDeyeFn(ctx, 0x2000, 0x000E, 1, 0x04)
+				if herr != nil {
+					log.Printf("%s: serial func04 read err (attempt %d): %v", t.IP, attempt, herr)
 					continue
 				}
-				// p.Values[0] = 0x2000 — регистр ДЛИНЫ строки; явно пропускаем
-				// (при длине ≥0x20 его lo-байт печатный и «подмешивался» в начало SN).
-				if sn := asciiFromRegisters(p.Values[1:]); sn != "" {
-					res.InverterSN = trimSofarVersions(sn)
-					break
+				for _, p := range hwpdus {
+					if p.CRC != p.CRCCalc {
+						continue
+					}
+					// p.Values[0] = 0x2000 — регистр ДЛИНЫ строки; явно пропускаем
+					// (при длине ≥0x20 его lo-байт печатный и «подмешивался» в начало SN).
+					if sn := asciiFromRegisters(p.Values[1:]); sn != "" {
+						res.InverterSN = trimSofarVersions(sn)
+						break
+					}
 				}
 			}
 		}
@@ -1476,6 +1509,9 @@ func main() {
 	// ждал медленный логгер (до ~15 c на первый байт).
 	stopCtx, stopCancel := context.WithCancel(context.Background())
 	defer stopCancel()
+	// Привязываем контекст долгих операций Redis к сигналу остановки, чтобы они
+	// корректно прерывались при shutdown (N16).
+	store.SetCtx(stopCtx)
 	// bgWg — все фоновые горутины, пишущие в Redis/PG: при завершении main
 	// отменяет stopCtx, ЖДЁТ их (bgWg.Wait()) и только потом defer'ы закрывают
 	// пулы rdb/pg — записи при остановке (BMS-drain, averageBucket) не гоняются
@@ -1502,7 +1538,32 @@ func main() {
 			if cerr != nil {
 				log.Printf("redis empty-check: %v", cerr)
 			} else if empty {
-				restoreRedisFromPG(store, pg, restoreWindow, stopCtx)
+				// IsEmpty (redis_store.go) учитывает только инверторное current +
+				// серию инверторов. Данные ANT BMS лежат в ОТДЕЛЬНЫХ ключах
+				// (HASH sunreceiver:bms, ряд sunreceiver:bms:series:*), в него не
+				// входят. Проверяем их, чтобы сложившийся BMS-«магазин» не был
+				// засчитан пустым и не перетёрся реставрацией.
+				bmsPresent, berr := redisBMSDataPresent(store)
+				switch {
+				case berr != nil:
+					log.Printf("redis empty-check (bms): %v", berr)
+				case bmsPresent:
+					log.Printf("redis empty-check: в Redis есть BMS-данные — реставрация не требуется")
+				default:
+					// SETNX-маркер: защита от повторной/одновременной реставрации
+					// (два экземпляра на одном Redis). Захвативший маркер — единственный,
+					// кто восстанавливает; остальные пропускают. Снимается сразу после
+					// реставрации (см. TTL на случай падения).
+					locked, lerr := store.rdb.SetNX(store.ctx, redisRestoreLockKey, time.Now().Unix(), restoreLockTTL).Result()
+					if lerr != nil {
+						log.Printf("pg restore: не удалось взять маркер: %v", lerr)
+					} else if !locked {
+						log.Printf("pg restore: реставрацию уже выполняет другой процесс — пропускаю")
+					} else {
+						restoreRedisFromPG(store, pg, restoreWindow, stopCtx)
+						store.rdb.Del(store.ctx, redisRestoreLockKey)
+					}
+				}
 			}
 		}
 	} else {
@@ -1673,6 +1734,11 @@ func runInverterPoll(store *redisStore, t invTarget, stop context.Context) {
 					}
 				}
 			}
+			// Кэшируем серийник инвертора на время жизни пулера: в следующем опросе
+			// pollDevice не будет перечитывать HW-диапазон с 3 ретраями.
+			if res.InverterSN != "" {
+				t.InverterSN = res.InverterSN
+			}
 			snap := deviceSnapshot{
 				Name:       t.Name,
 				IP:         t.IP,
@@ -1713,6 +1779,34 @@ func deyeErrCodeName(code byte) string {
 		return "SN логгера не совпадает"
 	}
 	return fmt.Sprintf("неизвестный код 0x%02X", code)
+}
+
+// redisRestoreLockKey — SETNX-маркер запуска реставрации Redis из PG: защищает от
+// повторной реставрации, когда на один Redis смотрят два процесса (второй
+// экземпляр). Захватывается на время реставрации, затем снимается.
+const redisRestoreLockKey = "sunreceiver:restore:lock"
+
+// restoreLockTTL — TTL маркера реставрации на случай падения процесса посреди
+// работы (иначе «залипший» маркер навсегда заблокировал бы реставрацию).
+const restoreLockTTL = 30 * time.Minute
+
+// redisBMSDataPresent — true, если в Redis есть данные ANT BMS: хотя бы одно поле
+// в HASH sunreceiver:bms или хоть один месячный сегмент ряда
+// sunreceiver:bms:series:*. Отдельно от IsEmpty, т.к. тот учитывает только
+// инверторное current/series.
+func redisBMSDataPresent(store *redisStore) (bool, error) {
+	n, err := store.rdb.HLen(store.ctx, redisBMSKey).Result()
+	if err != nil {
+		return false, err
+	}
+	if n > 0 {
+		return true, nil
+	}
+	keys, err := store.scanPrefixKeys(redisBMSSeriesPrefix + "*")
+	if err != nil {
+		return false, err
+	}
+	return len(keys) > 0, nil
 }
 
 // restoreRedisFromPG восстанавливает Redis из persistent-хранилища PostgreSQL
@@ -1757,6 +1851,10 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, st
 		if perr != nil {
 			continue
 		}
+		// Ключ месячного сегмента ряда строится по ts (redisSeriesKey = ts.Format("2006-01")).
+		// Живая запись пишет по локальной зоне (ts = time.Now()), а тут ts из RFC3339
+		// обычно в UTC — приводим к time.Local, чтобы попасть в тот же месяц-ключ.
+		ts = ts.In(time.Local)
 		if serr := store.SaveSnapshot(snap, ts); serr != nil {
 			log.Printf("pg restore: save %s: %v", snap.IP, serr)
 			continue
@@ -1784,6 +1882,8 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, st
 		if perr != nil {
 			continue
 		}
+		// См. выше: ключ месяца (bmsSeriesKey) приводим к локальной зоне, как живая запись.
+		ts = ts.In(time.Local)
 		if serr := store.SaveBMSSeries(p, ts); serr != nil {
 			log.Printf("pg restore: bms save %s: %v", p.Name, serr)
 			continue

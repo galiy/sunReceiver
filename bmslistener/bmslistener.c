@@ -40,7 +40,12 @@
  * фильтром занятости по /proc.
  *
  * build: gcc -O2 -Wall -o bmslistener bmslistener.c
+ *         zig cc -O2 -std=gnu99 -Wall -Wextra -target arm-linux-musleabihf \
+ *              -static -DVERSION=\"<версия>\" -o bmslistener bmslistener.c
  * licence-free, standalone C99+POSIX.
+ *
+ * --version (или -V) печатает «bmslistener <VERSION>», где VERSION задаётся
+ * макросом при сборке (по умолчанию "dev").
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -59,6 +64,11 @@
 #include <sys/shm.h>
 #include <stdint.h>
 #include <stdarg.h>
+
+/* версия демона: задаётся -DVERSION=\"<версия>\" при сборке, иначе "dev" */
+#ifndef VERSION
+#define VERSION "dev"
+#endif
 
 /* ---------- лог в файл (systemd 215 на этой плате не собирает stderr в журнал) ---------- */
 static void bms_log(const char *fmt, ...) {
@@ -580,7 +590,13 @@ static void reap_silent(bmsdev_t *devs, int n) {
 }
 
 /* ---------- main ---------- */
-int main(void) {
+int main(int argc, char **argv) {
+    /* --version / -V: печать версии и выход (без инициализации портов/shm) */
+    if (argc == 2 && (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-V") == 0)) {
+        printf("bmslistener %s\n", VERSION);
+        return 0;
+    }
+
     signal(SIGTERM, on_signal);
     signal(SIGINT, on_signal);
     signal(SIGHUP, SIG_IGN);

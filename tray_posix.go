@@ -21,8 +21,18 @@ package main
 import (
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 )
+
+// quitOnce гарантирует идемпотентное завершение: на POSIX писатель в quit один
+// (SIGINT/SIGTERM), но единая точка signalQuit сохраняет симметрию с Windows.
+var quitOnce sync.Once
+
+// signalQuit инициирует graceful-завершение один раз через канал quit.
+func signalQuit(quit chan struct{}) {
+	quitOnce.Do(func() { quit <- struct{}{} })
+}
 
 // runTray на POSIX (Linux/macOS) ничего не делает: приложение работает как
 // обычный процесс (systemd/консоль), трея нет.
@@ -35,7 +45,7 @@ func waitForQuit(quit chan struct{}) <-chan struct{} {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 		<-sig
-		quit <- struct{}{}
+		signalQuit(quit)
 	}()
 	return quit
 }
