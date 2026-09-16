@@ -1,3 +1,19 @@
+// sunReceiver
+// Copyright (C) 2026  Aleksandr Galinskii
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 package main
 
 import (
@@ -67,7 +83,7 @@ func TestBmsAccumulatorClosedAndDrain(t *testing.T) {
 	}
 	// Снимок из следующего промежутка [12:05, 12:10) — первый должен закрыться.
 	a.add(dev, now.Add(5*time.Minute))
-	closed := a.closed(now.Add(5*time.Minute))
+	closed := a.closed(now.Add(5 * time.Minute))
 	if len(closed) != 1 || closed[0].name != "B1" || closed[0].avg.Samples != 1 {
 		t.Fatalf("closed = %+v, want 1 точка B1 (samples=1)", closed)
 	}

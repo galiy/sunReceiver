@@ -1,3 +1,19 @@
+// sunReceiver
+// Copyright (C) 2026  Aleksandr Galinskii
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 package solarman
 
 import (
@@ -203,7 +219,7 @@ func ParseModbusPDU(payload []byte, offsets ...int) []ModbusPDU {
 			if vlen == 0 || vlen%2 != 0 || s+3+vlen+2 > len(payload) {
 				continue
 			}
-			if CRC16Modbus(payload[s : s+3+vlen]) != binary.LittleEndian.Uint16(payload[s+3+vlen:s+5+vlen]) {
+			if CRC16Modbus(payload[s:s+3+vlen]) != binary.LittleEndian.Uint16(payload[s+3+vlen:s+5+vlen]) {
 				continue
 			}
 			starts = append(starts, s)

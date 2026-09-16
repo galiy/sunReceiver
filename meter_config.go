@@ -1,3 +1,19 @@
+// sunReceiver
+// Copyright (C) 2026  Aleksandr Galinskii
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 package main
 
 import (
@@ -13,12 +29,12 @@ import (
 // при `go run .` — fallback в CWD. Файл содержит учёт/параметры подключения
 // конкретного счётчика, поэтому в git не коммитится; шаблон — dds238.json.sample.
 type meterConfig struct {
-	Name         string `json:"name"`
-	IP           string `json:"ip"`
-	Port         int    `json:"port"`
-	Unit         byte   `json:"unit"`
-	FirstReg     uint16 `json:"first_reg"`
-	RegisterCnt  uint16 `json:"register_count"`
+	Name        string `json:"name"`
+	IP          string `json:"ip"`
+	Port        int    `json:"port"`
+	Unit        byte   `json:"unit"`
+	FirstReg    uint16 `json:"first_reg"`
+	RegisterCnt uint16 `json:"register_count"`
 }
 
 // meterConfigPath возвращает путь к dds238.json в каталоге исполняемого файла.
@@ -55,8 +71,8 @@ func meterFromSection(m *meterSection) (*meterConfig, error) {
 }
 
 // loadMeterConfig читает и проверяет конфигурацию счётчика. Источники по приоритету:
-//   1) раздел "meter" в sunReceiver.json (передаётся из main как meterSection);
-//   2) отдельный файл dds238.json рядом с бинарником (обратная совместимость).
+//  1. раздел "meter" в sunReceiver.json (передаётся из main как meterSection);
+//  2. отдельный файл dds238.json рядом с бинарником (обратная совместимость).
 //
 // ВАЖНО: если раздел "meter" в конфиге ЕСТЬ (section != nil), но некорректен
 // (неполный/first_reg!=0) — опрос отключается с логом, и legacy-файл НЕ
