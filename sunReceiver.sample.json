@@ -12,6 +12,8 @@
     { "ip": "192.168.0.12", "name": "Deye Right", "type": "deye", "logger_sn": 3456789012, "disabled": false }
   ],
   "map": {
+    "disabled": false,
+    "bms_disabled": false,
     "rs485": {
       "name": "MAP (батарея/сеть)",
       "ip": "192.168.0.20",
@@ -31,6 +33,7 @@
     "pg_restore_window": "720h"
   },
   "meter": {
+    "disabled": false,
     "name": "Электросчётчик",
     "ip": "192.168.0.40",
     "port": 502,

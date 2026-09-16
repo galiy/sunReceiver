@@ -63,6 +63,14 @@ func loadBmsSite(sec *mapSection) *bmsApiClient {
 	if sec == nil || sec.BMSPath == "" {
 		return nil
 	}
+	if sec.Disabled != nil && *sec.Disabled {
+		log.Printf("bms: раздел map disabled=true — опрос BMS отключён")
+		return nil
+	}
+	if sec.BMSDisabled != nil && *sec.BMSDisabled {
+		log.Printf("bms: bms_disabled=true — опрос BMS отключён")
+		return nil
+	}
 	if sec.BaseURL == "" || sec.Login == "" || sec.Password == "" {
 		log.Printf("bms: раздел map неполный (нужны base_url, login, password) — опрос BMS отключён")
 		return nil

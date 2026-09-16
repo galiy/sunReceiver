@@ -64,6 +64,10 @@ func meterFromSection(m *meterSection) (*meterConfig, error) {
 // на dds238.json — только когда раздела "meter" в конфиге НЕТ вовсе.
 func loadMeterConfig(section *meterSection) *meterConfig {
 	if section != nil {
+		if section.Disabled != nil && *section.Disabled {
+			log.Printf("meter: раздел meter disabled=true — опрос счётчика отключён, legacy-файл НЕ используется")
+			return nil
+		}
 		mc, err := meterFromSection(section)
 		if err != nil {
 			log.Printf("meter: раздел meter некорректен (%v) — опрос счётчика отключён, legacy-файл НЕ используется", err)
