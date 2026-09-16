@@ -38,3 +38,4 @@ import_oracle/
 
 # архив отчётов код-ревью (имя содержит дату) — вне git
 archive/
+.kilo/gh-token.txt
