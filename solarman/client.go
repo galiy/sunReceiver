@@ -43,7 +43,7 @@ func (c *Client) dial(ctx context.Context) (net.Conn, error) {
 }
 
 // readAll собирает все кадры ответа с соединения до «тишины» (IdleWindow) либо
-// общего MaxTotal-лимиита приёма. Возвращает полученные байты.
+// общего MaxTotal-лимита приёма. Возвращает полученные байты.
 func (c *Client) readAll(conn net.Conn) []byte {
 	var raw []byte
 	buf := make([]byte, 1024)
