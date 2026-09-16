@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"math"
 	"time"
@@ -29,7 +30,7 @@ const (
 // runMeterBackfill — фоновый добор пропущенных тарифных границ. Сразу при старте
 // делает catch-up за всё окно удержания Redis, затем повторяется каждые
 // meterBackfillInterval. Останавливается по закрытию канала stop.
-func runMeterBackfill(store *redisStore, pg *pgStore, cfg *meterConfig, stop <-chan struct{}) {
+func runMeterBackfill(store *redisStore, pg *pgStore, cfg *meterConfig, ctx context.Context) {
 	if pg == nil || cfg == nil {
 		return
 	}
@@ -40,7 +41,7 @@ func runMeterBackfill(store *redisStore, pg *pgStore, cfg *meterConfig, stop <-c
 		select {
 		case <-ticker.C:
 			backfillMeterBoundaries(store, pg, cfg, time.Now())
-		case <-stop:
+		case <-ctx.Done():
 			return
 		}
 	}

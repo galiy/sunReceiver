@@ -890,7 +890,7 @@ func trimSofarVersions(s string) string {
 	return s[:loc[0]]
 }
 
-func pollDevice(t invTarget) DeviceResult {
+func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 	res := DeviceResult{OK: true}
 	client := clientFor(t.IP, t.LoggerSN)
 	// Sofar LSW-3 шлёт кадры с паузами до ~6.5 с (pacing) — окно тишины шире.
@@ -904,7 +904,7 @@ func pollDevice(t invTarget) DeviceResult {
 	case kindDeyeString:
 		result := map[uint16]uint16{}
 		for _, r := range [][2]uint16{{0x3C, 0x39}, {0xC6, 0x0D}} {
-			pdus, fr, err := client.ReadRegistersDeye(r[0], r[1], 1)
+			pdus, fr, err := client.ReadRegistersDeye(ctx, r[0], r[1], 1)
 			if err != nil {
 				continue
 			}
@@ -926,7 +926,10 @@ func pollDevice(t invTarget) DeviceResult {
 		// (10 цифр; проверено на живых .70/.79/.91/.92/.93, напр. .70 = "2405018274").
 		// Чтение с ретраями: логгер иногда молчит/отвечает не полностью.
 		for attempt := 1; attempt <= 3 && res.InverterSN == ""; attempt++ {
-			pdus, _, err := client.ReadRegistersDeye(0x0003, 0x0005, 1)
+			if ctx.Err() != nil {
+				return res
+			}
+			pdus, _, err := client.ReadRegistersDeye(ctx, 0x0003, 0x0005, 1)
 			if err != nil {
 				log.Printf("%s: serial func03 read err (attempt %d): %v", t.IP, attempt, err)
 				continue
@@ -947,7 +950,7 @@ func pollDevice(t invTarget) DeviceResult {
 		// (как Deye) и реальным SN логгера, а не на 12-байтный BuildReadFrame
 		// (на него отдаёт только heartbeat с кодом 0x05). Проверено 2026-09-07:
 		// на live .76 кадр 15b+SN даёт полный блок 0x0000-0x0027 (40 reg, func 03).
-		pdus, fr, err := client.ReadRegistersDeye(0x0000, 0x0028, 1)
+		pdus, fr, err := client.ReadRegistersDeye(ctx, 0x0000, 0x0028, 1)
 		if err != nil {
 			res.OK = false
 			return res
@@ -984,7 +987,10 @@ func pollDevice(t invTarget) DeviceResult {
 		// (func 04; первые 2 байта = длина строки, затем ASCII на 2 байта/регистр).
 		// Может быть НЕ числом (строка), напр. .76 = "SA3ES127LC1055V480V100V480".
 		for attempt := 1; attempt <= 3 && res.InverterSN == ""; attempt++ {
-			hwpdus, _, herr := client.ReadRegistersDeyeFn(0x2000, 0x000E, 1, 0x04)
+			if ctx.Err() != nil {
+				return res
+			}
+			hwpdus, _, herr := client.ReadRegistersDeyeFn(ctx, 0x2000, 0x000E, 1, 0x04)
 			if herr != nil {
 				log.Printf("%s: serial func04 read err (attempt %d): %v", t.IP, attempt, herr)
 				continue
@@ -1012,17 +1018,17 @@ func pollDevice(t invTarget) DeviceResult {
 		// и ток АКБ (_IAcc_med 0x432/0x433). Отдельного чтения 0x420 нет — оно было
 		// строгим подмножеством этого блока (ReadRegisters проверяет bytecount,
 		// поэтому при успехе 0x422 уже в cells).
-		if b, err := mc.ReadRegisters(0x0400, 0x20); err == nil {
+		if b, err := mc.ReadRegisters(ctx, 0x0400, 0x20); err == nil {
 			for i := 0; i < len(b); i++ {
 				cells[0x0400+uint16(i)] = b[i]
 			}
 		}
-		if b, err := mc.ReadRegisters(0x0530, 0x40); err == nil {
+		if b, err := mc.ReadRegisters(ctx, 0x0530, 0x40); err == nil {
 			for i := 0; i < len(b); i++ {
 				cells[0x0530+uint16(i)] = b[i]
 			}
 		}
-		if b, err := mc.ReadRegisters(0x0580, 0x24); err == nil {
+		if b, err := mc.ReadRegisters(ctx, 0x0580, 0x24); err == nil {
 			for i := 0; i < len(b); i++ {
 				cells[0x0580+uint16(i)] = b[i]
 			}
@@ -1081,15 +1087,15 @@ func pollMPPTFromArr(t invTarget, arr []mpptRaw) DeviceResult {
 // SaveSnapshotWindow: в пределах каждого 10-секундного окна остаётся ровно одна
 // (последняя) строка на устройство. МАП-цели исключены из 10-сек циклов инверторов
 // (см. runInverterPoll); MPPT не регистрируются в конфиге вовсе (см. pollAndSaveMap).
-func runMapPoll(store *redisStore, stop <-chan struct{}) {
+func runMapPoll(store *redisStore, stop context.Context) {
 	const pollEvery = time.Second
 	ticker := time.NewTicker(pollEvery)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
-			pollAndSaveMap(store, time.Now())
-		case <-stop:
+			pollAndSaveMap(stop, store, time.Now())
+		case <-stop.Done():
 			return
 		}
 	}
@@ -1130,7 +1136,7 @@ func saveWindowSnapshot(store *redisStore, t invTarget, res DeviceResult, now ti
 	}
 }
 
-func pollAndSaveMap(store *redisStore, now time.Time) {
+func pollAndSaveMap(ctx context.Context, store *redisStore, now time.Time) {
 	var wg sync.WaitGroup
 	activeMPPT := map[string]struct{}{}
 	fetchOK := false // MPPT-состав чистим из current только при успешном ответе API
@@ -1143,7 +1149,7 @@ func pollAndSaveMap(store *redisStore, now time.Time) {
 		wg.Add(1)
 		go func(t invTarget) {
 			defer wg.Done()
-			saveWindowSnapshot(store, t, pollDevice(t), now)
+			saveWindowSnapshot(store, t, pollDevice(ctx, t), now)
 		}(t)
 	}
 	// МАП через веб-API (map.disabled=true): Modbus-пулер не запущен (цели kindMAP в
@@ -1153,7 +1159,7 @@ func pollAndSaveMap(store *redisStore, now time.Time) {
 		go func() {
 			defer wg.Done()
 			t := invTarget{IP: mapAPI.ip, Name: mapAPI.name, Kind: kindMAP, Slot: -1, Order: mapAPI.order}
-			saveWindowSnapshot(store, t, pollMAPAPI(), now)
+			saveWindowSnapshot(store, t, pollMAPAPI(ctx), now)
 		}()
 	}
 	// MPPT-контроллеры — по факту подключённых из API. Состав определяется
@@ -1161,7 +1167,7 @@ func pollAndSaveMap(store *redisStore, now time.Time) {
 	// FetchMPPTs переиспользуется для всех слотов за цикл). Каждый контроллер
 	// ответа — отдельное устройство с ключом devKey(MPPT слотом); имя MPPT-<n+1>.
 	if mppt != nil {
-		arr, err := mppt.FetchMPPTs()
+		arr, err := mppt.FetchMPPTs(ctx)
 		if err != nil {
 			log.Printf("mppt api: %v", err)
 			// При ошибке запроса НЕ чистим «исчезнувшие» контроллеры: одиночный
@@ -1253,11 +1259,16 @@ func main() {
 	// Persistent-хранилище PostgreSQL: только усреднённые 5-минутные точки,
 	// пишутся фоновым процессом аккумуляции (см. accumulator.go) после накопления
 	// данных за 5 минут. Реставрация Redis при пустом хранилище.
-	stopBG := make(chan struct{})
+	// stopCtx — единый сигнал остановки ВСЕХ фоновых горутин: отмена ctx как
+	// закрывает их циклы (select на ctx.Done()), так и прерывает ЗАВЕРШЕННЫЕ
+	// (in-flight) сетевые опросы (dial/read/HTTP), чтобы graceful-shutdown не
+	// ждал медленный логгер (до ~15 c на первый байт).
+	stopCtx, stopCancel := context.WithCancel(context.Background())
+	defer stopCancel()
 	// bgWg — все фоновые горутины, пишущие в Redis/PG: при завершении main
-	// закрывает stopBG, ЖДЁТ их (bgWg.Wait()) и только потом defer'ы закрывают
-	// пулы rdb/pg — записи при остановке (BMS-drain, averageBucket, снимок
-	// текущего опроса) не гоняются с закрытыми пулами.
+	// отменяет stopCtx, ЖДЁТ их (bgWg.Wait()) и только потом defer'ы закрывают
+	// пулы rdb/pg — записи при остановке (BMS-drain, averageBucket) не гоняются
+	// с закрытыми пулами.
 	var bgWg sync.WaitGroup
 	var pg *pgStore
 	if *pgDSN != "" {
@@ -1279,7 +1290,7 @@ func main() {
 				bgWg.Add(1)
 				go func() {
 					defer bgWg.Done()
-					restoreRedisFromPG(store, pg, *restoreWindow, stopBG)
+					restoreRedisFromPG(store, pg, *restoreWindow, stopCtx)
 				}()
 			}
 		}
@@ -1292,12 +1303,12 @@ func main() {
 	bgWg.Add(1)
 	go func() {
 		defer bgWg.Done()
-		runAccumulator(store, pg, stopBG)
+		runAccumulator(store, pg, stopCtx)
 	}()
 	bgWg.Add(1)
 	go func() {
 		defer bgWg.Done()
-		runRedisCleanup(store, stopBG)
+		runRedisCleanup(store, stopCtx)
 	}()
 	// МАП («КЭС», Modbus TCP) и MPPT-контроллеры (веб-API ПАК «Малина»)
 	// опрашиваются отдельно, 1 раз в секунду, и пишутся в Redis со специальной
@@ -1305,7 +1316,7 @@ func main() {
 	bgWg.Add(1)
 	go func() {
 		defer bgWg.Done()
-		runMapPoll(store, stopBG)
+		runMapPoll(store, stopCtx)
 	}()
 	// ANT BMS (read_bms.php) — 1 раз в секунду: актуальное состояние в отдельном
 	// Redis-ключе (HASH sunreceiver:bms) + накопление 5-минутных усреднённых
@@ -1315,7 +1326,7 @@ func main() {
 		bgWg.Add(1)
 		go func() {
 			defer bgWg.Done()
-			runBmsPoll(store, pg, stopBG)
+			runBmsPoll(store, pg, stopCtx)
 		}()
 	}
 	// Электросчётчик DDS238 — 1 раз в секунду (мгновенные значения в Redis +
@@ -1324,14 +1335,14 @@ func main() {
 		bgWg.Add(1)
 		go func() {
 			defer bgWg.Done()
-			runMeterPoll(store, pg, meterCfg, stopBG)
+			runMeterPoll(store, pg, meterCfg, stopCtx)
 		}()
 		// Добор пропущенных тарифных границ («ближайшее из зафиксированного»),
 		// см. meter_backfill.go.
 		bgWg.Add(1)
 		go func() {
 			defer bgWg.Done()
-			runMeterBackfill(store, pg, meterCfg, stopBG)
+			runMeterBackfill(store, pg, meterCfg, stopCtx)
 		}()
 	}
 
@@ -1339,7 +1350,7 @@ func main() {
 		bgWg.Add(1)
 		go func() {
 			defer bgWg.Done()
-			serveDashboard(*dashboardAddr, store, pg, stopBG)
+			serveDashboard(*dashboardAddr, store, pg, stopCtx)
 		}()
 	}
 
@@ -1350,7 +1361,7 @@ func main() {
 	// периодом pollPeriod (10 с). Завис/таймаутит один текущий опрос одного
 	// инвертора — остальные продолжают опрашиваться и сохранять снимки строго
 	// раз в 10 секунд, влияния друг на друга нет вовсе. Снятие делается по
-	// закрытию stopBG.
+	// отмене stopCtx.
 	for _, t := range targets {
 		if t.Kind == kindMAP || t.Kind == kindMPPT {
 			continue // МАП и MPPT API опрашиваются отдельным 1-сек циклом (runMapPoll)
@@ -1358,16 +1369,19 @@ func main() {
 		bgWg.Add(1)
 		go func(t invTarget) {
 			defer bgWg.Done()
-			runInverterPoll(store, t, stopBG)
+			runInverterPoll(store, t, stopCtx)
 		}(t)
 	}
 
 	<-sig
 	log.Println("shutting down")
-	// Закрытие пулов rdb/pg — в defer'ах выше (LIFO: после этого кода).
-	close(stopBG)
-	// Ждём завершения фоновых горутин (их записи в Redis/PG), ПОСЛЕ чего
-	// defer'ы закрывают пулы — гонки «запись в закрытый пул» нет.
+	// Отмена stopCtx: циклы фоновых горутин завершаются, a in-flight сетевые
+	// опросы (dial/read/HTTP) прерываются немедленно — graceful-shutdown не
+	// ждёт медленный логгер.
+	stopCancel()
+	// Ждём завершения фоновых горутин (их завершающие записи в Redis/PG:
+	// BMS-drain, averageBucket), ПОСЛЕ чего defer'ы закрывают пулы — гонки
+	// «запись в закрытый пул» нет.
 	bgWg.Wait()
 }
 
@@ -1381,15 +1395,24 @@ func main() {
 // Так как у каждого инвертора свой таймер и своя горутина, зависший/таймаутящий
 // инвертор никак не влияет на периодичность и запись других. Клиент solarman на
 // этот IP используется только из этой горутины (инвариант «один IP — один
-// опрос», см. clientsByKey). Останавливается по закрытию канала stop.
-func runInverterPoll(store *redisStore, t invTarget, stop <-chan struct{}) {
+// опрос», см. clientsByKey). Останавливается по отмене ctx (stop): незавершённый
+// опрос (pollDevice) прерывается сразу, а не до конца таймаута медленного логгера.
+func runInverterPoll(store *redisStore, t invTarget, stop context.Context) {
 	ticker := time.NewTicker(pollPeriod)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
+			if stop.Err() != nil {
+				return
+			}
 			t0 := time.Now()
-			res := pollDevice(t)
+			res := pollDevice(stop, t)
+			// Стоп пришёл посреди опроса (ctx отменён, соединения логгеров
+			// закрыты): не сохраняем частичный/устаревший снимок при остановке.
+			if stop.Err() != nil {
+				return
+			}
 			now := time.Now() // фактическое время получения данных этого инвертора
 			log.Printf("%s: %s (%s)", t.IP, describeResult(res), now.Sub(t0).Round(time.Millisecond))
 		if !res.OK || !res.HasData {
@@ -1424,7 +1447,7 @@ func runInverterPoll(store *redisStore, t invTarget, stop <-chan struct{}) {
 				continue
 			}
 			log.Printf("saved %s: %s", t.Name, t.IP)
-		case <-stop:
+		case <-stop.Done():
 			return
 		}
 	}
@@ -1448,7 +1471,7 @@ func describeResult(res DeviceResult) string {
 //     ZSET ряда;
 //   - 5-минутные усреднённые точки ANT BMS (pg.BMSAveragesAll) — SaveBMSSeries
 //     в ряд sunreceiver:bms:series:<YYYY-MM>.
-func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, stop <-chan struct{}) {
+func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, stop context.Context) {
 	end := time.Now()
 	start := recentCutoff(end)
 	if w := end.Add(-window); w.After(start) {
@@ -1464,7 +1487,7 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, st
 	var restored int
 	for _, snap := range snaps {
 		select {
-		case <-stop:
+		case <-stop.Done():
 			log.Printf("pg restore: остановлено по сигналу (восстановлено точек: %d)", restored)
 			return
 		default:
@@ -1491,7 +1514,7 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, st
 	var bmsRestored int
 	for _, p := range bmsPts {
 		select {
-		case <-stop:
+		case <-stop.Done():
 			log.Printf("pg restore: остановлено по сигналу (BMS восстановлено точек: %d)", bmsRestored)
 			return
 		default:

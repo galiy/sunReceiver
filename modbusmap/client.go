@@ -12,6 +12,7 @@
 package modbusmap
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"net"
@@ -55,14 +56,18 @@ func (c *Client) Dial() error {
 // ReadRegisters читает registerCount регистров (слов) с адреса start, что
 // соответствует count*2 байт-ячейкам начиная с start. Возвращает байт-ячейки:
 // cell[start+i] = raw[2*i], cell[start+1+i] = raw[2*i+1].
-func (c *Client) ReadRegisters(start uint16, count uint16) ([]byte, error) {
+//
+// Уважает ctx только на этапе dial (DialContext): при отмене (стоп сервиса)
+// медленное подключение прерывается. Чтение ответа ограничено ReadTimeout (3 c)
+// независимым read-deadline, поэтому блокирующий conn.Read завершается сам.
+func (c *Client) ReadRegisters(ctx context.Context, start uint16, count uint16) ([]byte, error) {
 	if count > 120 {
 		return nil, fmt.Errorf("count %d слишком велик для МАП (макс 120)", count)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.conn == nil {
-		if err := c.dialLocked(); err != nil {
+		if err := c.dialLocked(ctx); err != nil {
 			return nil, err
 		}
 	}
@@ -83,7 +88,7 @@ func (c *Client) ReadRegisters(start uint16, count uint16) ([]byte, error) {
 	if _, err := c.conn.Write(req); err != nil {
 		// соединение могло умереть — переподнимаем один раз и повторяем
 		c.closeConn()
-		if derr := c.dialLocked(); derr != nil {
+		if derr := c.dialLocked(ctx); derr != nil {
 			return nil, fmt.Errorf("reconnect: %w", derr)
 		}
 		if err := c.conn.SetDeadline(time.Now().Add(ReadTimeout)); err != nil {
@@ -131,8 +136,9 @@ func (c *Client) ReadRegisters(start uint16, count uint16) ([]byte, error) {
 
 func (c *Client) nextTxn() uint16 { c.txn++; return c.txn }
 
-func (c *Client) dialLocked() error {
-	conn, err := net.DialTimeout("tcp", c.Address, ConnectTimeout)
+func (c *Client) dialLocked(ctx context.Context) error {
+	d := &net.Dialer{Timeout: ConnectTimeout}
+	conn, err := d.DialContext(ctx, "tcp", c.Address)
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", c.Address, err)
 	}

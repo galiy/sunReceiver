@@ -76,14 +76,14 @@ func loadBmsSite(sec *mpptSection) *bmsApiClient {
 }
 
 // fetch читает коллекцию BMS с read_bms.php.
-func (s *bmsApiClient) fetch() (*bmsCollection, error) {
+func (s *bmsApiClient) fetch(ctx context.Context) (*bmsCollection, error) {
 	req, err := http.NewRequest(http.MethodGet, s.url, nil)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	rctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
-	req = req.WithContext(ctx)
+	req = req.WithContext(rctx)
 	req.Header.Set("Authorization", s.authHdr)
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -114,7 +114,7 @@ func (s *bmsApiClient) fetch() (*bmsCollection, error) {
 // пишется в Redis (месячный ZSET sunreceiver:bms:series, окно 2 календарных
 // суток) и в PostgreSQL (sunreceiver.bms_averages, вечно). При остановке
 // пулера накопленный (возможно неполный) промежуток дописывается.
-func runBmsPoll(store *redisStore, pg *pgStore, stop <-chan struct{}) {
+func runBmsPoll(store *redisStore, pg *pgStore, ctx context.Context) {
 	const pollEvery = time.Second
 	ticker := time.NewTicker(pollEvery)
 	defer ticker.Stop()
@@ -123,7 +123,7 @@ func runBmsPoll(store *redisStore, pg *pgStore, stop <-chan struct{}) {
 	for {
 		select {
 		case <-ticker.C:
-			col := pollAndSaveBMS(store)
+			col := pollAndSaveBMS(ctx, store)
 			if col != nil {
 				now := time.Now()
 				for i := range col.Devices {
@@ -131,7 +131,7 @@ func runBmsPoll(store *redisStore, pg *pgStore, stop <-chan struct{}) {
 				}
 			}
 			saveBMSClosedBuckets(store, pg, acc.closed(time.Now()), false)
-		case <-stop:
+		case <-ctx.Done():
 			// Drain неполного 5-минутного промежутка в Redis+PG. main() ждёт
 			// завершение этой горутины (bgWg) ДО закрытия пулов Redis/PG,
 			// поэтому записи не гоняются с закрытыми пулами.
@@ -170,8 +170,8 @@ func saveBMSClosedBuckets(store *redisStore, pg *pgStore, pts []bmsAvgPoint, par
 // Redis: устройство появляется/исчезает с дашборда по факту наличия в ответе
 // (как MPPT). При ошибке запроса предыдущее состояние в Redis сохраняется
 // (возвращается nil).
-func pollAndSaveBMS(store *redisStore) *bmsCollection {
-	col, err := bmsSite.fetch()
+func pollAndSaveBMS(ctx context.Context, store *redisStore) *bmsCollection {
+	col, err := bmsSite.fetch(ctx)
 	if err != nil {
 		log.Printf("bms api: %v", err)
 		return nil

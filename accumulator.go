@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"math"
@@ -191,7 +192,7 @@ func backfillAccumulator(store *redisStore, pg *pgStore, now time.Time) {
 // границы следующих итераций. Так как avgDelay (2 мин) < avgStep (5 мин), между
 // усреднением промежутка b (в b+2 мин) и следующей границей (b+5 мин) есть запас
 // ~3 минуты — цикл не дрейфует. Останавливается по закрытию канала stop.
-func runAccumulator(store *redisStore, pg *pgStore, stop <-chan struct{}) {
+func runAccumulator(store *redisStore, pg *pgStore, ctx context.Context) {
 	if pg == nil {
 		return
 	}
@@ -211,7 +212,7 @@ func runAccumulator(store *redisStore, pg *pgStore, stop <-chan struct{}) {
 		select {
 		case <-boundary.C:
 			b = floorToStep(time.Now())
-		case <-stop:
+		case <-ctx.Done():
 			stopTimer(boundary)
 			waitBuckets()
 			return
@@ -228,7 +229,7 @@ func runAccumulator(store *redisStore, pg *pgStore, stop <-chan struct{}) {
 				defer bucketWg.Done()
 				averageBucket(store, pg, start, end)
 			}()
-		case <-stop:
+		case <-ctx.Done():
 			stopTimer(delay)
 			waitBuckets()
 			return
@@ -249,7 +250,7 @@ func stopTimer(t *time.Timer) {
 
 // runRedisCleanup — фоновый процесс очистки старых данных Redis: удаляет точки
 // временного ряда старше последних 2 календарных суток (см. redisStore.PurgeOld).
-func runRedisCleanup(store *redisStore, stop <-chan struct{}) {
+func runRedisCleanup(store *redisStore, ctx context.Context) {
 	clean := func() { store.PurgeOld(time.Now()) }
 	clean()
 	ticker := time.NewTicker(15 * time.Minute)
@@ -258,7 +259,7 @@ func runRedisCleanup(store *redisStore, stop <-chan struct{}) {
 		select {
 		case <-ticker.C:
 			clean()
-		case <-stop:
+		case <-ctx.Done():
 			return
 		}
 	}

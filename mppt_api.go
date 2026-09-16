@@ -162,16 +162,17 @@ func (s *mpptSite) apiURL(device string) string {
 // fetchDevice запрашивает сырой JSON-ответ read_json.php?device=<device> и
 // возвращает тело ответа. Per-request контекст с таймаутом requestTimeout: если
 // ПАК «Малина» виснет, 1-секундный цикл runMapPoll не блокируется на общий
-// Timeout клиента (5 с).
-func (s *mpptSite) fetchDevice(device string) ([]byte, error) {
+// Timeout клиента (5 с). Рождённый от переданного ctx (стоп сервиса): при
+// остановке запрос прерывается немедленно.
+func (s *mpptSite) fetchDevice(ctx context.Context, device string) ([]byte, error) {
 	u := s.apiURL(device)
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	rctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
-	req = req.WithContext(ctx)
+	req = req.WithContext(rctx)
 	req.Header.Set("Authorization", s.authHdr)
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -186,8 +187,8 @@ func (s *mpptSite) fetchDevice(device string) ([]byte, error) {
 
 // FetchMPPTs запрашивает текущие параметры всех MPPT-контроллеров через
 // read_json.php?device=mppt и возвращает слайс контроллеров (индекс = слот).
-func (s *mpptSite) FetchMPPTs() ([]mpptRaw, error) {
-	body, err := s.fetchDevice("mppt")
+func (s *mpptSite) FetchMPPTs(ctx context.Context) ([]mpptRaw, error) {
+	body, err := s.fetchDevice(ctx, "mppt")
 	if err != nil {
 		return nil, err
 	}
@@ -303,8 +304,8 @@ func (r *mapRaw) UnmarshalJSON(data []byte) error {
 // read_json.php?device=map. Ответ — один JSON-объект; после него в том же теле
 // может идти служебный массив MPPT, который игнорируется (читаем только первое
 // JSON-значение через json.Decoder).
-func (s *mpptSite) FetchMAP() (*mapRaw, error) {
-	body, err := s.fetchDevice("map")
+func (s *mpptSite) FetchMAP(ctx context.Context) (*mapRaw, error) {
+	body, err := s.fetchDevice(ctx, "map")
 	if err != nil {
 		return nil, err
 	}
@@ -384,9 +385,9 @@ func mapMAPAPI(r mapRaw) (valuesContract, time.Time, bool) {
 // Время снимка — текущее время опроса (res.Time остаётся нулевым, saveWindowSnapshot
 // возьмёт now), а НЕ поле timestamp ответа API: у МАП (device=map) оно старческое/
 // некорректное, и использование его увело бы точки временного ряда на годы в прошлое.
-func pollMAPAPI() DeviceResult {
+func pollMAPAPI(ctx context.Context) DeviceResult {
 	res := DeviceResult{OK: true}
-	r, err := mppt.FetchMAP()
+	r, err := mppt.FetchMAP(ctx)
 	if err != nil {
 		res.OK = false
 		log.Printf("map api: %v", err)

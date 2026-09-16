@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"time"
@@ -114,8 +115,8 @@ func mapMeterValues(r meterReadings) valuesContract {
 
 // pollMeter читает регистры счётчика и возвращает мгновенные значения контракта
 // и расшифрованные показания (для тарифного захвата). При ошибке — ok=false.
-func pollMeter(c *meterClient, cfg *meterConfig) (valuesContract, meterReadings, bool) {
-	regs, err := c.ReadHoldingRegisters(cfg.FirstReg, cfg.RegisterCnt)
+func pollMeter(ctx context.Context, c *meterClient, cfg *meterConfig) (valuesContract, meterReadings, bool) {
+	regs, err := c.ReadHoldingRegisters(ctx, cfg.FirstReg, cfg.RegisterCnt)
 	if err != nil {
 		return nil, meterReadings{}, false
 	}
@@ -132,7 +133,7 @@ func pollMeter(c *meterClient, cfg *meterConfig) (valuesContract, meterReadings,
 //     показания Import/Export для посуточной статистики в PG (meter_tariff.go).
 //
 // Останавливается по закрытию канала stop.
-func runMeterPoll(store *redisStore, pg *pgStore, cfg *meterConfig, stop <-chan struct{}) {
+func runMeterPoll(store *redisStore, pg *pgStore, cfg *meterConfig, ctx context.Context) {
 	if cfg == nil {
 		return
 	}
@@ -147,7 +148,7 @@ func runMeterPoll(store *redisStore, pg *pgStore, cfg *meterConfig, stop <-chan 
 		select {
 		case <-ticker.C:
 			now := time.Now()
-			vals, readings, ok := pollMeter(client, cfg)
+			vals, readings, ok := pollMeter(ctx, client, cfg)
 			if !ok {
 				log.Printf("%s: meter опрос не удался", cfg.IP)
 				continue
@@ -164,7 +165,7 @@ func runMeterPoll(store *redisStore, pg *pgStore, cfg *meterConfig, stop <-chan 
 			if capture != nil {
 				capture.capture(readings, now)
 			}
-		case <-stop:
+		case <-ctx.Done():
 			return
 		}
 	}
