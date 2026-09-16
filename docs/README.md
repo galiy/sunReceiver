@@ -98,7 +98,10 @@ go run .                     # запуск из исходников (конф�
 `sunreceiver.service`; PostgreSQL 16 и Redis тоже там. Адрес и деплой — приватные,
 см. `AGENTS.md` (или `.kilo/AGENTS-private.md`). Деплой: собрать Linux-бинарник
 (`CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o sunReceiver-linux .`), scp на
-сервер, `systemctl restart sunreceiver.service`.
+сервер, `systemctl restart sunreceiver.service`. Сервис работает от
+непривилегированного пользователя `sunreceiver` (nologin) с hardening-юнитом
+(`ProtectSystem=strict`, `NoNewPrivileges`, `PrivateTmp`, пустой
+`CapabilityBoundingSet` и др.): демон не пишет в ФС, поэтому root не требуется.
 
 ## Документация
 
