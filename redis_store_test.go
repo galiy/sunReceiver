@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -187,5 +188,36 @@ func TestRedisStoreBMSSeriesReplace(t *testing.T) {
 	}
 	if len(got2) != 1 || got2[0].CurrentA != 9.0 {
 		t.Fatalf("B2 задета заменой: %+v, want 1 точка current=9.0", got2)
+	}
+}
+
+// TestSaveSnapshotWindowReplace: две записи одного IP в одном 10-секундном окне —
+// в ZSET ряда остаётся ровно ОДИН member со score окна (вторая запись заменяет
+// первую). Покрывает дубль точки из-за mapWin, обновляемого до Exec (п. 2.5).
+func TestSaveSnapshotWindowReplace(t *testing.T) {
+	s := testStore(t)
+	cleanTestKeys(t, s)
+	t.Cleanup(func() { cleanTestKeys(t, s) })
+
+	now := time.Now()
+	win := now.Truncate(10 * time.Second)
+	ip := "192.168.13.74"
+	sp1 := snap("MAP", ip, win.Add(2*time.Second), valuesContract{"grid_voltage": 230.0})
+	sp2 := snap("MAP", ip, win.Add(7*time.Second), valuesContract{"grid_voltage": 231.0})
+	if err := s.SaveSnapshotWindow(sp1, win.Add(2*time.Second)); err != nil {
+		t.Fatalf("SaveSnapshotWindow #1: %v", err)
+	}
+	if err := s.SaveSnapshotWindow(sp2, win.Add(7*time.Second)); err != nil {
+		t.Fatalf("SaveSnapshotWindow #2: %v", err)
+	}
+
+	key := redisSeriesKey(win)
+	score := strconv.FormatInt(win.Unix(), 10)
+	members, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: score, Max: score}).Result()
+	if err != nil {
+		t.Fatalf("ZRangeByScore: %v", err)
+	}
+	if len(members) != 1 {
+		t.Fatalf("members со score окна=%d, want 1 (замена в 10-с окне): %v", len(members), members)
 	}
 }

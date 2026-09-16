@@ -19,6 +19,11 @@ type Client struct {
 	DeviceSN   uint32
 	Timeout    time.Duration
 	IdleWindow time.Duration
+	// MaxTotal — общий лимит приёма ОДНОГО ответа (от первого байта до конца).
+	// Защита от «зомби»-логгера: капающий байтами (с интервалом < IdleWindow)
+	// без общего лимита держал бы Exchange до 4096-байтового потолка (часы).
+	// 0 — без общего лимита (legacy-поведение, только IdleWindow).
+	MaxTotal time.Duration
 
 	// серийный номер кадра — инкрементируется на каждый запрос.
 	mu     sync.Mutex
@@ -37,18 +42,32 @@ func (c *Client) dial(ctx context.Context) (net.Conn, error) {
 	return conn, nil
 }
 
-// readAll собирает все кадры ответа с соединения до «тишины» (IdleWindow) либо общего
-// Timeout (для первого байта). Возвращает полученные байты.
+// readAll собирает все кадры ответа с соединения до «тишины» (IdleWindow) либо
+// общего MaxTotal-лимиита приёма. Возвращает полученные байты.
 func (c *Client) readAll(conn net.Conn) []byte {
 	var raw []byte
 	buf := make([]byte, 1024)
 	firstByte := true
+	// Общий дедлайн приёма ответа: «капающий» логгер (байт с интервалом <
+	// IdleWindow) не должен держать Exchange часами — после MaxTotal приём
+	// прекращается, даже если байты ещё приходят.
+	var deadline time.Time
+	if c.MaxTotal > 0 {
+		deadline = time.Now().Add(c.MaxTotal)
+	}
 	for {
 		// Первый байт может прийти через 8-15 с (pacing логгера) — ждём Timeout.
 		// Дальше — тишина IdleWindow означает конец ответа.
 		idle := c.IdleWindow
 		if firstByte {
 			idle = c.Timeout
+		}
+		if !deadline.IsZero() {
+			if remaining := deadline.Sub(time.Now()); remaining <= 0 {
+				break // общий лимит приёма исчерпан
+			} else if idle > remaining {
+				idle = remaining
+			}
 		}
 		if err := conn.SetReadDeadline(time.Now().Add(idle)); err != nil {
 			break

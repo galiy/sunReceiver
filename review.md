@@ -809,7 +809,7 @@ protocol/length, исключительный ответ (`func|0x80`) и byteco
 
 ## Батч 2 — надёжность старта и поллинга (7 пунктов; Топ-5,10,11)
 
-### 2.1 Solarman: общий read-deadline (Топ-5; поток 1.1)
+### 2.1 Solarman: общий read-deadline (Топ-5; поток 1.1) ✅
 
 - **Файлы**: `solarman/client.go` — `Client` (17-26), `readAll` (42-69); `main.go` —
   `clientFor` (719-734).
@@ -846,7 +846,7 @@ protocol/length, исключительный ответ (`func|0x80`) и byteco
   каждые 200 мс; клиент `MaxTotal=500ms`, `IdleWindow=5s` → `readAll` завершается за
   <~1 с (замерить `time.Since` в тесте с запасом, без флейков).
 
-### 2.2 Валидация logger_sn (Топ-11; поток 1.3)
+### 2.2 Валидация logger_sn (Топ-11; поток 1.3) ✅
 
 - **Файл**: `main.go`, `loadConfig` (163-192, цикл invertors).
 - **Проблема**: `logger_sn = 0`/отсутствует → Deye/Sofar отвечают кодом 0x06
@@ -861,7 +861,7 @@ protocol/length, исключительный ответ (`func|0x80`) и byteco
   `main()` при ошибке `loadConfig` уже делает `log.Fatal` — проверить, что сообщение
   доходит (запустить с тестовым конфигом, где `logger_sn` убран).
 
-### 2.3 meter-раздел: дефолты + валидация FirstReg (Топ-10; поток 4.3, 4.8)
+### 2.3 meter-раздел: дефолты + валидация FirstReg (Топ-10; поток 4.3, 4.8) ✅
 
 - **Файлы**: `meter_config.go` — `meterFromSection` (34-57), `loadMeterConfig` (63-92);
   связанное: `meter_poller.go` `decodeMeterRegs` (65-98 — декодирование по
@@ -885,7 +885,7 @@ protocol/length, исключительный ответ (`func|0x80`) и byteco
   `dds238.json` в CWD — опроса НЕ должно быть (лог); (2) `first_reg: 5` — тоже не
   должно.
 
-### 2.4 Аккумулятор: b из целевой границы, обработка пропущенных (поток 2.3)
+### 2.4 Аккумулятор: b из целевой границы, обработка пропущенных (поток 2.3) ✅
 
 - **Файл**: `accumulator.go`, `runAccumulator` (207-236).
 - **Проблема**: коммент говорит «граница b фиксируется в момент срабатывания
@@ -933,7 +933,7 @@ protocol/length, исключительный ответ (`func|0x80`) и byteco
   ```
   Коммент (186-194, 209-222) привести в соответствие.
 
-### 2.5 SaveSnapshotWindow: mapWin только после Exec (поток 2.4)
+### 2.5 SaveSnapshotWindow: mapWin только после Exec (поток 2.4) ✅
 
 - **Файл**: `redis_store.go`, `SaveSnapshotWindow` (170-192).
 - **Проблема**: `s.mapWin[snap.IP]` (177) обновляется ДО `pipe.Exec` (188). При сбое
@@ -947,7 +947,7 @@ protocol/length, исключительный ответ (`func|0x80`) и byteco
   10-с окне → в ZSET ровно один member со score окна (`ZRangeByScore` + проверка
   `len == 1`).
 
-### 2.6 kindMAP: логировать ошибки Modbus-блоков (поток 4.8)
+### 2.6 kindMAP: логировать ошибки Modbus-блоков (поток 4.8) ✅
 
 - **Файл**: `main.go`, case `kindMAP` (1021-1035).
 - **Фикс**: три `if b, err := mc.ReadRegisters(...); err == nil { ... }` → добавить
@@ -955,7 +955,7 @@ protocol/length, исключительный ответ (`func|0x80`) и byteco
   ретрай-логики (ошибка одного блока не роняет опрос — блоки независимы, mergeMAPSnap
   донасаживает из предыдущего снимка).
 
-### 2.7 Meter-поллер: ретрит логирования сбоев (поток 4.5)
+### 2.7 Meter-поллер: ретрит логирования сбоев (поток 4.5) ✅
 
 - **Файл**: `meter_poller.go`, `runMeterPoll` (147-155).
 - **Проблема**: при недоступном DDS238 каждый тик (1 с) — dial (таймаут 3 с) +
@@ -1039,7 +1039,7 @@ protocol/length, исключительный ответ (`func|0x80`) и byteco
   (мёртвый no-op: созданный индекс называется `averages_ts_ip_idx` и живёт в `public`).
 - **4.2** `main.go` — вынести константы: `defaultIdleWindow = 4 * time.Second`
   (сейчас `clientFor` :729) и `sofarIdleWindow = 8 * time.Second` (сейчас захардкожено
-  в `pollDevice` :898).
+  в `pollDevice` :898). ✅
 - **4.3** `main.go` `pollDevice` switch (903-1045) — добавить
   `default: log.Printf("%s: неизвестный kind %s — опрос пропущен", t.IP, t.Kind)`.
 - **4.4** `main.go`, Sofar SN-ветка (989-1007) — `asciiFromRegisters(p.Values[1:])`:

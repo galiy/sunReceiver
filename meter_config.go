@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 )
@@ -30,40 +31,51 @@ func meterConfigPath() string {
 }
 
 // meterFromSection строит *meterConfig из раздела meter основного sunReceiver.json.
-// Значения по умолчанию и валидация — как у loadMeterConfig (файл dds238.json).
-func meterFromSection(m *meterSection) *meterConfig {
+// Валидация:
+//   - m == nil (раздела нет) — nil, nil (вызывающий сам решает про fallback);
+//   - неполный раздел (ip/port/unit/name) — nil, nil (опрос отключён);
+//   - first_reg != 0 — nil, error: декодер заточен под абсолютные регистры 0..26
+//     (decodeMeterRegs), при first_reg != 0 маппинг молча неверен;
+//   - register_count == 0 — дефолт 27 (полный блок, как в dds238read.py).
+func meterFromSection(m *meterSection) (*meterConfig, error) {
 	if m == nil {
-		return nil
+		return nil, nil
 	}
 	if m.IP == "" || m.Port == 0 || m.Unit == 0 || m.Name == "" {
-		return nil
+		return nil, nil
 	}
-	mc := &meterConfig{
-		Name:        m.Name,
-		IP:          m.IP,
-		Port:        m.Port,
-		Unit:        m.Unit,
-		FirstReg:    m.FirstReg,
-		RegisterCnt: m.RegisterCnt,
+	if m.FirstReg != 0 {
+		return nil, fmt.Errorf("first_reg=%d: декодер заточен под регистры 0..26 (абсолютные адреса) — опрос счётчика отключён", m.FirstReg)
 	}
-	if mc.FirstReg == 0 && mc.RegisterCnt == 0 {
-		mc.FirstReg = 0
-		mc.RegisterCnt = 27
+	regCnt := m.RegisterCnt
+	if regCnt == 0 {
+		regCnt = 27
 	}
-	if mc.RegisterCnt == 0 {
-		return nil
-	}
-	return mc
+	return &meterConfig{Name: m.Name, IP: m.IP, Port: m.Port, Unit: m.Unit, FirstReg: 0, RegisterCnt: regCnt}, nil
 }
 
 // loadMeterConfig читает и проверяет конфигурацию счётчика. Источники по приоритету:
 //   1) раздел "meter" в sunReceiver.json (передаётся из main как meterSection);
 //   2) отдельный файл dds238.json рядом с бинарником (обратная совместимость).
-// Если ни там, ни там счётчик не задан полностью — возвращает nil (опрос отключён).
+//
+// ВАЖНО: если раздел "meter" в конфиге ЕСТЬ (section != nil), но некорректен
+// (неполный/first_reg!=0) — опрос отключается с логом, и legacy-файл НЕ
+// используется (иначе молча опрашивался бы ДРУГОЙ счётчик с чужим IP). Fallback
+// на dds238.json — только когда раздела "meter" в конфиге НЕТ вовсе.
 func loadMeterConfig(section *meterSection) *meterConfig {
-	if mc := meterFromSection(section); mc != nil {
+	if section != nil {
+		mc, err := meterFromSection(section)
+		if err != nil {
+			log.Printf("meter: раздел meter некорректен (%v) — опрос счётчика отключён, legacy-файл НЕ используется", err)
+			return nil
+		}
+		if mc == nil {
+			log.Printf("meter: раздел meter в sunReceiver.json неполный — опрос счётчика отключён, legacy-файл НЕ используется")
+			return nil
+		}
 		return mc
 	}
+	// Раздела "meter" в конфиге нет — fallback на legacy dds238.json.
 	path := meterConfigPath()
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		// `go run .`: бинарник во временном каталоге go-сборки — ищем в CWD.
@@ -80,13 +92,13 @@ func loadMeterConfig(section *meterSection) *meterConfig {
 	if mc.IP == "" || mc.Port == 0 || mc.Unit == 0 || mc.Name == "" {
 		return nil
 	}
-	if mc.FirstReg == 0 && mc.RegisterCnt == 0 {
-		// Значения по умолчанию: полный блок 27 регистров с адреса 0 (как в dds238read.py).
-		mc.FirstReg = 0
-		mc.RegisterCnt = 27
+	if mc.FirstReg != 0 {
+		log.Printf("meter: legacy dds238.json с first_reg=%d: декодер заточен под регистры 0..26 — опрос счётчика отключён", mc.FirstReg)
+		return nil
 	}
 	if mc.RegisterCnt == 0 {
-		return nil
+		// Значения по умолчанию: полный блок 27 регистров с адреса 0 (как в dds238read.py).
+		mc.RegisterCnt = 27
 	}
 	return &mc
 }

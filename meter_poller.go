@@ -144,14 +144,28 @@ func runMeterPoll(store *redisStore, pg *pgStore, cfg *meterConfig, ctx context.
 	}
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	// Ретрит логирования сбоев: первый сбой — сразу, далее не чаще раза в 10 мин
+	// (при длительном отключении счётчика ~20 строк/мин было бы слишком). При
+	// восстановлении после серии сбоев — одна строка.
+	const failLogInterval = 10 * time.Minute
+	var lastFailLog time.Time
+	var wasFailing bool
 	for {
 		select {
 		case <-ticker.C:
 			now := time.Now()
 			vals, readings, ok := pollMeter(ctx, client, cfg)
 			if !ok {
-				log.Printf("%s: meter опрос не удался", cfg.IP)
+				if !wasFailing || now.Sub(lastFailLog) >= failLogInterval {
+					log.Printf("%s: meter опрос не удался", cfg.IP)
+					lastFailLog = now
+				}
+				wasFailing = true
 				continue
+			}
+			if wasFailing {
+				log.Printf("%s: meter опрос восстановлен", cfg.IP)
+				wasFailing = false
 			}
 			snap := deviceSnapshot{
 				Name:      cfg.Name,
