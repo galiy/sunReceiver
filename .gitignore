@@ -7,6 +7,12 @@ data/
 # контекст по настройке/оптимизации ПАК «Малина» и сбора логов на 253 (приватный) — не коммитить
 .kilo/malina-opt-context.md
 
+# приватная инфраструктура sunReceiver (даталоггеры IP/SN, прод, SSH, деплой) — не коммитить
+.kilo/AGENTS-private.md
+
+# настройка HTTPS (Let's Encrypt + Apache reverse proxy на 253) (приватный) — не коммитить
+docs/https-setup.md
+
 # конфигурация электросчётчика DDS238 (подключение, учёт) — не коммитить
 dds238.json
 
