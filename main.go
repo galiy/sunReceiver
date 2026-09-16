@@ -138,11 +138,12 @@ type mpptSection struct {
 }
 
 type configFile struct {
-	Invertors []configInverter `json:"invertors"`
-	Map       *mapSection      `json:"map"`
-	DB        *dbConfig        `json:"db"`
-	Meter     *meterSection    `json:"meter"`
-	MPPT      *mpptSection     `json:"mppt"`
+	Invertors     []configInverter `json:"invertors"`
+	Map           *mapSection      `json:"map"`
+	DB            *dbConfig        `json:"db"`
+	Meter         *meterSection    `json:"meter"`
+	MPPT          *mpptSection     `json:"mppt"`
+	DashboardPort int              `json:"dashboard_port"` // порт веб-дашборда; 0 — дефолт 8080
 }
 
 // configPath — sunReceiver.json в каталоге исполняемого файла.
@@ -155,15 +156,15 @@ func configPath() string {
 }
 
 // loadConfig читает и проверяет sunReceiver.json, возвращает список целей
-// (инверторы + МАП, без отключённых) и настройки БД/счётчика/MPPT.
-func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mpptSection, error) {
+// (инверторы + МАП, без отключённых), настройки БД/счётчика/MPPT и порт дашборда.
+func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mpptSection, int, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("read config %s: %w", path, err)
+		return nil, nil, nil, nil, 0, fmt.Errorf("read config %s: %w", path, err)
 	}
 	var cf configFile
 	if err := json.Unmarshal(b, &cf); err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("parse config %s: %w", path, err)
+		return nil, nil, nil, nil, 0, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	targets := make([]invTarget, 0, len(cf.Invertors)+1)
 	nextOrder := 0 // порядок устройства на дашборде = позиция в конфиге (в порядке invertors, затем map)
@@ -171,7 +172,7 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mpptSectio
 	// Инверторы (Deye/Sofar) из invertors; отключённые (disabled=true) пропускаются.
 	for _, t := range cf.Invertors {
 		if t.Disabled == nil {
-			return nil, nil, nil, nil, fmt.Errorf("config %s: для %s (%s) не задано обязательное поле disabled (false/true)", path, t.Name, t.IP)
+			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: для %s (%s) не задано обязательное поле disabled (false/true)", path, t.Name, t.IP)
 		}
 		if *t.Disabled {
 			log.Printf("config: %s (%s) отключён (disabled=true) — не опрашивается", t.Name, t.IP)
@@ -188,19 +189,19 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mpptSectio
 			log.Printf("config: тип %q для %s не ожидается в invertors (используйте раздел map/mppt) — пропущен", t.Type, t.IP)
 			continue
 		default:
-			return nil, nil, nil, nil, fmt.Errorf("config %s: неизвестный тип %q для %s", path, t.Type, t.IP)
+			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: неизвестный тип %q для %s", path, t.Type, t.IP)
 		}
 		if t.IP == "" {
-			return nil, nil, nil, nil, fmt.Errorf("config %s: пустой ip (type=%s)", path, t.Type)
+			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустой ip (type=%s)", path, t.Type)
 		}
 		if t.Name == "" {
-			return nil, nil, nil, nil, fmt.Errorf("config %s: пустое имя name для %s", path, t.IP)
+			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустое имя name для %s", path, t.IP)
 		}
 		// Deye/Sofar: без серийного номера логгера (logger_sn=0) логгер отвечает
 		// кодом 0x06 (heartbeat_only) — данные получать невозможно. Ловим при
 		// старте (fatal), а не маскируем вечным heartbeat_only с логами на poll.
 		if (kind == kindDeyeString || kind == kindSofar) && t.LoggerSN == 0 {
-			return nil, nil, nil, nil, fmt.Errorf("config %s: %s (%s): не задан logger_sn — без SN логгера логгер отвечает кодом 0x06 и данные получать невозможно", path, t.Name, t.IP)
+			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: %s (%s): не задан logger_sn — без SN логгера логгер отвечает кодом 0x06 и данные получать невозможно", path, t.Name, t.IP)
 		}
 		targets = append(targets, invTarget{IP: t.IP, Name: t.Name, LoggerSN: t.LoggerSN, Kind: kind, Unit: 1, Slot: -1, Order: nextOrder})
 		nextOrder++
@@ -211,10 +212,10 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mpptSectio
 	// цель в targets не добавляется (обычный Modbus-пулер не запускается).
 	if cf.Map != nil {
 		if cf.Map.Disabled == nil {
-			return nil, nil, nil, nil, fmt.Errorf("config %s: в разделе map не задано обязательное поле disabled (false/true)", path)
+			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано обязательное поле disabled (false/true)", path)
 		}
 		if cf.Map.IP == "" {
-			return nil, nil, nil, nil, fmt.Errorf("config %s: пустой ip в разделе map", path)
+			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустой ip в разделе map", path)
 		}
 		name := cf.Map.Name
 		if name == "" {
@@ -239,10 +240,19 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mpptSectio
 		mpptOk := cf.MPPT != nil && cf.MPPT.BaseURL != "" && cf.MPPT.MPPTPath != "" &&
 			cf.MPPT.Login != "" && cf.MPPT.Password != ""
 		if !mpptOk {
-			return nil, nil, nil, nil, fmt.Errorf("config %s: нет ни одного активного устройства", path)
+			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: нет ни одного активного устройства", path)
 		}
 	}
-	return targets, cf.DB, cf.Meter, cf.MPPT, nil
+	return targets, cf.DB, cf.Meter, cf.MPPT, cf.DashboardPort, nil
+}
+
+// defaultDashboardAddr возвращает адрес веб-дашборда из конфиг-порта: 0 — дефолт
+// ":8080", иначе ":<порт>". Пустая строка (0) — дашборд включён.
+func defaultDashboardAddr(port int) string {
+	if port == 0 {
+		return ":8080"
+	}
+	return fmt.Sprintf(":%d", port)
 }
 
 // defaultRedisAddr возвращает адрес Redis: из раздела db конфига (приоритет),
@@ -1275,8 +1285,9 @@ func main() {
 	var dbCfg *dbConfig
 	var meterSec *meterSection
 	var mpptSec *mpptSection
+	var dashPort int
 	var err error
-	targets, dbCfg, meterSec, mpptSec, err = loadConfig(cfgPath)
+	targets, dbCfg, meterSec, mpptSec, dashPort, err = loadConfig(cfgPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1285,7 +1296,7 @@ func main() {
 	redisAddr := flag.String("redis", defaultRedisAddr(dbCfg), "адрес Redis (хост:порт)")
 	pgDSN := flag.String("pg", defaultPGDSN(dbCfg), "DSN PostgreSQL для persistent-хранилища (пустая строка — выключить)")
 	restoreWindow := flag.Duration("pg-restore-window", 30*24*time.Hour, "окно РЕСТАВРАЦИИ Redis из PG при пустом Redis (фактическое окно не больше 2 календарных суток — recentCutoff)")
-	dashboardAddr := flag.String("dashboard", ":8080", "адрес веб-дашборда (пустая строка — выключить)")
+	dashboardAddr := flag.String("dashboard", defaultDashboardAddr(dashPort), "адрес веб-дашборда (пустая строка — выключить)")
 	flag.Parse()
 
 	log.Printf("poller started: config=%s targets=%v period=%s", cfgPath, targets, pollPeriod)

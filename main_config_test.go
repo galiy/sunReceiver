@@ -17,7 +17,7 @@ func TestLoadConfigLoggerSNRequired(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"invertors":[{"ip":"192.168.13.91","name":"D1","type":"deye","disabled":false}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, _, err := loadConfig(path); err == nil {
+	if _, _, _, _, _, err := loadConfig(path); err == nil {
 		t.Fatal("ожидали ошибку для Deye без logger_sn")
 	} else if !strings.Contains(err.Error(), "logger_sn") {
 		t.Fatalf("err=%v, want упоминание logger_sn", err)
@@ -27,7 +27,7 @@ func TestLoadConfigLoggerSNRequired(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"invertors":[{"ip":"192.168.13.76","name":"S1","type":"sofar","disabled":false}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, _, err := loadConfig(path); err == nil {
+	if _, _, _, _, _, err := loadConfig(path); err == nil {
 		t.Fatal("ожидали ошибку для Sofar без logger_sn")
 	}
 
@@ -35,7 +35,7 @@ func TestLoadConfigLoggerSNRequired(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"invertors":[{"ip":"192.168.13.91","name":"D1","type":"deye","disabled":false,"logger_sn":1774265353}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	targets, _, _, _, err := loadConfig(path)
+	targets, _, _, _, _, err := loadConfig(path)
 	if err != nil {
 		t.Fatalf("валидный конфиг: %v", err)
 	}
