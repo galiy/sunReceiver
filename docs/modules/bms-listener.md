@@ -12,7 +12,12 @@
 [`antbms.md`](../antbms.md)), а в sunReceiver — `bms_poller.go` (модуль ANT BMS).
 
 Исходники: [`bmslistener/`](../../bmslistener/) → `bmslistener.c`, `Makefile`,
-`bmslistener.service`, `web/read_bms.php`.
+`bmslistener.service`, `web/read_bms.php` (web-api-эндпоинт).
+
+Конечная цель демона — **не только** публикация параметров в shm, а **выдача данных
+через web-api**: `web/read_bms.php` читает shm 2018 и отдаёт готовый JSON (аналог
+`read_json.php` для других устройств). Именно его опрашивает `bms_poller.go`
+(через `mppt.bms_path` в конфиге).
 
 ## Что делает
 
@@ -39,7 +44,21 @@ sudo make install
 
 1. `install -m 0755 bmslistener /usr/sbin/bmslistener` — кладёт бинарник в `/usr/sbin/`.
 2. `install -m 0644 bmslistener.service /etc/systemd/system/bmslistener.service` — юнит.
-3. `systemctl daemon-reload && systemctl enable bmslistener.service` — активация.
+3. Устанавливает веб-скрипт `web/read_bms.php` → `/settings/html/read_bms.php`
+   (владелец `www-data:www-data`, права 0644).
+4. `systemctl daemon-reload && systemctl enable bmslistener.service` — активация.
+
+Веб-скрипт ставится на **rw-раздел** `/settings/html` (веб-корень Малины, см.
+[`malina-web-api.md`](../malina-web-api.md)); `/` там read-only. Путь веб-корня
+переопределяется переменной `WEBROOT` (по умолчанию `/settings/html`).
+
+Если нужно обновить только web-api без пересборки демона и без перезапуска сервиса:
+
+```sh
+sudo make install-web
+```
+
+Откат установки: `sudo make uninstall` (бинарник, юнит и веб-скрипт удаляются).
 
 Затем запустить и проверить:
 
@@ -48,8 +67,8 @@ sudo systemctl start bmslistener.service
 systemctl status bmslistener.service   # active (running)
 ```
 
-Так же на Малину кладётся `web/read_bms.php` в веб-каталог (заглушка-эндпоинт,
-аналог `read_json.php`).
+Веб-скрипт `read_bms.php` (web-api) кладётся в веб-корень автоматически при
+`make install` (см. выше).
 
 ### Юнит `bmslistener.service`
 
