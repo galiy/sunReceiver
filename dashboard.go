@@ -288,7 +288,7 @@ window.srBindChip = function(b, fnToggle, fnIsolate){
 //     touchmove — он мешал зуму), поэтому onTap не передаётся.
 // Плагин chartjs-plugin-zoom на touch-устройствах отключён (pan/wheel/pinch),
 // чтобы его Hammer не перехватывал жесты и не мешал скроллу страницы.
-window.srTouchChart = function(getChart, canvasId, minSpan, onTap){
+window.srTouchChart = function(getChart, canvasId, minSpan, onTap, onGestureComplete){
   var canvas=document.getElementById(canvasId);
   if(!canvas) return;
   canvas.style.touchAction='pan-y';
@@ -356,7 +356,9 @@ window.srTouchChart = function(getChart, canvasId, minSpan, onTap){
     }
     if(!st || st.mode!=='maybe' || st.decided==='pan'){
       // Жест завершён: панорама (swipe) или щипок (pinch).
+      var done=(st && (st.mode==='pinch' || st.decided==='pan'));
       st=null;
+      if(done && onGestureComplete) onGestureComplete();
       return;
     }
     var dt=Date.now()-st.t;
@@ -368,6 +370,7 @@ window.srTouchChart = function(getChart, canvasId, minSpan, onTap){
       if(c && c.chartArea && px>=c.chartArea.left && px<=c.chartArea.right){
         if(Date.now()-lastTap.t<320 && Math.abs(px-lastTap.px)<40){
           try{ c.resetZoom(); }catch(err){}
+          if(onGestureComplete) onGestureComplete();
         } else if(onTap){ onTap(px); }
         lastTap={t:Date.now(), px:px};
       }
@@ -1237,12 +1240,43 @@ function syncZoomToOthers(fromChart){
 		});
 	}finally{ zoomSyncing=false; }
 }
+// ---------- Перезагрузка данных после зума/сдвига ----------
+// Окно X общее для всех графиков страницы. После завершения зума/панорамы
+// (колесо, drag, pinch, свайп, двойной тап) данные удаляются и загружаются
+// заново с бэкенда под новое окно; поля «С/по» обновляются.
+var winReloadTimer=null, winReloadSrc=null;
+function srWindowChanged(chartId){
+	if(winReloadTimer) clearTimeout(winReloadTimer);
+	winReloadSrc=chartId;
+	winReloadTimer=setTimeout(function(){
+		winReloadTimer=null;
+		var id=winReloadSrc; winReloadSrc=null;
+		var c=window[id]||Chart.getChart(id);
+		if(!c||!c.scales||!c.scales.x) return;
+		var x=c.scales.x;
+		if(!isFinite(x.min)||!isFinite(x.max)||x.max<=x.min) return;
+		var from=new Date(x.min), to=new Date(x.max);
+		if(Math.round(from.getTime())===Math.round(selRange.from.getTime()) && Math.round(to.getTime())===Math.round(selRange.to.getTime())) return;
+		selRange.from=from; selRange.to=to; periodMode='custom';
+		document.getElementById('fromPick').value=toInputDateTime(from);
+		document.getElementById('toPick').value=toInputDateTime(to);
+		document.getElementById('datePick').value=toInputDate(from);
+		setActiveBtn(null);
+		preserveZoom=true;
+		loadAll();
+	},300);
+}
 function renderChart(id, datasets, opts){
 	var canvas=document.getElementById(id);
 	var old=window[id];
 	var saved={min:null,max:null};
 	if(old && old.scales && old.scales.x && isFinite(old.scales.x.min) && isFinite(old.scales.x.max)){
 		saved={min:old.scales.x.min, max:old.scales.x.max};
+	}
+	// После завершения зума/панорамы — перезагрузка данных под новое окно.
+	if(opts && opts.plugins && opts.plugins.zoom){
+		opts.plugins.zoom.zoom.onZoomComplete=function(){ srWindowChanged(id); };
+		if(opts.plugins.zoom.pan) opts.plugins.zoom.pan.onPanComplete=function(){ srWindowChanged(id); };
 	}
 	if(old){ captureHidden(id, old); try{ old.destroy(); }catch(e){} }
 	// При сохранении окна чарт создаём сразу С ЭТИМ окном: первый draw на полном
@@ -1499,7 +1533,7 @@ loadAll(); setInterval(function(){ preserveZoom=true; loadAll(); },60000);
 // отключён — он мешал зуму).
 if(SR_COARSE){
 	['powerChart','totalChart','gridVChart','gridPChart'].forEach(function(id){
-		srTouchChart(function(){ return window[id]; }, id, 60*1000);
+		srTouchChart(function(){ return window[id]; }, id, 60*1000, null, function(){ srWindowChanged(id); });
 	});
 }
 </script>
@@ -1691,7 +1725,8 @@ function renderEnergyChart(canvasId, labels, datasets){
 				// вручную: bindCategoryPan ниже, поэтому pan.enabled=false.
 				zoom:{
 					pan:{ enabled:false },
-					zoom:{ wheel:{ enabled:!SR_COARSE, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:!SR_COARSE }, mode:'x' },
+					zoom:{ wheel:{ enabled:!SR_COARSE, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:!SR_COARSE }, mode:'x',
+						onZoomComplete:function(){ energyWindowChanged(canvasId); } },
 					limits:{ x:{ minRange:3 } }
 				}
 			},
@@ -1731,6 +1766,7 @@ function monthlyDatasets(days){
 
 // initEnergyPanel создаёт независимо управляемый график со своим диапазоном.
 // cfg: { canvasId, statusId, fromEl, toEl, applyBtn, isMonthly, presets:[{btn,range}], defaultFrom, defaultTo }
+var ENERGY_PANELS={};
 function initEnergyPanel(cfg){
 	var p={ selFrom:cfg.defaultFrom(), selTo:cfg.defaultTo() };
 	var presetIds=cfg.presets.map(function(pr){ return pr.btn; });
@@ -1772,6 +1808,8 @@ function initEnergyPanel(cfg){
 	document.getElementById(cfg.fromEl).value=toInputDateTime(p.selFrom);
 	document.getElementById(cfg.toEl).value=toInputDateTime(p.selTo);
 	load();
+	p.setRange=setRange;
+	ENERGY_PANELS[cfg.canvasId]={ p:p, isMonthly:cfg.isMonthly };
 	return p;
 }
 
@@ -1801,13 +1839,39 @@ initEnergyPanel({
 // Кнопки «Сброс зума» по каждому тарифному графику.
 document.getElementById('btnD1Reset').addEventListener('click',function(){ try{ if(window.dailyTariffChart) window.dailyTariffChart.resetZoom(); }catch(e){} });
 document.getElementById('btnD2Reset').addEventListener('click',function(){ try{ if(window.monthlyTariffChart) window.monthlyTariffChart.resetZoom(); }catch(e){} });
+// ---------- Перезагрузка данных после зума/сдвига (каждый график независимо) ----------
+// Category-шкала: окно X = индексы столбцов; границы переводятся в даты по
+// подписям (дневной — 'YYYY-MM-DD', месячный — 'YYYY-MM') и панель
+// перезагружается с бэкенда под новый диапазон.
+var energyReloadTimer={};
+function energyLabelStart(s){ var q=String(s).split('-').map(Number); if(q.length>=3) return new Date(q[0],q[1]-1,q[2],0,0,0,0); if(q.length===2) return new Date(q[0],q[1]-1,1,0,0,0,0); return null; }
+function energyLabelEnd(s){ var q=String(s).split('-').map(Number); if(q.length>=3) return new Date(q[0],q[1]-1,q[2],23,59,59,999); if(q.length===2) return new Date(q[0],q[1],0,23,59,59,999); return null; }
+function energyWindowChanged(canvasId){
+	if(energyReloadTimer[canvasId]) clearTimeout(energyReloadTimer[canvasId]);
+	energyReloadTimer[canvasId]=setTimeout(function(){
+		delete energyReloadTimer[canvasId];
+		var c=window[canvasId];
+		if(!c||!c.scales||!c.scales.x||!c.data||!c.data.labels) return;
+		var x=c.scales.x;
+		if(!isFinite(x.min)||!isFinite(x.max)||x.max<=x.min) return;
+		var labels=c.data.labels;
+		var lo=Math.max(0,Math.floor(x.min)), hi=Math.min(labels.length-1,Math.ceil(x.max));
+		if(hi<lo) hi=lo;
+		var from=energyLabelStart(labels[lo]), to=energyLabelEnd(labels[hi]);
+		if(!from||!to) return;
+		var pan=ENERGY_PANELS[canvasId];
+		if(!pan) return;
+		if(Math.round(from.getTime())===Math.round(pan.p.selFrom.getTime()) && Math.round(to.getTime())===Math.round(pan.p.selTo.getTime())) return;
+		pan.p.setRange(from,to,null);
+	},300);
+}
 // Drag-панорама на category-шкале (столбцы) десктопом: плагинный pan на
 // category-шкале перемещается только если дельта ОДНОГО mousemove превышает
 // ширину столбца — обычным движением мыши график не сдвинуть, поэтому панорама
 // сделана вручную: mousedown запоминает окно, mousemove сдвигает его на целое
 // число столбцов (через zoomScale — «Сброс зума» и лимиты продолжают работать).
 // На touch панораму делает srTouchChart, плагинный pan на странице выключен.
-function bindCategoryPan(canvasId){
+function bindCategoryPan(canvasId, onComplete){
   if(SR_COARSE) return;
   var canvas=document.getElementById(canvasId); if(!canvas) return;
   var st=null;
@@ -1815,7 +1879,7 @@ function bindCategoryPan(canvasId){
     if(e.button!==0) return;
     var c=window[canvasId]; if(!c || !c.scales || !c.scales.x || !c.chartArea) return;
     var x=c.scales.x;
-    st={x0:e.clientX, min0:x.min, max0:x.max, span:x.max-x.min, w:x.width};
+    st={x0:e.clientX, min0:x.min, max0:x.max, span:x.max-x.min, w:x.width, moved:false};
     if(!st.w) { st=null; return; }
     try{ c.options.plugins.tooltip.enabled=false; }catch(err){}
     e.preventDefault();
@@ -1826,22 +1890,24 @@ function bindCategoryPan(canvasId){
     var step=Math.round((st.x0-e.clientX)/st.w*st.span);
     var desiredMin=st.min0+step;
     if(desiredMin!==c.scales.x.min){
-      try{ c.zoomScale('x', {min:desiredMin, max:desiredMin+st.span}, 'none'); }catch(err){}
+      try{ c.zoomScale('x', {min:desiredMin, max:desiredMin+st.span}, 'none'); st.moved=true; }catch(err){}
     }
   });
   window.addEventListener('mouseup', function(){
     if(!st) return;
+    var moved=st.moved;
     st=null;
     var c=window[canvasId];
     if(c){ try{ c.options.plugins.tooltip.enabled=!(SR_COARSE||window.__srTouched); c.update('none'); }catch(err){} }
+    if(moved && onComplete) onComplete();
   });
 }
-['dailyTariffChart','monthlyTariffChart'].forEach(bindCategoryPan);
+['dailyTariffChart','monthlyTariffChart'].forEach(function(id){ bindCategoryPan(id, function(){ energyWindowChanged(id); }); });
 // Мобильная версия: touch-жесты по тарифным графикам (щипок — зум по X,
 // свайп — панорама, двойной тап — сброс; на touch плагин zoom отключён).
 if(SR_COARSE){
 	['dailyTariffChart','monthlyTariffChart'].forEach(function(id){
-		srTouchChart(function(){ return window[id]; }, id, 3);
+		srTouchChart(function(){ return window[id]; }, id, 3, null, function(){ energyWindowChanged(id); });
 	});
 }
 </script>
@@ -2196,6 +2262,32 @@ function syncBmsZoomToOthers(fromChart){
   }finally{ zoomSyncing=false; }
 }
 var bmsZoomSyncPlugin={ id:'bmsZoomSync', afterDraw:function(chart){ try{ checkBmsZoomSync(chart); }catch(e){} } };
+// ---------- Перезагрузка данных после зума/сдвига ----------
+// Окно X общее для всех графиков BMS. После завершения зума/панорамы данные
+// удаляются и загружаются заново с бэкенда под новое окно; поля «С/по»
+// обновляются.
+var bmsWinReloadTimer=null, bmsWinReloadSrc=null;
+function bmsWindowChanged(chartId){
+  if(bmsWinReloadTimer) clearTimeout(bmsWinReloadTimer);
+  bmsWinReloadSrc=chartId;
+  bmsWinReloadTimer=setTimeout(function(){
+    bmsWinReloadTimer=null;
+    var id=bmsWinReloadSrc; bmsWinReloadSrc=null;
+    var c=BMS_CHARTS[id];
+    if(!c||!c.scales||!c.scales.x) return;
+    var x=c.scales.x;
+    if(!isFinite(x.min)||!isFinite(x.max)||x.max<=x.min) return;
+    var from=new Date(x.min), to=new Date(x.max);
+    if(Math.round(from.getTime())===Math.round(selRange.from.getTime()) && Math.round(to.getTime())===Math.round(selRange.to.getTime())) return;
+    selRange.from=from; selRange.to=to; periodMode='custom';
+    document.getElementById('fromPick').value=toInputDateTime(from);
+    document.getElementById('toPick').value=toInputDateTime(to);
+    document.getElementById('datePick').value=toInputDate(from);
+    setActiveBtn(null);
+    preserveZoom=true;
+    loadBmsCharts();
+  },300);
+}
 // lgKit — HTML-легенда-чипы вместо встроенной легенды Chart.js. ЛКМ по чипу —
 // вкл/выкл эту линию (toggle); двойной ЛКМ — показать только эту линию; «Все» —
 // показать все. Чистый DOM: без модификаторов и приватного API Chart.js.
@@ -2285,8 +2377,8 @@ function bmsRender(id, datasets, yTitle, legend, zero){
     plugins:{
       legend: { display:false },
       zoom:{
-        pan:{ enabled:!SR_COARSE, mode:'x' },
-        zoom:{ wheel:{ enabled:!SR_COARSE, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:!SR_COARSE }, mode:'x' },
+        pan:{ enabled:!SR_COARSE, mode:'x', onPanComplete:function(){ bmsWindowChanged(id); } },
+        zoom:{ wheel:{ enabled:!SR_COARSE, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:!SR_COARSE }, mode:'x', onZoomComplete:function(){ bmsWindowChanged(id); } },
         limits:{ x:{ minRange: 5*60*1000 } }
       }
     },
@@ -2420,7 +2512,7 @@ setInterval(function(){ preserveZoom=true; loadBmsCharts(); },60000);
 // панорама, двойной тап — сброс зума; tooltip на тап отключён — мешал зуму).
 if(SR_COARSE){
   BMS_CHART_IDS.forEach(function(id){
-    srTouchChart(function(){ return BMS_CHARTS[id]; }, id, 5*60*1000);
+    srTouchChart(function(){ return BMS_CHARTS[id]; }, id, 5*60*1000, null, function(){ bmsWindowChanged(id); });
   });
 }
 
