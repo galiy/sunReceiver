@@ -9,7 +9,7 @@
 - ХОСТ: Raspberry Pi, Raspbian 8 (jessie), hostname `malina.localhost`.
   ФС `/` — **read-only** (ext4, mmcblk0p2); данные живут на rw-разделе
   `/settings` (mmcblk0p3). Веб-интерфейс — PHP 5, сервер — Microsoft-IIS/6.0
-   на памяти (вероятно nginx-обвязка), Basic-auth (`admin`/пароль из раздела `mppt`
+   на памяти (вероятно nginx-обвязка), Basic-auth (`admin`/пароль из раздела `malina`
    в `sunReceiver.json`).
 - Веб-корень: `/settings/html`. Все данные, меняющиеся в реальном времени,
   демон `mapd` непрерывно складывает в **System V shared memory**, откуда их
@@ -117,14 +117,14 @@
   из `/settings/logs/*.json` и БД через `db_read`.
 - Системные/инфраструктурные данные (список узлов, CPU, статус сети, события,
   состояние EEPROM) — отдельные маленькие PHP.
-- Конфиг доступа (Basic-auth) — раздел `mppt` файла `sunReceiver.json` (не в git).
+- Конфиг доступа (Basic-auth) — раздел `malina` файла `sunReceiver.json` (не в git).
   Веб-роот на rw-разделе `/settings/html`.
 
 ---
 
 ## Конфигурация доступа
 
-Доступ к веб-API (Basic-auth) задаётся в **разделе `mppt` файла `sunReceiver.json`**
+Доступ к веб-API (Basic-auth) задаётся в **разделе `malina` файла `sunReceiver.json`**
 (см. `mppt_api.go`, `loadMPPTSite`). Раньше был отдельный файл `malina.json` — он
 удалён, все поля переехали в `sunReceiver.json`.
 

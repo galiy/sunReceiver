@@ -11,22 +11,24 @@
     { "ip": "192.168.0.10", "name": "Deye Left", "type": "deye", "logger_sn": 1234567890, "disabled": false },
     { "ip": "192.168.0.12", "name": "Deye Right", "type": "deye", "logger_sn": 3456789012, "disabled": false }
   ],
-  "map": {
+  "maprs485": {
     "name": "MAP (батарея/сеть)",
     "ip": "192.168.0.20",
     "unit": 1,
     "disabled": false
   },
-  "mppt": {
+  "malina": {
     "base_url": "http://192.168.0.30",
     "mppt_path": "/read_json.php?device=mppt",
+    "map_path": "/read_json.php?device=map",
     "bms_path": "/read_bms.php",
     "login": "admin",
     "password": "CHANGE_ME"
   },
   "db": {
     "redis": "192.168.0.253:6379",
-    "pg": "postgres://sunreceiver:CHANGE_ME_PASSWORD@192.168.0.253:5432/sunreceiver?sslmode=disable"
+    "pg": "postgres://sunreceiver:CHANGE_ME_PASSWORD@192.168.0.253:5432/sunreceiver?sslmode=disable",
+    "pg_restore_window": "720h"
   },
   "meter": {
     "name": "Электросчётчик",

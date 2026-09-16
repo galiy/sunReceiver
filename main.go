@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"log"
 	"math"
@@ -95,13 +94,13 @@ type configInverter struct {
 	Disabled *bool  `json:"disabled"`
 }
 
-// mapSection — отдельный блок настройки МАП Титанатор («КЭС», батарея/сеть) в
-// sunReceiver.json. Не входит в invertors: это устройство Modbus TCP, а не инвертор.
-// Disabled — ОБЯЗАТЕЛЬНОЕ поле (отсутствие = ошибка конфига): false = МАП
+// mapRS485Section — отдельный блок настройки МАП Титанатор («КЭС», батарея/сеть) в
+// sunReceiver.json. Не входит в invertors: это устройство Modbus TCP (RS485), а не
+// инвертор. Disabled — ОБЯЗАТЕЛЬНОЕ поле (отсутствие = ошибка конфига): false = МАП
 // опрашивается через Modbus TCP (как раньше); true = пулер по Modbus НЕ запускается,
 // а все параметры МАП (батарея/сеть) берутся из веб-API ПАК «Малина»
-// read_json.php?device=map (для этого требуется настроенный раздел "mppt").
-type mapSection struct {
+// read_json.php?device=map (для этого требуется настроенный раздел "malina").
+type mapRS485Section struct {
 	Name     string `json:"name"`
 	IP       string `json:"ip"`
 	Unit     int    `json:"unit,omitempty"`
@@ -112,8 +111,9 @@ type mapSection struct {
 // Пароль указывается прямо в pg-DSN (sunReceiver.json — приватный конфиг, в git не
 // коммитится).
 type dbConfig struct {
-	Redis string `json:"redis"` // адрес Redis в формате host:port
-	PG    string `json:"pg"`    // DSN PostgreSQL (с паролем)
+	Redis           string `json:"redis"`             // адрес Redis в формате host:port
+	PG              string `json:"pg"`                // DSN PostgreSQL (с паролем)
+	PGRestoreWindow string `json:"pg_restore_window"` // окно РЕСТАВРАЦИИ Redis из PG (duration-строка, напр. "720h"); пусто — дефолт 30 суток
 }
 
 // meterSection — конфигурация электросчётчика DDS238, заданная в sunReceiver.json
@@ -127,22 +127,24 @@ type meterSection struct {
 	RegisterCnt uint16 `json:"register_count"`
 }
 
-// mpptSection — конфигурация веб-API ПАК «Малина» для мониторинга MPPT-контроллеров.
-// Пароль хранится в открытом виде (sunReceiver.json — приватный, в git не выгружается).
-type mpptSection struct {
+// malinaSection — конфигурация веб-API ПАК «Малина» для мониторинга MPPT-контроллеров
+// и МАП (через read_json.php). Пароль хранится в открытом виде (sunReceiver.json —
+// приватный, в git не выгружается).
+type malinaSection struct {
 	BaseURL  string `json:"base_url"`
-	MPPTPath string `json:"mppt_path"`
-	BMSPath  string `json:"bms_path"` // путь к read_bms.php (ANT BMS); пусто — BMS не опрашивается
+	MPPTPath string `json:"mppt_path"` // путь к read_json.php?device=mppt (КЭС/MPPT-контроллеры)
+	MapPath  string `json:"map_path"`  // путь к read_json.php?device=map (МАП, батарея/сеть); пусто = выводится из mppt_path
+	BMSPath  string `json:"bms_path"`  // путь к read_bms.php (ANT BMS); пусто — BMS не опрашивается
 	Login    string `json:"login"`
 	Password string `json:"password"`
 }
 
 type configFile struct {
 	Invertors     []configInverter `json:"invertors"`
-	Map           *mapSection      `json:"map"`
+	MapRS485      *mapRS485Section `json:"maprs485"`
 	DB            *dbConfig        `json:"db"`
 	Meter         *meterSection    `json:"meter"`
-	MPPT          *mpptSection     `json:"mppt"`
+	Malina        *malinaSection   `json:"malina"`
 	DashboardPort int              `json:"dashboard_port"` // порт веб-дашборда; 0 — дефолт 8080
 }
 
@@ -156,8 +158,8 @@ func configPath() string {
 }
 
 // loadConfig читает и проверяет sunReceiver.json, возвращает список целей
-// (инверторы + МАП, без отключённых), настройки БД/счётчика/MPPT и порт дашборда.
-func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mpptSection, int, error) {
+// (инверторы + МАП, без отключённых), настройки БД/счётчика/Малина и порт дашборда.
+func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *malinaSection, int, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil, nil, nil, 0, fmt.Errorf("read config %s: %w", path, err)
@@ -207,29 +209,29 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mpptSectio
 		nextOrder++
 	}
 
-	// МАП (батарея/сеть) — отдельный блок "map". Disabled обязателен: false —
-	// Modbus TCP, true — данные берутся из веб-API ПАК «Малина» (mapAPI). При true
-	// цель в targets не добавляется (обычный Modbus-пулер не запускается).
-	if cf.Map != nil {
-		if cf.Map.Disabled == nil {
-			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано обязательное поле disabled (false/true)", path)
+	// МАП (батарея/сеть) — отдельный блок "maprs485". Disabled обязателен: false —
+	// Modbus TCP (RS485), true — данные берутся из веб-API ПАК «Малина» (mapAPI).
+	// При true цель в targets не добавляется (обычный Modbus-пулер не запускается).
+	if cf.MapRS485 != nil {
+		if cf.MapRS485.Disabled == nil {
+			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе maprs485 не задано обязательное поле disabled (false/true)", path)
 		}
-		if cf.Map.IP == "" {
-			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустой ip в разделе map", path)
+		if cf.MapRS485.IP == "" {
+			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустой ip в разделе maprs485", path)
 		}
-		name := cf.Map.Name
+		name := cf.MapRS485.Name
 		if name == "" {
 			name = "MAP (батарея/сеть)"
 		}
-		if *cf.Map.Disabled {
+		if *cf.MapRS485.Disabled {
 			log.Printf("config: МАП (%s) disabled=true — опрашивается через веб-API ПАК «Малина», а не через Modbus", name)
-			mapAPI = &mapAPISource{name: name, ip: cf.Map.IP, order: nextOrder}
+			mapAPI = &mapAPISource{name: name, ip: cf.MapRS485.IP, order: nextOrder}
 		} else {
 			unit := byte(1)
-			if cf.Map.Unit > 0 {
-				unit = byte(cf.Map.Unit)
+			if cf.MapRS485.Unit > 0 {
+				unit = byte(cf.MapRS485.Unit)
 			}
-			targets = append(targets, invTarget{IP: cf.Map.IP, Name: name, Kind: kindMAP, Unit: unit, Slot: -1, Order: nextOrder})
+			targets = append(targets, invTarget{IP: cf.MapRS485.IP, Name: name, Kind: kindMAP, Unit: unit, Slot: -1, Order: nextOrder})
 			nextOrder++
 		}
 	}
@@ -237,22 +239,33 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mpptSectio
 	if len(targets) == 0 && mapAPI == nil {
 		// Если активными остались только MPPT-контроллеры из API ПАК «Малина»,
 		// targets может быть пуст — это допустимо: цели собираются динамически.
-		mpptOk := cf.MPPT != nil && cf.MPPT.BaseURL != "" && cf.MPPT.MPPTPath != "" &&
-			cf.MPPT.Login != "" && cf.MPPT.Password != ""
+		mpptOk := cf.Malina != nil && cf.Malina.BaseURL != "" && cf.Malina.MPPTPath != "" &&
+			cf.Malina.Login != "" && cf.Malina.Password != ""
 		if !mpptOk {
 			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: нет ни одного активного устройства", path)
 		}
 	}
-	return targets, cf.DB, cf.Meter, cf.MPPT, cf.DashboardPort, nil
+	// Порт веб-дашборда — обязательное поле dashboard_port.
+	if cf.DashboardPort == 0 {
+		return nil, nil, nil, nil, 0, fmt.Errorf("config %s: не задано обязательное поле dashboard_port (порт веб-дашборда)", path)
+	}
+	return targets, cf.DB, cf.Meter, cf.Malina, cf.DashboardPort, nil
 }
 
-// defaultDashboardAddr возвращает адрес веб-дашборда из конфиг-порта: 0 — дефолт
-// ":8080", иначе ":<порт>". Пустая строка (0) — дашборд включён.
+// defaultDashboardAddr собирает адрес веб-дашборда из обязательного конфиг-порта.
 func defaultDashboardAddr(port int) string {
-	if port == 0 {
-		return ":8080"
-	}
 	return fmt.Sprintf(":%d", port)
+}
+
+// defaultPGRestoreWindow возвращает окно реставрации Redis из PG: из раздела db
+// конфига (duration-строка), иначе — дефолт 30 суток. Некорректная строка — дефолт.
+func defaultPGRestoreWindow(db *dbConfig) time.Duration {
+	if db != nil && db.PGRestoreWindow != "" {
+		if d, err := time.ParseDuration(db.PGRestoreWindow); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 30 * 24 * time.Hour
 }
 
 // defaultRedisAddr возвращает адрес Redis: из раздела db конфига (приоритет),
@@ -1284,36 +1297,35 @@ func main() {
 	}
 	var dbCfg *dbConfig
 	var meterSec *meterSection
-	var mpptSec *mpptSection
+	var malinaSec *malinaSection
 	var dashPort int
 	var err error
-	targets, dbCfg, meterSec, mpptSec, dashPort, err = loadConfig(cfgPath)
+	targets, dbCfg, meterSec, malinaSec, dashPort, err = loadConfig(cfgPath)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// Дефолты адресов БД берутся из раздела "db" sunReceiver.json, иначе — локальные.
-	redisAddr := flag.String("redis", defaultRedisAddr(dbCfg), "адрес Redis (хост:порт)")
-	pgDSN := flag.String("pg", defaultPGDSN(dbCfg), "DSN PostgreSQL для persistent-хранилища (пустая строка — выключить)")
-	restoreWindow := flag.Duration("pg-restore-window", 30*24*time.Hour, "окно РЕСТАВРАЦИИ Redis из PG при пустом Redis (фактическое окно не больше 2 календарных суток — recentCutoff)")
-	dashboardAddr := flag.String("dashboard", defaultDashboardAddr(dashPort), "адрес веб-дашборда (пустая строка — выключить)")
-	flag.Parse()
+	// Адреса БД и порт дашборда берутся из sunReceiver.json (раздел db / dashboard_port).
+	redisAddr := defaultRedisAddr(dbCfg)
+	pgDSN := defaultPGDSN(dbCfg)
+	restoreWindow := defaultPGRestoreWindow(dbCfg)
+	dashboardAddr := defaultDashboardAddr(dashPort)
 
 	log.Printf("poller started: config=%s targets=%v period=%s", cfgPath, targets, pollPeriod)
 
-	// Конфигурация веб-API ПАК «Малина» для мониторинга MPPT (КЭС) — раздел "mppt"
+	// Конфигурация веб-API ПАК «Малина» для мониторинга MPPT (КЭС) — раздел "malina"
 	// sunReceiver.json (бывший malina.json).
-	mppt = loadMPPTSite(mpptSec)
+	mppt = loadMPPTSite(malinaSec)
 	// ANT BMS (ANT BMS, web-API read_bms.php ПАК «Малина») — отдельный 1-сек цикл,
 	// актуальное состояние в отдельном Redis-ключе (HASH sunreceiver:bms).
-	bmsSite = loadBmsSite(mpptSec)
+	bmsSite = loadBmsSite(malinaSec)
 	if bmsSite != nil {
 		log.Printf("bms: опрос ANT BMS через %s (1 раз в секунду, ключ Redis %s)", bmsSite.url, redisBMSKey)
 	}
-	// Если МАП опрашивается через веб-API (map.disabled=true), обязателен доступ к
-	// ПАК «Малина» (раздел "mppt") — иначе неоткуда взять параметры батареи/сети.
+	// Если МАП опрашивается через веб-API (maprs485.disabled=true), обязателен доступ к
+	// ПАК «Малина» (раздел "malina") — иначе неоткуда взять параметры батареи/сети.
 	if mapAPI != nil && mppt == nil {
-		log.Fatalf("config: МАП настроен через веб-API (map.disabled=true), но раздел mppt неполный — нужны base_url, mppt_path, login, password")
+		log.Fatalf("config: МАП настроен через веб-API (maprs485.disabled=true), но раздел malina неполный — нужны base_url, mppt_path, login, password")
 	}
 	// Конфигурация электросчётчика DDS238 — раздел "meter" sunReceiver.json
 	// или файл dds238.json (обратная совместимость).
@@ -1324,7 +1336,7 @@ func main() {
 		log.Printf("meter: не настроен (нет dds238.json рядом с бинарником) — опрос счётчика отключён")
 	}
 
-	rdb, err := openRedis(*redisAddr)
+	rdb, err := openRedis(redisAddr)
 	if err != nil {
 		log.Fatalf("redis: %v", err)
 	}
@@ -1346,8 +1358,8 @@ func main() {
 	// с закрытыми пулами.
 	var bgWg sync.WaitGroup
 	var pg *pgStore
-	if *pgDSN != "" {
-		pg, err = openPG(*pgDSN)
+	if pgDSN != "" {
+		pg, err = openPG(pgDSN)
 		if err != nil {
 			log.Printf("pg: %v (persistent-хранилище отключено)", err)
 		} else {
@@ -1365,7 +1377,7 @@ func main() {
 				bgWg.Add(1)
 				go func() {
 					defer bgWg.Done()
-					restoreRedisFromPG(store, pg, *restoreWindow, stopCtx)
+					restoreRedisFromPG(store, pg, restoreWindow, stopCtx)
 				}()
 			}
 		}
@@ -1421,13 +1433,11 @@ func main() {
 		}()
 	}
 
-	if *dashboardAddr != "" {
-		bgWg.Add(1)
-		go func() {
-			defer bgWg.Done()
-			serveDashboard(*dashboardAddr, store, pg, stopCtx)
-		}()
-	}
+	bgWg.Add(1)
+	go func() {
+		defer bgWg.Done()
+		serveDashboard(dashboardAddr, store, pg, stopCtx)
+	}()
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
