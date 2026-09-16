@@ -7,7 +7,7 @@
 ## Источники данных
 
 - **MPPT-контроллеры** (`kindMPPT`) — **веб-API ПАК «Малина»**
-  `read_json.php?device=mppt` (HTTP Basic-auth; конфиг — раздел **`mppt`**
+  `read_json.php?device=mppt` (HTTP Basic-auth; конфиг — раздел **`malina`**
   `sunReceiver.json`; пароль в открытом виде, файл в git не выгружается; для
   разработки SSH — `.kilo/malina-ssh.json`). В `sunReceiver.json` MPPT **не
   регистрируются**: состав определяется динамически по факту подключения
@@ -19,16 +19,17 @@
   `P_Out` + `timestamp`. Реализация — `mppt_api.go` (`mpptSite`, `FetchMPPTs`,
   `mapMPPTAPI`) + сбор в `pollAndSaveMap`; коннектор к `read_json.php` — в
   [../read_json.md](../read_json.md).
-- **МАП (`kindMAP`)** — раздел **`map`** конфига, оставлен для данных **батареи и
+- **МАП (`kindMAP`)** — раздел **`maprs485`** конфига, оставлен для данных **батареи и
   сети** МАП на дашборд. Цель `MAP (батарея/сеть)` (192.168.13.74, unit 1).
   Пер-слотовый MPPT через Modbus больше не опрашивается. Источник задаёт
-  обязательное поле `disabled` раздела `map` (отсутствие = ошибка конфига):
-  - `false` — **Modbus TCP** (`modbusmap/` + `mapClientFor`), блоки 0x400/0x530/0x580;
+  обязательное поле `disabled` раздела `maprs485` (отсутствие = ошибка конфига):
+  - `false` — **Modbus TCP/RS485** (`modbusmap/` + `mapClientFor`), блоки 0x400/0x530/0x580;
   - `true` — пулер по Modbus НЕ запускается, параметры из **веб-API ПАК «Малина»**
     `read_json.php?device=map` (`mpptSite.FetchMAP` + `mapMAPAPI`); обязателен полный
-    раздел `mppt` (иначе `log.Fatal` при старте). Ключ устройства (devKey) и имя —
+    раздел `malina` (иначе `log.Fatal` при старте). Ключ устройства (devKey) и имя —
     те же (IP МАП из конфига), поэтому история на дашборде преемственна при
-    переключении режимов.
+    переключении режимов. Путь к `read_json.php?device=map` — поле `map_path`
+    раздела `malina` (при отсутствии выводится из `mppt_path` подменой `device`).
 
 ## `values` углов МАП/MPPT (теги в `commonContractTags`)
 

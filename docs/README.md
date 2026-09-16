@@ -42,12 +42,12 @@ DDS238 (Modbus TCP), нормализует всё в единый контра�
 
 - **Инверторы** — раздел `invertors` конфига, нормализуются в контракт `values`
   (у каждого флаг `disabled`, обязательное поле).
-- **МАП** — раздел `map`; источник задаёт обязательное поле `disabled`
-  (`false`=Modbus, `true`=веб-API ПАК «Малина», нужен раздел `mppt`).
-- **MPPT** — раздел `mppt` (доступ к ПАК «Малина»); состав контроллеров
+- **МАП** — раздел `maprs485`; источник задаёт обязательное поле `disabled`
+  (`false`=Modbus/RS485, `true`=веб-API ПАК «Малина», нужен раздел `malina`).
+- **MPPT/МАП веб-API** — раздел `malina` (доступ к ПАК «Малина»); состав контроллеров
   **динамический** по ответу веб-API (появляется/исчезает на дашборде).
 - **Счётчик** — раздел `meter` (legacy: файл `dds238.json`).
-- **BMS** — поле `mppt.bms_path`; состав батарей динамический по ответу `read_bms.php`.
+- **BMS** — поле `malina.bms_path`; состав батарей динамический по ответу `read_bms.php`.
 
 ## Хранение данных
 
@@ -65,7 +65,7 @@ DDS238 (Modbus TCP), нормализует всё в единый контра�
 ## Конфигурация
 
 Один файл **`sunReceiver.json`** рядом с бинарником (`os.Executable()`; при
-`go run .` — fallback в CWD). Разделы: `invertors`, `map`, `mppt`, `db`, `meter`.
+`go run .` — fallback в CWD). Разделы: `invertors`, `maprs485`, `malina`, `db`, `meter`.
 Файл приватный (пароли — в открытом виде, в `.gitignore`); публичный шаблон
 структуры — [`sunReceiver.sample.json`](../sunReceiver.sample.json) (обновлять при
 любом изменении структуры конфига: IP — случайные из `192.168.0.x`, серийные
@@ -74,8 +74,8 @@ DDS238 (Modbus TCP), нормализует всё в единый контра�
 | Раздел | Поля |
 |---|---|
 | `invertors[]` | `ip`, `name`, `type` (`deye`/`sofar`), `logger_sn`, `disabled` (обязательное) |
-| `map` | `name`, `ip`, `unit` (Modbus, умолч. 1), `disabled` (обязательное: `false`=Modbus, `true`=веб-API ПАК «Малина», нужен раздел `mppt`) |
-| `mppt` | `base_url`, `mppt_path`, `login`, `password`, `bms_path` (включает опрос ANT BMS) |
+| `maprs485` | `name`, `ip`, `unit` (Modbus, умолч. 1), `disabled` (обязательное: `false`=Modbus/RS485, `true`=веб-API ПАК «Малина», нужен раздел `malina`) |
+| `malina` | `base_url`, `mppt_path`, `map_path` (необязательное — путь к read_json.php?device=map, при отсутствии выводится из mppt_path), `login`, `password`, `bms_path` (включает опрос ANT BMS) |
 | `db` | `redis` (host:port), `pg` (DSN с паролем) |
 | `meter` | `name`, `ip`, `port`, `unit`, `first_reg`, `register_count` |
 
@@ -87,8 +87,9 @@ go build -o sunReceiver .   # сборка
 go run .                     # запуск из исходников (конфиг из CWD)
 ```
 
-Флаги: `-redis <addr>` (умолч. из конфига), `-pg <dsn>` (пустая — выключить PG),
-`-pg-restore-window <dur>` (окно реставрации Redis из PG), `-dashboard <addr>`.
+Все настройки задаются только в `sunReceiver.json` (флагов командной строки нет):
+адреса БД (`db.redis`, `db.pg`, опц. `db.pg_restore_window`), порт дашборда
+(`dashboard_port`, обязательное).
 
 Прод развёрнут на внутреннем сервере (Ubuntu 22.04, amd64) как systemd-сервис
 `sunreceiver.service`; PostgreSQL 16 и Redis тоже там. Адрес и деплой — приватные,

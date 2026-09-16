@@ -13,7 +13,7 @@
 
 - раздел `invertors` → `type` "deye"→`kindDeyeString`, "sofar"→`kindSofar`
   (поле `disabled` обязательно; `true` — пропускается);
-- раздел `map` → `kindMAP` (MPPT — `kindMPPT` — в конфиг НЕ задаётся, появляется
+- раздел `maprs485` → `kindMAP` (MPPT — `kindMPPT` — в конфиг НЕ задаётся, появляется
   динамически, см. [map-mppt.md](map-mppt.md)).
 
 Название — «логическое имя» инвертора (обязательное поле, напр. `Deye Left`,
@@ -66,12 +66,12 @@ Deye — реальный SN даталоггера (`ReadRegistersDeye`); Sofar
 реставрация, дашборд через `http.Server.Shutdown`, бюджет 5 с) и только потом
 defer'ы закрывают пулы Redis/PG — записи при остановке не гоняются с `pool close`.
 
-## Флаги CLI
+## Настройки (из `sunReceiver.json`)
 
-`-redis <addr>`, `-pg <dsn>` (дефолты из раздела `db`, пустая `-pg` выключает PG),
-`-pg-restore-window <dur>` (по умолч. `720h`; `restoreRedisFromPG` всё равно
-обрезает окно до `recentCutoff`), `-dashboard <addr>` (по умолч. `:8080`, пустая
-выключает).
+Флагов CLI нет. Всё берётся из конфига: адреса БД — раздел `db`
+(`redis`, `pg`; пустой `pg` выключает PG), `pg_restore_window` (по умолч. `720h`;
+`restoreRedisFromPG` всё равно обрезает окно до `recentCutoff`), порт дашборда —
+обязательное `dashboard_port`.
 
 ## Связанные документы
 

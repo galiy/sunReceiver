@@ -114,6 +114,14 @@ func TestMpptSiteAPIURL(t *testing.T) {
 	if got := s2.apiURL("map"); got != "http://x/read_json.php?device=map" {
 		t.Errorf("apiURL(map) без query = %q", got)
 	}
+	// Явный map_path имеет приоритет для device=map.
+	s3 := &mpptSite{BaseURL: "http://192.168.0.60", MPPTPath: "/read_json.php?device=mppt", MapPath: "/read_json.php?device=map"}
+	if got := s3.apiURL("map"); got != "http://192.168.0.60/read_json.php?device=map" {
+		t.Errorf("apiURL(map) с map_path = %q", got)
+	}
+	if got := s3.apiURL("mppt"); got != "http://192.168.0.60/read_json.php?device=mppt" {
+		t.Errorf("apiURL(mppt) с map_path = %q", got)
+	}
 }
 
 func TestMapMPPTAPIZeroTimestamp(t *testing.T) {

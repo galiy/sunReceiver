@@ -24,6 +24,7 @@ const requestTimeout = 3 * time.Second
 type mpptSite struct {
 	BaseURL  string
 	MPPTPath string
+	MapPath  string // путь к read_json.php?device=map (МАП); пусто — выводится из MPPTPath
 	Login    string
 	Password string
 	Host     string // host из base_url (IP ПАК «Малина») — используется как IP MPPT-устройства
@@ -32,15 +33,15 @@ type mpptSite struct {
 	authHdr string // "Basic base64(login:password)"
 }
 
-// loadMPPTSite собирает mpptSite из раздела "mppt" sunReceiver.json (mpptSection).
+// loadMPPTSite собирает mpptSite из раздела "malina" sunReceiver.json (malinaSection).
 // Если секция отсутствует или поля не полностью заданы — возвращает nil
 // (MPPT-контроллеры не опрашиваются).
-func loadMPPTSite(sec *mpptSection) *mpptSite {
+func loadMPPTSite(sec *malinaSection) *mpptSite {
 	if sec == nil {
 		return nil
 	}
 	if sec.BaseURL == "" || sec.MPPTPath == "" || sec.Login == "" || sec.Password == "" {
-		log.Printf("mppt site: раздел mppt неполный (нужны base_url, mppt_path, login, password) — мониторинг MPPT отключён")
+		log.Printf("malina site: раздел malina неполный (нужны base_url, mppt_path, login, password) — мониторинг MPPT отключён")
 		return nil
 	}
 	tok := base64.StdEncoding.EncodeToString([]byte(sec.Login + ":" + sec.Password))
@@ -48,6 +49,7 @@ func loadMPPTSite(sec *mpptSection) *mpptSite {
 	return &mpptSite{
 		BaseURL:  sec.BaseURL,
 		MPPTPath: sec.MPPTPath,
+		MapPath:  sec.MapPath,
 		Login:    sec.Login,
 		Password: sec.Password,
 		Host:     host,
@@ -145,12 +147,15 @@ func parseFloat(s string) (float64, bool) {
 	return f, true
 }
 
-// apiURL собирает полный URL к read_json.php для нужного device, заменяя значение
-// параметра device в существующем mppt_path (который обычно задан как
-// "/read_json.php?device=mppt"). Возвращает, например,
-// "…/read_json.php?device=map".
+// apiURL собирает полный URL к read_json.php для нужного device. Для "mppt" берётся
+// MPPTPath, для "map" — MapPath (если задан), иначе из MPPTPath выводится URL с
+// параметром device=map (значение device в существующем mppt_path заменяется).
+// MPPTPath обычно задан как "/read_json.php?device=mppt".
 func (s *mpptSite) apiURL(device string) string {
 	path := s.MPPTPath
+	if device == "map" && s.MapPath != "" {
+		path = s.MapPath
+	}
 	if i := strings.IndexByte(path, '?'); i >= 0 {
 		q, _ := url.ParseQuery(path[i+1:])
 		q.Set("device", device)

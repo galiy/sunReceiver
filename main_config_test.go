@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestLoadConfigLoggerSNRequired (п. 2.2): Deye/Sofar без logger_sn — ошибка
@@ -14,7 +15,7 @@ func TestLoadConfigLoggerSNRequired(t *testing.T) {
 	path := filepath.Join(dir, "cfg.json")
 
 	// Deye без logger_sn — ошибка с упоминанием logger_sn.
-	if err := os.WriteFile(path, []byte(`{"invertors":[{"ip":"192.168.13.91","name":"D1","type":"deye","disabled":false}]}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"dashboard_port":8080,"invertors":[{"ip":"192.168.13.91","name":"D1","type":"deye","disabled":false}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, _, _, _, err := loadConfig(path); err == nil {
@@ -24,7 +25,7 @@ func TestLoadConfigLoggerSNRequired(t *testing.T) {
 	}
 
 	// Sofar без logger_sn — тоже ошибка.
-	if err := os.WriteFile(path, []byte(`{"invertors":[{"ip":"192.168.13.76","name":"S1","type":"sofar","disabled":false}]}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"dashboard_port":8080,"invertors":[{"ip":"192.168.13.76","name":"S1","type":"sofar","disabled":false}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, _, _, _, err := loadConfig(path); err == nil {
@@ -32,7 +33,7 @@ func TestLoadConfigLoggerSNRequired(t *testing.T) {
 	}
 
 	// С logger_sn — валиден.
-	if err := os.WriteFile(path, []byte(`{"invertors":[{"ip":"192.168.13.91","name":"D1","type":"deye","disabled":false,"logger_sn":1774265353}]}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"dashboard_port":8080,"invertors":[{"ip":"192.168.13.91","name":"D1","type":"deye","disabled":false,"logger_sn":1774265353}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	targets, _, _, _, _, err := loadConfig(path)
@@ -62,5 +63,34 @@ func TestLoadMeterConfigValidation(t *testing.T) {
 	}
 	if mc.FirstReg != 0 || mc.RegisterCnt != 27 {
 		t.Fatalf("FirstReg=%d RegisterCnt=%d, want 0/27", mc.FirstReg, mc.RegisterCnt)
+	}
+}
+
+// TestLoadConfigDashboardPortRequired (п. 4): dashboard_port — обязательное поле;
+// без него — ошибка конфига при старте.
+func TestLoadConfigDashboardPortRequired(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cfg.json")
+	if err := os.WriteFile(path, []byte(`{"invertors":[{"ip":"192.168.13.91","name":"D1","type":"deye","disabled":false,"logger_sn":1774265353}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, _, err := loadConfig(path); err == nil {
+		t.Fatal("ожидали ошибку при отсутствии dashboard_port")
+	} else if !strings.Contains(err.Error(), "dashboard_port") {
+		t.Fatalf("err=%v, want упоминание dashboard_port", err)
+	}
+}
+
+// TestDefaultPGRestoreWindow — дефолт и разбор из конфига.
+func TestDefaultPGRestoreWindow(t *testing.T) {
+	if got := defaultPGRestoreWindow(nil); got != 30*24*time.Hour {
+		t.Fatalf("nil db → %v, want 30 суток", got)
+	}
+	if got := defaultPGRestoreWindow(&dbConfig{PGRestoreWindow: "48h"}); got != 48*time.Hour {
+		t.Fatalf("48h → %v, want 48ч", got)
+	}
+	// Некорректная строка — дефолт.
+	if got := defaultPGRestoreWindow(&dbConfig{PGRestoreWindow: "abc"}); got != 30*24*time.Hour {
+		t.Fatalf("abc → %v, want дефолт", got)
 	}
 }
