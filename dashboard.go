@@ -2628,9 +2628,6 @@ func (h *dashboardHandler) apiBMSSeries(w http.ResponseWriter, r *http.Request, 
 	if pts == nil {
 		pts = []bmsSeriesPoint{}
 	}
-	// TEMP [seriesstats]: временная статистика вызовов series-API (удалить после тестов).
-	log.Printf("[seriesstats] /api/bms/%s/series params=%q from=%s to=%s points=%d",
-		name, r.URL.RawQuery, from.Format(time.RFC3339), to.Format(time.RFC3339), len(pts))
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -3017,17 +3014,6 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	res.MeterVoltage = meterSeries(snaps, "meter_voltage")
 	res.MeterActivePower = meterSeries(snaps, "meter_active_power")
 
-	// TEMP [seriesstats]: временная статистика вызовов series-API (удалить после тестов).
-	{
-		names := make([]string, 0, len(res.Series))
-		for _, s := range res.Series {
-			names = append(names, fmt.Sprintf("%s=%d", s.Name, len(s.Points)))
-		}
-		log.Printf("[seriesstats] /api/series params=%q from=%s to=%s series: %s total=%d map_grid_voltage=%d map_grid_power=%d map_bat_voltage=%d map_bat_power=%d map_cons=%d meter_voltage=%d meter_active_power=%d",
-			r.URL.RawQuery, from.Format(time.RFC3339), to.Format(time.RFC3339), strings.Join(names, " "),
-			len(res.Total), len(res.MapGridVoltage), len(res.MapGridPower), len(res.MapBatVoltage), len(res.MapBatPower), len(res.MapCons), len(res.MeterVoltage), len(res.MeterActivePower))
-	}
-
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(res)
@@ -3316,10 +3302,6 @@ func (h *dashboardHandler) apiTariffs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// TEMP [seriesstats]: временная статистика вызовов series-API (удалить после тестов).
-	log.Printf("[seriesstats] /api/tariffs params=%q from=%s to=%s days=%d",
-		r.URL.RawQuery, from.Format(time.RFC3339), to.Format(time.RFC3339), len(days))
-
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(meterDailyResponse{
