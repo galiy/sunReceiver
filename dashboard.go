@@ -27,6 +27,18 @@ const rangeCacheTTL = 15 * time.Second
 // 3 запроса к PG/сек (7200/мин) до ~1 раза в минуту без заметной задержки.
 const tariffCacheTTL = 60 * time.Second
 
+// dashFlags — флаги видимости блоков на дашборде, вычисленные из sunReceiver.json.
+// Nonzero-поля управляют рендерингом рамок/плашек и кнопки «Электроэнергия»:
+//   - ShowMap — показывать блок «Данные МАП» (map.disabled != true);
+//   - ShowMeter — показывать блок счётчика и тарифов, кнопку «Электроэнергия»
+//     (счётчик опрашивается, meter.disabled != true);
+//   - ShowBMS — показывать блок BMS-батареек (пулер ANT BMS запущен).
+type dashFlags struct {
+	ShowMap   bool
+	ShowMeter bool
+	ShowBMS   bool
+}
+
 // dashboardHandler — веб-дашборд: отдаёт три HTML-страницы и JSON API.
 //   - Главная страница (/) — текущие параметры: плашки, электросчётчик, сводная
 //     таблица; обновляются каждую секунду из Redis.
@@ -37,6 +49,7 @@ const tariffCacheTTL = 60 * time.Second
 type dashboardHandler struct {
 	store *redisStore
 	pg    *pgStore
+	flags dashFlags
 
 	// Кэш loadRange: 4 одинаковых запроса /api/series за цикл сойдутся в один
 	// read из Redis/PG. Ключ — от (start, end).
@@ -394,7 +407,7 @@ document.querySelectorAll('.chart-toolbar span').forEach(function(s){
 <div class="mnav">
   <a href="/" {{if eq .active "home"}}class="active"{{end}}>Главная</a>
   <a href="/charts" {{if eq .active "charts"}}class="active"{{end}}>Графики</a>
-  <a href="/energy" {{if eq .active "energy"}}class="active"{{end}}>Электроэнергия</a>
+  {{if .flags.ShowMeter}}<a href="/energy" {{if eq .active "energy"}}class="active"{{end}}>Электроэнергия</a>{{end}}
 </div>
 {{end}}
 `
@@ -490,9 +503,10 @@ h1 { font-size:22px; margin:0 0 4px; }
     <p class="sub">Текущие параметры инверторов и электросчётчика (из Redis, обновление каждую секунду)</p>
   </div>
   <a class="nav-btn" href="/charts">Открыть графики</a>
-  <a class="nav-btn" href="/energy">Электроэнергия</a>
+  {{if .flags.ShowMeter}}<a class="nav-btn" href="/energy">Электроэнергия</a>{{end}}
 </div>
 
+{{if .flags.ShowBMS}}
 <div class="group group-top">
   <div class="group-head">
     <span class="group-title">BMS (ANT батарея)</span>
@@ -500,7 +514,9 @@ h1 { font-size:22px; margin:0 0 4px; }
   </div>
   <div class="group-body" id="bmsList"><span class="missing">Загрузка...</span></div>
 </div>
+{{end}}
 
+{{if .flags.ShowMeter}}
 <div class="group group-top">
   <div class="group-head">
     <span class="group-title">Электросчётчик DDS238 &mdash; текущие параметры</span>
@@ -509,7 +525,9 @@ h1 { font-size:22px; margin:0 0 4px; }
   <div class="group-body" id="meterStats"><span class="missing">Нет данных</span></div>
   <div class="meter-note">Мощность с отрицательным знаком &mdash; отдача в сеть (генерация); положительная &mdash; потребление.</div>
 </div>
+{{end}}
 
+{{if .flags.ShowMeter}}
 <div class="groups-row">
   <div class="group tariff-grid">
     <div class="group-title">Потребление/Отдача за сегодня</div>
@@ -587,8 +605,10 @@ h1 { font-size:22px; margin:0 0 4px; }
     </div>
   </div>
 </div>
+{{end}}
 
 <div class="groups-row">
+  {{if .flags.ShowMap}}
   <div class="group">
     <div class="group-title">Данные МАП</div>
     <div class="group-body">
@@ -619,6 +639,7 @@ h1 { font-size:22px; margin:0 0 4px; }
       </div>
     </div>
   </div>
+  {{end}}
   <div class="group">
     <div class="group-title">Мощности инверторов</div>
     <div class="group-body">
@@ -650,6 +671,12 @@ h1 { font-size:22px; margin:0 0 4px; }
 <script>{{template "mjs"}}</script>
 <script>
 'use strict';
+
+// Флаги видимости блоков (из sunReceiver.json): скрытые рамки/плашки не рендерятся
+// сервером, поэтому и обновления соответствующих элементов пропускаем.
+var showMap = {{if .flags.ShowMap}}true{{else}}false{{end}};
+var showMeter = {{if .flags.ShowMeter}}true{{else}}false{{end}};
+var showBMS = {{if .flags.ShowBMS}}true{{else}}false{{end}};
 
 // ---------- Утилиты ----------
 function esc(s){ return String(s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
@@ -806,9 +833,10 @@ var METER_PARAMS = [
 // renderMeter строит HTML статистик плашки счётчика из его снимка (или «Нет данных»).
 function renderMeter(meter){
 	var stats=document.getElementById('meterStats');
+	if(!stats) return;
 	if(!meter){ stats.innerHTML='<span class="missing">Нет данных</span>'; return; }
 	var ts=document.getElementById('meterTs');
-	ts.textContent=meter.timestamp? 'Актуально: '+fmtSec(meter.timestamp) : '—';
+	if(ts) ts.textContent=meter.timestamp? 'Актуально: '+fmtSec(meter.timestamp) : '—';
 	var h='';
 	for(var i=0;i<METER_PARAMS.length;i++){
 		var t=METER_PARAMS[i][0], lbl=METER_PARAMS[i][1], unit=METER_PARAMS[i][2], signed=METER_PARAMS[i][3];
@@ -856,55 +884,63 @@ async function tick(){
 			pvEl.textContent='—';
 		}
 		// Плашки МАП: напряжение/мощность сети и батареи.
-		setKpi('kpiGridV', data.map_grid_voltage);
-		setKpi('kpiGridP', data.map_grid_power);
-		setKpi('kpiBatV', data.map_battery_voltage);
-		setKpi('kpiBatP', data.map_battery_power);
-		setKpi('kpiConsP', data.map_consumption);
+		if(showMap){
+			setKpi('kpiGridV', data.map_grid_voltage);
+			setKpi('kpiGridP', data.map_grid_power);
+			setKpi('kpiBatV', data.map_battery_voltage);
+			setKpi('kpiBatP', data.map_battery_power);
+			setKpi('kpiConsP', data.map_consumption);
+		}
 		// Плашки «Потребление/Отдача за сегодня» (kWh): считаются из актуальных
 		// показаний счётчика и фиксированных граничных точек тарифов.
-		setKpi2('kpiImpDay', data.meter_import_day);
-		setKpi2('kpiImpNight', data.meter_import_night);
-		setKpi2('kpiExpDay', data.meter_export_day);
-		setKpi2('kpiExpNight', data.meter_export_night);
-		// Плашки «Потребление/Отдача за месяц/год» (kWh).
-		setKpi2('kpiImpDayM', data.meter_import_day_month);
-		setKpi2('kpiImpNightM', data.meter_import_night_month);
-		setKpi2('kpiExpDayM', data.meter_export_day_month);
-		setKpi2('kpiExpNightM', data.meter_export_night_month);
-		setKpi2('kpiImpDayY', data.meter_import_day_year);
-		setKpi2('kpiImpNightY', data.meter_import_night_year);
-		setKpi2('kpiExpDayY', data.meter_export_day_year);
-		setKpi2('kpiExpNightY', data.meter_export_night_year);
-		// Заголовки рамок: «Потребление/Отдача за MM.YYYY» и «... за YYYY год».
-		var now=new Date();
-		function p2(x){ return (x<10?'0':'')+x; }
-		document.getElementById('tariffMonthTitle').textContent='Потребление/Отдача за '+p2(now.getMonth()+1)+'.'+now.getFullYear();
-		document.getElementById('tariffYearTitle').textContent='Потребление/Отдача за '+now.getFullYear()+' год';
-		// Плашка электросчётчика (вверху).
-		var meter=null;
-		for(var i=0;i<data.devices.length;i++) if(isMeterDevice(data.devices[i])){ meter=data.devices[i]; break; }
-		renderMeter(meter);
+		if(showMeter){
+			setKpi2('kpiImpDay', data.meter_import_day);
+			setKpi2('kpiImpNight', data.meter_import_night);
+			setKpi2('kpiExpDay', data.meter_export_day);
+			setKpi2('kpiExpNight', data.meter_export_night);
+			// Плашки «Потребление/Отдача за месяц/год» (kWh).
+			setKpi2('kpiImpDayM', data.meter_import_day_month);
+			setKpi2('kpiImpNightM', data.meter_import_night_month);
+			setKpi2('kpiExpDayM', data.meter_export_day_month);
+			setKpi2('kpiExpNightM', data.meter_export_night_month);
+			setKpi2('kpiImpDayY', data.meter_import_day_year);
+			setKpi2('kpiImpNightY', data.meter_import_night_year);
+			setKpi2('kpiExpDayY', data.meter_export_day_year);
+			setKpi2('kpiExpNightY', data.meter_export_night_year);
+			// Заголовки рамок: «Потребление/Отдача за MM.YYYY» и «... за YYYY год».
+			var now=new Date();
+			function p2(x){ return (x<10?'0':'')+x; }
+			document.getElementById('tariffMonthTitle').textContent='Потребление/Отдача за '+p2(now.getMonth()+1)+'.'+now.getFullYear();
+			document.getElementById('tariffYearTitle').textContent='Потребление/Отдача за '+now.getFullYear()+' год';
+			// Плашка электросчётчика (вверху).
+			var meter=null;
+			for(var i=0;i<data.devices.length;i++) if(isMeterDevice(data.devices[i])){ meter=data.devices[i]; break; }
+			renderMeter(meter);
+		}
 		var cards=document.getElementById('cards');
 		cards.innerHTML = renderPivot(data.devices);
 	}catch(e){}
 }
 // setKpi заполняет плашку числом (с разделителями) или прочерком, если нет данных.
 function setKpi(id, v){
+	var el=document.getElementById(id);
+	if(!el) return;
 	var n=Number(v);
 	if(isFinite(n)){
-		document.getElementById(id).textContent=n.toLocaleString('ru-RU',{maximumFractionDigits:1});
+		el.textContent=n.toLocaleString('ru-RU',{maximumFractionDigits:1});
 	}else{
-		document.getElementById(id).textContent='—';
+		el.textContent='—';
 	}
 }
 // setKpi2 заполняет плашку kWh-величиной (до 2 знаков) или прочерком, если нет данных.
 function setKpi2(id, v){
+	var el=document.getElementById(id);
+	if(!el) return;
 	var n=Number(v);
 	if(isFinite(n)){
-		document.getElementById(id).textContent=n.toLocaleString('ru-RU',{maximumFractionDigits:2});
+		el.textContent=n.toLocaleString('ru-RU',{maximumFractionDigits:2});
 	}else{
-		document.getElementById(id).textContent='—';
+		el.textContent='—';
 	}
 }
 
@@ -914,12 +950,14 @@ function setKpi2(id, v){
 // 1-секундного tick главной страницы).
 function bmsSocColor(soc){ return soc<20?'#ff6b6b':(soc<50?'#ff9f43':(soc<80?'#f9ca24':'#00b894')); }
 async function tickBMS(){
+  if(!showBMS) return;
   try{
     var r=await fetch('/api/bms');
     if(!r.ok) return;
     var data=await r.json();
     var list=data.bms||[];
     var el=document.getElementById('bmsList');
+    if(!el) return;
     if(!list.length){ el.innerHTML='<span class="missing">BMS не найдены (или опрос отключён)</span>'; return; }
     var h='';
     for(var i=0;i<list.length;i++){
@@ -2510,13 +2548,13 @@ var bmsDetailTmpl = template.Must(template.New("bmsdetail").Parse(mobileCommon +
 func (h *dashboardHandler) charts(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = chartsTmpl.Execute(w, map[string]any{"active": "charts"})
+	_ = chartsTmpl.Execute(w, map[string]any{"active": "charts", "flags": h.flags})
 }
 
 func (h *dashboardHandler) energy(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = energyTmpl.Execute(w, map[string]any{"active": "energy"})
+	_ = energyTmpl.Execute(w, map[string]any{"active": "energy", "flags": h.flags})
 }
 
 // apiBMS отдаёт актуальное состояние всех ANT BMS (HASH sunreceiver:bms,
@@ -2655,7 +2693,7 @@ func (h *dashboardHandler) apiBMSSeries(w http.ResponseWriter, r *http.Request, 
 func (h *dashboardHandler) bmsDetail(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = bmsDetailTmpl.Execute(w, map[string]any{"active": "home"})
+	_ = bmsDetailTmpl.Execute(w, map[string]any{"active": "home", "flags": h.flags})
 }
 
 var dashboardTmpl = template.Must(template.New("dash").Parse(mobileCommon + dashboardPage))
@@ -2663,7 +2701,7 @@ var dashboardTmpl = template.Must(template.New("dash").Parse(mobileCommon + dash
 func (h *dashboardHandler) index(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = dashboardTmpl.Execute(w, map[string]any{"active": "home"})
+	_ = dashboardTmpl.Execute(w, map[string]any{"active": "home", "flags": h.flags})
 }
 
 // meterTariffToday вычисляет тарифные величины счётчика за текущие календарные
@@ -3362,8 +3400,8 @@ func dayBounds(now time.Time, loc *time.Location) (time.Time, time.Time) {
 // serveDashboard — HTTP-сервер веб-дашборда. При закрытии stop аккуратно
 // завершает сервер (http.Server.Shutdown, бюджет 5 с), чтобы main мог закрыть
 // пулы Redis/PG после завершения всех фоновых горутин (bgWg).
-func serveDashboard(addr string, store *redisStore, pg *pgStore, stop context.Context) {
-	h := &dashboardHandler{store: store, pg: pg}
+func serveDashboard(addr string, store *redisStore, pg *pgStore, stop context.Context, flags dashFlags) {
+	h := &dashboardHandler{store: store, pg: pg, flags: flags}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.index)
 	mux.HandleFunc("/charts", h.charts)

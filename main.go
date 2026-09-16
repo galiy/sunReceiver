@@ -118,6 +118,9 @@ type dbConfig struct {
 
 // meterSection — конфигурация электросчётчика DDS238, заданная в sunReceiver.json
 // разделом "meter" (обратная совместимость — отдельный dds238.json).
+// Disabled — ОБЯЗАТЕЛЬНОЕ поле (отсутствие = ошибка конфига): false = счётчик
+// опрашивается; true = все пулеры счётчика отключены, плашки/кнопка «Электроэнергия»
+// на дашборде скрыты.
 type meterSection struct {
 	Name        string `json:"name"`
 	IP          string `json:"ip"`
@@ -125,20 +128,27 @@ type meterSection struct {
 	Unit        byte   `json:"unit"`
 	FirstReg    uint16 `json:"first_reg"`
 	RegisterCnt uint16 `json:"register_count"`
+	Disabled    *bool  `json:"disabled"`
 }
 
 // mapSection — раздел "map" sunReceiver.json: настройка МАП Титанатор (вложенный
 // подраздел rs485 — Modbus TCP/RS485) и веб-API ПАК «Малина» для мониторинга
 // MPPT-контроллеров и МАП (через read_json.php). Пароль хранится в открытом виде
 // (sunReceiver.json — приватный, в git не выгружается).
+// Disabled — ОБЯЗАТЕЛЬНОЕ поле (отсутствие = ошибка конфига): true отключает ВСЕ
+// пулеры раздела map (МАП Modbus/веб-API, MPPT-контроллеры и BMS); на пулеры
+// сетевых инверторов не влияет. BMSDisabled — ОБЯЗАТЕЛЬНОЕ поле: true отключает
+// только пулер ANT BMS (плашки-батарейки на дашборде скрываются).
 type mapSection struct {
-	RS485    *mapRS485Section `json:"rs485"`
-	BaseURL  string           `json:"base_url"`
-	MPPTPath string           `json:"mppt_path"` // путь к read_json.php?device=mppt (КЭС/MPPT-контроллеры)
-	MapPath  string           `json:"map_path"`  // путь к read_json.php?device=map (МАП, батарея/сеть); пусто = выводится из mppt_path
-	BMSPath  string           `json:"bms_path"`  // путь к read_bms.php (ANT BMS); пусто — BMS не опрашивается
-	Login    string           `json:"login"`
-	Password string           `json:"password"`
+	RS485       *mapRS485Section `json:"rs485"`
+	BaseURL     string           `json:"base_url"`
+	MPPTPath    string           `json:"mppt_path"` // путь к read_json.php?device=mppt (КЭС/MPPT-контроллеры)
+	MapPath     string           `json:"map_path"`  // путь к read_json.php?device=map (МАП, батарея/сеть); пусто = выводится из mppt_path
+	BMSPath     string           `json:"bms_path"`  // путь к read_bms.php (ANT BMS); пусто — BMS не опрашивается
+	Login       string           `json:"login"`
+	Password    string           `json:"password"`
+	Disabled    *bool            `json:"disabled"`
+	BMSDisabled *bool            `json:"bms_disabled"`
 }
 
 type configFile struct {
@@ -213,7 +223,23 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	// МАП (батарея/сеть) — вложенный блок "rs485" раздела "map". Disabled обязателен:
 	// false — Modbus TCP (RS485), true — данные берутся из веб-API ПАК «Малина»
 	// (mapAPI). При true цель в targets не добавляется (Modbus-пулер не запускается).
-	if cf.Map != nil && cf.Map.RS485 != nil {
+	// Обязательные флаги раздела map: верхнеуровневый disabled (отключает ВСЕ пулеры
+	// map/mppt/bms) и bms_disabled (отключает только пулер ANT BMS).
+	if cf.Map != nil {
+		if cf.Map.Disabled == nil {
+			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано обязательное поле disabled (false/true)", path)
+		}
+		if cf.Map.BMSDisabled == nil {
+			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано обязательное поле bms_disabled (false/true)", path)
+		}
+		if *cf.Map.Disabled {
+			log.Printf("config: map disabled=true — пулеры МАП, MPPT и BMS не запускаются")
+		}
+	}
+	if cf.Meter != nil && cf.Meter.Disabled == nil {
+		return nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе meter не задано обязательное поле disabled (false/true)", path)
+	}
+	if cf.Map != nil && cf.Map.RS485 != nil && !*cf.Map.Disabled {
 		rs485 := cf.Map.RS485
 		if rs485.Disabled == nil {
 			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: в подразделе map.rs485 не задано обязательное поле disabled (false/true)", path)
@@ -1338,6 +1364,16 @@ func main() {
 		log.Printf("meter: не настроен (нет dds238.json рядом с бинарником) — опрос счётчика отключён")
 	}
 
+	// Флаги видимости блоков дашборда, вычисленные из конфигурации:
+	//   - ShowMap — МАП/MPPT включены (map.disabled != true);
+	//   - ShowMeter — счётчик реально опрашивается (не disabled и не «неполный»);
+	//   - ShowBMS — пулер ANT BMS запущен (bms_disabled != true, заполнен bms_path).
+	dash := dashFlags{
+		ShowMap:   mapSec != nil && (mapSec.Disabled == nil || !*mapSec.Disabled),
+		ShowMeter: meterCfg != nil,
+		ShowBMS:   bmsSite != nil,
+	}
+
 	rdb, err := openRedis(redisAddr)
 	if err != nil {
 		log.Fatalf("redis: %v", err)
@@ -1401,12 +1437,27 @@ func main() {
 	}()
 	// МАП («КЭС», Modbus TCP) и MPPT-контроллеры (веб-API ПАК «Малина»)
 	// опрашиваются отдельно, 1 раз в секунду, и пишутся в Redis со специальной
-	// логикой «одна строка за 10 с» (см. SaveSnapshotWindow).
-	bgWg.Add(1)
-	go func() {
-		defer bgWg.Done()
-		runMapPoll(store, stopCtx)
-	}()
+	// логикой «одна строка за 10 с» (см. SaveSnapshotWindow). Быстрый 1-сек цикл
+	// запускается только если есть хоть один источник МАП/MPPT: при map.disabled=true
+	// (или отсутствии источников) горутина не стартует вовсе.
+	hasMapSource := mapAPI != nil || mppt != nil
+	if !hasMapSource {
+		for _, t := range targets {
+			if t.Kind == kindMAP {
+				hasMapSource = true
+				break
+			}
+		}
+	}
+	if hasMapSource {
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			runMapPoll(store, stopCtx)
+		}()
+	} else {
+		log.Printf("map/mppt: опрос отключён (map.disabled=true или нет источников МАП/MPPT)")
+	}
 	// ANT BMS (read_bms.php) — 1 раз в секунду: актуальное состояние в отдельном
 	// Redis-ключе (HASH sunreceiver:bms) + накопление 5-минутных усреднённых
 	// точек в Redis (ряд, окно 2 суток) и PG (bms_averages), см. bms_poller.go
@@ -1438,7 +1489,7 @@ func main() {
 	bgWg.Add(1)
 	go func() {
 		defer bgWg.Done()
-		serveDashboard(dashboardAddr, store, pg, stopCtx)
+		serveDashboard(dashboardAddr, store, pg, stopCtx, dash)
 	}()
 
 	sig := make(chan os.Signal, 1)

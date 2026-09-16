@@ -31,6 +31,12 @@
     переключении режимов. Путь к `read_json.php?device=map` — поле `map_path` раздела
     `map` (при отсутствии выводится из `mppt_path` подменой `device`).
 
+Верхнеуровневый **`map.disabled`** (обязательное поле раздела `map`) — мастер-выключатель
+всего раздела: при `true` НЕ запускаются пулеры МАП (и Modbus, и веб-API) и MPPT, блок
+«Данные МАП» на дашборде скрывается; на пулеры сетевых инверторов не влияет.
+**`map.bms_disabled`** (обязательное) отключает только пулер ANT BMS (батарейки на
+главной странице скрываются).
+
 ## `values` углов МАП/MPPT (теги в `commonContractTags`)
 
 - **MPPT API** (`mapMPPTAPI`): `pv1_voltage/current/power` = `Vc_PV`/`Ic_PV`/`P_PV`
@@ -44,7 +50,7 @@
   0x422, 0 → нет сети, иначе +100 В), `grid_power` (`_PNET` 0x59A/0x59B, sign
   `_PNET_Sign_P` 0x587), `battery_voltage` (`_UAcc_med` 0x405/0x406,
   `(VH*256+VL)/10`), `battery_power` (`_PLoad` 0x59E/0x59F, `((H*256+L)/8)*100`).
-- **MAP API** (`mapMAPAPI`, при `map.disabled=true`): тот же контракт из
+- **MAP API** (`mapMAPAPI`, при `map.rs485.disabled=true`): тот же контракт из
   `read_json.php?device=map`: `battery_voltage`/`l1_voltage` = `_Uacc`, `l1_current`
   = `_Iacc`, `ac_active_power` = `_Uacc×_Iacc`, `grid_frequency` = `_TFNET`,
   `grid_voltage` = `_UNET` (уже в В, без смещения +100), `grid_power` =

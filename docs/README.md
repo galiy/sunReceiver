@@ -43,11 +43,15 @@ DDS238 (Modbus TCP), нормализует всё в единый контра�
 - **Инверторы** — раздел `invertors` конфига, нормализуются в контракт `values`
   (у каждого флаг `disabled`, обязательное поле).
 - **МАП** — подраздел `map.rs485`; источник задаёт обязательное поле `disabled`
-  (`false`=Modbus/RS485, `true`=веб-API ПАК «Малина»).
+  (`false`=Modbus/RS485, `true`=веб-API ПАК «Малина»). Верхнеуровневый `map.disabled`
+  (обязательное) отключает ВСЕ пулеры раздела (МАП, MPPT, BMS); `map.bms_disabled`
+  (обязательное) отключает только пулер ANT BMS.
 - **MPPT/МАП веб-API** — раздел `map` (доступ к ПАК «Малина»); состав контроллеров
   **динамический** по ответу веб-API (появляется/исчезает на дашборде).
-- **Счётчик** — раздел `meter` (legacy: файл `dds238.json`).
+- **Счётчик** — раздел `meter` (legacy: файл `dds238.json`); обязательное поле
+  `meter.disabled` (`true` — пулеры отключены, плашки/кнопка «Электроэнергия» скрыты).
 - **BMS** — поле `map.bms_path`; состав батарей динамический по ответу `read_bms.php`.
+  При `map.bms_disabled=true` пулер отключён, батарейки с дашборда скрыты.
 
 ## Хранение данных
 
@@ -74,9 +78,9 @@ DDS238 (Modbus TCP), нормализует всё в единый контра�
 | Раздел | Поля |
 |---|---|
 | `invertors[]` | `ip`, `name`, `type` (`deye`/`sofar`), `logger_sn`, `disabled` (обязательное) |
-| `map` | `rs485` (подраздел: `name`, `ip`, `unit` (Modbus, умолч. 1), `disabled` (обязательное: `false`=Modbus/RS485, `true`=веб-API ПАК «Малина»)); веб-API: `base_url`, `mppt_path`, `map_path` (необязательное — путь к read_json.php?device=map, при отсутствии выводится из mppt_path), `login`, `password`, `bms_path` (включает опрос ANT BMS) |
+| `map` | `disabled` (обязательное: `true` — все пулеры МАП/MPPT/BMS отключены, плашки МАП скрыты), `bms_disabled` (обязательное: `true` — пулер ANT BMS отключён, батарейки скрыты), `rs485` (подраздел: `name`, `ip`, `unit` (Modbus, умолч. 1), `disabled` (обязательное: `false`=Modbus/RS485, `true`=веб-API ПАК «Малина»)); веб-API: `base_url`, `mppt_path`, `map_path` (необязательное — путь к read_json.php?device=map, при отсутствии выводится из mppt_path), `login`, `password`, `bms_path` (включает опрос ANT BMS) |
 | `db` | `redis` (host:port), `pg` (DSN с паролем) |
-| `meter` | `name`, `ip`, `port`, `unit`, `first_reg`, `register_count` |
+| `meter` | `disabled` (обязательное: `true` — пулеры отключены, плашки/кнопка «Электроэнергия» скрыты), `name`, `ip`, `port`, `unit`, `first_reg`, `register_count` |
 
 ## Сборка, запуск, деплой
 

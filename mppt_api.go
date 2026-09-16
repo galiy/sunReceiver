@@ -40,6 +40,10 @@ func loadMPPTSite(sec *mapSection) *mpptSite {
 	if sec == nil {
 		return nil
 	}
+	if sec.Disabled != nil && *sec.Disabled {
+		log.Printf("map site: раздел map disabled=true — мониторинг MPPT отключён")
+		return nil
+	}
 	if sec.BaseURL == "" || sec.MPPTPath == "" || sec.Login == "" || sec.Password == "" {
 		log.Printf("map site: раздел map неполный (нужны base_url, mppt_path, login, password) — мониторинг MPPT отключён")
 		return nil

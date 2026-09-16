@@ -12,7 +12,7 @@ import (
 // синхронно вызывают srTouchChart при загрузке, и при обратном порядке
 // touch-жесты (щипок-зум, панорама) не привязываются (ReferenceError).
 func TestMobileMjsScriptOrder(t *testing.T) {
-	data := map[string]any{"active": "home"}
+	data := map[string]any{"active": "home", "flags": dashFlags{ShowMap: true, ShowMeter: true, ShowBMS: true}}
 	cases := []struct {
 		name   string
 		tmpl   *template.Template
