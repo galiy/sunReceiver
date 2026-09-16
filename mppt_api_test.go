@@ -115,3 +115,22 @@ func TestMpptSiteAPIURL(t *testing.T) {
 		t.Errorf("apiURL(map) без query = %q", got)
 	}
 }
+
+func TestMapMPPTAPIZeroTimestamp(t *testing.T) {
+	// timestamp отсутствует/не распарсился (=0) → mapMPPTAPI возвращает НУЛЕВОЕ
+	// время, а не time.Unix(0,0) (оно не IsZero() и дало бы снимок с 1970).
+	var r mpptRaw
+	if err := json.Unmarshal([]byte(`{"UID":"1097","Vc_PV":"120.0","Ic_PV":"2","P_PV":"240"}`), &r); err != nil {
+		t.Fatalf("unmarshal mpptRaw (без timestamp): %v", err)
+	}
+	vals, ts, ok := mapMPPTAPI(r)
+	if !ok {
+		t.Fatal("mapMPPTAPI: ok=false, want true")
+	}
+	if !ts.IsZero() {
+		t.Errorf("ts = %v, want нулевое (IsZero) — saveWindowSnapshot возьмёт now", ts)
+	}
+	if v := vals["pv1_voltage"].(float64); v != 120.0 {
+		t.Errorf("pv1_voltage = %v, want 120", v)
+	}
+}

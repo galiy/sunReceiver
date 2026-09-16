@@ -137,6 +137,13 @@ func (b *bmsBucket) avg() bmsAveraged {
 			temps = append(temps, 0)
 		}
 	}
+	// Если лишние ячейки восстановлены (0-заполнением) сверх CellCount последнего
+	// снимка — поднимаем CellCount до фактического числа, иначе дашборд режет
+	// cells_v по CellCount и восстановленные ячейки в батарейках не видны.
+	cellCount := b.last.CellCount
+	if len(cells) > cellCount {
+		cellCount = len(cells)
+	}
 	return bmsAveraged{
 		CurrentA:     avg1("current_a"),
 		PowerW:       avg1("power_w"),
@@ -148,7 +155,7 @@ func (b *bmsBucket) avg() bmsAveraged {
 		AvgCellV:     avg1("avg_cell_v"),
 		CellsV:       cells,
 		Temperatures: temps,
-		CellCount:    b.last.CellCount,
+		CellCount:    cellCount,
 		ChargeMos:    b.last.ChargeMos,
 		DischargeMos: b.last.DischargeMos,
 		Balancer:     b.last.Balancer,

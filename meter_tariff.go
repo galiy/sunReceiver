@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Тарифные границы счётчика DDS238 — константа (ТЗ):
@@ -97,12 +98,20 @@ func (c *meterTariffCapture) atBoundary(b time.Time, r meterReadings, now time.T
 	}
 }
 
-// meterExecer — минимальный интерфейс, который удовлетворяют и *pgxpool.Pool,
-// и pgx.Tx: позволяет выполнять SQL как в пуле, так и внутри транзакции.
+// meterExecer — минимальный интерфейс для выполнения SQL: позволяет
+// StoreMeterBoundary работать как с транзакцией (pgx.Tx), так и с пулом
+// (*pgxpool.Pool). В настоящий момент используется только транзакционная
+// ветка (pgx.Tx); пул удовлетворяет интерфейс по сигнатурам, проверено
+// компиляцией ниже.
 type meterExecer interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
+
+var (
+	_ meterExecer = (pgx.Tx)(nil)
+	_ meterExecer = (*pgxpool.Pool)(nil)
+)
 
 // StoreMeterBoundary сохраняет показание Import/Export на границе b в таблице
 // daily_tariffs (идемпотентно) и пытается финализировать день. Граница 00:00

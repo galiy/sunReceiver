@@ -115,13 +115,22 @@ func TestMeterTariffBoundaryZeroAtomic(t *testing.T) {
 		t.Fatal("meterBoundaryCaptured(00:00)=false, want true (обе колонки непусты)")
 	}
 
-	// Идемпотентность: повторный вызов не меняет значения.
+	// Идемпотентный повтор с теми же значениями: значения не меняются.
+	if err := pgc.StoreMeterBoundary(b, 500.0, 50.0); err != nil {
+		t.Fatalf("StoreMeterBoundary идемпотентный повтор: %v", err)
+	}
+	if err := pgc.pool.QueryRow(ctx, `SELECT "import_0000" FROM sunreceiver.daily_tariffs WHERE day=$1`,
+		time.Date(2026, 9, 2, 0, 0, 0, 0, loc)).Scan(&imp0000); err != nil || *imp0000 != 500 {
+		t.Fatalf("import_0000 после идемпотентного повтора = %v, want 500 (значения не изменились)", imp0000)
+	}
+	// Повтор с ДРУГИМИ значениями — DO UPDATE (override): более поздняя запись
+	// того же (день, граница) побеждает (last-write-wins), а не игнорируется.
 	if err := pgc.StoreMeterBoundary(b, 999.0, 99.0); err != nil {
-		t.Fatalf("StoreMeterBoundary повтор: %v", err)
+		t.Fatalf("StoreMeterBoundary повтор (override): %v", err)
 	}
 	if err := pgc.pool.QueryRow(ctx, `SELECT "import_0000" FROM sunreceiver.daily_tariffs WHERE day=$1`,
 		time.Date(2026, 9, 2, 0, 0, 0, 0, loc)).Scan(&imp0000); err != nil || *imp0000 != 999 {
-		t.Fatalf("import_0000 после повтора = %v, want 999 (idempotent upsert)", imp0000)
+		t.Fatalf("import_0000 после override = %v, want 999 (do update)", imp0000)
 	}
 
 	// Самовосстановление: имитируем частичную запись (только import_0000[D],

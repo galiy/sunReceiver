@@ -355,10 +355,10 @@ window.srTouchChart = function(getChart, canvasId, minSpan, onTap, onGestureComp
       return;
     }
     if(!st || st.mode!=='maybe' || st.decided==='pan'){
-      // Жест завершён: панорама (swipe) или щипок (pinch).
+      // Жест завершён: панорама (swipe) или щипок (pinch) — не сброс.
       var done=(st && (st.mode==='pinch' || st.decided==='pan'));
       st=null;
-      if(done && onGestureComplete) onGestureComplete();
+      if(done && onGestureComplete) onGestureComplete(false);
       return;
     }
     var dt=Date.now()-st.t;
@@ -370,7 +370,9 @@ window.srTouchChart = function(getChart, canvasId, minSpan, onTap, onGestureComp
       if(c && c.chartArea && px>=c.chartArea.left && px<=c.chartArea.right){
         if(Date.now()-lastTap.t<320 && Math.abs(px-lastTap.px)<40){
           try{ c.resetZoom(); }catch(err){}
-          if(onGestureComplete) onGestureComplete();
+          // Двойной тап = сброс зума: onGestureComplete(true) — окно возвращается
+          // к стандартному виду, правый край должен снова догонять now.
+          if(onGestureComplete) onGestureComplete(true);
         } else if(onTap){ onTap(px); }
         lastTap={t:Date.now(), px:px};
       }
@@ -1077,6 +1079,7 @@ Chart.register(ChartZoom);
 
 var preserveZoom=false;
 var userZoomed=false; // true — пользователь зумнул/сдвинул (нестандартное окно); false — стандартный вид (правый край догоняет now)
+var zoomResetInProgress=false; // true — идёт сброс зума (кнопка/двойной тап); srWindowChanged не фиксирует окно
 var hoverPix={};
 // hiddenSets[chartId] — метки датасетов, которые пользователь скрыл кликом по
 // легенде. При пересоздании графика (обновление по таймеру) выбор восстанавливается,
@@ -1246,11 +1249,13 @@ function syncZoomToOthers(fromChart){
 // (колесо, drag, pinch, свайп, двойной тап) данные удаляются и загружаются
 // заново с бэкенда под новое окно; поля «С/по» обновляются.
 var winReloadTimer=null, winReloadSrc=null;
-function srWindowChanged(chartId){
+function srWindowChanged(chartId, isResetFromGesture){
 	if(winReloadTimer) clearTimeout(winReloadTimer);
 	winReloadSrc=chartId;
 	winReloadTimer=setTimeout(function(){
 		winReloadTimer=null;
+		var isReset = isResetFromGesture || zoomResetInProgress;
+		zoomResetInProgress=false;
 		var id=winReloadSrc; winReloadSrc=null;
 		var c=window[id]||Chart.getChart(id);
 		if(!c||!c.scales||!c.scales.x) return;
@@ -1263,8 +1268,11 @@ function srWindowChanged(chartId){
 		document.getElementById('toPick').value=toInputDateTime(to);
 		document.getElementById('datePick').value=toInputDate(from);
 		setActiveBtn(null);
-		preserveZoom=true;
-		userZoomed=true; // перезагрузка ПОСЛЕ зума/панорамы — окно нестандартное
+		// Сброс зума (кнопка/двойной тап) возвращает окно к стандартному виду: не
+		// фиксировать его (preserveZoom) и не помечать как нестандартное — правый
+		// край должен снова догонять now. От обычного зума отличается маркером.
+		if(isReset){ preserveZoom=false; userZoomed=false; }
+		else { preserveZoom=true; userZoomed=true; }
 		loadAll();
 	},300);
 }
@@ -1407,7 +1415,15 @@ async function loadTotalChart(){
 		buildTotalChart(data);
 	}catch(e){}
 }
-document.getElementById('btnTotalReset').addEventListener('click',function(){ userZoomed=false; if(window.totalChart) window.totalChart.resetZoom(); });
+// «Сброс зума» по одному графику: помечает сброс (srWindowChanged не фиксирует
+// окно), сбрасывает флаг стандартного вида; таймер страхует от «застрявшего»
+// флага, если resetZoom() не вызвал onZoomComplete (окно и так стандартное).
+function userResetZoom(id){
+	zoomResetInProgress=true; userZoomed=false;
+	var c=window[id]; if(c) try{ c.resetZoom(); }catch(e){}
+	setTimeout(function(){ zoomResetInProgress=false; },700);
+}
+document.getElementById('btnTotalReset').addEventListener('click',function(){ userResetZoom('totalChart'); });
 
 // Активная мощность по инверторам
 function buildChart(data){
@@ -1432,7 +1448,7 @@ async function loadChart(){
 		buildChart(data);
 	}catch(e){}
 }
-document.getElementById('btnReset').addEventListener('click',function(){ userZoomed=false; if(window.powerChart) window.powerChart.resetZoom(); });
+document.getElementById('btnReset').addEventListener('click',function(){ userResetZoom('powerChart'); });
 
 // Напряжения (МАП + счётчик). Счётчик на левой оси (белая линия).
 function buildGridVChart(data){
@@ -1464,7 +1480,7 @@ async function loadGridVChart(){
 		buildGridVChart(data);
 	}catch(e){}
 }
-document.getElementById('btnGridVReset').addEventListener('click',function(){ userZoomed=false; if(window.gridVChart) window.gridVChart.resetZoom(); });
+document.getElementById('btnGridVReset').addEventListener('click',function(){ userResetZoom('gridVChart'); });
 
 // Мощности (МАП + счётчик). Активная мощность счётчика белой линией на левой оси.
 function buildGridPChart(data){
@@ -1496,7 +1512,7 @@ async function loadGridPChart(){
 		buildGridPChart(data);
 	}catch(e){}
 }
-document.getElementById('btnGridPReset').addEventListener('click',function(){ userZoomed=false; if(window.gridPChart) window.gridPChart.resetZoom(); });
+document.getElementById('btnGridPReset').addEventListener('click',function(){ userResetZoom('gridPChart'); });
 
 // ---------- Кнопки выбора периода ----------
 document.getElementById('btnToday').addEventListener('click',function(){ setPeriod(startOfToday(), endOfToday(), 'day', 'btnToday'); });
@@ -1537,7 +1553,7 @@ loadAll(); setInterval(function(){ preserveZoom=userZoomed; loadAll(); },60000);
 // отключён — он мешал зуму).
 if(SR_COARSE){
 	['powerChart','totalChart','gridVChart','gridPChart'].forEach(function(id){
-		srTouchChart(function(){ return window[id]; }, id, 60*1000, null, function(){ srWindowChanged(id); });
+		srTouchChart(function(){ return window[id]; }, id, 60*1000, null, function(isReset){ srWindowChanged(id, isReset); });
 	});
 }
 </script>
@@ -2186,6 +2202,7 @@ function setBmsRangeLabels(){
 // ---------- Выбор периода (общий для всех графиков BMS) ----------
 var preserveZoom=false;
 var userZoomed=false; // true — зум/сдвиг (нестандартное окно); false — стандартный вид
+var zoomResetInProgress=false; // true — идёт сброс зума (кнопка/двойной тап); bmsWindowChanged не фиксирует окно
 var selRange={from:startOfToday(), to:endOfToday()};
 var periodMode='day';
 function startOfToday(){ var d=new Date(); d.setHours(0,0,0,0); return d; }
@@ -2257,11 +2274,13 @@ var bmsZoomSyncPlugin={ id:'bmsZoomSync', afterDraw:function(chart){ try{ checkB
 // удаляются и загружаются заново с бэкенда под новое окно; поля «С/по»
 // обновляются.
 var bmsWinReloadTimer=null, bmsWinReloadSrc=null;
-function bmsWindowChanged(chartId){
+function bmsWindowChanged(chartId, isResetFromGesture){
   if(bmsWinReloadTimer) clearTimeout(bmsWinReloadTimer);
   bmsWinReloadSrc=chartId;
   bmsWinReloadTimer=setTimeout(function(){
     bmsWinReloadTimer=null;
+    var isReset = isResetFromGesture || zoomResetInProgress;
+    zoomResetInProgress=false;
     var id=bmsWinReloadSrc; bmsWinReloadSrc=null;
     var c=BMS_CHARTS[id];
     if(!c||!c.scales||!c.scales.x) return;
@@ -2274,8 +2293,10 @@ function bmsWindowChanged(chartId){
     document.getElementById('toPick').value=toInputDateTime(to);
     document.getElementById('datePick').value=toInputDate(from);
     setActiveBtn(null);
-    preserveZoom=true;
-    userZoomed=true; // перезагрузка ПОСЛЕ зума/панорамы — окно нестандартное
+    // Сброс зума (кнопка/двойной тап) — окно возвращается к стандартному виду:
+    // не фиксировать и не помечать как нестандартное (правый край догоняет now).
+    if(isReset){ preserveZoom=false; userZoomed=false; }
+    else { preserveZoom=true; userZoomed=true; }
     loadBmsCharts();
   },300);
 }
@@ -2484,10 +2505,18 @@ document.getElementById('btnRange').addEventListener('click',function(){
 });
 document.getElementById('btnRefresh').addEventListener('click',function(){ preserveZoom=false; userZoomed=false; loadBmsCharts(); });
 // Кнопки «Сброс зума» по каждому графику BMS.
+// «Сброс зума» по одному графику BMS: помечает сброс (bmsWindowChanged не
+// фиксирует окно); таймер страхует от «застрявшего» флага, если resetZoom()
+// не вызвал onZoomComplete (окно и так стандартное).
+function bmsUserResetZoom(id){
+  zoomResetInProgress=true; userZoomed=false;
+  var c=BMS_CHARTS[id]; if(c) try{ c.resetZoom(); }catch(e){}
+  setTimeout(function(){ zoomResetInProgress=false; },700);
+}
 for(var _b=0;_b<BMS_CHART_IDS.length;_b++){
   (function(id){
     var btn=document.getElementById(BMS_RESET_BTN[id]);
-    if(btn) btn.addEventListener('click',function(){ userZoomed=false; var c=BMS_CHARTS[id]; if(c) try{ c.resetZoom(); }catch(e){} });
+    if(btn) btn.addEventListener('click',function(){ bmsUserResetZoom(id); });
   })(BMS_CHART_IDS[_b]);
 }
 // Инициализация полей периода и первичная загрузка; дальше — раз в минуту (зум
@@ -2503,7 +2532,7 @@ setInterval(function(){ preserveZoom=userZoomed; loadBmsCharts(); },60000);
 // панорама, двойной тап — сброс зума; tooltip на тап отключён — мешал зуму).
 if(SR_COARSE){
   BMS_CHART_IDS.forEach(function(id){
-    srTouchChart(function(){ return BMS_CHARTS[id]; }, id, 5*60*1000, null, function(){ bmsWindowChanged(id); });
+    srTouchChart(function(){ return BMS_CHARTS[id]; }, id, 5*60*1000, null, function(isReset){ bmsWindowChanged(id, isReset); });
   });
 }
 
