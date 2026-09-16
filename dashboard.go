@@ -226,7 +226,7 @@ const mobileCommon = `
   .chart-wrap { height:290px; }
   .period-panel { gap:8px; margin-bottom:12px; }
   .period-panel button, .range-panel button, .chart-toolbar button { min-height:40px; padding:9px 14px; font-size:13px; }
-  .period-panel input[type=date], .range-panel input[type=date] { min-height:40px; padding:8px 10px; font-size:14px; }
+  .period-panel input[type=date], .period-panel input[type=datetime-local], .range-panel input[type=date], .range-panel input[type=datetime-local] { min-height:40px; padding:8px 10px; font-size:14px; }
   .lg-chips { gap:8px; }
   .lg-chip { padding:8px 14px 8px 10px; font-size:13px; }
   .lg-hint { margin-bottom:8px; }
@@ -421,8 +421,8 @@ h1 { font-size:22px; margin:0 0 4px; }
 .period-panel button { background:#252b36; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:5px 12px; cursor:pointer; font-size:13px; }
 .period-panel button:hover { background:#2f3644; }
 .period-panel button.active { background:#2f6fed; border-color:#2f6fed; color:#fff; }
-.period-panel input[type=date] { background:#181c24; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:4px 8px; font-size:13px; color-scheme:dark; }
-.period-panel input[type=date]:focus { outline:none; border-color:#2f6fed; }
+.period-panel input[type=date], .period-panel input[type=datetime-local] { background:#181c24; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:4px 8px; font-size:13px; color-scheme:dark; }
+.period-panel input[type=date]:focus, .period-panel input[type=datetime-local]:focus { outline:none; border-color:#2f6fed; }
 .period-panel .nav-arrow { padding:5px 10px; font-size:16px; line-height:1; }
 .chart-wrap { position:relative; height:340px; }
 .charts { display:flex; flex-wrap:wrap; gap:16px; margin-bottom:20px; }
@@ -969,8 +969,8 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 .period-panel button { background:#252b36; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:5px 12px; cursor:pointer; font-size:13px; }
 .period-panel button:hover { background:#2f3644; }
 .period-panel button.active { background:#2f6fed; border-color:#2f6fed; color:#fff; }
-.period-panel input[type=date] { background:#181c24; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:4px 8px; font-size:13px; color-scheme:dark; }
-.period-panel input[type=date]:focus { outline:none; border-color:#2f6fed; }
+.period-panel input[type=date], .period-panel input[type=datetime-local] { background:#181c24; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:4px 8px; font-size:13px; color-scheme:dark; }
+.period-panel input[type=date]:focus, .period-panel input[type=datetime-local]:focus { outline:none; border-color:#2f6fed; }
 .period-panel .nav-arrow { padding:5px 10px; font-size:16px; line-height:1; }
 .chart-wrap { position:relative; height:340px; }
 .charts { display:flex; flex-wrap:wrap; gap:16px; margin-bottom:20px; }
@@ -1005,9 +1005,9 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
   <input type="date" id="datePick" title="Выбрать день">
   <button id="btnDate">За выбранный день</button>
   <span style="color:#555">С</span>
-  <input type="date" id="fromPick" title="Начало периода">
+  <input type="datetime-local" id="fromPick" title="Начало периода">
   <span style="color:#555">по</span>
-  <input type="date" id="toPick" title="Конец периода">
+  <input type="datetime-local" id="toPick" title="Конец периода">
   <button id="btnRange">Показать период</button>
   <button id="btnPeriodNext" title="Следующий период">&rsaquo;</button>
   <button id="btnRefresh" title="Принудительно обновить графики">Обновить графики</button>
@@ -1309,6 +1309,8 @@ function dayFromStr(s){
 	return new Date(p[0], p[1]-1, p[2], 0,0,0,0);
 }
 function toInputDate(d){ function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
+function toInputDateTime(d){ function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes()); }
+function dtFromStr(s){ var d=String(s).split('T'), p=d[0].split('-').map(Number), t=(d[1]||'0:0').split(':').map(Number); return new Date(p[0],p[1]-1,p[2],t[0]||0,t[1]||0,0,0); }
 function endOfDay(d){
 	var e=new Date(d); e.setHours(23,59,59,999); return e;
 }
@@ -1331,9 +1333,9 @@ function setPeriod(from,to,mode,activeBtn){
 	selRange.from=from; selRange.to=to; periodMode=mode;
 	preserveZoom=false;
 	setActiveBtn(activeBtn);
-	var dFrom=dayStart(from), dTo=dayStart(to);
-	document.getElementById('fromPick').value=toInputDate(dFrom);
-	document.getElementById('toPick').value=toInputDate(dTo);
+	var dFrom=dayStart(from);
+	document.getElementById('fromPick').value=toInputDateTime(from);
+	document.getElementById('toPick').value=toInputDateTime(to);
 	document.getElementById('datePick').value=toInputDate(mode==='day'?from:dFrom);
 	loadAll();
 }
@@ -1481,16 +1483,15 @@ document.getElementById('btnPeriodNext').addEventListener('click',function(){ sh
 document.getElementById('btnRange').addEventListener('click',function(){
 	var f=document.getElementById('fromPick'), t=document.getElementById('toPick');
 	if(!f.value||!t.value) return;
-	var from=dayFromStr(f.value), to=dayFromStr(t.value); to.setHours(23,59,59,999);
-	setPeriod(from, to, 'custom', null);
+	setPeriod(dtFromStr(f.value), dtFromStr(t.value), 'custom', null);
 });
 document.getElementById('btnRefresh').addEventListener('click',function(){
 	preserveZoom=false;
 	loadAll();
 });
 
-document.getElementById('fromPick').value=toInputDate(dayStart(selRange.from));
-document.getElementById('toPick').value=toInputDate(dayStart(selRange.to));
+document.getElementById('fromPick').value=toInputDateTime(selRange.from);
+document.getElementById('toPick').value=toInputDateTime(selRange.to);
 document.getElementById('datePick').value=toInputDate(selRange.from);
 loadAll(); setInterval(function(){ preserveZoom=true; loadAll(); },60000);
 // Мобильная версия: touch-жесты по графикам (щипок — зум по X, свайп —
@@ -1536,8 +1537,8 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 .range-panel button { background:#252b36; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:4px 10px; cursor:pointer; font-size:13px; }
 .range-panel button:hover { background:#2f3644; }
 .range-panel button.active { background:#2f6fed; border-color:#2f6fed; color:#fff; }
-.range-panel input[type=date] { background:#181c24; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:4px 8px; font-size:13px; color-scheme:dark; }
-.range-panel input[type=date]:focus { outline:none; border-color:#2f6fed; }
+.range-panel input[type=date], .range-panel input[type=datetime-local] { background:#181c24; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:4px 8px; font-size:13px; color-scheme:dark; }
+.range-panel input[type=date]:focus, .range-panel input[type=datetime-local]:focus { outline:none; border-color:#2f6fed; }
 .chart-wrap { position:relative; height:360px; }
 .range-status { color:#ffa94d; font-style:italic; }
 .lg-chips { display:flex; flex-wrap:wrap; gap:6px; margin:2px 0 10px; }
@@ -1570,9 +1571,9 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
     <button id="d1Week">7 дней</button>
     <button id="d1Days30">30 дней</button>
     <span style="color:#555">С</span>
-    <input type="date" id="d1From">
+    <input type="datetime-local" id="d1From">
     <span style="color:#555">по</span>
-    <input type="date" id="d1To">
+    <input type="datetime-local" id="d1To">
     <button id="d1Apply">Показать</button>
   </div>
   <div class="chart-toolbar"><span class="range-status" id="s1"></span><button id="btnD1Reset">Сброс зума</button></div>
@@ -1587,9 +1588,9 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
     <button id="d2PrevYear">Прошлый год</button>
     <button id="d2Month">Текущий месяц</button>
     <span style="color:#555">С</span>
-    <input type="date" id="d2From">
+    <input type="datetime-local" id="d2From">
     <span style="color:#555">по</span>
-    <input type="date" id="d2To">
+    <input type="datetime-local" id="d2To">
     <button id="d2Apply">Показать</button>
   </div>
   <div class="chart-toolbar"><span class="range-status" id="s2"></span><button id="btnD2Reset">Сброс зума</button></div>
@@ -1658,9 +1659,9 @@ function lgKit(canvasId, chipsId){
 	return { build: build };
 }
 
-function toD(d){ function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
+function toInputDateTime(d){ function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes()); }
 function dayStart(d){ var r=new Date(d); r.setHours(0,0,0,0); return r; }
-function parseDay(s){ var p=String(s).split('-').map(Number); return new Date(p[0],p[1]-1,p[2],0,0,0,0); }
+function dtFromStr(s){ var d=String(s).split('T'), p=d[0].split('-').map(Number), t=(d[1]||'0:0').split(':').map(Number); return new Date(p[0],p[1]-1,p[2],t[0]||0,t[1]||0,0,0); }
 function endOfDay(d){ var e=new Date(d); e.setHours(23,59,59,999); return e; }
 function startOfMonth(){ var d=new Date(); return new Date(d.getFullYear(),d.getMonth(),1,0,0,0,0); }
 function endOfMonth(){ var d=new Date(); return new Date(d.getFullYear(),d.getMonth()+1,0,23,59,59,999); }
@@ -1737,12 +1738,12 @@ function initEnergyPanel(cfg){
 		p.selFrom=from; p.selTo=to;
 		presetIds.forEach(function(id){ document.getElementById(id).classList.remove('active'); });
 		if(activeBtn) document.getElementById(activeBtn).classList.add('active');
-		document.getElementById(cfg.fromEl).value=toD(dayStart(from));
-		document.getElementById(cfg.toEl).value=toD(dayStart(to));
+		document.getElementById(cfg.fromEl).value=toInputDateTime(from);
+		document.getElementById(cfg.toEl).value=toInputDateTime(to);
 		return load();
 	}
 	async function load(){
-		var url='/api/tariffs?from='+toD(dayStart(p.selFrom))+'&to='+toD(dayStart(p.selTo));
+		var url='/api/tariffs?from='+encodeURIComponent(p.selFrom.toISOString())+'&to='+encodeURIComponent(p.selTo.toISOString());
 		var r=await fetch(url); if(!r.ok) return;
 		var data=await r.json();
 		var days=data.days||[];
@@ -1765,11 +1766,11 @@ function initEnergyPanel(cfg){
 	document.getElementById(cfg.applyBtn).addEventListener('click',function(){
 		var f=document.getElementById(cfg.fromEl).value, t=document.getElementById(cfg.toEl).value;
 		if(!f||!t) return;
-		setRange(parseDay(f), endOfDay(parseDay(t)), null);
+		setRange(dtFromStr(f), dtFromStr(t), null);
 	});
 	// Инициализация диапазона и полей по умолчанию.
-	document.getElementById(cfg.fromEl).value=toD(dayStart(p.selFrom));
-	document.getElementById(cfg.toEl).value=toD(dayStart(p.selTo));
+	document.getElementById(cfg.fromEl).value=toInputDateTime(p.selFrom);
+	document.getElementById(cfg.toEl).value=toInputDateTime(p.selTo);
 	load();
 	return p;
 }
@@ -1916,8 +1917,8 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 .period-panel button { background:#252b36; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:5px 12px; cursor:pointer; font-size:13px; }
 .period-panel button:hover { background:#2f3644; }
 .period-panel button.active { background:#2f6fed; border-color:#2f6fed; color:#fff; }
-.period-panel input[type=date] { background:#181c24; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:4px 8px; font-size:13px; color-scheme:dark; }
-.period-panel input[type=date]:focus { outline:none; border-color:#2f6fed; }
+.period-panel input[type=date], .period-panel input[type=datetime-local] { background:#181c24; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:4px 8px; font-size:13px; color-scheme:dark; }
+.period-panel input[type=date]:focus, .period-panel input[type=datetime-local]:focus { outline:none; border-color:#2f6fed; }
 .period-panel .nav-arrow { padding:5px 10px; font-size:16px; line-height:1; }
 .chart-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:10px 12px; margin:0 0 8px; font-size:13px; color:#8a93a1; }
 .chart-toolbar button { background:#252b36; color:#e6e6e6; border:1px solid #333b49; border-radius:6px; padding:4px 10px; cursor:pointer; font-size:13px; }
@@ -1978,9 +1979,9 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
   <input type="date" id="datePick" title="Выбрать день">
   <button id="btnDate">За выбранный день</button>
   <span style="color:#555">С</span>
-  <input type="date" id="fromPick" title="Начало периода">
+  <input type="datetime-local" id="fromPick" title="Начало периода">
   <span style="color:#555">по</span>
-  <input type="date" id="toPick" title="Конец периода">
+  <input type="datetime-local" id="toPick" title="Конец периода">
   <button id="btnRange">Показать период</button>
   <button id="btnPeriodNext" title="Следующий период">&rsaquo;</button>
   <button id="btnRefresh" title="Принудительно обновить графики">Обновить графики</button>
@@ -2137,6 +2138,8 @@ function endOfToday(){ var d=new Date(); d.setHours(23,59,59,999); return d; }
 function startOfYesterday(){ var d=new Date(); d.setDate(d.getDate()-1); d.setHours(0,0,0,0); return d; }
 function dayFromStr(s){ var p=String(s).split('-').map(Number); return new Date(p[0], p[1]-1, p[2], 0,0,0,0); }
 function toInputDate(d){ function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
+function toInputDateTime(d){ function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes()); }
+function dtFromStr(s){ var d=String(s).split('T'), p=d[0].split('-').map(Number), t=(d[1]||'0:0').split(':').map(Number); return new Date(p[0],p[1]-1,p[2],t[0]||0,t[1]||0,0,0); }
 function endOfDay(d){ var e=new Date(d); e.setHours(23,59,59,999); return e; }
 function dayStart(d){ var r=new Date(d); r.setHours(0,0,0,0); return r; }
 function addDays(d,n){ var r=new Date(d); r.setDate(r.getDate()+n); return r; }
@@ -2151,9 +2154,9 @@ function setPeriod(from,to,mode,activeBtn){
   selRange.from=from; selRange.to=to; periodMode=mode;
   preserveZoom=false;
   setActiveBtn(activeBtn);
-  var dFrom=dayStart(from), dTo=dayStart(to);
-  document.getElementById('fromPick').value=toInputDate(dFrom);
-  document.getElementById('toPick').value=toInputDate(dTo);
+  var dFrom=dayStart(from);
+  document.getElementById('fromPick').value=toInputDateTime(from);
+  document.getElementById('toPick').value=toInputDateTime(to);
   document.getElementById('datePick').value=toInputDate(mode==='day'?from:dFrom);
   loadBmsCharts();
 }
@@ -2394,8 +2397,7 @@ document.getElementById('btnPeriodNext').addEventListener('click',function(){ sh
 document.getElementById('btnRange').addEventListener('click',function(){
   var f=document.getElementById('fromPick'), t=document.getElementById('toPick');
   if(!f.value||!t.value) return;
-  var from=dayFromStr(f.value), to=dayFromStr(t.value); to.setHours(23,59,59,999);
-  setPeriod(from, to, 'custom', null);
+  setPeriod(dtFromStr(f.value), dtFromStr(t.value), 'custom', null);
 });
 document.getElementById('btnRefresh').addEventListener('click',function(){ preserveZoom=false; loadBmsCharts(); });
 // Кнопки «Сброс зума» по каждому графику BMS.
@@ -2407,8 +2409,8 @@ for(var _b=0;_b<BMS_CHART_IDS.length;_b++){
 }
 // Инициализация полей периода и первичная загрузка; дальше — раз в минуту (зум
 // и выбор линий сохраняются), параметры батареи — каждую секунду.
-document.getElementById('fromPick').value=toInputDate(dayStart(selRange.from));
-document.getElementById('toPick').value=toInputDate(dayStart(selRange.to));
+document.getElementById('fromPick').value=toInputDateTime(selRange.from);
+document.getElementById('toPick').value=toInputDateTime(selRange.to);
 document.getElementById('datePick').value=toInputDate(selRange.from);
 setActiveBtn('btnToday');
 loadBmsCharts();
@@ -3207,9 +3209,12 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore, stop <-chan str
 }
 
 // apiTariffs отдаёт посуточную тарифную статистику счётчика (день/ночь ×
-// потребление/отдача) за запрошенный период [from, to] (YYYY-MM-DD), отсортированную
-// по дате. Параметры from/to необязательны; если не заданы — берётся текущий
-// календарный месяц. Только финализированные дни (полные показания на 00:00/07:00/23:00).
+// потребление/отдача) за запрошенный период [from, to] (RFC3339, дата+время),
+// отсортированную по дате. Выборка — по календарным дням в локальной зоне:
+// первый день по дате from, последний по дате to (время внутри суток на
+// выборку не влияет). Параметры from/to необязательны; если не заданы —
+// берётся текущий календарный месяц. Только финализированные дни (полные
+// показания на 00:00/07:00/23:00).
 func (h *dashboardHandler) apiTariffs(w http.ResponseWriter, r *http.Request) {
 	from, to := parseTariffRange(r.URL.Query().Get("from"), r.URL.Query().Get("to"))
 	days := []meterDayStat{}
@@ -3225,24 +3230,29 @@ func (h *dashboardHandler) apiTariffs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(meterDailyResponse{
 		GeneratedAt: time.Now().Format(time.RFC3339),
-		From:        from.Format("2006-01-02"),
-		To:          to.AddDate(0, 0, -1).Format("2006-01-02"),
+		From:        from.Format(time.RFC3339),
+		To:          to.Add(-time.Second).Format(time.RFC3339),
 		Days:        days,
 	})
 }
 
-// parseTariffRange разбирает необязательные параметры from/to (YYYY-MM-DD) в диапазон
-// [from, to) в локальной зоне. Пустые значения дают текущий календарный месяц.
+// parseTariffRange разбирает необязательные параметры from/to (RFC3339,
+// дата+время) в диапазон дней [start, end) в локальной зоне: start — начало
+// суток первого дня (по дате from), end — начало суток после последнего
+// (по дате to). Время внутри суток на выборку не влияет — только календарный
+// день. Пустые значения или ошибка парсинга дают текущий календарный месяц.
 func parseTariffRange(fromStr, toStr string) (time.Time, time.Time) {
 	now := time.Now()
 	loc := now.Location()
 	defStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
 	defEnd := defStart.AddDate(0, 1, 0)
-	if t, err := time.ParseInLocation("2006-01-02", fromStr, loc); err == nil {
-		defStart = t
+	if t, err := time.Parse(time.RFC3339, fromStr); err == nil {
+		t = t.In(loc)
+		defStart = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc)
 	}
-	if t, err := time.ParseInLocation("2006-01-02", toStr, loc); err == nil {
-		defEnd = t.AddDate(0, 0, 1)
+	if t, err := time.Parse(time.RFC3339, toStr); err == nil {
+		t = t.In(loc)
+		defEnd = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, 1)
 	}
 	if defEnd.Before(defStart) {
 		defEnd = defStart.AddDate(0, 1, 0)
