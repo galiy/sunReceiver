@@ -1024,7 +1024,6 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
     <h2>Напряжение сети и батареи (МАП), V + напряжение счётчика</h2>
     <div class="chart-toolbar">
       <span id="gridVChartRange"></span>
-      <button id="btnGridVReset">Сброс зума</button>
       <span>Зум: Ctrl+колесо / drag&ndash;панорама</span>
     </div>
     <div class="lg-chips" id="gridVChartLg"></div>
@@ -1035,7 +1034,6 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
     <h2>Мощности сети и батареи (МАП), W + активная мощность счётчика</h2>
     <div class="chart-toolbar">
       <span id="gridPChartRange"></span>
-      <button id="btnGridPReset">Сброс зума</button>
       <span>Зум: Ctrl+колесо / drag&ndash;панорама</span>
     </div>
     <div class="lg-chips" id="gridPChartLg"></div>
@@ -1046,7 +1044,6 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
     <h2>Суммарная активная мощность, W</h2>
     <div class="chart-toolbar">
       <span id="totalChartRange"></span>
-      <button id="btnTotalReset">Сброс зума</button>
       <span>Зум: Ctrl+колесо / drag&ndash;панорама</span>
     </div>
     <div class="chart-wrap"><canvas id="totalChart"></canvas></div>
@@ -1056,7 +1053,6 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
     <h2>Активная мощность по инверторам, W</h2>
     <div class="chart-toolbar">
       <span id="chartRange"></span>
-      <button id="btnReset">Сброс зума</button>
       <span>Зум: Ctrl+колесо / drag&ndash;панорама</span>
     </div>
     <div class="lg-chips" id="powerChartLg"></div>
@@ -1079,7 +1075,6 @@ Chart.register(ChartZoom);
 
 var preserveZoom=false;
 var userZoomed=false; // true — пользователь зумнул/сдвинул (нестандартное окно); false — стандартный вид (правый край догоняет now)
-var zoomResetInProgress=false; // true — идёт сброс зума (кнопка/двойной тап); srWindowChanged не фиксирует окно
 var hoverPix={};
 // hiddenSets[chartId] — метки датасетов, которые пользователь скрыл кликом по
 // легенде. При пересоздании графика (обновление по таймеру) выбор восстанавливается,
@@ -1257,8 +1252,7 @@ function srWindowChanged(chartId, isResetFromGesture){
 	winReloadSrc=chartId;
 	winReloadTimer=setTimeout(function(){
 		winReloadTimer=null;
-		var isReset = isResetFromGesture || zoomResetInProgress;
-		zoomResetInProgress=false;
+		var isReset = isResetFromGesture;
 		var id=winReloadSrc; winReloadSrc=null;
 		var c=window[id]||Chart.getChart(id);
 		if(!c||!c.scales||!c.scales.x) return;
@@ -1271,7 +1265,7 @@ function srWindowChanged(chartId, isResetFromGesture){
 		document.getElementById('toPick').value=toInputDateTime(to);
 		document.getElementById('datePick').value=toInputDate(from);
 		setActiveBtn(null);
-		// Сброс зума (кнопка/двойной тап) возвращает окно к стандартному виду: не
+		// Сброс зума (двойной тап) возвращает окно к стандартному виду: не
 		// фиксировать его (preserveZoom) и не помечать как нестандартное — правый
 		// край должен снова догонять now. От обычного зума отличается маркером.
 		if(isReset){ preserveZoom=false; userZoomed=false; }
@@ -1418,16 +1412,6 @@ async function loadTotalChart(){
 		buildTotalChart(data);
 	}catch(e){}
 }
-// «Сброс зума» по одному графику: помечает сброс (srWindowChanged не фиксирует
-// окно), сбрасывает флаг стандартного вида; таймер страхует от «застрявшего»
-// флага, если resetZoom() не вызвал onZoomComplete (окно и так стандартное).
-function userResetZoom(id){
-	zoomResetInProgress=true; userZoomed=false;
-	var c=window[id]; if(c) try{ c.resetZoom(); }catch(e){}
-	setTimeout(function(){ zoomResetInProgress=false; },700);
-}
-document.getElementById('btnTotalReset').addEventListener('click',function(){ userResetZoom('totalChart'); });
-
 // Активная мощность по инверторам
 function buildChart(data){
 	var datasets=[];
@@ -1451,7 +1435,6 @@ async function loadChart(){
 		buildChart(data);
 	}catch(e){}
 }
-document.getElementById('btnReset').addEventListener('click',function(){ userResetZoom('powerChart'); });
 
 // Напряжения (МАП + счётчик). Счётчик на левой оси (белая линия).
 function buildGridVChart(data){
@@ -1483,7 +1466,6 @@ async function loadGridVChart(){
 		buildGridVChart(data);
 	}catch(e){}
 }
-document.getElementById('btnGridVReset').addEventListener('click',function(){ userResetZoom('gridVChart'); });
 
 // Мощности (МАП + счётчик). Активная мощность счётчика белой линией на левой оси.
 function buildGridPChart(data){
@@ -1515,7 +1497,6 @@ async function loadGridPChart(){
 		buildGridPChart(data);
 	}catch(e){}
 }
-document.getElementById('btnGridPReset').addEventListener('click',function(){ userResetZoom('gridPChart'); });
 
 // ---------- Кнопки выбора периода ----------
 document.getElementById('btnToday').addEventListener('click',function(){ setPeriod(startOfToday(), endOfToday(), 'day', 'btnToday'); });
@@ -1634,7 +1615,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
     <input type="datetime-local" id="d1To">
     <button id="d1Apply">Показать</button>
   </div>
-  <div class="chart-toolbar"><span class="range-status" id="s1"></span><button id="btnD1Reset">Сброс зума</button><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
+  <div class="chart-toolbar"><span class="range-status" id="s1"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
   <div class="lg-chips" id="dailyTariffChartLg"></div>
   <div class="chart-wrap"><canvas id="dailyTariffChart"></canvas></div>
 </div>
@@ -1651,7 +1632,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
     <input type="datetime-local" id="d2To">
     <button id="d2Apply">Показать</button>
   </div>
-  <div class="chart-toolbar"><span class="range-status" id="s2"></span><button id="btnD2Reset">Сброс зума</button><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
+  <div class="chart-toolbar"><span class="range-status" id="s2"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
   <div class="lg-chips" id="monthlyTariffChartLg"></div>
   <div class="chart-wrap"><canvas id="monthlyTariffChart"></canvas></div>
 </div>
@@ -1884,9 +1865,6 @@ initEnergyPanel({
 	],
 	defaultFrom:startOfYear, defaultTo:endOfYear
 });
-// Кнопки «Сброс зума» по каждому тарифному графику.
-document.getElementById('btnD1Reset').addEventListener('click',function(){ try{ if(window.dailyTariffChart) window.dailyTariffChart.resetZoom(); }catch(e){} });
-document.getElementById('btnD2Reset').addEventListener('click',function(){ try{ if(window.monthlyTariffChart) window.monthlyTariffChart.resetZoom(); }catch(e){} });
 // Перезагрузка данных после зума/сдвига (каждый график независимо). Time-шкала:
 // окно X — время; по завершении жеста (onZoomComplete/onPanComplete на десктопе,
 // onGestureComplete на touch) 300ms-debounce → данные удаляются и грузятся
@@ -2063,33 +2041,33 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#0
 <div class="charts bms-charts">
   <div class="card">
     <h2>Заряд (SOC), %</h2>
-    <div class="chart-toolbar"><span id="bmsCapChartRange"></span><button id="btnBmsCapReset">Сброс зума</button><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
+    <div class="chart-toolbar"><span id="bmsCapChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="chart-wrap"><canvas id="bmsCapChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Напряжение пакета, V</h2>
-    <div class="chart-toolbar"><span id="bmsVoltChartRange"></span><button id="btnBmsVoltReset">Сброс зума</button><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
+    <div class="chart-toolbar"><span id="bmsVoltChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="chart-wrap"><canvas id="bmsVoltChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Ток, A</h2>
-    <div class="chart-toolbar"><span id="bmsCurChartRange"></span><button id="btnBmsCurReset">Сброс зума</button><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
+    <div class="chart-toolbar"><span id="bmsCurChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="chart-wrap"><canvas id="bmsCurChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Мощность, W</h2>
-    <div class="chart-toolbar"><span id="bmsPwrChartRange"></span><button id="btnBmsPwrReset">Сброс зума</button><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
+    <div class="chart-toolbar"><span id="bmsPwrChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="chart-wrap"><canvas id="bmsPwrChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Напряжения ячеек, V</h2>
-    <div class="chart-toolbar"><span id="bmsCellsChartRange"></span><button id="btnBmsCellsReset">Сброс зума</button><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
+    <div class="chart-toolbar"><span id="bmsCellsChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="lg-chips" id="bmsCellsChartLg"></div>
     <div class="chart-wrap"><canvas id="bmsCellsChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Температуры T1–T4 (батарея, силовые ключи, плата), &deg;C</h2>
-    <div class="chart-toolbar"><span id="bmsTempChartRange"></span><button id="btnBmsTempReset">Сброс зума</button><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
+    <div class="chart-toolbar"><span id="bmsTempChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="lg-chips" id="bmsTempChartLg"></div>
     <div class="chart-wrap"><canvas id="bmsTempChart"></canvas></div>
   </div>
@@ -2193,7 +2171,6 @@ async function load(){
 Chart.register(ChartZoom);
 var CHART_COLORS=['#4ecdc4','#ff6b6b','#4dabf7','#ffd166','#00b894','#a29bfe','#ff9f43','#e84393','#55efc4','#fd79a8','#74b9ff','#ffeaa7','#dfe6e9','#fab1a0','#81ecec','#6c5ce7'];
 var BMS_CHART_IDS=['bmsCapChart','bmsVoltChart','bmsCurChart','bmsPwrChart','bmsCellsChart','bmsTempChart'];
-var BMS_RESET_BTN={ bmsCapChart:'btnBmsCapReset', bmsVoltChart:'btnBmsVoltReset', bmsCurChart:'btnBmsCurReset', bmsPwrChart:'btnBmsPwrReset', bmsCellsChart:'btnBmsCellsReset', bmsTempChart:'btnBmsTempReset' };
 function mkBmsDs(label,color,data){ return { label:label, data:data, borderColor:color, backgroundColor:color, pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false }; }
 function packVolt(p){ var s=0, c=p.cells_v||[]; for(var i=0;i<c.length;i++) s+=c[i]; return s; }
 function fmtDate(t){ var d=new Date(t); function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes()); }
@@ -2205,7 +2182,6 @@ function setBmsRangeLabels(){
 // ---------- Выбор периода (общий для всех графиков BMS) ----------
 var preserveZoom=false;
 var userZoomed=false; // true — зум/сдвиг (нестандартное окно); false — стандартный вид
-var zoomResetInProgress=false; // true — идёт сброс зума (кнопка/двойной тап); bmsWindowChanged не фиксирует окно
 var selRange={from:startOfToday(), to:endOfToday()};
 var periodMode='day';
 function startOfToday(){ var d=new Date(); d.setHours(0,0,0,0); return d; }
@@ -2282,8 +2258,7 @@ function bmsWindowChanged(chartId, isResetFromGesture){
   bmsWinReloadSrc=chartId;
   bmsWinReloadTimer=setTimeout(function(){
     bmsWinReloadTimer=null;
-    var isReset = isResetFromGesture || zoomResetInProgress;
-    zoomResetInProgress=false;
+    var isReset = isResetFromGesture;
     var id=bmsWinReloadSrc; bmsWinReloadSrc=null;
     var c=BMS_CHARTS[id];
     if(!c||!c.scales||!c.scales.x) return;
@@ -2296,7 +2271,7 @@ function bmsWindowChanged(chartId, isResetFromGesture){
     document.getElementById('toPick').value=toInputDateTime(to);
     document.getElementById('datePick').value=toInputDate(from);
     setActiveBtn(null);
-    // Сброс зума (кнопка/двойной тап) — окно возвращается к стандартному виду:
+    // Сброс зума (двойной тап) — окно возвращается к стандартному виду:
     // не фиксировать и не помечать как нестандартное (правый край догоняет now).
     if(isReset){ preserveZoom=false; userZoomed=false; }
     else { preserveZoom=true; userZoomed=true; }
@@ -2507,21 +2482,6 @@ document.getElementById('btnRange').addEventListener('click',function(){
   setPeriod(dtFromStr(f.value), dtFromStr(t.value), 'custom', null);
 });
 document.getElementById('btnRefresh').addEventListener('click',function(){ preserveZoom=false; userZoomed=false; loadBmsCharts(); });
-// Кнопки «Сброс зума» по каждому графику BMS.
-// «Сброс зума» по одному графику BMS: помечает сброс (bmsWindowChanged не
-// фиксирует окно); таймер страхует от «застрявшего» флага, если resetZoom()
-// не вызвал onZoomComplete (окно и так стандартное).
-function bmsUserResetZoom(id){
-  zoomResetInProgress=true; userZoomed=false;
-  var c=BMS_CHARTS[id]; if(c) try{ c.resetZoom(); }catch(e){}
-  setTimeout(function(){ zoomResetInProgress=false; },700);
-}
-for(var _b=0;_b<BMS_CHART_IDS.length;_b++){
-  (function(id){
-    var btn=document.getElementById(BMS_RESET_BTN[id]);
-    if(btn) btn.addEventListener('click',function(){ bmsUserResetZoom(id); });
-  })(BMS_CHART_IDS[_b]);
-}
 // Инициализация полей периода и первичная загрузка; дальше — раз в минуту (зум
 // и выбор линий сохраняются), параметры батареи — каждую секунду.
 document.getElementById('fromPick').value=toInputDateTime(selRange.from);
