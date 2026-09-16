@@ -88,7 +88,8 @@ legacy-файлом `dds238.json`). Опрос Deye/Sofar — раз в 10 се�
   тарифы (`daily_tariffs`), добор пропущенных границ. Полное описание —
   [`docs/dds238-meter.md`](docs/dds238-meter.md).
 - **ANT BMS** — `bms_poller.go`, `bms_accumulator.go`, `bmslistener/`. Полное описание —
-  [`docs/antbms.md`](docs/antbms.md).
+  [`docs/antbms.md`](docs/antbms.md). Демон bmslistener (установка на ПАК «Малина») —
+  [`docs/modules/bms-listener.md`](docs/modules/bms-listener.md).
 
 ### Универсальный контракт `values`
 

@@ -27,7 +27,7 @@ DDS238 (Modbus TCP), нормализует всё в единый контра�
 | **Веб-дашборд** (`dashboard.go`) | HTML + JSON API (`/`, `/charts`, `/energy`, `/bms/<name>`) поверх Redis/PG, зум/панорама, offline-индикация, mobile-раскладка | [modules/dashboard.md](modules/dashboard.md) |
 | **МАП + MPPT** (`mppt_api.go`, `modbusmap/`) | МАП (батарея/сеть) через Modbus TCP или веб-API; MPPT-контроллеры через `read_json.php?device=mppt` (динамический состав) | [modules/map-mppt.md](modules/map-mppt.md) |
 | **Счётчик DDS238** (`meter_*.go`) | Мгновенные значения `meter_*` + посуточные тарифы «День/Ночь» (`daily_tariffs`) с добором пропущенных границ | [dds238-meter.md](dds238-meter.md) |
-| **ANT BMS** (`bms_poller.go`, `bmslistener/`) | Опрос батарей через `read_bms.php` → shm bmslistener; 5-мин усреднённые точки в Redis+PG | [antbms.md](antbms.md) |
+| **ANT BMS** (`bms_poller.go`, `bmslistener/`) | Опрос батарей через `read_bms.php` → shm bmslistener; 5-мин усреднённые точки в Redis+PG | [antbms.md](antbms.md), [modules/bms-listener.md](modules/bms-listener.md) |
 | **Универсальный контракт `values`** | Набор общих тегов с одинаковыми именами/единицами для всех марок (PV, AC, фазы, энергия, МАП) | [universal-contract.md](universal-contract.md) |
 
 ## Что опрашивается
@@ -125,5 +125,7 @@ go run .                     # запуск из исходников (конф�
   посуточные тарифы, конфигурация).
 - [`antbms.md`](antbms.md), [`antbms-worklog.md`](antbms-worklog.md) — BMS: цепочка
   bmslistener → read_bms.php, протокол, дашборд.
+- [`modules/bms-listener.md`](modules/bms-listener.md) — демон bmslistener: описание
+  и **установка** на ПАК «Малина» (сборка C + `make install` + systemd).
 - `docs/map/`, `docs/antbms/` — справочные материалы реверса (байт-карты, кадры,
   команды).
