@@ -41,6 +41,11 @@ const (
 	meterBackfillMinAge = 10 * time.Minute
 	// meterBackfillScanT — полуширина окна поиска ближайшей точки вокруг границы.
 	meterBackfillScanT = 6 * time.Hour
+	// meterBackfillMaxDist — максимальное допустимое расстояние между границей и
+	// ближайшим найденным показанием. Добор — best-effort «ближайшее из
+	// зафиксированного»: если пулер молчал дольше этого порога (например, 5 ч),
+	// отстоящее показание в границу НЕ подставляется (это уже не та граница).
+	meterBackfillMaxDist = 30 * time.Minute
 )
 
 // runMeterBackfill — фоновый добор пропущенных тарифных границ. Сразу при старте
@@ -183,6 +188,12 @@ func nearestMeterReading(store *redisStore, cfg *meterConfig, b time.Time) (imp,
 		}
 	}
 	if bestDelta == time.Duration(math.MaxInt64) {
+		return 0, 0, false
+	}
+	// Принято только ближайшее показание, отстоящее от границы не более чем на
+	// meterBackfillMaxDist: «дальнее» (в ±6 ч) показание — не та граница, его не
+	// подставляем.
+	if bestDelta > meterBackfillMaxDist {
 		return 0, 0, false
 	}
 	return bestImp, bestExp, true

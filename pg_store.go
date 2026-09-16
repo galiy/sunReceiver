@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -114,6 +115,55 @@ CREATE TABLE IF NOT EXISTS sunreceiver.bms_averages (
 	return nil
 }
 
+// pgExecer — общее для *pgxpool.Pool и pgx.Tx: Exec с CommandTag. Нужно, чтобы
+// метод записи одной точки можно было вызвать и напрямую на пуле, и внутри
+// транзакции (см. withTx, insertAverageBucket).
+type pgExecer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// pgRetryBackoff — паузы между повторными попытками транзакционной записи бакета
+// (см. retryPg): кратковременный сбой PG при 3 попытках (100/500/1000 мс) не
+// оставляет «дыру» в ряде.
+var pgRetryBackoff = [...]time.Duration{100 * time.Millisecond, 500 * time.Millisecond, time.Second}
+
+// retryPg выполняет fn с повторными попытками (attempts раз), между ними — пауза
+// из pgRetryBackoff. Применяется к транзакционной записи 5-минутного бакета:
+// одноразовая горутина бакета не переписывается позже, поэтому одиночный сбой PG
+// должен быть пережит повторной попыткой.
+func retryPg(fn func() error, attempts int) error {
+	var err error
+	for i := 0; i < attempts; i++ {
+		if err = fn(); err == nil {
+			return nil
+		}
+		if i == attempts-1 {
+			break
+		}
+		d := pgRetryBackoff[i]
+		if i >= len(pgRetryBackoff) {
+			d = pgRetryBackoff[len(pgRetryBackoff)-1]
+		}
+		time.Sleep(d)
+	}
+	return err
+}
+
+// withTx выполняет fn на одной транзакции пула и коммитит её: весь набор точек
+// одного бакета (или одного вызова для BMS) записывается атомарно — либо все,
+// либо ничего. При ошибке транзакция откатывается.
+func (s *pgStore) withTx(fn func(q pgExecer) error) error {
+	tx, err := s.pool.Begin(s.ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(s.ctx) }()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit(s.ctx)
+}
+
 // InsertAveraged сохраняет одну усреднённую за 5 минут точку (ts — начало
 // промежутка). Идемпотентна по (ip, ts), но повторная запись ОБНОВЛЯЕТ строку:
 // поздняя запись того же промежутка побеждает (last-write-wins), как в
@@ -122,11 +172,18 @@ CREATE TABLE IF NOT EXISTS sunreceiver.bms_averages (
 // нормального перекрытия backfill↔живой цикл нет, но если такое перекрытие
 // возникнет — более полная (поздняя) запись переопределит раннюю частичную.
 func (s *pgStore) InsertAveraged(ip, name string, ts time.Time, deviceSN string, vc valuesContract) error {
+	return insertAveragedExec(s.pool, s.ctx, ip, name, ts, deviceSN, vc)
+}
+
+// insertAveragedExec — реализация вставки одной усреднённой точки в
+// sunreceiver.averages; вызывается и напрямую на пуле (InsertAveraged), и внутри
+// транзакции (insertAverageBucket). Идемпотентна по (ip, ts).
+func insertAveragedExec(q pgExecer, ctx context.Context, ip, name string, ts time.Time, deviceSN string, vc valuesContract) error {
 	vals, err := json.Marshal(vc)
 	if err != nil {
 		return fmt.Errorf("pg marshal values %s: %w", ip, err)
 	}
-	_, err = s.pool.Exec(s.ctx, `
+	_, err = q.Exec(ctx, `
 INSERT INTO sunreceiver.averages (ip, name, ts, device_sn, values)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (ip, ts) DO UPDATE
@@ -189,22 +246,35 @@ WHERE ts >= $1 AND ts <= $2`
 }
 
 // InsertBMSAveraged сохраняет одну усреднённую за 5 минут точку BMS
-// (ts — начало промежутка). Идемпотентна по (name, ts), но повторная запись
-// ОБНОВЛЯЕТ строку: last-write-wins — поздняя запись того же промежутка
-// побеждает, независимо от полноты (при рестарте посреди промежутка drain
-// старого процесса пишет частичный bucket, новый процесс пишет его продолжение
-// ПОЗЖЕ — останется поздняя, возможно менее полная; значение — корректное
-// среднее по реально набранным данным, поле samples это отражает). Это
-// согласует PG с рядом Redis, где SaveBMSSeries делает то же самое.
+// (ts — начало промежутка). Идемпотентна по (name, ts).
+//
+// Sample-count guard: повторная запись того же (name, ts) НЕ перетирает более
+// полную строку. Effect при рестарте: при остановке посреди промежутка drain
+// (partial=true) пишет неполный [start,stop] ТОЛЬКО в Redis и НЕ в PG (см.
+// saveBMSClosedBuckets), поэтому в PG уходят лишь полные 5-минутные бакеты. Если
+// всё же встречается конкурентное дописывание живого бакета (поздняя запись того
+// же (name,ts)), выигрывает запись с БОЛЬШИМ число сэмплов (samples), а не
+// «последняя» — так более полное усреднение не заменяется частичным и снимки до
+// рестарта не выпадают из итога (у BMS нет backfill, история только живой опрос).
 func (s *pgStore) InsertBMSAveraged(name string, ts time.Time, avg bmsAveraged) error {
+	return insertBMSAveragedExec(s.pool, s.ctx, name, ts, avg)
+}
+
+// insertBMSAveragedExec — реализация вставки одной усреднённой точки BMS в
+// sunreceiver.bms_averages; вызывается и напрямую на пуле (InsertBMSAveraged), и
+// внутри транзакции (saveBMSClosedBuckets). Where-условие — sample-count guard,
+// см. InsertBMSAveraged.
+func insertBMSAveragedExec(q pgExecer, ctx context.Context, name string, ts time.Time, avg bmsAveraged) error {
 	vals, err := json.Marshal(avg)
 	if err != nil {
 		return fmt.Errorf("pg marshal bms avg %s: %w", name, err)
 	}
-	_, err = s.pool.Exec(s.ctx, `
+	_, err = q.Exec(ctx, `
 INSERT INTO sunreceiver.bms_averages (name, ts, values)
 VALUES ($1, $2, $3)
-ON CONFLICT (name, ts) DO UPDATE SET values = EXCLUDED.values`,
+ON CONFLICT (name, ts) DO UPDATE SET values = EXCLUDED.values
+  WHERE sunreceiver.bms_averages.values->>'samples' IS NULL
+     OR (EXCLUDED.values->>'samples')::int > (sunreceiver.bms_averages.values->>'samples')::int`,
 		name, ts.UTC(), vals)
 	if err != nil {
 		return fmt.Errorf("pg insert bms avg %s: %w", name, err)
@@ -212,7 +282,8 @@ ON CONFLICT (name, ts) DO UPDATE SET values = EXCLUDED.values`,
 	return nil
 }
 
-// BMSAverages возвращает 5-минутные усреднённые точки одной BMS (deviceName)
+// BMSAverages возвращает 5-минутные усреднённые точки одной BMS (по ключу
+// bmsKey — name, см. bms_poller.go)
 // за период [start, end] включительно, по возрастанию ts. Выборка идёт по
 // PK (name, ts) — узкий индексный range-scan по конкретной BMS (эффективно
 // для построения графиков за произвольный диапазон времени).

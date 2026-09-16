@@ -287,7 +287,6 @@ type mapRaw struct {
 	Uacc      string // Напряжение АКБ, В (_UAcc_med, 0x405/0x406)
 	Iacc      string // Ток АКБ, А (знак «−» = заряд) (_IAcc_med, 0x432/0x433)
 	UNet      string // Напряжение сети, В (0 = нет сети) (_UNET, 0x422)
-	PNet      string // Мощность сети, Вт (_PNET; у МАП занижен/недостоверен)
 	PNetCalc  string // Расчётная мощность сети, Вт (_PNET_calc = _UNET × _INET) — ДОСТОВЕРНАЯ
 	PLoad     string // Мощность по АКБ, Вт (_PLoad)
 	TFNet     string // Частота сети, Гц (_TFNET)
@@ -311,7 +310,6 @@ func (r *mapRaw) UnmarshalJSON(data []byte) error {
 	str("_Uacc", &r.Uacc)
 	str("_Iacc", &r.Iacc)
 	str("_UNET", &r.UNet)
-	str("_PNET", &r.PNet)
 	str("_PNET_calc", &r.PNetCalc)
 	str("_PLoad", &r.PLoad)
 	str("_TFNET", &r.TFNet)
@@ -393,11 +391,10 @@ func mapMAPAPI(r mapRaw) (valuesContract, time.Time, bool) {
 	if v, ok = parseFloat(r.UNet); ok {
 		out["grid_voltage"] = v
 	}
-	// Мощность сети — расчётная _PNET_calc (= _UNET × _INET), достоверная; как
-	// фолбэк (ответ без _PNET_calc) — сырой _PNET.
+	// Мощность сети — расчётная _PNET_calc (= _UNET × _INET), достоверная (сырое
+	// _PNET у МАП сильно занижено, ~×5). При отсутствии _PNET_calc grid_power НЕ
+	// выставляем: подставлять заведомо недостоверное значение хуже, чем отсутствие.
 	if v, ok = parseFloat(r.PNetCalc); ok {
-		out["grid_power"] = v
-	} else if v, ok = parseFloat(r.PNet); ok {
 		out["grid_power"] = v
 	}
 	if v, ok = parseFloat(r.PLoad); ok {

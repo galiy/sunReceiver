@@ -17,6 +17,7 @@
 package main
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -141,5 +142,40 @@ func TestAverageValuesAccumulatorOutOfOrder(t *testing.T) {
 	got := averageValues(snaps)
 	if got["energy_total"] != 3000.0 {
 		t.Fatalf("energy_total=%v, want 3000.0 (max ts)", got["energy_total"])
+	}
+}
+
+// TestRetryPg: транзакционная запись бакета переживает кратковременный сбой PG
+// (V8): fn вызывается повторно, при успехе на любой попытке возвращается nil;
+// при исчерпании попыток возвращается последняя ошибка.
+func TestRetryPg(t *testing.T) {
+	// Первые две попытки падают, третья — успех → nil.
+	n := 0
+	err := retryPg(func() error {
+		n++
+		if n < 3 {
+			return errors.New("transient")
+		}
+		return nil
+	}, 3)
+	if err != nil {
+		t.Fatalf("retryPg вернул ошибку после успеха: %v", err)
+	}
+	if n != 3 {
+		t.Fatalf("fn вызвана %d раз, want 3 (2 сбоя + успех)", n)
+	}
+
+	// Все попытки падают → возвращается последняя ошибка, попыток — ровно attempts.
+	m := 0
+	wantErr := errors.New("persistent")
+	err = retryPg(func() error {
+		m++
+		return wantErr
+	}, 3)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("retryPg err = %v, want %v", err, wantErr)
+	}
+	if m != 3 {
+		t.Fatalf("fn вызвана %d раз, want 3", m)
 	}
 }

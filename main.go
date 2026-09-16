@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,6 +48,11 @@ const (
 	// идут до ~30 с (Sofar pacing), Deye ~8 с; «зомби»-логгер без лимита держал
 	// бы Exchange часами.
 	maxExchangeTotal = 60 * time.Second
+	// mpptEmptyTolerance — сколько подряд идущих ПУСТЫХ (len(arr)==0) успешных
+	// ответов read_json.php?device=mppt терпим ДО прунинга составa MPPT из current.
+	// Одиночная/короткая пустота (перезапуск Малины, транзиентный сбой) не должна
+	// сносить все MPPT-ключи дашборда; пруним только при устойчивой пустоте.
+	mpptEmptyTolerance = 3
 )
 
 type targetKind int
@@ -328,6 +334,48 @@ func defaultPGDSN(db *dbConfig) string {
 	return "postgres://localhost:5432/sunreceiver?sslmode=disable"
 }
 
+// mpptPollState — межцикловое состояние пулера MPPT-контроллеров через веб-API
+// ПАК «Малина» (сохраняется между вызовами pollAndSaveMap, которые идут раз в
+// секунду из runMapPoll; доступ к нему только из одной горутины). Защищает от двух
+// краевых эффектов ответов read_json.php?device=mppt:
+//   - счётчик подряд идущих ПУСТЫХ (len(arr)==0) успешных ответов: до порога
+//     mpptEmptyTolerance не вызываем PruneMPPT, чтобы одиночная пустота не снесла
+//     все MPPT-ключи из current (аналог BMS-гварда);
+//   - маппинг слот→UID: если в текущем ответе UID контроллера пуст, используем
+//     последний известный UID этого слота — ключ devKey (и имя) не «дрейфует»
+//     между опросами из-за пустого UID (сам UID — стабильный серийник контроллера).
+type mpptPollState struct {
+	slots map[int]string // слот → последний известный UID контроллера (стабильный ключ)
+	empty int            // подряд идущих пустых успешных ответов MPPT API
+}
+
+func newMPPTPollState() *mpptPollState {
+	return &mpptPollState{slots: map[int]string{}}
+}
+
+// resolveUID возвращает UID для слота: переданный (если непустой) — запоминает его;
+// иначе — последний известный для слота (стабильный ключ при пустом UID), либо "".
+func (s *mpptPollState) resolveUID(slot int, uid string) string {
+	if uid != "" {
+		s.slots[slot] = uid
+		return uid
+	}
+	return s.slots[slot]
+}
+
+// shouldPrune решает, вызывать ли PruneMPPT в текущем цикле. При пустом ответе
+// (empty=true) инкрементит счётчик и разрешает прунинг только после порога
+// mpptEmptyTolerance; при непустом (empty=false) — сбрасывает счётчик и разрешает
+// прунинг сразу.
+func (s *mpptPollState) shouldPrune(empty bool) bool {
+	if empty {
+		s.empty++
+		return s.empty >= mpptEmptyTolerance
+	}
+	s.empty = 0
+	return true
+}
+
 // devKey возвращает ключ устройства в хранилище (поле IP снимка): для обычных
 // инверторов это IP; для kindMAP с slot и для kindMPPT — IP с суффиксом контроллера
 // (например, 192.168.13.74#mppt0 / 192.168.13.60#mppt-1097), чтобы разные
@@ -506,6 +554,7 @@ type DeviceResult struct {
 	HasData    bool
 	DeviceSN   string // серийный номер даталоггера (десятичный)
 	InverterSN string // серийный номер инвертора (строка; для Sofar это ASCII-строка HW-регистров)
+	ErrCode    byte   // код ошибки heartbeat Deye/Sofar (0x00 — нет ошибки), см. DeyeErrorCode
 	Values     valuesContract
 	Time       time.Time // время актуальности данных (для MPPT API — timestamp ответа)
 }
@@ -727,7 +776,7 @@ var deyeRegMap = map[uint16]deyeSensor{
 	0x56: {"ac_active_power", "ac_active_power", 0.1, "W", false, 0, true},
 	// 0x58 AC reactive power: ×0.1 var (raw 365 → 36.5 var, физически правдоподобно;
 	// ×10 давал 3650 var — абсурд при P≈404W). Единицы совпадают с Sofar (var).
-	0x58: {"ac_reactive_power", "ac_reactive_power", 0.1, "var", false, 0, false},
+	0x58: {"ac_reactive_power", "ac_reactive_power", 0.1, "var", true, 0, false},
 	0x5A: {"radiator_temperature", "temperature_radiator", 0.1, "C", false, -100, false},
 	0x5B: {"igbt_temperature", "temperature_igbt", 0.1, "C", false, -100, false},
 	0x6D: {"pv1_voltage", "pv1_voltage", 0.1, "V", false, 0, false},
@@ -1167,6 +1216,13 @@ func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 	}
 
 	for _, f := range frames {
+		// Код ошибки heartbeat (0x05 адрес устройства, 0x06 SN логгера и т.п.) —
+		// в проде эти коды раньше глушились (логгировались только в probe), что
+		// маскировало неверный SN/адрес вечным heartbeat_only. Выносим код в
+		// DeviceResult: runInverterPoll логирует его редуцированно (с дедупликацией).
+		if code, ok := solarman.DeyeErrorCode(f); ok && code != 0 {
+			res.ErrCode = code
+		}
 		if f.DeviceSN != 0 {
 			res.DeviceSN = strconv.FormatUint(uint64(f.DeviceSN), 10)
 			break
@@ -1220,10 +1276,11 @@ func runMapPoll(store *redisStore, stop context.Context) {
 	const pollEvery = time.Second
 	ticker := time.NewTicker(pollEvery)
 	defer ticker.Stop()
+	state := newMPPTPollState()
 	for {
 		select {
 		case <-ticker.C:
-			pollAndSaveMap(stop, store, time.Now())
+			pollAndSaveMap(stop, store, time.Now(), state)
 		case <-stop.Done():
 			return
 		}
@@ -1265,10 +1322,10 @@ func saveWindowSnapshot(store *redisStore, t invTarget, res DeviceResult, now ti
 	}
 }
 
-func pollAndSaveMap(ctx context.Context, store *redisStore, now time.Time) {
+func pollAndSaveMap(ctx context.Context, store *redisStore, now time.Time, state *mpptPollState) {
 	var wg sync.WaitGroup
 	activeMPPT := map[string]struct{}{}
-	fetchOK := false // MPPT-состав чистим из current только при успешном ответе API
+	pruneMPPT := false // MPPT-состав чистим из current только по решению state.shouldPrune
 	// МАП (батарея/сеть) — из targets (Modbus) или через веб-API ПАК «Малина».
 	for i := range targets {
 		t := targets[i]
@@ -1303,16 +1360,17 @@ func pollAndSaveMap(ctx context.Context, store *redisStore, now time.Time) {
 			// сбой (таймаут, перезапуск Малины) не должен вычистить все MPPT из
 			// current. Чистим только когда API ответил, но контроллера нет в ответе.
 		} else {
-			fetchOK = true
 			for slot := range arr {
 				slot := slot
-				uid := arr[slot].UID
+				// UID — стабильный серийник контроллера; при пустом в ответе берём
+				// последний известный для слота, чтобы ключ не «дрейфовал».
+				uid := state.resolveUID(slot, arr[slot].UID)
 				name := fmt.Sprintf("MPPT-%d", slot+1)
 				if uid != "" {
 					name = "MPPT-" + uid
 				} else {
-					// UID в ответе API отсутствует — ключ по индексу (деградация:
-					// отвал нижнего слота может склеить ряды), предупреждаем.
+					// UID неизвестен и ни разу не встречался для слота — ключ по
+					// индексу (деградация: отвал нижнего слота может склеить ряды).
 					log.Printf("%s: mppt api: слот %d без UID — ключ по индексу", mppt.Host, slot)
 				}
 				t := invTarget{IP: mppt.Host, Name: name, Kind: kindMPPT, Slot: slot, UID: uid, Order: mpptOrderBase + slot}
@@ -1323,12 +1381,14 @@ func pollAndSaveMap(ctx context.Context, store *redisStore, now time.Time) {
 					saveWindowSnapshot(store, t, pollMPPTFromArr(t, arr), now)
 				}(t)
 			}
+			// Прунинг — только по устойчивой пустоте (несколько пустых ответов подряд).
+			pruneMPPT = state.shouldPrune(len(arr) == 0)
 		}
 	}
 	wg.Wait()
 	// Исчезнувшие MPPT-контроллеры (не в ответе API) убираем из HASH current, чтобы
 	// их строка не показывалась на дашборде как актуальная.
-	if fetchOK {
+	if pruneMPPT {
 		store.PruneMPPT(activeMPPT)
 	}
 }
@@ -1433,16 +1493,16 @@ func main() {
 			if merr := pg.MigrateLegacy(); merr != nil {
 				log.Printf("pg legacy миграция: %v", merr)
 			}
-			// Если Redis пуст — восстановить в нём данные из PG в фоне (с учётом stop).
+			// Если Redis пуст — восстановить в нём данные из PG. Реставрация
+			// выполняется СИНХРОННО, ДО запуска runAccumulator ниже: иначе
+			// backfillAccumulator мог бы прочитать наполовину восстановленный
+			// Redis и перетереть полные PG-бакеты частичными (гонка restore ↔
+			// backfill на пустом Redis).
 			empty, cerr := store.IsEmpty()
 			if cerr != nil {
 				log.Printf("redis empty-check: %v", cerr)
 			} else if empty {
-				bgWg.Add(1)
-				go func() {
-					defer bgWg.Done()
-					restoreRedisFromPG(store, pg, restoreWindow, stopCtx)
-				}()
+				restoreRedisFromPG(store, pg, restoreWindow, stopCtx)
 			}
 		}
 	} else {
@@ -1567,6 +1627,8 @@ func main() {
 func runInverterPoll(store *redisStore, t invTarget, stop context.Context) {
 	ticker := time.NewTicker(pollPeriod)
 	defer ticker.Stop()
+	var lastErrCode byte
+	var lastErrAt time.Time
 	for {
 		select {
 		case <-ticker.C:
@@ -1581,6 +1643,17 @@ func runInverterPoll(store *redisStore, t invTarget, stop context.Context) {
 				return
 			}
 			now := time.Now() // фактическое время получения данных этого инвертора
+			if res.ErrCode != 0 {
+				// Код ошибки heartbeat — редуцированно: при смене кода или не чаще
+				// 1 раза в минуту на устройство, чтобы не спамить лог на каждые 10 с.
+				if res.ErrCode != lastErrCode || now.Sub(lastErrAt) > time.Minute {
+					log.Printf("%s: heartbeat код ошибки 0x%02X (%s)", t.IP, res.ErrCode, deyeErrCodeName(res.ErrCode))
+					lastErrCode = res.ErrCode
+					lastErrAt = now
+				}
+			} else {
+				lastErrCode = 0
+			}
 			log.Printf("%s: %s (%s)", t.IP, describeResult(res), now.Sub(t0).Round(time.Millisecond))
 			if !res.OK || !res.HasData {
 				// heartbeat_only / no data / ошибка — снимок не сохраняем
@@ -1630,6 +1703,18 @@ func describeResult(res DeviceResult) string {
 	return "heartbeat_only"
 }
 
+// deyeErrCodeName — человекочитаемое имя кода ошибки heartbeat Deye/Sofar
+// (см. DeyeErrorCode в solarman/frame.go).
+func deyeErrCodeName(code byte) string {
+	switch code {
+	case 0x05:
+		return "неверный Modbus-адрес устройства"
+	case 0x06:
+		return "SN логгера не совпадает"
+	}
+	return fmt.Sprintf("неизвестный код 0x%02X", code)
+}
+
 // restoreRedisFromPG восстанавливает Redis из persistent-хранилища PostgreSQL
 // за период [now-window, now], но не старше окна удержания Redis (последние 2
 // календарных суток), иначе фоновая очистка сразу удалит восстановленное.
@@ -1651,6 +1736,15 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, st
 		log.Printf("pg restore: query: %v", err)
 		return
 	}
+	// Сортируем по ts ascending: pg.Averages не гарантирует порядок (без ORDER BY),
+	// а в цикле ниже каждый SaveSnapshot кладёт точку в HASH current[ip] — остаётся
+	// «последний из итерации». Сортируем, чтобы последний HSet был самым свежим
+	// (детерминированный current[ip] после реставрации).
+	sort.Slice(snaps, func(i, j int) bool {
+		ti, _ := parseTS(snaps[i].Timestamp)
+		tj, _ := parseTS(snaps[j].Timestamp)
+		return ti.Before(tj)
+	})
 	var restored int
 	for _, snap := range snaps {
 		select {

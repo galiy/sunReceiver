@@ -72,8 +72,9 @@ func TestMapMAPAPIParse(t *testing.T) {
 	}
 }
 
-func TestMapMAPAPIGridPowerFallback(t *testing.T) {
-	// Нет _PNET_calc → grid_power берём из _PNET (фолбэк).
+func TestMapMAPAPINoGridPowerWithoutCalc(t *testing.T) {
+	// Нет _PNET_calc → grid_power НЕ выставляется (фолбэк на недостоверный _PNET
+	// убран: подставлять заведомо ошибочное значение хуже, чем отсутствие).
 	var r mapRaw
 	if err := json.Unmarshal([]byte(`{"timestamp":"1","_Uacc":"52.0","_Iacc":"1","_UNET":"220","_PNET":"910","_PLoad":"0","_TFNET":"50.0"}`), &r); err != nil {
 		t.Fatalf("unmarshal mapRaw: %v", err)
@@ -82,8 +83,8 @@ func TestMapMAPAPIGridPowerFallback(t *testing.T) {
 	if !ok {
 		t.Fatal("mapMAPAPI: ok=false, want true")
 	}
-	if v := vals["grid_power"].(float64); v != 910 {
-		t.Errorf("grid_power = %v, want 910 (фолбэк на _PNET)", v)
+	if _, present := vals["grid_power"]; present {
+		t.Errorf("grid_power присутствует без _PNET_calc=%q, want отсутствует", r.PNetCalc)
 	}
 }
 

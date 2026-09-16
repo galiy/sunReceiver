@@ -48,20 +48,22 @@ type bmsAveraged struct {
 	Samples      int       `json:"samples"`        // сколько 1-секундных снимков вошло в точку
 }
 
-// bmsSeriesPoint — точка BMS-ряда в Redis: имя устройства, время (начало
+// bmsSeriesPoint — точка BMS-ряда: ключ устройства, время (начало
 // 5-минутного промежутка, RFC3339) и усреднённые значения.
 type bmsSeriesPoint struct {
-	Name string `json:"name"` // deviceName, напр. "AntBms 320 A/h"
-	Ts   string `json:"ts"`   // начало 5-минутного промежутка (RFC3339)
+	Name    string `json:"name"`    // ключ (bmsKey), напр. "AntBms 320 A/h@/dev/ttyUSB0"
+	Display string `json:"display"` // отображаемое имя (DeviceName), напр. "AntBms 320 A/h"
+	Ts      string `json:"ts"`      // начало 5-минутного промежутка (RFC3339)
 	bmsAveraged
 }
 
 // bmsAvgPoint — завершённый (или выгружаемый при остановке) 5-минутный
 // промежуток одной BMS для записи в хранилища.
 type bmsAvgPoint struct {
-	name  string
-	start time.Time // начало 5-минутного промежутка
-	avg   bmsAveraged
+	name    string    // ключ (bmsKey)
+	display string    // отображаемое имя (DeviceName)
+	start   time.Time // начало 5-минутного промежутка
+	avg     bmsAveraged
 }
 
 // bmsBucket — in-memory накопитель 1-секундных снимков ANT BMS за один
@@ -72,6 +74,7 @@ type bmsAvgPoint struct {
 // опрос read_bms.php).
 type bmsBucket struct {
 	start      time.Time
+	display    string             // отображаемое имя (DeviceName) — ключ карты (см. bmsAccumulator)
 	sums       map[string]float64 // суммы мгновенных параметров (ключ — поле/«cell_i»/«temp_i»)
 	cnt        map[string]int
 	maxCellIdx int       // максимальный индекс ячейки, встреченный в снимках
@@ -183,7 +186,7 @@ func (b *bmsBucket) avg() bmsAveraged {
 // bmsAccumulator — in-memory аккумуляция 5-минутных усреднённых точек BMS
 // (см. bmsBucket). Однопоточный: трогает только горутина runBmsPoll.
 type bmsAccumulator struct {
-	buckets map[string]*bmsBucket // key = deviceName
+	buckets map[string]*bmsBucket // key = bmsKey(d) (см. bms_poller.go)
 	pending []bmsAvgPoint         // закрытые, но ещё не выданные вызывающему
 }
 
@@ -200,14 +203,16 @@ func (a *bmsAccumulator) add(d bmsDevice, now time.Time) {
 	if d.DeviceName == "" {
 		return
 	}
+	key := bmsKey(d)
 	start := floorToStep(now)
-	b := a.buckets[d.DeviceName]
+	b := a.buckets[key]
 	if b == nil || !b.start.Equal(start) {
 		if b != nil && !b.start.Add(avgStep).After(now) {
-			a.pending = append(a.pending, bmsAvgPoint{name: d.DeviceName, start: b.start, avg: b.avg()})
+			a.pending = append(a.pending, bmsAvgPoint{name: key, display: b.display, start: b.start, avg: b.avg()})
 		}
 		b = newBmsBucket(start)
-		a.buckets[d.DeviceName] = b
+		b.display = d.DeviceName
+		a.buckets[key] = b
 	}
 	b.add(d)
 }
@@ -216,10 +221,10 @@ func (a *bmsAccumulator) add(d bmsDevice, now time.Time) {
 // включая переведённые в pending при add. Вызывающий пишет точки в Redis/PG.
 func (a *bmsAccumulator) closed(now time.Time) []bmsAvgPoint {
 	var out []bmsAvgPoint
-	for name, b := range a.buckets {
+	for key, b := range a.buckets {
 		if !b.start.Add(avgStep).After(now) {
-			out = append(out, bmsAvgPoint{name: name, start: b.start, avg: b.avg()})
-			delete(a.buckets, name)
+			out = append(out, bmsAvgPoint{name: key, display: b.display, start: b.start, avg: b.avg()})
+			delete(a.buckets, key)
 		}
 	}
 	out = append(out, a.pending...)
@@ -231,8 +236,8 @@ func (a *bmsAccumulator) closed(now time.Time) []bmsAvgPoint {
 // при остановке пулера, чтобы накопленные снимки не были потеряны.
 func (a *bmsAccumulator) drain() []bmsAvgPoint {
 	var out []bmsAvgPoint
-	for name, b := range a.buckets {
-		out = append(out, bmsAvgPoint{name: name, start: b.start, avg: b.avg()})
+	for key, b := range a.buckets {
+		out = append(out, bmsAvgPoint{name: key, display: b.display, start: b.start, avg: b.avg()})
 	}
 	a.buckets = map[string]*bmsBucket{}
 	return out

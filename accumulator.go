@@ -135,7 +135,10 @@ func readBucketWindow(store *redisStore, start, end time.Time) ([]deviceSnapshot
 
 // insertAverageBucket группирует снимки по инвертору (по IP) и для каждого
 // записывает одну усреднённую точку в PG (ts = start). Общий для накопителя
-// (averageBucket) и бэкенд-долива (backfillAccumulator).
+// (averageBucket) и бэкенд-долива (backfillAccumulator). Весь набор точек одного
+// бакета пишется ОДНОЙ транзакцией с ограниченным retry (см. retryPg): либо все
+// точки инверторов промежутка, либо ни одной — кратковременный сбой PG не
+// оставляет частично записанный бакет («дыру»).
 func insertAverageBucket(pg *pgStore, start time.Time, snaps []deviceSnapshot) {
 	if len(snaps) == 0 {
 		return
@@ -144,14 +147,32 @@ func insertAverageBucket(pg *pgStore, start time.Time, snaps []deviceSnapshot) {
 	for _, sn := range snaps {
 		byIP[sn.IP] = append(byIP[sn.IP], sn)
 	}
+	type row struct {
+		ip, name, deviceSN string
+		vc                 valuesContract
+	}
+	rows := make([]row, 0, len(byIP))
 	for ip, group := range byIP {
 		vc := averageValues(group)
 		if len(vc) == 0 {
 			continue
 		}
-		if err := pg.InsertAveraged(ip, group[0].Name, start, group[0].DeviceSN, vc); err != nil {
-			log.Printf("acc pg %s: %v", ip, err)
-		}
+		rows = append(rows, row{ip: ip, name: group[0].Name, deviceSN: group[0].DeviceSN, vc: vc})
+	}
+	if len(rows) == 0 {
+		return
+	}
+	if err := retryPg(func() error {
+		return pg.withTx(func(q pgExecer) error {
+			for _, r := range rows {
+				if err := insertAveragedExec(q, pg.ctx, r.ip, r.name, start, r.deviceSN, r.vc); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}, 3); err != nil {
+		log.Printf("acc pg %s: %v", start.Format(time.RFC3339), err)
 	}
 }
 
