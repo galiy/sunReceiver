@@ -193,14 +193,23 @@ func TestParseModbusPDU(t *testing.T) {
 		t.Fatalf("CRC 0x%04X != расчёт 0x%04X", p.CRC, p.CRCCalc)
 	}
 
-	// ПДУ в нестандартном месте (15) — ищется только по явному offset.
+	// PDU в нестандартном месте (15) — поиск (по умолч.) находит его так же,
+	// как и явный offset.
 	payload15 := []byte{0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 	payload15 = append(payload15, pdu...)
-	if got := ParseModbusPDU(payload15); len(got) != 0 {
-		t.Fatalf("по умолч. offset: найдено %d PDU", len(got))
+	if got := ParseModbusPDU(payload15); len(got) != 1 || got[0].Offset != 15 {
+		t.Fatalf("поиск: найдено %d PDU", len(got))
 	}
 	if got := ParseModbusPDU(payload15, 15); len(got) != 1 || got[0].Offset != 15 {
 		t.Fatalf("по offset 15: %d PDU", len(got))
+	}
+
+	// Паттерн 01 03 с битым CRC — кандидат отклоняется.
+	bad := make([]byte, len(payload15))
+	copy(bad, payload15)
+	bad[len(bad)-1] ^= 0xFF
+	if got := ParseModbusPDU(bad); len(got) != 0 {
+		t.Fatalf("с битым CRC: найдено %d PDU", len(got))
 	}
 }
 

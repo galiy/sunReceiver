@@ -133,8 +133,11 @@ func (c *Client) Exchange(ctx context.Context, req []byte) ([]Frame, error) {
 	return SplitFrames(raw), nil
 }
 
-// ReadRegisters — запрос чтения startReg..startReg+regCount-1.
-// Возвращает распарсенные PDU (может быть несколько) и кадры ответа.
+// ReadRegisters — запрос чтения startReg..startReg+regCount-1 (12-байтный
+// datafield). Legacy: в проде не используется — оба типа логгеров (Deye и
+// Sofar) отвечают только на 15-байтный кадр (ReadRegistersDeyeFn); оставлено
+// для тестов/диагностики. Возвращает распарсенные PDU (может быть несколько)
+// и кадры ответа.
 func (c *Client) ReadRegisters(ctx context.Context, startReg, regCount uint16) ([]ModbusPDU, []Frame, error) {
 	frames, err := c.Exchange(ctx, BuildReadFrame(c.DeviceSN, c.nextSerial(), startReg, regCount))
 	if err != nil {

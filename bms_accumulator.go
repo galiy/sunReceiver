@@ -113,6 +113,12 @@ func (b *bmsBucket) avg() bmsAveraged {
 	if l := len(b.last.CellsV); l > nCells {
 		nCells = l
 	}
+	// Если РАННИЕ снимки промежутка имели больше ячеек, чем последний, лишние
+	// не отбрасываем: ведём цикл до maxCellIdx (0-заполнением отсутствующих,
+	// ветка else ниже) — иначе такие ячейки терялись бы вовсе.
+	if n := b.maxCellIdx + 1; n > nCells {
+		nCells = n
+	}
 	cells := make([]float64, 0, nCells)
 	for i := 0; i < nCells && i <= b.maxCellIdx; i++ {
 		key := fmt.Sprintf("cell_%d", i)
