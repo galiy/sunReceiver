@@ -5,6 +5,67 @@ import (
 	"time"
 )
 
+// TestReadBucketWindowBoundary: точка ровно на границе end НЕ входит в окно
+// [start, end) (принадлежит следующему бакету), точка за 1 с до end входит.
+// Покрывает двойной счёт на границе 5-минутного бакета (п. 1.5).
+func TestReadBucketWindowBoundary(t *testing.T) {
+	s := testStore(t)
+	cleanTestKeys(t, s)
+	t.Cleanup(func() { cleanTestKeys(t, s) })
+
+	// b — граница 5-минутного промежутка (кратна 5 мин).
+	b := time.Now().Truncate(5 * time.Minute)
+	start := b.Add(-5 * time.Minute)
+
+	// Точка ровно на границе b и точка на 1 с до b.
+	boundary := snap("A", "192.168.13.200", b, valuesContract{"ac_active_power": 1.0})
+	inside := snap("A", "192.168.13.200", b.Add(-1*time.Second), valuesContract{"ac_active_power": 2.0})
+	_ = s.SaveSnapshot(boundary, b)
+	_ = s.SaveSnapshot(inside, b.Add(-1*time.Second))
+
+	got, err := readBucketWindow(s, start, b)
+	if err != nil {
+		t.Fatalf("readBucketWindow: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("readBucketWindow len=%d, want 1 (только точка до границы): %+v", len(got), got)
+	}
+	if got[0].Timestamp != inside.Timestamp {
+		t.Fatalf("readBucketWindow вернул точку на границе вместо точки внутри: %+v", got)
+	}
+}
+
+// TestGroupForBackfill: backfill группирует по floorToStep в строгом окне
+// [start, end): точка ts==start входит, точка ts==end (текущий незавершённый
+// бакет) пропускается (п. 1.6).
+func TestGroupForBackfill(t *testing.T) {
+	// start = 10:00, end = 10:05 (оба — границы).
+	start := time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC)
+	end := start.Add(5 * time.Minute)
+	mk := func(ts time.Time) deviceSnapshot {
+		return deviceSnapshot{IP: "192.168.13.1", Timestamp: ts.UTC().Format(time.RFC3339), Values: valuesContract{"ac_active_power": 1.0}}
+	}
+	snaps := []deviceSnapshot{
+		mk(start),                       // ts==start — ВХОДИТ (бакет 10:00)
+		mk(start.Add(2 * time.Minute)),  // внутри бакета 10:00
+		mk(end),                         // ts==end — ПРОПУСКАЕТСЯ (текущий бакет 10:05)
+		mk(end.Add(30 * time.Second)),   // за end — ПРОПУСКАЕТСЯ
+		mk(start.Add(-10 * time.Second)), // до start — ПРОПУСКАЕТСЯ
+	}
+	groups := groupForBackfill(snaps, start, end)
+	// Ожидается ровно один бакет (10:00) с двумя снимками.
+	if len(groups) != 1 {
+		t.Fatalf("groupForBackfill бакетов=%d, want 1: %+v", len(groups), groups)
+	}
+	k := accBucketKey{ip: "192.168.13.1", bts: start}
+	if len(groups[k]) != 2 {
+		t.Fatalf("бакет 10:00 снимков=%d, want 2 (start + внутри): %+v", len(groups[k]), groups[k])
+	}
+	if _, ok := groups[accBucketKey{ip: "192.168.13.1", bts: end}]; ok {
+		t.Fatal("точка ts==end попала в текущий бакет — backfill не должен его трогать")
+	}
+}
+
 func TestFloorToStep(t *testing.T) {
 	// Граница сохраняется как есть.
 	b := time.Date(2026, 9, 15, 10, 5, 0, 0, time.UTC)

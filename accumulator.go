@@ -100,12 +100,21 @@ func averageValues(snaps []deviceSnapshot) valuesContract {
 // averageBucket читает из Redis снимки за промежуток [start, end) и записывает
 // в PostgreSQL по одной усреднённой точке на инвертор (ts = start).
 func averageBucket(store *redisStore, pg *pgStore, start, end time.Time) {
-	snaps, err := store.QuerySeries(start, end)
+	snaps, err := readBucketWindow(store, start, end)
 	if err != nil {
 		log.Printf("acc avg %s: %v", start.Format(time.RFC3339), err)
 		return
 	}
 	insertAverageBucket(pg, start, snaps)
+}
+
+// readBucketWindow читает из Redis снимки за промежуток [start, end). Правый
+// конец исключительный (QuerySeries(start, end−1с)): точка ровно на границе end
+// принадлежит СЛЕДУЮЩЕМУ бакету (floorToStep(end) == end) — согласовано с
+// группировкой backfillAccumulator и без двойного счёта (QuerySeries сам
+// включителен с обоих концов).
+func readBucketWindow(store *redisStore, start, end time.Time) ([]deviceSnapshot, error) {
+	return store.QuerySeries(start, end.Add(-time.Second))
 }
 
 // insertAverageBucket группирует снимки по инвертору (по IP) и для каждого
@@ -150,30 +159,40 @@ func backfillAccumulator(store *redisStore, pg *pgStore, now time.Time) {
 		log.Printf("acc backfill: %v", err)
 		return
 	}
-	// Группируем по 5-минутному бакету (начало бакета = ключ); снимок с ts
-	// строго в [бакет, бакет+5м). Внутри бакета усредняем все снимки всех
-	// инверторов по IP (см. insertAverageBucket).
-	type bucketKey struct {
-		ip  string
-		bts time.Time
-	}
-	groups := map[bucketKey][]deviceSnapshot{}
-	for _, sn := range snaps {
-		ts, perr := time.Parse(time.RFC3339, sn.Timestamp)
-		if perr != nil {
-			continue
-		}
-		if !ts.After(end) || ts.Before(start) {
-			continue
-		}
-		groups[bucketKey{ip: sn.IP, bts: floorToStep(ts)}] = append(groups[bucketKey{ip: sn.IP, bts: floorToStep(ts)}], sn)
-	}
+	groups := groupForBackfill(snaps, start, end)
 	var n int
 	for k, bucketSnaps := range groups {
 		insertAverageBucket(pg, k.bts, bucketSnaps)
 		n++
 	}
 	log.Printf("acc backfill: обработано %d 5-минутных бакетов", n)
+}
+
+// accBucketKey — ключ группировки backfill: (устройство, начало 5-минутного бакета).
+type accBucketKey struct {
+	ip  string
+	bts time.Time
+}
+
+// groupForBackfill группирует снимки по 5-минутному бакету (floorToStep) в
+// строгом окне [start, end): снимок с ts == end (начало текущего незавершённого
+// бакета) пропускается — его допишет целиком живой цикл, а не backfill (иначе
+// backfill записал бы одно-точечную версию незавершённого бакета). Чистая
+// функция (без Redis/PG) — тестируется напрямую.
+func groupForBackfill(snaps []deviceSnapshot, start, end time.Time) map[accBucketKey][]deviceSnapshot {
+	groups := map[accBucketKey][]deviceSnapshot{}
+	for _, sn := range snaps {
+		ts, perr := time.Parse(time.RFC3339, sn.Timestamp)
+		if perr != nil {
+			continue
+		}
+		if ts.Before(start) || !ts.Before(end) {
+			continue
+		}
+		k := accBucketKey{ip: sn.IP, bts: floorToStep(ts)}
+		groups[k] = append(groups[k], sn)
+	}
+	return groups
 }
 
 // runAccumulator — фоновый процесс усреднения и записи в PostgreSQL:

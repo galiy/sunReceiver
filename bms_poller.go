@@ -176,6 +176,16 @@ func pollAndSaveBMS(ctx context.Context, store *redisStore) *bmsCollection {
 		log.Printf("bms api: %v", err)
 		return nil
 	}
+	// read_bms.php при сбое чтения shm отдаёт {"updated":0,"devices":[]} (HTTP 200).
+	// bmslistener никогда не публикует updated=0 — это маркер сбоя: коллекцию в
+	// Redis НЕ трогаем (иначе одиночная shm-гонка вычистит весь дашборд BMS).
+	// Возврат nil — аккумулятор (acc.add) по nil пропустит, в него уходят только
+	// валидные устройства. Валидная ПУСТАЯ коллекция (updated>0, devices=[])
+	// по-прежнему чистит дашборд — этот путь ниже не тронут.
+	if col.Updated == 0 {
+		log.Printf("bms api: сбойный ответ (updated=0) — коллекция не трогается")
+		return nil
+	}
 	active := make(map[string]string, len(col.Devices))
 	for i := range col.Devices {
 		d := col.Devices[i]

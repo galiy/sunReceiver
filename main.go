@@ -72,7 +72,8 @@ type invTarget struct {
 	Kind     targetKind
 	Unit     byte
 	Slot     int
-	Order    int // порядок устройства на дашборде (индекс в конфиге; MPPT — всегда последними)
+	UID      string // для kindMPPT: UID контроллера из read_json.php (стабильный идентификатор)
+	Order    int    // порядок устройства на дашборде (индекс в конфиге; MPPT — всегда последними)
 }
 
 // configInverter — запись инвертора (Deye/Sofar) в sunReceiver.json разделе "invertors".
@@ -249,11 +250,18 @@ func defaultPGDSN(db *dbConfig) string {
 }
 
 // devKey возвращает ключ устройства в хранилище (поле IP снимка): для обычных
-// инверторов это IP; для kindMAP с slot и для kindMPPT — IP с суффиксом номера
-// контроллера (например, 192.168.13.74#mppt0 / 192.168.13.60#mppt0), чтобы разные
+// инверторов это IP; для kindMAP с slot и для kindMPPT — IP с суффиксом контроллера
+// (например, 192.168.13.74#mppt0 / 192.168.13.60#mppt-1097), чтобы разные
 // контроллеры одного гейта не сливались в одну колонку/ряд Redis и PG.
+// Для kindMPPT ключ строится по UID контроллера (стабильный идентификатор), а не
+// по индексу в массиве API: отвал контроллера с меньшим индексом сдвигает остальных
+// в ответе, и индексный ключ склеил бы ряды двух разных аппаратов. Подстрока "#mppt"
+// сохраняется (PruneMPPT ищет ключи по strings.Contains(ip, "#mppt")).
 func devKey(t invTarget) string {
 	if t.Kind == kindMPPT {
+		if t.UID != "" {
+			return fmt.Sprintf("%s#mppt-%s", t.IP, t.UID)
+		}
 		return fmt.Sprintf("%s#mppt%d", t.IP, t.Slot)
 	}
 	if t.Kind == kindMAP && t.Slot >= 0 {
@@ -919,8 +927,14 @@ func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 			}
 		}
 		if len(result) > 0 {
-			res.HasData = true
 			res.Values = mapDeyeRegisters(result)
+			// Ядро (ac_active_power, рег. 0x56/0x57 — только первый диапазон 0x3C–0x74)
+			// обязано быть: без него values после фильтра commonContractTags пуст, а снимок
+			// со свежим timestamp показывает инвертор «онлайн, но пустой» (не offline).
+			// Второй диапазон (0xC6–0xD2: energy_load/sold/bought) не входит в контракт.
+			if _, ok := res.Values["ac_active_power"]; ok {
+				res.HasData = true
+			}
 		}
 		// Серийный номер инвертора Deye — ASCII-строка в регистрах 0x0003-0x0007
 		// (10 цифр; проверено на живых .70/.79/.91/.92/.93, напр. .70 = "2405018274").
@@ -1077,7 +1091,14 @@ func pollMPPTFromArr(t invTarget, arr []mpptRaw) DeviceResult {
 	if arr[t.Slot].UID != "" {
 		res.DeviceSN = fmt.Sprintf("mppt-%s", arr[t.Slot].UID)
 	}
-	// Актуальность данных из API (для таймстампа снимка).
+	// Актуальность данных из API (для таймстампа снимка). mapMPPTAPI вернул нулевое
+	// время при timestamp=0; здесь дополнительно отбрасываем устаревший (>5 мин) или
+	// будущий timestamp — дрейф часов Малины не должен уводить снимок от now.
+	if !ts.IsZero() {
+		if d := time.Since(ts); d > 5*time.Minute || d < -5*time.Minute {
+			ts = time.Time{}
+		}
+	}
 	res.Time = ts
 	return res
 }
@@ -1177,13 +1198,22 @@ func pollAndSaveMap(ctx context.Context, store *redisStore, now time.Time) {
 			fetchOK = true
 			for slot := range arr {
 				slot := slot
-				activeMPPT[saveMPPTKey(slot)] = struct{}{}
+				uid := arr[slot].UID
+				name := fmt.Sprintf("MPPT-%d", slot+1)
+				if uid != "" {
+					name = "MPPT-" + uid
+				} else {
+					// UID в ответе API отсутствует — ключ по индексу (деградация:
+					// отвал нижнего слота может склеить ряды), предупреждаем.
+					log.Printf("%s: mppt api: слот %d без UID — ключ по индексу", mppt.Host, slot)
+				}
+				t := invTarget{IP: mppt.Host, Name: name, Kind: kindMPPT, Slot: slot, UID: uid, Order: mpptOrderBase + slot}
+				activeMPPT[devKey(t)] = struct{}{}
 				wg.Add(1)
-				go func(slot int) {
+				go func(t invTarget) {
 					defer wg.Done()
-					t := invTarget{IP: mppt.Host, Name: fmt.Sprintf("MPPT-%d", slot+1), Kind: kindMPPT, Slot: slot, Order: mpptOrderBase + slot}
 					saveWindowSnapshot(store, t, pollMPPTFromArr(t, arr), now)
-				}(slot)
+				}(t)
 			}
 		}
 	}
@@ -1193,11 +1223,6 @@ func pollAndSaveMap(ctx context.Context, store *redisStore, now time.Time) {
 	if fetchOK {
 		store.PruneMPPT(activeMPPT)
 	}
-}
-
-// saveMPPTKey возвращает devKey (поле IP снимка) для MPPT-слота: host#mppt<slot>.
-func saveMPPTKey(slot int) string {
-	return fmt.Sprintf("%s#mppt%d", mppt.Host, slot)
 }
 
 func main() {

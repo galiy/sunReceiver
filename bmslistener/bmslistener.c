@@ -412,10 +412,10 @@ static void publish_all(bmsdev_t *devs, int n) {
         struct tm tmv; localtime_r(&d->last_ok, &tmv);
         strftime(ts_str, sizeof ts_str, "%H:%M:%S", &tmv);
 
-        BUFADD("%s{\"deviceName\":\"AntBms %d A/h\",\"port\":\"%s\","
+        BUFADD("%s{\"deviceName\":\"AntBms %d A/h (%s)\",\"port\":\"%s\","
             "\"timestamp\":%ld,\"time\":\"%s\","
             "\"cell_count\":%d,\"cells_v\":[",
-            (cnt ? "," : ""), (int)(d->capacity_ah + 0.5), d->dev,
+            (cnt ? "," : ""), (int)(d->capacity_ah + 0.5), d->dev, d->dev,
             (long)d->last_ok, ts_str, d->cell_count);
         for (int k = 0; k < 32 && k < d->cell_count; k++) {
             BUFADD("%s%.3f", (k ? "," : ""), d->cells_v[k]);

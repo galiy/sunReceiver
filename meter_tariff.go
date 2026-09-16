@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"math"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Тарифные границы счётчика DDS238 — константа (ТЗ):
@@ -93,51 +97,76 @@ func (c *meterTariffCapture) atBoundary(b time.Time, r meterReadings, now time.T
 	}
 }
 
+// meterExecer — минимальный интерфейс, который удовлетворяют и *pgxpool.Pool,
+// и pgx.Tx: позволяет выполнять SQL как в пуле, так и внутри транзакции.
+type meterExecer interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
 // StoreMeterBoundary сохраняет показание Import/Export на границе b в таблице
 // daily_tariffs (идемпотентно) и пытается финализировать день. Граница 00:00
 // принадлежит двум дням: как открывающее показание дня b и как показание на
 // 00:00 следующего дня для расчёта ночного тарифа дня (b-1).
+//
+// Все записи (включая двойную для границы 00:00 и финализацию обоих дней)
+// выполняются в ОДНОЙ транзакции: сбой PG между отдельными upsert'ами мог бы
+// навсегда оставить день незафинализированным (первый upsert закоммичен,
+// второй потерян; живой захват не повторит, добор сочтёт границу захваченной).
 func (s *pgStore) StoreMeterBoundary(b time.Time, imp, exp float64) error {
 	loc := time.Local
 	y, mo, d := b.In(loc).Date()
 	hour := b.In(loc).Hour()
 	day := time.Date(y, mo, d, 0, 0, 0, 0, loc)
 
+	tx, err := s.pool.Begin(s.ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(s.ctx) }() // после Commit — no-op
+	e := meterExecer(tx)
+
 	switch hour {
 	case 0:
-		if err := s.applyMeterBoundary(day, "import_0000", "export_0000", imp, exp); err != nil {
+		if err := applyMeterBoundary(e, s.ctx, day, "import_0000", "export_0000", imp, exp); err != nil {
 			return err
 		}
 		prevDay := day.AddDate(0, 0, -1)
-		if err := s.applyMeterBoundary(prevDay, "import_next", "export_next", imp, exp); err != nil {
+		if err := applyMeterBoundary(e, s.ctx, prevDay, "import_next", "export_next", imp, exp); err != nil {
 			return err
 		}
-		if err := s.finalizeMeterDay(day); err != nil {
+		if err := finalizeMeterDay(e, s.ctx, day); err != nil {
 			return err
 		}
-		return s.finalizeMeterDay(prevDay)
+		if err := finalizeMeterDay(e, s.ctx, prevDay); err != nil {
+			return err
+		}
 	case meterDayStartH:
-		if err := s.applyMeterBoundary(day, "import_0700", "export_0700", imp, exp); err != nil {
+		if err := applyMeterBoundary(e, s.ctx, day, "import_0700", "export_0700", imp, exp); err != nil {
 			return err
 		}
-		return s.finalizeMeterDay(day)
+		if err := finalizeMeterDay(e, s.ctx, day); err != nil {
+			return err
+		}
 	case meterDayEndH:
-		if err := s.applyMeterBoundary(day, "import_2300", "export_2300", imp, exp); err != nil {
+		if err := applyMeterBoundary(e, s.ctx, day, "import_2300", "export_2300", imp, exp); err != nil {
 			return err
 		}
-		return s.finalizeMeterDay(day)
+		if err := finalizeMeterDay(e, s.ctx, day); err != nil {
+			return err
+		}
 	}
-	return nil
+	return tx.Commit(s.ctx)
 }
 
 // applyMeterBoundary пишет одно граничное показание в строку дня (UPSERT).
-func (s *pgStore) applyMeterBoundary(day time.Time, colImp, colExp string, imp, exp float64) error {
+func applyMeterBoundary(e meterExecer, ctx context.Context, day time.Time, colImp, colExp string, imp, exp float64) error {
 	q := fmt.Sprintf(`
 INSERT INTO sunreceiver.daily_tariffs (day, "%s", "%s")
 VALUES ($1, $2, $3)
 ON CONFLICT (day) DO UPDATE SET "%s"=EXCLUDED."%s", "%s"=EXCLUDED."%s"`,
 		colImp, colExp, colImp, colImp, colExp, colExp)
-	_, err := s.pool.Exec(s.ctx, q, day,
+	_, err := e.Exec(ctx, q, day,
 		round3(imp), round3(exp))
 	return err
 }
@@ -145,10 +174,10 @@ ON CONFLICT (day) DO UPDATE SET "%s"=EXCLUDED."%s", "%s"=EXCLUDED."%s"`,
 // finalizeMeterDay, если у дня есть все 4 граничные показания и разности
 // неотрицательны (счётчик не обнулялся), вычисляет и записывает 4 тарифные
 // величины: потребление/отдачу по тарифу «День» и «Ночь».
-func (s *pgStore) finalizeMeterDay(day time.Time) error {
+func finalizeMeterDay(e meterExecer, ctx context.Context, day time.Time) error {
 	var import0000, import0700, import2300, importNext float64
 	var export0000, export0700, export2300, exportNext float64
-	err := s.pool.QueryRow(s.ctx, `
+	err := e.QueryRow(ctx, `
 SELECT import_0000, import_0700, import_2300, import_next,
        export_0000, export_0700, export_2300, export_next
 FROM sunreceiver.daily_tariffs
@@ -167,11 +196,20 @@ WHERE day = $1`, day).Scan(
 
 	// Счётчик 32-бит не обнулится (сотни тыс. kWh), но на всякий случай
 	// отрицательные разности (сброс/замена счётчика) финализацию пропускаем.
+	// Если сумма ночи неотрицательна, но одна из двух ночных частей
+	// отрицательна (замена счётчика ночью с большим базовым показанием) —
+	// день финализируем, но предупреждаем: «ночь» собрана из отрицательных
+	// частей и может быть завышена.
+	if (import0700-import0000 < 0 || importNext-import2300 < 0 ||
+		export0700-export0000 < 0 || exportNext-export2300 < 0) && impNight >= 0 && expNight >= 0 {
+		log.Printf("tariff: день %s: ночная разность собрана из отрицательных частей (замена счётчика?)",
+			day.Format("2006-01-02"))
+	}
 	if impDay < 0 || impNight < 0 || expDay < 0 || expNight < 0 {
 		return nil
 	}
 
-	_, err = s.pool.Exec(s.ctx, `
+	_, err = e.Exec(ctx, `
 UPDATE sunreceiver.daily_tariffs
 SET import_day=$2, import_night=$3, export_day=$4, export_night=$5, finalized=now()
 WHERE day=$1`, day, round3(impDay), round3(impNight), round3(expDay), round3(expNight))
