@@ -12,4 +12,5 @@
 | МАП + MPPT | [map-mppt.md](map-mppt.md) | `mppt_api.go`, `modbusmap/` |
 | Счётчик DDS238 | [../dds238-meter.md](../dds238-meter.md) | `meter_*.go` |
 | ANT BMS | [../antbms.md](../antbms.md) | `bms_poller.go`, `bmslistener/` |
+| bmslistener (демон) | [bms-listener.md](bms-listener.md) | `bmslistener/` (C + systemd, установка) |
 | Универсальный контракт `values` | [../universal-contract.md](../universal-contract.md) | `main.go`, `commonContractTags` |
