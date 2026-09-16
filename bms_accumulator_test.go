@@ -63,6 +63,11 @@ func TestBmsAccumulatorNameCollision(t *testing.T) {
 	a := newBmsAccumulator()
 	dev1 := bmsDevice{DeviceName: "AntBms 320 A/h", Port: "/dev/ttyUSB0", CurrentA: 1, CellCount: 1, CellsV: []float64{3.3}}
 	dev2 := bmsDevice{DeviceName: "AntBms 320 A/h", Port: "/dev/ttyUSB1", CurrentA: 2, CellCount: 1, CellsV: []float64{3.4}}
+	// Ключи проставляются так же, как в pollAndSaveBMS (resolveBMSKey): при
+	// коллизии двух одинаковых имён в коллекции — развод по порту.
+	coll := map[string]int{dev1.DeviceName: 2}
+	dev1.Key = resolveBMSKey(dev1, coll)
+	dev2.Key = resolveBMSKey(dev2, coll)
 	a.add(dev1, now)
 	a.add(dev2, now)
 	closed := a.closed(now.Add(5 * time.Minute))

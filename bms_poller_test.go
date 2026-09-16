@@ -185,3 +185,23 @@ func TestBmsKey(t *testing.T) {
 		t.Fatalf("bmsKey(noPort) = %q", bmsKey(noPort))
 	}
 }
+
+// TestResolveBMSKey: уникальное (неколлизионное) имя КЛЮЧА НЕ меняется — сохраняет
+// непрерывность исторических рядов Redis/PG; при коллизии двух одинаковых имён в
+// коллекции ключ разводится по USB-порту (V1).
+func TestResolveBMSKey(t *testing.T) {
+	unique := bmsDevice{DeviceName: "AntBms 320 A/h (/dev/ttyUSB2)", Port: "/dev/ttyUSB2"}
+	if k := resolveBMSKey(unique, map[string]int{unique.DeviceName: 1}); k != "AntBms 320 A/h (/dev/ttyUSB2)" {
+		t.Fatalf("unique resolveBMSKey = %q, want исходный DeviceName", k)
+	}
+
+	a := bmsDevice{DeviceName: "AntBms 320 A/h", Port: "/dev/ttyUSB0"}
+	b := bmsDevice{DeviceName: "AntBms 320 A/h", Port: "/dev/ttyUSB1"}
+	coll := map[string]int{"AntBms 320 A/h": 2}
+	if k := resolveBMSKey(a, coll); k != "AntBms 320 A/h@/dev/ttyUSB0" {
+		t.Fatalf("collide resolveBMSKey(a) = %q, want @/dev/ttyUSB0", k)
+	}
+	if k := resolveBMSKey(b, coll); k != "AntBms 320 A/h@/dev/ttyUSB1" {
+		t.Fatalf("collide resolveBMSKey(b) = %q, want @/dev/ttyUSB1", k)
+	}
+}
