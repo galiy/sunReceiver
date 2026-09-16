@@ -281,17 +281,14 @@ window.srBindChip = function(b, fnToggle, fnIsolate){
 // Touch-управление графиком:
 //   - горизонтальный свайп одним пальцем — панорама по времени (вертикальный скролл
 //     страницы не блокируется: touch-action: pan-y);
-//   - щипок двумя пальцами — зум/у-зум (окно зафиксировано под серединой пальцев);
+//   - щипок двумя пальцами — зум по X (окно зафиксировано под серединой пальцев);
 //   - двойной тап — сброс зума;
 //   - тап — onTap(px), если задан. На страницах графиков хинт со значениями на
 //     мобильной версии отключён (onHover не вызывает chart.update на каждый
 //     touchmove — он мешал зуму), поэтому onTap не передаётся.
 // Плагин chartjs-plugin-zoom на touch-устройствах отключён (pan/wheel/pinch),
 // чтобы его Hammer не перехватывал жесты и не мешал скроллу страницы.
-// onPanEnd (опц.) — вызывается по завершении жест-панорамы (палец отпущен после
-// горизонтального свайпа); страницы используют его для догрузки данных, если окно
-// ушло за пределы уже загруженных точек.
-window.srTouchChart = function(getChart, canvasId, minSpan, onTap, onPanEnd){
+window.srTouchChart = function(getChart, canvasId, minSpan, onTap){
   var canvas=document.getElementById(canvasId);
   if(!canvas) return;
   canvas.style.touchAction='pan-y';
@@ -321,7 +318,7 @@ window.srTouchChart = function(getChart, canvasId, minSpan, onTap, onPanEnd){
       e.preventDefault();
       beginPinch(c, e);
     } else if(e.touches.length===1){
-      st={mode:'maybe', x0:e.touches[0].clientX, y0:e.touches[0].clientY, lastX:e.touches[0].clientX, t:Date.now(), decided:null, edge:null};
+      st={mode:'maybe', x0:e.touches[0].clientX, y0:e.touches[0].clientY, lastX:e.touches[0].clientX, t:Date.now(), decided:null};
     }
   }, {passive:false});
   canvas.addEventListener('touchmove', function(e){
@@ -343,10 +340,6 @@ window.srTouchChart = function(getChart, canvasId, minSpan, onTap, onPanEnd){
         if(w && c.chartArea){
           var dData=-(e.touches[0].clientX-st.lastX)/c.chartArea.width*(w.max-w.min);
           var dMin=w.min+dData, dMax=w.max+dData;
-          // Category-шкала: окно не уходит за данные (zoomScale зажимает), поэтому
-          // запоминаем, к какому краю пользователь уткнулся (для догрузки).
-          if(dMin < 0) st.edge='left';
-          else { var nl=(c.data&&c.data.labels)? c.data.labels.length : null; if(nl && dMax > nl-1) st.edge='right'; }
           try{ c.zoomScale('x', {min:dMin, max:dMax}, 'none'); }catch(err){}
         }
         st.lastX=e.touches[0].clientX;
@@ -362,11 +355,8 @@ window.srTouchChart = function(getChart, canvasId, minSpan, onTap, onPanEnd){
       return;
     }
     if(!st || st.mode!=='maybe' || st.decided==='pan'){
-      // Жест завершён: панорама (swipe) или щипок (pinch, может быть зум-аут).
-      var wasGesture = !!(st && ((st.mode==='maybe' && st.decided==='pan') || st.mode==='pinch'));
-      var gestEdge=(st && st.edge)? st.edge : null;
+      // Жест завершён: панорама (swipe) или щипок (pinch).
       st=null;
-      if(wasGesture && typeof onPanEnd==='function') onPanEnd(gestEdge);
       return;
     }
     var dt=Date.now()-st.t;
@@ -1257,7 +1247,7 @@ function renderChart(id, datasets, opts){
 	if(old){ captureHidden(id, old); try{ old.destroy(); }catch(e){} }
 	// При сохранении окна чарт создаём сразу С ЭТИМ окном: первый draw на полном
 	// диапазоне через afterDraw(checkZoomSync) «раскачал бы» остальные чарты
-	// транзиторным диапазоном — после догрузки/обновления график «прыгал
+	// транзиторным диапазоном — после обновления график «прыгал
 	// обратно» на полный период.
 	if(preserveZoom && saved.min!==null && saved.max!==null){
 		opts.scales.x.min=saved.min; opts.scales.x.max=saved.max;
@@ -1293,16 +1283,9 @@ function chartOpts(withLegend,yTitle,extra){
 		plugins:{
 			tooltip:{ enabled:false },
 			zoom:{
-				// onPanComplete — в подобъекте pan (плагин читает options.pan.*),
-				// onZoomComplete — в корне zoom (плагин читает options.zoom.onZoomComplete).
-				// Триггер догрузки — только в КОНЦЕ жеста (onPanComplete/onZoomComplete):
-				// догрузка посреди драга (по onPan) пересоздаёт чарт под курсором и
-				// ломает жест — график «прыгает» на позицию до завершения сдвига.
-				pan:{ enabled:!SR_COARSE, mode:'x',
-					onPanComplete:function(){ maybeExtendAndLoad(); } },
+				pan:{ enabled:!SR_COARSE, mode:'x' },
 				zoom:{ wheel:{ enabled:!SR_COARSE, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:!SR_COARSE }, mode:'x' },
-				limits:{ x:{ minRange: 60*1000 } },
-				onZoomComplete:function(){ maybeExtendAndLoad(); }
+				limits:{ x:{ minRange: 60*1000 } }
 			}
 		},
 		scales:{
@@ -1311,7 +1294,6 @@ function chartOpts(withLegend,yTitle,extra){
 		}
 	};
 	if(extra){
-		if(extra.zoomMode){ o.plugins.zoom.zoom.mode=extra.zoomMode; o.plugins.zoom.pan.mode=extra.zoomMode; }
 		if(extra.limits){ o.plugins.zoom.limits=Object.assign(o.plugins.zoom.limits, extra.limits); }
 		if(extra.scales){ for(var k in extra.scales) o.scales[k]=extra.scales[k]; }
 	}
@@ -1366,35 +1348,6 @@ function shiftPeriod(delta){
 }
 async function loadAll(){
 	await Promise.all([loadTotalChart(), loadChart(), loadGridVChart(), loadGridPChart()]);
-}
-// Догрузка данных при сдвиге (панорама) за пределы загруженных точек:
-// если видимое окно по X ушло за границы selRange, расширяем диапазон и
-// перечитываем /api/series, сохраняя текущее окно (preserveZoom). Вызывается
-// только по ЗАВЕРШЕНИИ жеста (onPanComplete/onZoomComplete — десктоп,
-// onPanEnd в srTouchChart — mobile): запуск посреди драга пересоздаёт чарты
-// под курсором и ломает жест.
-var extLoading=false;
-function maybeExtendAndLoad(){
-	if(extLoading) return;
-	var c=window.powerChart || (typeof Chart!=='undefined'? Chart.getChart('powerChart') : null);
-	if(!c || !c.scales || !c.scales.x) return;
-	var x=c.scales.x;
-	if(!isFinite(x.min) || !isFinite(x.max) || x.max<=x.min) return;
-	var winMin=x.min, winMax=x.max, span=x.max-x.min;
-	var buf=Math.max(span*0.25, 30*60*1000); // буфер, чтобы не догружать на каждом микро-сдвиге
-	var nowMs=Date.now();
-	var f=selRange.from.getTime(), t=selRange.to.getTime();
-	var ntBase=Math.min(t, nowMs); // в будущее данные не догружаем (их нет)
-	var nf=f, nt=ntBase, changed=false;
-	if(winMin < f - buf){ nf=winMin - buf; changed=true; }
-	if(winMax > ntBase - buf){ var cand=Math.min(winMax + buf, nowMs); if(cand > nt){ nt=cand; if(nt > t) changed=true; } }
-	if(!changed) return;
-	extLoading=true;
-	selRange.from=new Date(nf); selRange.to=new Date(nt);
-	preserveZoom=true; // сохранить текущее (сдвинутое) окно при пересоздании графиков
-	document.getElementById('fromPick').value=toInputDate(dayStart(selRange.from));
-	document.getElementById('toPick').value=toInputDate(dayStart(selRange.to));
-	loadAll().then(function(){ extLoading=false; }, function(){ extLoading=false; });
 }
 
 // Суммарный график
@@ -1457,8 +1410,6 @@ function buildGridVChart(data){
 		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false }
 	];
 	renderChart('gridVChart', datasets, chartOpts(true,'V',{
-		zoomMode:'xy',
-		limits:{ x:{minRange:60*1000}, y:{minRange:20}, y1:{minRange:20} },
 		scales:{ y1:{ type:'linear', position:'right', beginAtZero:false, title:{display:true, text:'Напряжение батареи, V'} } }
 	}));
 	lgKit('gridVChart','gridVChartLg').build(window.gridVChart);
@@ -1542,20 +1493,12 @@ document.getElementById('fromPick').value=toInputDate(dayStart(selRange.from));
 document.getElementById('toPick').value=toInputDate(dayStart(selRange.to));
 document.getElementById('datePick').value=toInputDate(selRange.from);
 loadAll(); setInterval(function(){ preserveZoom=true; loadAll(); },60000);
-// Фолбэк, если hammer panend (onPanComplete) не сработал: любое отпускание
-// указателя (конец драга) → проверка догрузки ПОСЛЕ жеста. Посреди драга не
-// срабатывает (только при отпускании); если окно в пределах данных — no-op.
-var extUpDebounce=null;
-window.addEventListener('pointerup',function(){
-	if(extUpDebounce) clearTimeout(extUpDebounce);
-	extUpDebounce=setTimeout(function(){ extUpDebounce=null; maybeExtendAndLoad(); }, 80);
-});
-// Мобильная версия: touch-жесты по графикам (щипок — зум, свайп — панорама,
-// двойной тап — сброс зума; хинт со значениями на мобильной отключён — он
-// мешал зуму).
+// Мобильная версия: touch-жесты по графикам (щипок — зум по X, свайп —
+// панорама, двойной тап — сброс зума; хинт со значениями на мобильной
+// отключён — он мешал зуму).
 if(SR_COARSE){
 	['powerChart','totalChart','gridVChart','gridPChart'].forEach(function(id){
-		srTouchChart(function(){ return window[id]; }, id, 60*1000, undefined, maybeExtendAndLoad);
+		srTouchChart(function(){ return window[id]; }, id, 60*1000);
 	});
 }
 </script>
@@ -1723,17 +1666,8 @@ function startOfMonth(){ var d=new Date(); return new Date(d.getFullYear(),d.get
 function endOfMonth(){ var d=new Date(); return new Date(d.getFullYear(),d.getMonth()+1,0,23,59,59,999); }
 function startOfYear(){ var d=new Date(); return new Date(d.getFullYear(),0,1,0,0,0,0); }
 function endOfYear(){ var d=new Date(); return new Date(d.getFullYear(),11,31,23,59,59,999); }
-// Сдвиг календарной даты на n дней/месяцев (для догрузки диапазона при сдвиге).
-function addDaysD(d,n){ var r=new Date(d); r.setDate(r.getDate()+n); return r; }
-function addMonthsD(d,n){ return new Date(d.getFullYear(), d.getMonth()+n, 1, 0,0,0,0); }
-// energyPanLoad[canvasId] — обработчик «окно ушло за данные», ставится каждым
-// initEnergyPanel; вызывают его drag-панорама (десктоп) и touch-свайп (mobile).
-var energyPanLoad={};
-// pendingPreserve[canvasId] — окно (индексы) и якорь-метка, которые нужно
-// сохранить после догрузки (при вставке новых дней слева индексы сдвигаются).
-var pendingPreserve={};
 
-function renderEnergyChart(canvasId, labels, datasets, preserveSpec){
+function renderEnergyChart(canvasId, labels, datasets){
 	var canvas=document.getElementById(canvasId);
 	var old=window[canvasId]; if(old){ captureHidden(canvasId, old); try{ old.destroy(); }catch(e){} }
 	canvas.getContext('2d');
@@ -1764,17 +1698,6 @@ function renderEnergyChart(canvasId, labels, datasets, preserveSpec){
 		}
 	});
 	if(applyHidden(canvasId, window[canvasId])) window[canvasId].update('none');
-	// После догрузки при сдвиге сохраняем видимое окно. При вставке новых дней СЛЕВА
-	// все индексы сдвигаются, поэтому пересчитываем окно по якорной метке (первой
-	// метке до догрузки): её новый индекс = величина сдвига.
-	if(preserveSpec && preserveSpec.anchor){
-		var anchorIdx=labels.indexOf(preserveSpec.anchor);
-		if(anchorIdx>=0 && isFinite(preserveSpec.winMin) && isFinite(preserveSpec.winMax)){
-			window[canvasId].options.scales.x.min=preserveSpec.winMin+anchorIdx;
-			window[canvasId].options.scales.x.max=preserveSpec.winMax+anchorIdx;
-			window[canvasId].update('none');
-		}
-	}
 	lgKit(canvasId, canvasId+'Lg').build(window[canvasId]);
 	return window[canvasId];
 }
@@ -1819,7 +1742,6 @@ function initEnergyPanel(cfg){
 		return load();
 	}
 	async function load(){
-		var spec=pendingPreserve[cfg.canvasId]||null; delete pendingPreserve[cfg.canvasId];
 		var url='/api/tariffs?from='+toD(dayStart(p.selFrom))+'&to='+toD(dayStart(p.selTo));
 		var r=await fetch(url); if(!r.ok) return;
 		var data=await r.json();
@@ -1829,60 +1751,11 @@ function initEnergyPanel(cfg){
 		else{ st.textContent='Показано дней: '+days.length+(cfg.isMonthly?' (по месяцам)':''); }
 		if(cfg.isMonthly){
 			var mx=monthlyDatasets(days);
-			renderEnergyChart(cfg.canvasId, mx.labels, mx.datasets, spec);
+			renderEnergyChart(cfg.canvasId, mx.labels, mx.datasets);
 		}else{
-			renderEnergyChart(cfg.canvasId, days.map(function(d){ return d.day; }), dailyDatasets(days), spec);
+			renderEnergyChart(cfg.canvasId, days.map(function(d){ return d.day; }), dailyDatasets(days));
 		}
 	}
-	// Догрузка при сдвиге (panorama/swipe) к краю загруженных дней/месяцев:
-	// category-шкала не даёт окну уйти за данные (zoomScale зажимает [0..N-1]),
-	// поэтому догрузка срабатывает по НАПРАВЛЕНИЮ сдвига (direction: 'left'/'right'),
-	// которое запоминают bindCategoryPan (десктоп) и srTouchChart (mobile), когда
-	// пользователь упирается в край. Расширяем [selFrom, selTo] и перечитываем
-	// /api/tariffs, сохраняя окно (pendingPreserve + сдвиг по якорной метке).
-	// В будущее не догружаем (данных нет); влево — с ограничением ~2 года/24 месяца.
-	var extBusy=false;
-	async function maybeLoadMore(direction){
-		if(extBusy) return;
-		if(direction!=='left' && direction!=='right') return; // energy: только явный сдвиг к краю
-		var c=window[cfg.canvasId]; if(!c||!c.scales||!c.scales.x) return;
-		var N=(c.data.labels||[]).length; if(!N) return;
-		var x=c.scales.x;
-		var winMin=isFinite(x.min)? x.min : 0, winMax=isFinite(x.max)? x.max : N-1;
-		var span=(isFinite(x.min)&&isFinite(x.max)&&x.max>x.min)? x.max-x.min : N;
-		var needLeft = direction==='left';
-		var needRight = direction==='right';
-		var visUnits=Math.max(3, span);
-		var addLeft = needLeft ? Math.ceil(visUnits*0.5)+1 : 0;
-		var addRight = needRight ? Math.ceil(visUnits*0.5)+1 : 0;
-		var nowD=new Date();
-		if(cfg.isMonthly){
-			var nowYMI=nowD.getFullYear()*12+nowD.getMonth();
-			var fI=p.selFrom.getFullYear()*12+p.selFrom.getMonth();
-			var tI=p.selTo.getFullYear()*12+p.selTo.getMonth();
-			var capI=nowYMI-24;
-			var nfI = needLeft ? Math.max(fI-addLeft, capI) : fI;
-			var ntI = needRight ? Math.min(tI+addRight, nowYMI) : tI;
-			if(nfI===fI && ntI===tI) return;
-			pendingPreserve[cfg.canvasId]={ anchor:c.data.labels[0], winMin:winMin, winMax:winMax };
-			extBusy=true;
-			try{ await setRange(new Date(Math.floor(nfI/12), nfI%12, 1,0,0,0,0), new Date(Math.floor(ntI/12), ntI%12+1, 0,23,59,59,999), null); }
-			finally{ extBusy=false; }
-		}else{
-			var fromDay=dayStart(p.selFrom);
-			var toDay=dayStart(p.selTo);
-			var todayDay=dayStart(nowD);
-			var capDay=addDaysD(todayDay, -730);
-			if(needLeft){ var candF=addDaysD(fromDay, -addLeft); if(candF<capDay) candF=capDay; fromDay=candF; }
-			if(needRight){ var candT=addDaysD(toDay, addRight); if(candT>todayDay) candT=todayDay; toDay=candT; }
-			if(fromDay.getTime()===dayStart(p.selFrom).getTime() && toDay.getTime()===dayStart(p.selTo).getTime()) return;
-			pendingPreserve[cfg.canvasId]={ anchor:c.data.labels[0], winMin:winMin, winMax:winMax };
-			extBusy=true;
-			try{ await setRange(fromDay, endOfDay(toDay), null); }
-			finally{ extBusy=false; }
-		}
-	}
-	energyPanLoad[cfg.canvasId]=maybeLoadMore;
 	cfg.presets.forEach(function(pr){
 		document.getElementById(pr.btn).addEventListener('click',function(){
 			document.getElementById(pr.btn).blur();
@@ -1941,7 +1814,7 @@ function bindCategoryPan(canvasId){
     if(e.button!==0) return;
     var c=window[canvasId]; if(!c || !c.scales || !c.scales.x || !c.chartArea) return;
     var x=c.scales.x;
-    st={x0:e.clientX, min0:x.min, max0:x.max, span:x.max-x.min, n:(c.data.labels||[]).length, w:x.width, edge:null};
+    st={x0:e.clientX, min0:x.min, max0:x.max, span:x.max-x.min, w:x.width};
     if(!st.w) { st=null; return; }
     try{ c.options.plugins.tooltip.enabled=false; }catch(err){}
     e.preventDefault();
@@ -1950,30 +1823,24 @@ function bindCategoryPan(canvasId){
     if(!st) return;
     var c=window[canvasId]; if(!c || !c.scales || !c.scales.x) { st=null; return; }
     var step=Math.round((st.x0-e.clientX)/st.w*st.span);
-    // Желанный индекс левого края (до зажима zoomScale в [0..n-1]). По нему
-    // запоминаем, к какому краю данных уперся пользователь (для догрузки).
     var desiredMin=st.min0+step;
-    if(desiredMin < 0) st.edge='left';
-    else if(desiredMin+st.span > st.n-1) st.edge='right';
     if(desiredMin!==c.scales.x.min){
       try{ c.zoomScale('x', {min:desiredMin, max:desiredMin+st.span}, 'none'); }catch(err){}
     }
   });
   window.addEventListener('mouseup', function(){
     if(!st) return;
-    var dir=st.edge;
     st=null;
     var c=window[canvasId];
     if(c){ try{ c.options.plugins.tooltip.enabled=!(SR_COARSE||window.__srTouched); c.update('none'); }catch(err){} }
-    if(dir && energyPanLoad[canvasId]) energyPanLoad[canvasId](dir);
   });
 }
 ['dailyTariffChart','monthlyTariffChart'].forEach(bindCategoryPan);
-// Мобильная версия: touch-жесты по тарифным графикам (щипок — зум, свайп —
-// панорама, двойной тап — сброс; на touch плагин zoom отключён).
+// Мобильная версия: touch-жесты по тарифным графикам (щипок — зум по X,
+// свайп — панорама, двойной тап — сброс; на touch плагин zoom отключён).
 if(SR_COARSE){
 	['dailyTariffChart','monthlyTariffChart'].forEach(function(id){
-		srTouchChart(function(){ return window[id]; }, id, 3, undefined, energyPanLoad[id]);
+		srTouchChart(function(){ return window[id]; }, id, 3);
 	});
 }
 </script>
@@ -2415,15 +2282,9 @@ function bmsRender(id, datasets, yTitle, legend, zero){
     plugins:{
       legend: { display:false },
       zoom:{
-        // onPanComplete — в подобъекте pan (плагин читает options.pan.*),
-        // onZoomComplete — в корне zoom (как и на странице графиков).
-        // Догрузка — только в КОНЦЕ жеста (без onPan-дебаунса: запуск
-        // посреди свайпа пересоздаёт чарты и ломает жест).
-        pan:{ enabled:!SR_COARSE, mode:'x',
-          onPanComplete:function(){ bmsMaybeExtend(); } },
+        pan:{ enabled:!SR_COARSE, mode:'x' },
         zoom:{ wheel:{ enabled:!SR_COARSE, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:!SR_COARSE }, mode:'x' },
-        limits:{ x:{ minRange: 5*60*1000 } },
-        onZoomComplete:function(){ bmsMaybeExtend(); }
+        limits:{ x:{ minRange: 5*60*1000 } }
       }
     },
     scales:{
@@ -2510,33 +2371,6 @@ async function loadBmsCharts(){
     setBmsRangeLabels();
   }catch(e){}
 }
-// Догрузка 5-минутных точек BMS при сдвиге (панорама) за пределы загруженных:
-// если видимое окно по X ушло за selRange, расширяем диапазон и перечитываем
-// /api/bms/<name>/series, сохраняя текущее окно (preserveZoom + bmsCaptureState).
-// Триггер — только завершение жеста (onPanComplete/onZoomComplete/onPanEnd).
-var bmsExtLoading=false;
-function bmsMaybeExtend(){
-  if(bmsExtLoading) return;
-  var c=BMS_CHARTS['bmsCapChart'];
-  if(!c || !c.scales || !c.scales.x) return;
-  var x=c.scales.x;
-  if(!isFinite(x.min) || !isFinite(x.max) || x.max<=x.min) return;
-  var winMin=x.min, winMax=x.max, span=x.max-x.min;
-  var buf=Math.max(span*0.25, 30*60*1000);
-  var nowMs=Date.now();
-  var f=selRange.from.getTime(), t=selRange.to.getTime();
-  var ntBase=Math.min(t, nowMs);
-  var nf=f, nt=ntBase, changed=false;
-  if(winMin < f - buf){ nf=winMin - buf; changed=true; }
-  if(winMax > ntBase - buf){ var cand=Math.min(winMax + buf, nowMs); if(cand > nt){ nt=cand; if(nt > t) changed=true; } }
-  if(!changed) return;
-  bmsExtLoading=true;
-  selRange.from=new Date(nf); selRange.to=new Date(nt);
-  preserveZoom=true;
-  document.getElementById('fromPick').value=toInputDate(dayStart(selRange.from));
-  document.getElementById('toPick').value=toInputDate(dayStart(selRange.to));
-  loadBmsCharts().then(function(){ bmsExtLoading=false; }, function(){ bmsExtLoading=false; });
-}
 
 // Кнопки периода BMS.
 document.getElementById('btnToday').addEventListener('click',function(){ setPeriod(startOfToday(), endOfToday(), 'day', 'btnToday'); });
@@ -2579,20 +2413,12 @@ document.getElementById('datePick').value=toInputDate(selRange.from);
 setActiveBtn('btnToday');
 loadBmsCharts();
 setInterval(function(){ preserveZoom=true; loadBmsCharts(); },60000);
-// Фолбэк, если hammer panend (onPanComplete) не сработал: любое отпускание
-// указателя (конец свайпа) → проверка догрузки ПОСЛЕ жеста. Посреди свайпа не
-// срабатывает; если окно в пределах данных — no-op.
-var bmsUpDebounce=null;
-window.addEventListener('pointerup',function(){
-  if(bmsUpDebounce) clearTimeout(bmsUpDebounce);
-  bmsUpDebounce=setTimeout(function(){ bmsUpDebounce=null; bmsMaybeExtend(); }, 80);
-});
 
-// Мобильная версия: touch-жесты по графикам BMS (щипок — зум, свайп — панорама,
-// двойной тап — сброс зума; tooltip на тап отключён — мешал зуму).
+// Мобильная версия: touch-жесты по графикам BMS (щипок — зум по X, свайп —
+// панорама, двойной тап — сброс зума; tooltip на тап отключён — мешал зуму).
 if(SR_COARSE){
   BMS_CHART_IDS.forEach(function(id){
-    srTouchChart(function(){ return BMS_CHARTS[id]; }, id, 5*60*1000, undefined, bmsMaybeExtend);
+    srTouchChart(function(){ return BMS_CHARTS[id]; }, id, 5*60*1000);
   });
 }
 
