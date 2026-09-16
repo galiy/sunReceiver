@@ -18,9 +18,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -200,8 +202,8 @@ ON CONFLICT (day) DO UPDATE SET "%s"=EXCLUDED."%s", "%s"=EXCLUDED."%s"`,
 // неотрицательны (счётчик не обнулялся), вычисляет и записывает 4 тарифные
 // величины: потребление/отдачу по тарифу «День» и «Ночь».
 func finalizeMeterDay(e meterExecer, ctx context.Context, day time.Time) error {
-	var import0000, import0700, import2300, importNext float64
-	var export0000, export0700, export2300, exportNext float64
+	var import0000, import0700, import2300, importNext *float64
+	var export0000, export0700, export2300, exportNext *float64
 	err := e.QueryRow(ctx, `
 SELECT import_0000, import_0700, import_2300, import_next,
        export_0000, export_0700, export_2300, export_next
@@ -210,14 +212,39 @@ WHERE day = $1`, day).Scan(
 		&import0000, &import0700, &import2300, &importNext,
 		&export0000, &export0700, &export2300, &exportNext)
 	if err != nil {
-		return nil // строки ещё нет или не все значения — пропускаем
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // строки ещё нет — финализировать нечего
+		}
+		return nil
+	}
+
+	// Неполные границы (часть показаний NULL — граница не захвачена): финализация
+	// невозможна. Логируем, какие именно отсутствуют, чтобы пропуск был виден.
+	var missing []string
+	check := func(name string, v *float64) {
+		if v == nil {
+			missing = append(missing, name)
+		}
+	}
+	check("import_0000", import0000)
+	check("import_0700", import0700)
+	check("import_2300", import2300)
+	check("import_next", importNext)
+	check("export_0000", export0000)
+	check("export_0700", export0700)
+	check("export_2300", export2300)
+	check("export_next", exportNext)
+	if len(missing) > 0 {
+		log.Printf("tariff: день %s: границы неполные (%s) — тариф не финализирован",
+			day.Format("2006-01-02"), strings.Join(missing, ","))
+		return nil
 	}
 
 	// День: 07:00→23:00. Ночь: [00:00→07:00] + [23:00→00:00 следующего дня].
-	impDay := import2300 - import0700
-	impNight := (import0700 - import0000) + (importNext - import2300)
-	expDay := export2300 - export0700
-	expNight := (export0700 - export0000) + (exportNext - export2300)
+	impDay := *import2300 - *import0700
+	impNight := (*import0700 - *import0000) + (*importNext - *import2300)
+	expDay := *export2300 - *export0700
+	expNight := (*export0700 - *export0000) + (*exportNext - *export2300)
 
 	// Счётчик 32-бит не обнулится (сотни тыс. kWh), но на всякий случай
 	// отрицательные разности (сброс/замена счётчика) финализацию пропускаем.
@@ -225,8 +252,8 @@ WHERE day = $1`, day).Scan(
 	// отрицательна (замена счётчика ночью с большим базовым показанием) —
 	// день финализируем, но предупреждаем: «ночь» собрана из отрицательных
 	// частей и может быть завышена.
-	if (import0700-import0000 < 0 || importNext-import2300 < 0 ||
-		export0700-export0000 < 0 || exportNext-export2300 < 0) && impNight >= 0 && expNight >= 0 {
+	if (*import0700-*import0000 < 0 || *importNext-*import2300 < 0 ||
+		*export0700-*export0000 < 0 || *exportNext-*export2300 < 0) && impNight >= 0 && expNight >= 0 {
 		log.Printf("tariff: день %s: ночная разность собрана из отрицательных частей (замена счётчика?)",
 			day.Format("2006-01-02"))
 	}

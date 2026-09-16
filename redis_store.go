@@ -92,6 +92,15 @@ func openRedis(addr string) (*redis.Client, error) {
 	return rdb, nil
 }
 
+// SetCtx привязывает контекст, на котором выполняются все операции Redis, к
+// единому сигналу остановки (stopCtx из main.go). До вызова используется
+// context.Background() (см. литерал redisStore в main.go). При отмене контекста
+// зависшие долгие операции (scan/запись бакетов) прерываются, а не висят до
+// Read/Write-таймаута. Вызывается один раз до запуска горутин пулеров.
+func (s *redisStore) SetCtx(ctx context.Context) {
+	s.ctx = ctx
+}
+
 // redisSeriesKey возвращает ключ месячного сегмента временного ряда для ts.
 func redisSeriesKey(ts time.Time) string {
 	return redisSeriesPrefix + ts.Format("2006-01")
@@ -106,14 +115,40 @@ func bmsSeriesKey(ts time.Time) string {
 // SaveSnapshot пишет снимок в Redis одной транзакцией:
 //   - обновляет текущее значение (HASH current[ip]);
 //   - кладёт точку в месячный ZSET временного ряда (score = Unix-секунды).
+//
+// Тот же (устройство, секунда) может записываться дважды: при повторном опросе
+// в пределах секунды (пулер не обязан укладываться в целые секунды). Голый ZADD
+// оставил бы в ZSET два member с одинаковым score — две точки в один момент
+// времени. Поэтому перед записью удаляются старые версии того же устройства на
+// этом score: в Redis остаётся ровно одна точка на (устройство, секунда).
 func (s *redisStore) SaveSnapshot(snap deviceSnapshot, ts time.Time) error {
 	b, err := json.Marshal(snap)
 	if err != nil {
 		return fmt.Errorf("marshal snapshot %s: %w", snap.IP, err)
 	}
 	key := redisSeriesKey(ts)
+	// Старые версии этого же устройства на том же моменте (score): ищем среди
+	// member'ов с точным score, разбираем и собираем для удаления.
+	score := strconv.FormatInt(ts.Unix(), 10)
+	old, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: score, Max: score}).Result()
+	if err != nil {
+		return fmt.Errorf("dedup %s: %w", snap.IP, err)
+	}
+	var stale []any
+	for _, m := range old {
+		var q deviceSnapshot
+		if json.Unmarshal([]byte(m), &q) != nil {
+			continue
+		}
+		if q.IP == snap.IP {
+			stale = append(stale, m)
+		}
+	}
 	pipe := s.rdb.TxPipeline()
 	pipe.HSet(s.ctx, redisCurrentKey, snap.IP, b)
+	if len(stale) > 0 {
+		pipe.ZRem(s.ctx, key, stale...)
+	}
 	pipe.ZAdd(s.ctx, key, redis.Z{Score: float64(ts.Unix()), Member: string(b)})
 	// Держим хоть один месяц истории; при смене месяца эта строка оставить ключ живым.
 	pipe.Expire(s.ctx, key, 40*24*time.Hour)
@@ -358,6 +393,7 @@ func (s *redisStore) QueryBMSSeries(name string, start, end time.Time) ([]bmsSer
 	min := strconv.FormatInt(start.Unix(), 10)
 	max := strconv.FormatInt(end.Unix(), 10)
 	var all []bmsSeriesPoint
+	var queryErr error
 	eachMonth(start, end, func(y int, m time.Month) bool {
 		key := bmsSeriesKey(time.Date(y, m, 1, 0, 0, 0, 0, time.Local))
 		vals, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{
@@ -365,6 +401,7 @@ func (s *redisStore) QueryBMSSeries(name string, start, end time.Time) ([]bmsSer
 			Max: max,
 		}).Result()
 		if err != nil {
+			queryErr = err
 			return false
 		}
 		for _, v := range vals {
@@ -379,6 +416,9 @@ func (s *redisStore) QueryBMSSeries(name string, start, end time.Time) ([]bmsSer
 		}
 		return true
 	})
+	if queryErr != nil {
+		return nil, queryErr
+	}
 	return all, nil
 }
 
@@ -544,6 +584,7 @@ func (s *redisStore) QuerySeries(start, end time.Time) ([]deviceSnapshot, error)
 	min := strconv.FormatInt(start.Unix(), 10)
 	max := strconv.FormatInt(end.Unix(), 10)
 	var all []deviceSnapshot
+	var queryErr error
 	eachMonth(start, end, func(y int, m time.Month) bool {
 		key := redisSeriesKey(time.Date(y, m, 1, 0, 0, 0, 0, time.Local))
 		vals, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{
@@ -551,6 +592,7 @@ func (s *redisStore) QuerySeries(start, end time.Time) ([]deviceSnapshot, error)
 			Max: max,
 		}).Result()
 		if err != nil {
+			queryErr = err
 			return false
 		}
 		for _, v := range vals {
@@ -562,5 +604,8 @@ func (s *redisStore) QuerySeries(start, end time.Time) ([]deviceSnapshot, error)
 		}
 		return true
 	})
+	if queryErr != nil {
+		return nil, queryErr
+	}
 	return all, nil
 }

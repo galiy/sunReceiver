@@ -1,6 +1,8 @@
 module github.com/galiy/sunReceiver
 
-go 1.26.5
+go 1.26
+
+toolchain go1.26.5
 
 require (
 	fyne.io/systray v1.12.2

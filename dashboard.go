@@ -24,6 +24,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -1005,10 +1006,10 @@ const chartsPage = `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Графики — SunReceiver</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" integrity="sha384-9nhczxUqK87bcKHh20fSQcTGD4qq5GhayNYSYWqwBkINBhOfQLg/P5HG5lF1urn4" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js" integrity="sha384-cVMg8E3QFwTvGCDuK+ET4PD341jF3W8nO1auiXfuZNQkzbUUiBGLsIQUE+b1mxws" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js" integrity="sha384-Cs3dgUx6+jDxxuqHvVH8Onpyj2LF1gKZurLDlhqzuJmUqVYMJ0THTWpxK5Z086Zm" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js" integrity="sha384-zPzbVRXfR492Sd5D+HydTYCxxgHAfgVO8KERbLlpeH5unsmbAEXrscGUUqLZG9BM" crossorigin="anonymous"></script>
 <style>
 :root { color-scheme: dark; }
 * { box-sizing: border-box; }
@@ -1610,10 +1611,10 @@ const energyPage = `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Электроэнергия — SunReceiver</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" integrity="sha384-9nhczxUqK87bcKHh20fSQcTGD4qq5GhayNYSYWqwBkINBhOfQLg/P5HG5lF1urn4" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js" integrity="sha384-cVMg8E3QFwTvGCDuK+ET4PD341jF3W8nO1auiXfuZNQkzbUUiBGLsIQUE+b1mxws" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js" integrity="sha384-Cs3dgUx6+jDxxuqHvVH8Onpyj2LF1gKZurLDlhqzuJmUqVYMJ0THTWpxK5Z086Zm" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js" integrity="sha384-zPzbVRXfR492Sd5D+HydTYCxxgHAfgVO8KERbLlpeH5unsmbAEXrscGUUqLZG9BM" crossorigin="anonymous"></script>
 <style>
 :root { color-scheme: dark; }
 * { box-sizing: border-box; }
@@ -1966,10 +1967,10 @@ const bmsDetailPage = `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>BMS — SunReceiver</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" integrity="sha384-9nhczxUqK87bcKHh20fSQcTGD4qq5GhayNYSYWqwBkINBhOfQLg/P5HG5lF1urn4" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js" integrity="sha384-cVMg8E3QFwTvGCDuK+ET4PD341jF3W8nO1auiXfuZNQkzbUUiBGLsIQUE+b1mxws" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js" integrity="sha384-Cs3dgUx6+jDxxuqHvVH8Onpyj2LF1gKZurLDlhqzuJmUqVYMJ0THTWpxK5Z086Zm" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js" integrity="sha384-zPzbVRXfR492Sd5D+HydTYCxxgHAfgVO8KERbLlpeH5unsmbAEXrscGUUqLZG9BM" crossorigin="anonymous"></script>
 <style>
 :root { color-scheme: dark; }
 * { box-sizing: border-box; }
@@ -2564,13 +2565,19 @@ var bmsDetailTmpl = template.Must(template.New("bmsdetail").Parse(mobileCommon +
 func (h *dashboardHandler) charts(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = chartsTmpl.Execute(w, map[string]any{"active": "charts", "flags": h.flags})
+	if err := chartsTmpl.Execute(w, map[string]any{"active": "charts", "flags": h.flags}); err != nil {
+		log.Printf("dashboard: render /charts: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}
 }
 
 func (h *dashboardHandler) energy(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = energyTmpl.Execute(w, map[string]any{"active": "energy", "flags": h.flags})
+	if err := energyTmpl.Execute(w, map[string]any{"active": "energy", "flags": h.flags}); err != nil {
+		log.Printf("dashboard: render /energy: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}
 }
 
 // apiBMS отдаёт актуальное состояние всех ANT BMS (HASH sunreceiver:bms,
@@ -2711,7 +2718,10 @@ func (h *dashboardHandler) apiBMSSeries(w http.ResponseWriter, r *http.Request, 
 func (h *dashboardHandler) bmsDetail(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = bmsDetailTmpl.Execute(w, map[string]any{"active": "home", "flags": h.flags})
+	if err := bmsDetailTmpl.Execute(w, map[string]any{"active": "home", "flags": h.flags}); err != nil {
+		log.Printf("dashboard: render /bms: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}
 }
 
 var dashboardTmpl = template.Must(template.New("dash").Parse(mobileCommon + dashboardPage))
@@ -2719,7 +2729,28 @@ var dashboardTmpl = template.Must(template.New("dash").Parse(mobileCommon + dash
 func (h *dashboardHandler) index(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = dashboardTmpl.Execute(w, map[string]any{"active": "home", "flags": h.flags})
+	if err := dashboardTmpl.Execute(w, map[string]any{"active": "home", "flags": h.flags}); err != nil {
+		log.Printf("dashboard: render /: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}
+}
+
+// tariffLogMu/tariffLogAt — ограничение частоты диагностики неполных границ тарифа:
+// /api/current опрашивается раз в секунду, поэтому при длительной нехватке границ
+// простая лог-строка спамила бы журнал. Диагностика печатается не чаще раза в минуту.
+var (
+	tariffLogMu sync.Mutex
+	tariffLogAt time.Time
+)
+
+func logTariffMissing(format string, args ...any) {
+	tariffLogMu.Lock()
+	defer tariffLogMu.Unlock()
+	if !tariffLogAt.IsZero() && time.Since(tariffLogAt) < time.Minute {
+		return
+	}
+	tariffLogAt = time.Now()
+	log.Printf(format, args...)
 }
 
 // meterTariffToday вычисляет тарифные величины счётчика за текущие календарные
@@ -2728,15 +2759,21 @@ func (h *dashboardHandler) index(w http.ResponseWriter, r *http.Request) {
 // из Redis) и фиксированные границы дня (b, из pg.daily_tariffs). Границы, которые
 // ещё не наступили или не захвачены, отсутствуют (nil) — расчёт строится только из
 // доступных показаний; величины приводятся к ≥0 (сброс счётчика игнорируется).
+// Отсутствие нужной в текущей ветке границы логируется (см. logTariffMissing),
+// чтобы «день/ночь» не атрибуцировались молча от неполных данных.
 func meterTariffToday(now time.Time, impNow, expNow float64, b *meterBoundaryRow) (impDay, impNight, expDay, expNight float64) {
 	hour := now.In(time.Local).Hour()
 	// Ночная зона [00:00, 07:00): весь прирост с начала суток — ночь.
 	if hour < meterDayStartH {
 		if b.Import0000 != nil {
 			impNight = impNow - *b.Import0000
+		} else {
+			logTariffMissing("tariff: ночь с начала суток: нет показания на 00:00 (import) — ночной импорт не атрибуцирован")
 		}
 		if b.Export0000 != nil {
 			expNight = expNow - *b.Export0000
+		} else {
+			logTariffMissing("tariff: ночь с начала суток: нет показания на 00:00 (export) — ночная отдача не атрибуцирована")
 		}
 		return 0, max0f(impNight), 0, max0f(expNight)
 	}
@@ -2744,34 +2781,59 @@ func meterTariffToday(now time.Time, impNow, expNow float64, b *meterBoundaryRow
 	if hour < meterDayEndH {
 		if b.Import0000 != nil && b.Import0700 != nil {
 			impNight = *b.Import0700 - *b.Import0000
+		} else if b.Import0000 != nil || b.Import0700 != nil {
+			logTariffMissing("tariff: день: ночь [00:00,07:00] не собрана — неполные границы import 00:00/07:00")
 		}
 		if b.Export0000 != nil && b.Export0700 != nil {
 			expNight = *b.Export0700 - *b.Export0000
+		} else if b.Export0000 != nil || b.Export0700 != nil {
+			logTariffMissing("tariff: день: ночь [00:00,07:00] не собрана — неполные границы export 00:00/07:00")
 		}
 		if b.Import0700 != nil {
 			impDay = impNow - *b.Import0700
 		} else if b.Import0000 != nil {
 			impDay = impNow - *b.Import0000
+			logTariffMissing("tariff: день: нет показания на 07:00 (import) — дневной импорт считается от 00:00")
+		} else {
+			logTariffMissing("tariff: день: нет показаний import 07:00/00:00 — дневной импорт не атрибуцирован")
 		}
 		if b.Export0700 != nil {
 			expDay = expNow - *b.Export0700
 		} else if b.Export0000 != nil {
 			expDay = expNow - *b.Export0000
+			logTariffMissing("tariff: день: нет показания на 07:00 (export) — дневная отдача считается от 00:00")
+		} else {
+			logTariffMissing("tariff: день: нет показаний export 07:00/00:00 — дневная отдача не атрибуцирована")
 		}
 		return max0f(impDay), max0f(impNight), max0f(expDay), max0f(expNight)
 	}
 	// Ночная зона [23:00, 24:00): день полон [07:00,23:00], ночь = [00:00,07:00] + [23:00,now].
 	if b.Import0700 != nil && b.Import2300 != nil {
 		impDay = *b.Import2300 - *b.Import0700
+	} else if b.Import0700 != nil || b.Import2300 != nil {
+		logTariffMissing("tariff: ночь: день [07:00,23:00] не собран — неполные границы import 07:00/23:00")
 	}
 	if b.Export0700 != nil && b.Export2300 != nil {
 		expDay = *b.Export2300 - *b.Export0700
+	} else if b.Export0700 != nil || b.Export2300 != nil {
+		logTariffMissing("tariff: ночь: день [07:00,23:00] не собран — неполные границы export 07:00/23:00")
 	}
 	if b.Import0000 != nil && b.Import0700 != nil {
 		impNight = *b.Import0700 - *b.Import0000
+	} else if b.Import0000 != nil || b.Import0700 != nil {
+		logTariffMissing("tariff: ночь: ночь [00:00,07:00] не собрана — неполные границы import 00:00/07:00")
 	}
 	if b.Export0000 != nil && b.Export0700 != nil {
 		expNight = *b.Export0700 - *b.Export0000
+	} else if b.Export0000 != nil || b.Export0700 != nil {
+		logTariffMissing("tariff: ночь: ночь [00:00,07:00] не собрана — неполные границы export 00:00/07:00")
+	}
+	// В ночной ветке [23:00,24:00) показатель на 23:00 обязателен для закрытия дня.
+	if b.Import2300 == nil {
+		logTariffMissing("tariff: ночь: нет показания на 23:00 (import) — ночной импорт [23:00,now] не атрибуцирован")
+	}
+	if b.Export2300 == nil {
+		logTariffMissing("tariff: ночь: нет показания на 23:00 (export) — ночная отдача [23:00,now] не атрибуцирована")
 	}
 	if b.Import2300 != nil {
 		impNight += impNow - *b.Import2300
@@ -2953,6 +3015,8 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 		b, mSum, ySum := h.loadTariffData(now)
 		if b != nil {
 			impDay, impNight, expDay, expNight = meterTariffToday(now, impNow, expNow, b)
+		} else {
+			logTariffMissing("tariff: границы текущих суток отсутствуют в PG — тарифные плашки дня не рассчитываются")
 		}
 		impDayM, impNightM, expDayM, expNightM = mSum[0]+impDay, mSum[1]+impNight, mSum[2]+expDay, mSum[3]+expNight
 		impDayY, impNightY, expDayY, expNightY = ySum[0]+impDay, ySum[1]+impNight, ySum[2]+expDay, ySum[3]+expNight
@@ -3423,6 +3487,22 @@ func dayBounds(now time.Time, loc *time.Location) (time.Time, time.Time) {
 	return start, end
 }
 
+// recoverMiddleware — защитная обёртка над mux: паника в любом обработчике
+// логируется (со стеком) и превращается в http.Error 500 вместо падения
+// всего сервера. Один упавший хендлер (напр. из-за краевых данных в Redis/PG)
+// не должен уносить остальные эндпоинты.
+func recoverMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("dashboard: panic в %s %s: %v\n%s", r.Method, r.URL.Path, rec, debug.Stack())
+				http.Error(w, "internal error", http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
 // serveDashboard — HTTP-сервер веб-дашборда. При закрытии stop аккуратно
 // завершает сервер (http.Server.Shutdown, бюджет 5 с), чтобы main мог закрыть
 // пулы Redis/PG после завершения всех фоновых горутин (bgWg).
@@ -3439,7 +3519,7 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore, stop context.Co
 	mux.HandleFunc("/api/bms", h.apiBMS)
 	mux.HandleFunc("/api/bms/", h.apiBMSOne)
 	srv := &http.Server{
-		Addr: addr, Handler: mux,
+		Addr: addr, Handler: recoverMiddleware(mux),
 		// Таймауты защищают от slowloris и «висящих» соединений, не ограничивая
 		// длинные ответы (/api/series за большой период идёт из PG — WriteTimeout=0):
 		// ReadHeaderTimeout отсекает медленные/зависшие клиенты при приёме заголовка,

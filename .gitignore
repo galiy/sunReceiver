@@ -26,6 +26,8 @@ sunReceiver.json
 sunReceiver
 sunReceiver-linux
 solarman-probe
+*.log
+*.exe
 
 # релизные артефакты сборки (make VERSION=... all) — не коммитить
 dist/
