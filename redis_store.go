@@ -41,8 +41,9 @@ const (
 	// по затронутым месяцам, отсортированных по времени.
 	redisSeriesPrefix = "sunreceiver:series:"
 	// redisBMSKey — HASH текущего состояния ANT BMS (bmslistener → read_bms.php
-	// ПАК «Малина»): поле = deviceName (напр. "AntBms 320 A/h"), значение = JSON
-	// устройства bmsDevice. Отдельный ключ — BMS не входит в общий снимок
+	// ПАК «Малина»): поле = ключ bmsKey (deviceName или "deviceName@Port", см.
+	// bms_poller.go), значение = JSON устройства bmsDevice (содержит deviceName
+	// для отображения и port). Отдельный ключ — BMS не входит в общий снимок
 	// sunreceiver:current (нет универсального контракта значений). Пишется
 	// BMS-пулером 1 раз в секунду (bms_poller.go), чистится при исчезновении
 	// устройства из коллекции.
@@ -250,7 +251,7 @@ func (s *redisStore) PruneMPPT(active map[string]struct{}) {
 }
 
 // SetBMS обновляет коллекцию BMS-устройств в HASH sunreceiver:bms одной
-// транзакцией: пишет все активные (поле = deviceName, значение = JSON bmsDevice)
+// транзакцией: пишет все активные (поле = ключ bmsKey, значение = JSON bmsDevice)
 // и удаляет те, которых нет в active (устройство исчезло из коллекции —
 // адаптер отключился/замолчал, bmslistener уже забыл его).
 func (s *redisStore) SetBMS(active map[string]string) error {
@@ -277,8 +278,8 @@ func (s *redisStore) SetBMS(active map[string]string) error {
 	return nil
 }
 
-// BMSCurrent возвращает текущее состояние всех BMS-устройств (поле = deviceName,
-// значение = JSON bmsDevice).
+// BMSCurrent возвращает текущее состояние всех BMS-устройств (поле = ключ
+// bmsKey, значение = JSON bmsDevice).
 func (s *redisStore) BMSCurrent() (map[string]string, error) {
 	m, err := s.rdb.HGetAll(s.ctx, redisBMSKey).Result()
 	if err != nil {
@@ -287,8 +288,8 @@ func (s *redisStore) BMSCurrent() (map[string]string, error) {
 	return m, nil
 }
 
-// BMSOne возвращает текущее состояние одного BMS-устройства по deviceName;
-// пустая строка, если устройство отсутствует.
+// BMSOne возвращает текущее состояние одного BMS-устройства по ключу (bmsKey,
+// см. bms_poller.go); пустая строка, если устройство отсутствует.
 func (s *redisStore) BMSOne(name string) (string, error) {
 	v, err := s.rdb.HGet(s.ctx, redisBMSKey, name).Result()
 	if errors.Is(err, redis.Nil) {
@@ -345,8 +346,8 @@ func (s *redisStore) SaveBMSSeries(p bmsSeriesPoint, ts time.Time) error {
 	return nil
 }
 
-// QueryBMSSeries возвращает 5-минутные усреднённые точки одной BMS (по
-// deviceName) за период [start, end] включительно из Redis-ряда, по
+// QueryBMSSeries возвращает 5-минутные усреднённые точки одной BMS (по ключу
+// bmsKey) за период [start, end] включительно из Redis-ряда, по
 // возрастанию времени. Читает месячные сегменты ZRANGEBYSCORE (в пределах
 // окна удержания 2 календарных суток); отфильтрованные по имени точки —
 // точный срез для графиков конкретной BMS.

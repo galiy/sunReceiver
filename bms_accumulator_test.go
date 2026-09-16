@@ -17,9 +17,72 @@
 package main
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
+
+// TestBmsAveragedSamplesJSON: поле samples всегда сериализуется в jsonb values и
+// читается обратно как int. На это поле опирается sample-count guard в
+// InsertBMSAveraged (pg_store.go) — сравнение (values->>'samples')::int: если бы
+// samples терялось при marshal, guard не смог бы отличить более полную запись.
+func TestBmsAveragedSamplesJSON(t *testing.T) {
+	avg := bmsAveraged{CurrentA: 1.5, PowerW: 51.2, Soc: 55, CellCount: 16, Samples: 120}
+	b, err := json.Marshal(avg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	// SQL-гвард читает values->>'samples' как jsonb-число: проверяем, что поле
+	// присутствует и парсится в int.
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("unmarshal to map: %v", err)
+	}
+	raw, ok := m["samples"]
+	if !ok {
+		t.Fatalf("samples не сериализуется в values: %s", b)
+	}
+	var n int
+	if err := json.Unmarshal(raw, &n); err != nil || n != 120 {
+		t.Fatalf("samples=%s → %d, want 120", raw, n)
+	}
+	var back bmsAveraged
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if back.Samples != 120 || back.CurrentA != 1.5 {
+		t.Fatalf("roundtrip: %+v", back)
+	}
+}
+
+// TestBmsAccumulatorNameCollision: две одинаковые батареи (same DeviceName) с
+// разными USB-портами дают РАЗНЫЕ ключи бакетов и, соответственно, разные
+// 5-минутные точки (V1) — иначе они сливались бы в одну.
+func TestBmsAccumulatorNameCollision(t *testing.T) {
+	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.Local)
+	a := newBmsAccumulator()
+	dev1 := bmsDevice{DeviceName: "AntBms 320 A/h", Port: "/dev/ttyUSB0", CurrentA: 1, CellCount: 1, CellsV: []float64{3.3}}
+	dev2 := bmsDevice{DeviceName: "AntBms 320 A/h", Port: "/dev/ttyUSB1", CurrentA: 2, CellCount: 1, CellsV: []float64{3.4}}
+	a.add(dev1, now)
+	a.add(dev2, now)
+	closed := a.closed(now.Add(5 * time.Minute))
+	if len(closed) != 2 {
+		t.Fatalf("closed = %d, want 2 (разные ключи): %+v", len(closed), closed)
+	}
+	seen := map[string]string{}
+	for _, p := range closed {
+		if p.display != "AntBms 320 A/h" {
+			t.Fatalf("display = %q, want исходный DeviceName", p.display)
+		}
+		seen[p.name] = seen[p.name] + "|"
+	}
+	if _, ok := seen["AntBms 320 A/h@/dev/ttyUSB0"]; !ok {
+		t.Fatalf("нет ключа @/dev/ttyUSB0: %v", seen)
+	}
+	if _, ok := seen["AntBms 320 A/h@/dev/ttyUSB1"]; !ok {
+		t.Fatalf("нет ключа @/dev/ttyUSB1: %v", seen)
+	}
+}
 
 func TestBmsBucketAverage(t *testing.T) {
 	start := time.Date(2026, 9, 14, 12, 0, 0, 0, time.Local)

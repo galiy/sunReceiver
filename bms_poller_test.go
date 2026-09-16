@@ -69,12 +69,16 @@ func TestPollAndSaveBMSUpdatedZero(t *testing.T) {
 	}
 }
 
-// TestPollAndSaveBMSValidEmpty: валидная ПУСТАЯ коллекция (updated>0, devices=[])
-// по-прежнему чистит дашборд (это не сбой, а «действительно 0 батарей»).
-func TestPollAndSaveBMSValidEmpty(t *testing.T) {
+// TestPollAndSaveBMSValidEmptyTolerance: валидно-пустая коллекция (updated>0,
+// devices=[]) НЕ стирает дашборд при одиночном/коротком всплеске пустоты (K1):
+// одиночный перезапуск bmslistener или временный сбой shm не должен сносить HASH
+// sunreceiver:bms. Пока счётчик подряд идущих пустых ответов < bmsEmptyTolerance —
+// коллекция не трогается.
+func TestPollAndSaveBMSValidEmptyTolerance(t *testing.T) {
 	s := testStore(t)
 	cleanTestKeys(t, s)
 	t.Cleanup(func() { cleanTestKeys(t, s) })
+	bmsEmptyStreak = 0
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -95,15 +99,89 @@ func TestPollAndSaveBMSValidEmpty(t *testing.T) {
 		t.Fatalf("SetBMS seed: %v", err)
 	}
 
-	if col := pollAndSaveBMS(context.Background(), s); col == nil {
-		t.Fatal("pollAndSaveBMS при updated>0 вернул nil, want коллекцию")
+	// 1–2 пустых ответа (меньше bmsEmptyTolerance=3) — дашборд сохраняется.
+	for i := 0; i < 2; i++ {
+		if col := pollAndSaveBMS(context.Background(), s); col == nil {
+			t.Fatalf("pollAndSaveBMS при updated>0 вернул nil, want коллекцию")
+		}
+		cur, err := s.BMSCurrent()
+		if err != nil {
+			t.Fatalf("BMSCurrent: %v", err)
+		}
+		if _, ok := cur[seededName]; !ok {
+			t.Fatalf("seeded BMS удалён пустым ответом #%d (счётчик %d): %+v", i+1, bmsEmptyStreak, cur)
+		}
+	}
+}
+
+// TestPollAndSaveBMSValidEmpty: при устойчивой пустоте (>= bmsEmptyTolerance
+// подряд идущих пустых ответов) дашборд очищается — это «действительно 0 батарей».
+func TestPollAndSaveBMSValidEmpty(t *testing.T) {
+	s := testStore(t)
+	cleanTestKeys(t, s)
+	t.Cleanup(func() { cleanTestKeys(t, s) })
+	bmsEmptyStreak = 0
+	saved := bmsEmptyTolerance
+	bmsEmptyTolerance = 2
+	t.Cleanup(func() { bmsEmptyTolerance = saved })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"updated":1750000000,"devices":[]}`))
+	}))
+	defer srv.Close()
+
+	oldSite := bmsSite
+	bmsSite = &bmsApiClient{
+		url:     srv.URL,
+		client:  &http.Client{Timeout: 2 * time.Second},
+		authHdr: "Basic test",
+	}
+	t.Cleanup(func() { bmsSite = oldSite })
+
+	const seededName = "AntBms 320 A/h (/dev/ttyUSB0)"
+	if err := s.SetBMS(map[string]string{seededName: `{"deviceName":"` + seededName + `"}`}); err != nil {
+		t.Fatalf("SetBMS seed: %v", err)
 	}
 
+	// Первый пустой ответ (счётчик 1 < 2) — коллекция не трогается.
+	if col := pollAndSaveBMS(context.Background(), s); col == nil {
+		t.Fatal("pollAndSaveBMS вернул nil, want коллекцию")
+	}
 	cur, err := s.BMSCurrent()
 	if err != nil {
 		t.Fatalf("BMSCurrent: %v", err)
 	}
+	if _, ok := cur[seededName]; !ok {
+		t.Fatalf("seeded BMS удалён: %+v", cur)
+	}
+
+	// Второй подряд пустой ответ — достигнут порог, коллекция очищается.
+	if col := pollAndSaveBMS(context.Background(), s); col == nil {
+		t.Fatal("pollAndSaveBMS вернул nil, want коллекцию")
+	}
+	cur, err = s.BMSCurrent()
+	if err != nil {
+		t.Fatalf("BMSCurrent: %v", err)
+	}
 	if _, ok := cur[seededName]; ok {
-		t.Fatalf("seeded BMS не удалён валидной пустой коллекцией: %+v", cur)
+		t.Fatalf("seeded BMS не удалён устойчивой пустотой: %+v", cur)
+	}
+}
+
+// TestBmsKey: коллизия имён двух одинаковых батарей с разными USB-портами
+// разрешается ключом deviceName@port; при пустом port — фолбэк на deviceName.
+func TestBmsKey(t *testing.T) {
+	a := bmsDevice{DeviceName: "AntBms 320 A/h", Port: "/dev/ttyUSB0"}
+	b := bmsDevice{DeviceName: "AntBms 320 A/h", Port: "/dev/ttyUSB1"}
+	if bmsKey(a) == bmsKey(b) {
+		t.Fatalf("коллизия: одинаковые ключи для разных портов: %q", bmsKey(a))
+	}
+	if bmsKey(a) != "AntBms 320 A/h@/dev/ttyUSB0" {
+		t.Fatalf("bmsKey(a) = %q", bmsKey(a))
+	}
+	noPort := bmsDevice{DeviceName: "AntBms 320 A/h"}
+	if bmsKey(noPort) != "AntBms 320 A/h" {
+		t.Fatalf("bmsKey(noPort) = %q", bmsKey(noPort))
 	}
 }

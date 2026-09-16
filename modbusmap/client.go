@@ -90,9 +90,10 @@ func (c *Client) ReadRegisters(ctx context.Context, start uint16, count uint16) 
 	// MBAP + PDU (func 03, start, count)
 	lenField := 6
 	req := make([]byte, 0, 12)
-	req = binary.BigEndian.AppendUint16(req, c.nextTxn())      // transaction id
-	req = binary.BigEndian.AppendUint16(req, 0)                // protocol
-	req = binary.BigEndian.AppendUint16(req, uint16(lenField)) // length
+	txn := c.nextTxn()
+	req = binary.BigEndian.AppendUint16(req, txn)                 // transaction id
+	req = binary.BigEndian.AppendUint16(req, 0)                   // protocol
+	req = binary.BigEndian.AppendUint16(req, uint16(lenField))    // length
 	req = append(req, c.Unit)
 	req = append(req, 0x03)
 	req = binary.BigEndian.AppendUint16(req, start)
@@ -122,9 +123,21 @@ func (c *Client) ReadRegisters(ctx context.Context, start uint16, count uint16) 
 		c.closeConn()
 		return nil, fmt.Errorf("read header: %w", err)
 	}
+	// Сверяем transaction id: nextTxn() инкрементит, поэтому храним использованный
+	// txn. Поздний ответ от СТАРОГО запроса на переиспользуемом сокете не принимается
+	// (иначе его данные ячеек пришли бы как ответ текущего запроса) — соединение
+	// закрываем, чтобы следующий опрос пошёл по чистому сокету.
+	if got := binary.BigEndian.Uint16(hdr[0:2]); got != txn {
+		c.closeConn()
+		return nil, fmt.Errorf("несовпадение transaction id: ожидался %d, получен %d", txn, got)
+	}
 	if binary.BigEndian.Uint16(hdr[2:4]) != 0 {
 		c.closeConn()
 		return nil, fmt.Errorf("не protocol=0 в MBAP")
+	}
+	if hdr[6] != c.Unit {
+		c.closeConn()
+		return nil, fmt.Errorf("несовпадение unit id: ожидался %d, получен %d", c.Unit, hdr[6])
 	}
 	mbLen := int(binary.BigEndian.Uint16(hdr[4:6]))
 	if mbLen < 3 || mbLen > 2+1+1+2*int(count) {

@@ -33,6 +33,7 @@ import (
 type bmsDevice struct {
 	DeviceName    string    `json:"deviceName"`     // "AntBms <ёмкость> A/h"
 	Port          string    `json:"port"`           // USB-порт адаптера (позиционный)
+	Key           string    `json:"key"`            // ключ устройства (bmsKey): deviceName или "deviceName@Port"; для запросов/URL
 	Timestamp     int64     `json:"timestamp"`      // Unix-время последнего валидного кадра
 	Time          string    `json:"time"`           // локальное время HH:MM:SS
 	CellCount     int       `json:"cell_count"`     // число ячеек (S)
@@ -52,6 +53,18 @@ type bmsDevice struct {
 	MinCellV      float64   `json:"min_cell_v"`     // напряжение минимальной ячейки, V
 	AvgCellV      float64   `json:"avg_cell_v"`     // среднее напряжение ячейки, V
 	Frames        uint32    `json:"frames"`         // счётчик валидных кадров с запуска слушателя
+}
+
+// bmsKey — стабильный ключ BMS-устройства, однозначно идентифицирующий его в
+// HASH sunreceiver:bms, Redis-ряде, PG (name) и дашборде (/api/bms/<name>).
+// Два одинаковых deviceName (коллизия имён) с разными USB-портами адаптеров
+// (Port) получают РАЗНЫЕ ключи; при пустом Port — фолбэк просто на deviceName
+// (сохраняет прежнее поведение для устройств без указания порта).
+func bmsKey(d bmsDevice) string {
+	if d.Port != "" {
+		return d.DeviceName + "@" + d.Port
+	}
+	return d.DeviceName
 }
 
 // bmsCollection — ответ read_bms.php (публикация bmslistener).
@@ -156,36 +169,70 @@ func runBmsPoll(store *redisStore, pg *pgStore, ctx context.Context) {
 			}
 			saveBMSClosedBuckets(store, pg, acc.closed(time.Now()), false)
 		case <-ctx.Done():
-			// Drain неполного 5-минутного промежутка в Redis+PG. main() ждёт
-			// завершение этой горутины (bgWg) ДО закрытия пулов Redis/PG,
-			// поэтому записи не гоняются с закрытыми пулами.
+			// Drain неполного 5-минутного промежутка ТОЛЬКО в Redis (partial=true —
+			// в PG не пишем, там остаются только полные бакеты). В комментарии
+			// saveBMSClosedBuckets эффект раскрыт. main() ждёт завершение этой
+			// горутины (bgWg) ДО закрытия пулов Redis/PG, поэтому записи не
+			// гоняются с закрытыми пулами.
 			saveBMSClosedBuckets(store, pg, acc.drain(), true)
 			return
 		}
 	}
 }
 
+// bmsEmptyTolerance — сколько подряд валидно-пустых ответов (updated>0,
+// devices=[]) требуется, чтобы почистить дашборд BMS (см. pollAndSaveBMS).
+var bmsEmptyTolerance = 3
+
+// bmsEmptyStreak — счётчик подряд идущих валидно-пустых ответов. Гвард
+// устойчивости (K1): одиночная/короткая пустота (перезапуск bmslistener,
+// временный сбой shm) не должна стирать весь дашборд батарей.
+var bmsEmptyStreak int
+
 // saveBMSClosedBuckets пишет готовые 5-минутные точки BMS в Redis (месячный
 // ZSET, окно удержания 2 календарных суток — чистка PurgeOld) и в PG (вечно).
-// partial=true — промежутки выгружаются при остановке (неполные).
+// partial=true — промежутки выгружаются при остановке (неполные): такие пишутся
+// ТОЛЬКО в Redis (единственное представление «момента остановки»), в PG не
+// попадают — там остаются только полные 5-минутные бакеты (K3).
 func saveBMSClosedBuckets(store *redisStore, pg *pgStore, pts []bmsAvgPoint, partial bool) {
+	type row struct {
+		name  string
+		start time.Time
+		avg   bmsAveraged
+	}
+	var pgRows []row
 	for _, p := range pts {
 		if p.avg.Samples == 0 {
 			continue
 		}
-		sp := bmsSeriesPoint{Name: p.name, Ts: p.start.Format(time.RFC3339)}
+		sp := bmsSeriesPoint{Name: p.name, Display: p.display, Ts: p.start.Format(time.RFC3339)}
 		sp.bmsAveraged = p.avg
 		if err := store.SaveBMSSeries(sp, p.start); err != nil {
 			log.Printf("bms avg redis %s %s: %v", p.name, p.start.Format(time.RFC3339), err)
 		}
-		if pg != nil {
-			if err := pg.InsertBMSAveraged(p.name, p.start, p.avg); err != nil {
-				log.Printf("bms avg pg %s %s: %v", p.name, p.start.Format(time.RFC3339), err)
-			}
+		if pg != nil && !partial {
+			pgRows = append(pgRows, row{name: p.name, start: p.start, avg: p.avg})
 		}
 		if partial {
 			log.Printf("bms avg: дописан неполный 5-минутный промежуток %s %s (снимков: %d)",
 				p.name, p.start.Format(time.RFC3339), p.avg.Samples)
+		}
+	}
+	// Набор точек одного вызова пишем ОДНОЙ транзакцией с ограниченным retry:
+	// кратковременный сбой PG не должен оставлять «дыру» в 5-минутном ряде BMS
+	// (для BMS история восстанавливается только живым опросом — потеря необратима).
+	if pg != nil && len(pgRows) > 0 {
+		if err := retryPg(func() error {
+			return pg.withTx(func(q pgExecer) error {
+				for _, r := range pgRows {
+					if err := insertBMSAveragedExec(q, pg.ctx, r.name, r.start, r.avg); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
+		}, 3); err != nil {
+			log.Printf("bms avg pg: %v", err)
 		}
 	}
 }
@@ -193,7 +240,9 @@ func saveBMSClosedBuckets(store *redisStore, pg *pgStore, pts []bmsAvgPoint, par
 // pollAndSaveBMS делает один запрос read_bms.php и обновляет коллекцию в
 // Redis: устройство появляется/исчезает с дашборда по факту наличия в ответе
 // (как MPPT). При ошибке запроса предыдущее состояние в Redis сохраняется
-// (возвращается nil).
+// (возвращается nil). Валидно-пустой ответ (updated>0, devices=[]) чистит
+// дашборд только при устойчивой пустоте (bmsEmptyTolerance подряд) — одиночный
+// всплеск пустоты (перезапуск bmslistener, сбой shm) коллекцию не трогает.
 func pollAndSaveBMS(ctx context.Context, store *redisStore) *bmsCollection {
 	col, err := bmsSite.fetch(ctx)
 	if err != nil {
@@ -204,11 +253,25 @@ func pollAndSaveBMS(ctx context.Context, store *redisStore) *bmsCollection {
 	// bmslistener никогда не публикует updated=0 — это маркер сбоя: коллекцию в
 	// Redis НЕ трогаем (иначе одиночная shm-гонка вычистит весь дашборд BMS).
 	// Возврат nil — аккумулятор (acc.add) по nil пропустит, в него уходят только
-	// валидные устройства. Валидная ПУСТАЯ коллекция (updated>0, devices=[])
-	// по-прежнему чистит дашборд — этот путь ниже не тронут.
+	// валидные устройства.
 	if col.Updated == 0 {
 		log.Printf("bms api: сбойный ответ (updated=0) — коллекция не трогается")
 		return nil
+	}
+	// Валидно-ПУСТАЯ коллекция (updated>0, devices=[]) — не обязательно «0 батарей»:
+	// bmslistener может временно публиковать пустоту (перезапуск, сбой shm). Чтобы
+	// одиночная/короткая пустота не стирала весь дашборд, требуем bmsEmptyTolerance
+	// подряд идущих пустых ответов, прежде чем чистить. Счётчик сбрасывается при
+	// любом ответе с хотя бы одним устройством.
+	if len(col.Devices) == 0 {
+		bmsEmptyStreak++
+		if bmsEmptyStreak < bmsEmptyTolerance {
+			log.Printf("bms api: пустая коллекция (%d/%d) — коллекция не трогается",
+				bmsEmptyStreak, bmsEmptyTolerance)
+			return col
+		}
+	} else {
+		bmsEmptyStreak = 0
 	}
 	active := make(map[string]string, len(col.Devices))
 	for i := range col.Devices {
@@ -216,12 +279,13 @@ func pollAndSaveBMS(ctx context.Context, store *redisStore) *bmsCollection {
 		if d.DeviceName == "" {
 			continue
 		}
+		d.Key = bmsKey(d)
 		b, err := json.Marshal(d)
 		if err != nil {
 			log.Printf("bms: marshal %s: %v", d.DeviceName, err)
 			continue
 		}
-		active[d.DeviceName] = string(b)
+		active[bmsKey(d)] = string(b)
 	}
 	if err := store.SetBMS(active); err != nil {
 		log.Printf("bms redis: %v", err)

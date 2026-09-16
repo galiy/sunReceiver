@@ -979,7 +979,7 @@ async function tickBMS(){
     for(var i=0;i<list.length;i++){
       var d=list[i];
       var soc=Math.max(0,Math.min(100,Number(d.soc)||0));
-      h+='<a class="bms-btn" href="/bms/'+encodeURIComponent(d.deviceName)+'" title="Порт: '+esc(d.port)+'">'
+      h+='<a class="bms-btn" href="/bms/'+encodeURIComponent(d.key||d.deviceName)+'" title="Порт: '+esc(d.port)+'">'
         +'<div class="bms-batt">'
         +'<div class="bms-batt-fill" style="height:'+Math.max(4,soc)+'%;background:'+bmsSocColor(soc)+'"></div>'
         +'<span class="bms-batt-soc">'+soc+'%</span>'
@@ -2589,7 +2589,7 @@ func (h *dashboardHandler) apiBMS(w http.ResponseWriter, r *http.Request) {
 		}
 		devs = append(devs, d)
 	}
-	sort.Slice(devs, func(i, j int) bool { return devs[i].DeviceName < devs[j].DeviceName })
+	sort.Slice(devs, func(i, j int) bool { return bmsKey(devs[i]) < bmsKey(devs[j]) })
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -2598,8 +2598,10 @@ func (h *dashboardHandler) apiBMS(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// apiBMSOne отдаёт актуальное состояние одной ANT BMS по deviceName
-// (/api/bms/<name>) для страницы деталей (обновление раз в секунду).
+// apiBMSOne отдаёт актуальное состояние одной ANT BMS по ключу bmsKey
+// (/api/bms/<name>) для страницы деталей (обновление раз в секунду). name в URL —
+// ключ устройства (deviceName или "deviceName@Port", см. bmsKey); отображаемое имя
+// берётся из поля deviceName самого JSON.
 // /api/bms/<name>/series — временной ряд 5-минутных усреднённых точек
 // (см. apiBMSSeries).
 func (h *dashboardHandler) apiBMSOne(w http.ResponseWriter, r *http.Request) {
@@ -2882,6 +2884,9 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 		// Мощности устройства МАП (батарея/сеть) в сумме по инверторам не участвуют:
 		// они отображаются только на плашках/графиках МАП.
 		if isMAPDevice(d.Values) {
+			if ts, err := time.Parse(time.RFC3339, d.Timestamp); err != nil || !ts.After(staleCutoff) {
+				continue
+			}
 			if v, ok := snapFloat(d.Values, "grid_voltage"); ok {
 				gridV = v
 			}
@@ -2923,6 +2928,11 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	hasImp, hasExp := false, false
 	for _, d := range devices {
 		if isMeterDevice(d.Values) {
+			// «Молчащий» счётчик (снимок старше staleCutoff) не отдаёт актуальные
+			// показания — тарифные плашки не строятся из замолчавших значений.
+			if ts, err := time.Parse(time.RFC3339, d.Timestamp); err != nil || !ts.After(staleCutoff) {
+				continue
+			}
 			if v, ok := snapFloat(d.Values, "meter_import"); ok {
 				impNow, hasImp = v, true
 			}
@@ -3428,7 +3438,17 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore, stop context.Co
 	mux.HandleFunc("/api/tariffs", h.apiTariffs)
 	mux.HandleFunc("/api/bms", h.apiBMS)
 	mux.HandleFunc("/api/bms/", h.apiBMSOne)
-	srv := &http.Server{Addr: addr, Handler: mux}
+	srv := &http.Server{
+		Addr: addr, Handler: mux,
+		// Таймауты защищают от slowloris и «висящих» соединений, не ограничивая
+		// длинные ответы (/api/series за большой период идёт из PG — WriteTimeout=0):
+		// ReadHeaderTimeout отсекает медленные/зависшие клиенты при приёме заголовка,
+		// IdleTimeout сбрасывает неактивные keep-alive, MaxHeaderBytes — лимит шапки.
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		WriteTimeout:      0,
+		MaxHeaderBytes:    1 << 20,
+	}
 	go func() {
 		<-stop.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
