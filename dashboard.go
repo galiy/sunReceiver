@@ -1159,7 +1159,10 @@ function drawCursorTooltip(chart){
 		ctx.beginPath(); ctx.moveTo(px,yScale.top); ctx.lineTo(px,yScale.bottom);
 		ctx.strokeStyle='rgba(160,160,160,0.55)'; ctx.lineWidth=1; ctx.stroke();
 		var labels=[], titleT=null;
-		chart.data.datasets.forEach(function(ds){
+		chart.data.datasets.forEach(function(ds,i){
+			// Видимость: скрытые кликом по легенде линии не участвуют в хинте
+			// (иначе их значения и «призрачные» точки видны на пустом поле).
+			if(!chart.isDatasetVisible||!chart.isDatasetVisible(i)) return;
 			var pts=ds.data; if(!pts||!pts.length) return;
 			var best=null;
 			for(var i=0;i<pts.length;i++){
