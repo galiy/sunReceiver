@@ -55,13 +55,28 @@ type bmsDevice struct {
 	Frames        uint32    `json:"frames"`         // счётчик валидных кадров с запуска слушателя
 }
 
-// bmsKey — стабильный ключ BMS-устройства, однозначно идентифицирующий его в
-// HASH sunreceiver:bms, Redis-ряде, PG (name) и дашборде (/api/bms/<name>).
-// Два одинаковых deviceName (коллизия имён) с разными USB-портами адаптеров
-// (Port) получают РАЗНЫЕ ключи; при пустом Port — фолбэк просто на deviceName
-// (сохраняет прежнее поведение для устройств без указания порта).
+// bmsKey — ключ BMS-устройства для HASH sunreceiver:bms, Redis-ряда, PG (name)
+// и дашборда (/api/bms/<name>). Приоритет — уже вычисленный d.Key (если задан
+// при резолве коллекции); иначе — deviceName, либо "deviceName@Port" при
+// непустом Port (фолбэк для одиночных вызовов, где контекст коллизий неизвестен).
 func bmsKey(d bmsDevice) string {
+	if d.Key != "" {
+		return d.Key
+	}
 	if d.Port != "" {
+		return d.DeviceName + "@" + d.Port
+	}
+	return d.DeviceName
+}
+
+// resolveBMSKey вычисляет ключ устройства в контексте всей коллекции:
+// если среди активных устройств есть ДВА с одинаковым DeviceName (коллизия
+// имён) — ключ различается по USB-порту ("deviceName@Port"); иначе ключ = сам
+// DeviceName. Так обычные (уникальные) имена сохраняют прежний ключ и
+// непрерывность исторических рядов Redis/PG, а реальная коллизия имён
+// разводится по порту.
+func resolveBMSKey(d bmsDevice, nameCount map[string]int) string {
+	if nameCount[d.DeviceName] > 1 && d.Port != "" {
 		return d.DeviceName + "@" + d.Port
 	}
 	return d.DeviceName
@@ -273,19 +288,26 @@ func pollAndSaveBMS(ctx context.Context, store *redisStore) *bmsCollection {
 	} else {
 		bmsEmptyStreak = 0
 	}
+	// Проверяем коллизию имён в пределах коллекции: если два устройства имеют
+	// одинаковый DeviceName, их ключи разводятся по USB-порту (resolveBMSKey).
+	// Это сохраняет непрерывность исторических рядов для уникальных имён.
+	nameCount := make(map[string]int, len(col.Devices))
+	for i := range col.Devices {
+		nameCount[col.Devices[i].DeviceName]++
+	}
 	active := make(map[string]string, len(col.Devices))
 	for i := range col.Devices {
 		d := col.Devices[i]
 		if d.DeviceName == "" {
 			continue
 		}
-		d.Key = bmsKey(d)
-		b, err := json.Marshal(d)
+		col.Devices[i].Key = resolveBMSKey(d, nameCount)
+		b, err := json.Marshal(col.Devices[i])
 		if err != nil {
 			log.Printf("bms: marshal %s: %v", d.DeviceName, err)
 			continue
 		}
-		active[bmsKey(d)] = string(b)
+		active[col.Devices[i].Key] = string(b)
 	}
 	if err := store.SetBMS(active); err != nil {
 		log.Printf("bms redis: %v", err)
