@@ -96,9 +96,42 @@ go build -o sunReceiver .   # сборка
 go run .                     # запуск из исходников (конфиг из CWD)
 ```
 
-Все настройки задаются только в `sunReceiver.json` (флагов командной строки нет):
-адреса БД (`db.redis`, `db.pg`, опц. `db.pg_restore_window`), порт дашборда
+Все настройки задаются только в `sunReceiver.json` (флагов командной строки нет,
+кроме `--version`/`-version` — печатает `sunReceiver <версия>`): адреса БД
+(`db.redis`, `db.pg`, опц. `db.pg_restore_window`), порт дашборда
 (`dashboard_port`, обязательное).
+
+### Релизы через Makefile
+
+Корневой **`Makefile`** собирает все релизные артефакты; версия подставляется в имя
+файла и в `main.version` через `-ldflags "-X main.version=<версия>"`, по умолчанию
+`dev`. `dist/` создаётся автоматически. Для цели `bmslistener` требуется
+установленный `zig`.
+
+```sh
+make VERSION=1.2.3 linux-x64     # dist/sunReceiver-linux-amd64-1.2.3
+make VERSION=1.2.3 win-x64       # dist/sunReceiver-windows-amd64-1.2.3.exe (-H windowsgui)
+make VERSION=1.2.3 bmslistener   # dist/bmslistener-armv7l-1.2.3 (zig)
+make VERSION=1.2.3 all           # все три
+make clean                       # rm -rf dist
+```
+
+**Windows (portable + tray)** — `win-x64` собирается с `-H windowsgui`
+(GUI-подсистема, консоль при запуске из проводника не мигает). Приложение
+сворачивается в системный трей (`fyne.io/systray`, `tray_windows.go`/`tray_posix.go`,
+иконка `tray.ico` embed) — в меню трея только пункт «Закрыть» (graceful shutdown);
+на POSIX `runTray` — no-op (обычные SIGINT/SIGTERM). Из-за `-H windowsgui` вывод
+`--version` в stdout из проводника не виден (запускать из cmd / перенаправлять).
+Логи на Windows пишутся в **`sunReceiver.log`** рядом с exe (как `sunReceiver.json`,
+через `setupLogging()` в `logfile_windows.go`); на POSIX `setupLogging()` — no-op
+(Linux — journald/systemd, macOS — консоль).
+
+**bmslistener (Малина)** — кросс-сборка через `zig cc -target
+arm-linux-musleabihf -static` (статичный elf32 ARM), поэтому не зависит от libc
+платы и запускается на старом Raspbian jessie. Артефакт кладётся в `dist/`, **на
+плату не переносится** (только артефакт/кросс-сборка).
+
+### Деплой (прод)
 
 Прод развёрнут на внутреннем сервере (Ubuntu 22.04, amd64) как systemd-сервис
 `sunreceiver.service`; PostgreSQL 16 и Redis тоже там. Адрес и деплой — приватные,

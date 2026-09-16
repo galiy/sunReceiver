@@ -24,13 +24,11 @@ import (
 	"log"
 	"math"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/galiy/sunReceiver/modbusmap"
@@ -38,8 +36,6 @@ import (
 )
 
 const (
-	// version — версия сборки сервиса (вывод через --version).
-	version    = "0.1.0"
 	port       = "8899"
 	pollPeriod = 10 * time.Second
 	timeout    = 15 * time.Second
@@ -352,6 +348,10 @@ func devKey(t invTarget) string {
 	}
 	return t.IP
 }
+
+// version — версия сборки сервиса. Переопределяется при сборке через
+// -ldflags "-X main.version=<версия>"; по умолчанию "dev" (локальная сборка).
+var version = "dev"
 
 var targets []invTarget
 
@@ -1335,6 +1335,7 @@ func pollAndSaveMap(ctx context.Context, store *redisStore, now time.Time) {
 
 func main() {
 	log.SetFlags(log.Ltime)
+	setupLogging()
 
 	for _, a := range os.Args[1:] {
 		if a == "--version" || a == "-version" {
@@ -1364,7 +1365,7 @@ func main() {
 	restoreWindow := defaultPGRestoreWindow(dbCfg)
 	dashboardAddr := defaultDashboardAddr(dashPort)
 
-	log.Printf("poller started: config=%s targets=%v period=%s", cfgPath, targets, pollPeriod)
+	log.Printf("poller started: version=%s config=%s targets=%v period=%s", version, cfgPath, targets, pollPeriod)
 
 	// Конфигурация веб-API ПАК «Малина» для мониторинга MPPT (КЭС) — раздел "map"
 	// sunReceiver.json (бывший malina.json).
@@ -1517,8 +1518,10 @@ func main() {
 		serveDashboard(dashboardAddr, store, pg, stopCtx, dash)
 	}()
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	// Windows-сборка сворачивается в трей (меню «Закрыть»); на POSIX (Linux)
+	// останавливается по SIGINT/SIGTERM. Единая точка — канал quit.
+	quit := make(chan struct{}, 1)
+	runTray(quit)
 
 	// Каждый инвертор (Deye/Sofar) опрашивается в СВОЁМ независимом цикле с
 	// периодом pollPeriod (10 с). Завис/таймаутит один текущий опрос одного
@@ -1536,7 +1539,7 @@ func main() {
 		}(t)
 	}
 
-	<-sig
+	<-waitForQuit(quit)
 	log.Println("shutting down")
 	// Отмена stopCtx: циклы фоновых горутин завершаются, a in-flight сетевые
 	// опросы (dial/read/HTTP) прерываются немедленно — graceful-shutdown не

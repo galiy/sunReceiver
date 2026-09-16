@@ -10,6 +10,9 @@ data/
 # приватная инфраструктура sunReceiver (даталоггеры IP/SN, прод, SSH, деплой) — не коммитить
 .kilo/AGENTS-private.md
 
+# приватный worklog задачи «релиз» (прогресс, решения, договорённости между воркерами) — не коммитить
+.kilo/release-worklog.md
+
 # настройка HTTPS (Let's Encrypt + Apache reverse proxy на 253) (приватный) — не коммитить
 docs/https-setup.md
 
@@ -23,6 +26,9 @@ sunReceiver.json
 sunReceiver
 sunReceiver-linux
 solarman-probe
+
+# релизные артефакты сборки (make VERSION=... all) — не коммитить
+dist/
 
 # справочные материалы МАП (не закоммичены, лежат локально)
 docs/map/
