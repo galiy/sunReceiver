@@ -13,7 +13,7 @@
 
 - раздел `invertors` → `type` "deye"→`kindDeyeString`, "sofar"→`kindSofar`
   (поле `disabled` обязательно; `true` — пропускается);
-- раздел `maprs485` → `kindMAP` (MPPT — `kindMPPT` — в конфиг НЕ задаётся, появляется
+- подраздел `map.rs485` → `kindMAP` (MPPT — `kindMPPT` — в конфиг НЕ задаётся, появляется
   динамически, см. [map-mppt.md](map-mppt.md)).
 
 Название — «логическое имя» инвертора (обязательное поле, напр. `Deye Left`,

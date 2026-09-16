@@ -54,17 +54,17 @@ type bmsApiClient struct {
 }
 
 // bmsSite — глобальный доступ к read_bms.php; заполняется в main() из раздела
-// "malina" sunReceiver.json (поле bms_path). nil — опрос BMS отключён.
+// "map" sunReceiver.json (поле bms_path). nil — опрос BMS отключён.
 var bmsSite *bmsApiClient
 
-// loadBmsSite собирает bmsApiClient из раздела "malina", если в нём задано bms_path.
+// loadBmsSite собирает bmsApiClient из раздела "map", если в нём задано bms_path.
 // Если поле отсутствует или раздел неполный — nil (BMS не опрашивается).
-func loadBmsSite(sec *malinaSection) *bmsApiClient {
+func loadBmsSite(sec *mapSection) *bmsApiClient {
 	if sec == nil || sec.BMSPath == "" {
 		return nil
 	}
 	if sec.BaseURL == "" || sec.Login == "" || sec.Password == "" {
-		log.Printf("bms: раздел malina неполный (нужны base_url, login, password) — опрос BMS отключён")
+		log.Printf("bms: раздел map неполный (нужны base_url, login, password) — опрос BMS отключён")
 		return nil
 	}
 	tok := base64.StdEncoding.EncodeToString([]byte(sec.Login + ":" + sec.Password))

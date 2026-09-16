@@ -33,15 +33,15 @@ type mpptSite struct {
 	authHdr string // "Basic base64(login:password)"
 }
 
-// loadMPPTSite собирает mpptSite из раздела "malina" sunReceiver.json (malinaSection).
-// Если секция отсутствует или поля не полностью заданы — возвращает nil
-// (MPPT-контроллеры не опрашиваются).
-func loadMPPTSite(sec *malinaSection) *mpptSite {
+// loadMPPTSite собирает mpptSite из раздела "map" sunReceiver.json (mapSection,
+// веб-API ПАК «Малина»). Если секция отсутствует или поля не полностью заданы —
+// возвращает nil (MPPT-контроллеры не опрашиваются).
+func loadMPPTSite(sec *mapSection) *mpptSite {
 	if sec == nil {
 		return nil
 	}
 	if sec.BaseURL == "" || sec.MPPTPath == "" || sec.Login == "" || sec.Password == "" {
-		log.Printf("malina site: раздел malina неполный (нужны base_url, mppt_path, login, password) — мониторинг MPPT отключён")
+		log.Printf("map site: раздел map неполный (нужны base_url, mppt_path, login, password) — мониторинг MPPT отключён")
 		return nil
 	}
 	tok := base64.StdEncoding.EncodeToString([]byte(sec.Login + ":" + sec.Password))

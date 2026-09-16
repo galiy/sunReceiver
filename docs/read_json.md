@@ -3,11 +3,11 @@
 > Проверено живьём 2026-09-07, текущее время ~21:44.
 
 Сайт МАП Микроарт отдаёт текущие параметры МАП Титанатор, MPPT-контроллеров (КЭС) и АКБ
-по HTTP с **Basic-авторизацией** (`admin` / пароль из раздела `malina` в `sunReceiver.json`).
+по HTTP с **Basic-авторизацией** (`admin` / пароль из раздела `map` в `sunReceiver.json`).
 Сервер: Microsoft-IIS/6.0, интерфейс на PHP (`index.php`, `read_memory.php`, `read_json.php`,
 `write_eeprom.php`).
 
-Учётные данные и URL хранятся в разделе `malina` файла `sunReceiver.json` рядом с
+Учётные данные и URL хранятся в разделе `map` файла `sunReceiver.json` рядом с
 исполняемым файлом (файл в git не попадает, см. `.gitignore`; публичный шаблон —
 `sunReceiver.sample.json`). Полное описание всех PHP-эндпоинтов и устройства ПАК — в
 [`malina-web-api.md`](malina-web-api.md).
@@ -18,9 +18,9 @@ read_json.php?device=mppt
 read_json.php?device=bat
 ```
 
-Путь MPPT-эндпоинта задан в разделе `malina` файла `sunReceiver.json` как `mppt_path`,
+Путь MPPT-эндпоинта задан в разделе `map` файла `sunReceiver.json` как `mppt_path`,
 путь к данным МАП — как `map_path` (при отсутствии выводится из `mppt_path` подменой
-параметра `device`); полный URL = `malina.base_url` + `mppt_path` / + `map_path`.
+параметра `device`); полный URL = `map.base_url` + `mppt_path` / + `map_path`.
 
 **Важно:** в отличие от Modbus-гейта МАП (порт 502), `read_json.php?device=mppt` отдаёт
 **полные индивидуальные параметры каждого MPPT-контроллера** (`Vc_PV`, `Ic_PV`, `V_Bat`,
@@ -31,12 +31,12 @@ read_json.php?device=bat
 
 ## `device=map` — параметры МАП Титанатор
 
-> **Источник данных kindMAP (батарея/сеть) при `maprs485.disabled=true` в `sunReceiver.json`.**
+> **Источник данных kindMAP (батарея/сеть) при `map.rs485.disabled=true` в `sunReceiver.json`.**
 > В этом режиме Modbus-пулер МАП не запускается, а контрактные теги
 > (`battery_voltage`, `battery_power`, `grid_voltage`, `grid_power`, `l1_voltage`,
 > `l1_current`, `ac_active_power`, `grid_frequency`) строятся из этого ответа
 > (`mpptSite.FetchMAP` + `mapMAPAPI` в `mppt_api.go`). Источник общий с MPPT —
-> раздел `malina` (`base_url` + `mppt_path`/`map_path` + Basic-auth); `mppt_path`
+> раздел `map` (`base_url` + `mppt_path`/`map_path` + Basic-auth); `mppt_path`
 > указывает на `read_json.php?device=mppt`, `map_path` (или производный от `mppt_path`)
 > — на `read_json.php?device=map` через `mpptSite.apiURL`.
 
@@ -99,7 +99,7 @@ read_json.php?device=bat
 > каждого MPPT-контроллера, которых нет в Modbus-гейте МАП (Vc_PV/Ic_PV/P_PV, V_Bat,
 > I_Ch, P_Out). Состав контроллеров определяется **динамически** по массиву ответа
 > (индекс = слот, 0..N-1); в `sunReceiver.json` MPPT не регистрируются. `mpptSite`
-> собирается из раздела `malina` `sunReceiver.json` (`base_url` + `mppt_path` + Basic-auth).
+> собирается из раздела `map` `sunReceiver.json` (`base_url` + `mppt_path` + Basic-auth).
 > Время актуальности данных — поле `timestamp` ответа (Unix), им же помечается снимок.
 
 Массив из N объектов — по одному на каждый подключённый MPPT-контроллер (в нашей системе — 3:

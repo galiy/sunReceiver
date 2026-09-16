@@ -7,9 +7,9 @@
 ## Источники данных
 
 - **MPPT-контроллеры** (`kindMPPT`) — **веб-API ПАК «Малина»**
-  `read_json.php?device=mppt` (HTTP Basic-auth; конфиг — раздел **`malina`**
-  `sunReceiver.json`; пароль в открытом виде, файл в git не выгружается; для
-  разработки SSH — `.kilo/malina-ssh.json`). В `sunReceiver.json` MPPT **не
+  `read_json.php?device=mppt` (HTTP Basic-auth; конфиг — раздел **`map`**
+  `sunReceiver.json`, поля веб-API; пароль в открытом виде, файл в git не выгружается;
+  для разработки SSH — `.kilo/malina-ssh.json`). В `sunReceiver.json` MPPT **не
   регистрируются**: состав определяется динамически по факту подключения
   контроллеров из ответа API. Контроллер появляется на дашборде, когда приходит в
   ответе, и исчезает, когда перестаёт отвечать (ключ удаляется из `current` через
@@ -19,17 +19,17 @@
   `P_Out` + `timestamp`. Реализация — `mppt_api.go` (`mpptSite`, `FetchMPPTs`,
   `mapMPPTAPI`) + сбор в `pollAndSaveMap`; коннектор к `read_json.php` — в
   [../read_json.md](../read_json.md).
-- **МАП (`kindMAP`)** — раздел **`maprs485`** конфига, оставлен для данных **батареи и
+- **МАП (`kindMAP`)** — подраздел **`map.rs485`** конфига, оставлен для данных **батареи и
   сети** МАП на дашборд. Цель `MAP (батарея/сеть)` (192.168.13.74, unit 1).
   Пер-слотовый MPPT через Modbus больше не опрашивается. Источник задаёт
-  обязательное поле `disabled` раздела `maprs485` (отсутствие = ошибка конфига):
+  обязательное поле `disabled` подраздела `map.rs485` (отсутствие = ошибка конфига):
   - `false` — **Modbus TCP/RS485** (`modbusmap/` + `mapClientFor`), блоки 0x400/0x530/0x580;
   - `true` — пулер по Modbus НЕ запускается, параметры из **веб-API ПАК «Малина»**
     `read_json.php?device=map` (`mpptSite.FetchMAP` + `mapMAPAPI`); обязателен полный
-    раздел `malina` (иначе `log.Fatal` при старте). Ключ устройства (devKey) и имя —
-    те же (IP МАП из конфига), поэтому история на дашборде преемственна при
-    переключении режимов. Путь к `read_json.php?device=map` — поле `map_path`
-    раздела `malina` (при отсутствии выводится из `mppt_path` подменой `device`).
+    раздел `map` (поля веб-API, иначе `log.Fatal` при старте). Ключ устройства (devKey)
+    и имя — те же (IP МАП из конфига), поэтому история на дашборде преемственна при
+    переключении режимов. Путь к `read_json.php?device=map` — поле `map_path` раздела
+    `map` (при отсутствии выводится из `mppt_path` подменой `device`).
 
 ## `values` углов МАП/MPPT (теги в `commonContractTags`)
 
