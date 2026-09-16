@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"net"
@@ -30,11 +31,12 @@ func newMeterClient(addr string, unit byte) *meterClient {
 }
 
 // dial устанавливает (или переиспользует) TCP-соединение; при необходимости переподнимает.
-func (c *meterClient) dial() error {
+func (c *meterClient) dial(ctx context.Context) error {
 	if c.conn != nil {
 		return nil
 	}
-	conn, err := net.DialTimeout("tcp", c.Address, 3*time.Second)
+	d := &net.Dialer{Timeout: 3 * time.Second}
+	conn, err := d.DialContext(ctx, "tcp", c.Address)
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", c.Address, err)
 	}
@@ -54,14 +56,17 @@ func (c *meterClient) nextTxn() uint16 { c.txn++; return c.txn }
 // ReadHoldingRegisters читает count держащих регистров с адреса start (функция 03)
 // и возвращает их как uint16 (big-endian). Эти же регистры возвращает
 // read_holding_registers(0, N) в dds238read.py.
-func (c *meterClient) ReadHoldingRegisters(start, count uint16) ([]uint16, error) {
+//
+// Уважает ctx только на этапе dial (DialContext): при отмене (стоп сервиса)
+// медленное подключение прерывается. Чтение ограничено 3-сек read-deadline.
+func (c *meterClient) ReadHoldingRegisters(ctx context.Context, start, count uint16) ([]uint16, error) {
 	if count == 0 {
 		return nil, fmt.Errorf("meter: пустой count")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.conn == nil {
-		if err := c.dial(); err != nil {
+		if err := c.dial(ctx); err != nil {
 			return nil, err
 		}
 	}
@@ -80,7 +85,7 @@ func (c *meterClient) ReadHoldingRegisters(start, count uint16) ([]uint16, error
 	if _, err := c.conn.Write(req); err != nil {
 		// соединение могло умереть — переподнимаем один раз и повторяем
 		c.closeConn()
-		if derr := c.dial(); derr != nil {
+		if derr := c.dial(ctx); derr != nil {
 			return nil, derr
 		}
 		if err := c.conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {

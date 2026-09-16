@@ -1,6 +1,7 @@
 package solarman
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"sync"
@@ -24,9 +25,12 @@ type Client struct {
 	serial uint16
 }
 
-// dial открывает свежее TCP-соединение без кэширования.
-func (c *Client) dial() (net.Conn, error) {
-	conn, err := net.DialTimeout("tcp", c.Address, c.Timeout)
+// dial открывает свежее TCP-соединение без кэширования. Уважает ctx: при
+// отмене (стоп сервиса) dial прерывается, а уже открытое соединение закрывается
+// наблюдателем в Exchange.
+func (c *Client) dial(ctx context.Context) (net.Conn, error) {
+	d := &net.Dialer{Timeout: c.Timeout}
+	conn, err := d.DialContext(ctx, "tcp", c.Address)
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
 	}
@@ -74,13 +78,28 @@ func (c *Client) nextSerial() uint16 {
 
 // Exchange отправляет один запрос через СВЕЖЕЕ соединение и собирает все кадры
 // ответа. Соединение гарантированно закрывается после чтения ответа или любой
-// ошибки.
-func (c *Client) Exchange(req []byte) ([]Frame, error) {
-	conn, err := c.dial()
+// ошибки. При отмене ctx (стоп сервиса) наблюдатель закрывает соединение, чтобы
+// блокирующий conn.Read в readAll мгновенно завершился — иначе опрос медленного
+// логгера (до ~15 c на первый байт) удерживал бы graceful-shutdown.
+func (c *Client) Exchange(ctx context.Context, req []byte) ([]Frame, error) {
+	conn, err := c.dial(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer conn.Close()
+
+	// Наблюдатель: при отмене ctx закрывает сокет, чтобы блокирующий conn.Read
+	// в readAll немедленно завершился ошибкой, а не ждал read-deadline. Сокет
+	// локальный для Exchange, поэтому Close из наблюдателя безопасен.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-done:
+		}
+	}()
 
 	if err := conn.SetDeadline(time.Now().Add(c.Timeout)); err != nil {
 		return nil, fmt.Errorf("set deadline: %w", err)
@@ -97,8 +116,8 @@ func (c *Client) Exchange(req []byte) ([]Frame, error) {
 
 // ReadRegisters — запрос чтения startReg..startReg+regCount-1.
 // Возвращает распарсенные PDU (может быть несколько) и кадры ответа.
-func (c *Client) ReadRegisters(startReg, regCount uint16) ([]ModbusPDU, []Frame, error) {
-	frames, err := c.Exchange(BuildReadFrame(c.DeviceSN, c.nextSerial(), startReg, regCount))
+func (c *Client) ReadRegisters(ctx context.Context, startReg, regCount uint16) ([]ModbusPDU, []Frame, error) {
+	frames, err := c.Exchange(ctx, BuildReadFrame(c.DeviceSN, c.nextSerial(), startReg, regCount))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -107,14 +126,14 @@ func (c *Client) ReadRegisters(startReg, regCount uint16) ([]ModbusPDU, []Frame,
 
 // ReadRegistersDeye — запрос чтения для Deye-даталоггеров (15-байтный datafield,
 // реальный SN логгера обязателен). Unit — Modbus-адрес устройства (обычно 0x01).
-func (c *Client) ReadRegistersDeye(startReg, regCount uint16, unit uint32) ([]ModbusPDU, []Frame, error) {
-	return c.ReadRegistersDeyeFn(startReg, regCount, unit, 0x03)
+func (c *Client) ReadRegistersDeye(ctx context.Context, startReg, regCount uint16, unit uint32) ([]ModbusPDU, []Frame, error) {
+	return c.ReadRegistersDeyeFn(ctx, startReg, regCount, unit, 0x03)
 }
 
 // ReadRegistersDeyeFn — ReadRegistersDeye с произвольной Modbus-функцией чтения
 // (0x03 holding / 0x04 input). Для HW-диапазона Sofar нужен func 04.
-func (c *Client) ReadRegistersDeyeFn(startReg, regCount uint16, unit uint32, fn byte) ([]ModbusPDU, []Frame, error) {
-	frames, err := c.Exchange(BuildDeyeReadFrameFn(c.DeviceSN, unit, c.nextSerial(), startReg, regCount, fn))
+func (c *Client) ReadRegistersDeyeFn(ctx context.Context, startReg, regCount uint16, unit uint32, fn byte) ([]ModbusPDU, []Frame, error) {
+	frames, err := c.Exchange(ctx, BuildDeyeReadFrameFn(c.DeviceSN, unit, c.nextSerial(), startReg, regCount, fn))
 	if err != nil {
 		return nil, nil, err
 	}
