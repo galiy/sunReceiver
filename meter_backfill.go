@@ -87,8 +87,11 @@ func backfillMeterBoundaries(store *redisStore, pg *pgStore, cfg *meterConfig, n
 
 // meterBoundaryCaptured возвращает true, если показание Import на границе b уже
 // записано в daily_tariffs (т.е. граница захвачена живьём или ранее добором).
-// Достаточно проверить import-колонку — StoreMeterBoundary всегда пишет пару
-// import/export вместе.
+// Для часов 7/23 достаточно одной import-колонки (StoreMeterBoundary пишет пару
+// import/export одной транзакцией). Для границы 00:00 — ДВЕ: и import_0000 дня
+// D, и import_next дня D−1; если записана только одна (транзиентный сбой PG между
+// upsert'ами в старом неатомарном коде), добор повторит StoreMeterBoundary и
+// транзакцией допишет недостающее, зафинализируя день D−1 (самовосстановление).
 func (s *pgStore) meterBoundaryCaptured(b time.Time) bool {
 	col := meterBoundaryImportCol(b.Hour())
 	if col == "" {
@@ -100,10 +103,19 @@ func (s *pgStore) meterBoundaryCaptured(b time.Time) bool {
 	var v *float64
 	err := s.pool.QueryRow(s.ctx,
 		`SELECT "`+col+`" FROM sunreceiver.daily_tariffs WHERE day=$1`, day).Scan(&v)
-	if err != nil {
+	if err != nil || v == nil {
 		return false
 	}
-	return v != nil
+	// Граница 00:00: дополнительно проверяем import_next предыдущего дня —
+	// только когда непусты ОБА, граница считается захваченной.
+	if b.In(loc).Hour() == 0 {
+		prevDay := day.AddDate(0, 0, -1)
+		var next *float64
+		err := s.pool.QueryRow(s.ctx,
+			`SELECT "import_next" FROM sunreceiver.daily_tariffs WHERE day=$1`, prevDay).Scan(&next)
+		return err == nil && next != nil
+	}
+	return true
 }
 
 // meterBoundaryImportCol возвращает имя import-колонки в daily_tariffs по часу границы.

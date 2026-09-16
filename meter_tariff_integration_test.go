@@ -67,3 +67,69 @@ FROM sunreceiver.daily_tariffs WHERE day = $1`, day).Scan(&impDay, &impNight, &e
 		t.Errorf("export_night = %v, want 3", expNight)
 	}
 }
+
+// TestMeterTariffBoundaryZeroAtomic: граница 00:00 должна записать ОБЕ колонки
+// (import_0000 дня D И import_next дня D−1) одной транзакцией; повторный вызов —
+// идемпотентен. meterBoundaryCaptured для часа 0 — true только когда непусты обе.
+func TestMeterTariffBoundaryZeroAtomic(t *testing.T) {
+	if os.Getenv("METER_PG_TEST") == "" {
+		t.Skip("METER_PG_TEST not set")
+	}
+	pgc, err := openPG("postgres://localhost:5432/sunreceiver?sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pgc.Close()
+	ctx := context.Background()
+	loc := time.Local
+	days := []time.Time{
+		time.Date(2026, 9, 1, 0, 0, 0, 0, loc),
+		time.Date(2026, 9, 2, 0, 0, 0, 0, loc),
+		time.Date(2026, 9, 3, 0, 0, 0, 0, loc),
+	}
+	clean := func() {
+		for _, d := range days {
+			pgc.pool.Exec(ctx, `DELETE FROM sunreceiver.daily_tariffs WHERE day = $1`, d)
+		}
+	}
+	clean()
+	defer clean()
+
+	// Граница 00:00 дня D=2026-09-02.
+	b := time.Date(2026, 9, 2, 0, 0, 0, 0, loc)
+	if err := pgc.StoreMeterBoundary(b, 500.0, 50.0); err != nil {
+		t.Fatalf("StoreMeterBoundary(00:00): %v", err)
+	}
+	// Обе колонки записаны: import_0000[D] и import_next[D−1].
+	var imp0000, importNext *float64
+	if err := pgc.pool.QueryRow(ctx, `SELECT "import_0000" FROM sunreceiver.daily_tariffs WHERE day=$1`,
+		time.Date(2026, 9, 2, 0, 0, 0, 0, loc)).Scan(&imp0000); err != nil || imp0000 == nil || *imp0000 != 500 {
+		t.Fatalf("import_0000[D] = %v (err %v), want 500", imp0000, err)
+	}
+	if err := pgc.pool.QueryRow(ctx, `SELECT "import_next" FROM sunreceiver.daily_tariffs WHERE day=$1`,
+		time.Date(2026, 9, 1, 0, 0, 0, 0, loc)).Scan(&importNext); err != nil || importNext == nil || *importNext != 500 {
+		t.Fatalf("import_next[D-1] = %v (err %v), want 500", importNext, err)
+	}
+	// Граница 00:00 «захвачена» — обе колонки непусты.
+	if !pgc.meterBoundaryCaptured(b) {
+		t.Fatal("meterBoundaryCaptured(00:00)=false, want true (обе колонки непусты)")
+	}
+
+	// Идемпотентность: повторный вызов не меняет значения.
+	if err := pgc.StoreMeterBoundary(b, 999.0, 99.0); err != nil {
+		t.Fatalf("StoreMeterBoundary повтор: %v", err)
+	}
+	if err := pgc.pool.QueryRow(ctx, `SELECT "import_0000" FROM sunreceiver.daily_tariffs WHERE day=$1`,
+		time.Date(2026, 9, 2, 0, 0, 0, 0, loc)).Scan(&imp0000); err != nil || *imp0000 != 999 {
+		t.Fatalf("import_0000 после повтора = %v, want 999 (idempotent upsert)", imp0000)
+	}
+
+	// Самовосстановление: имитируем частичную запись (только import_0000[D],
+	// import_next[D−1] пропущен — транзиентный сбой PG в старом неатомарном коде).
+	// meterBoundaryCaptured для часа 0 должен вернуть false → добор повторит запись.
+	pgc.pool.Exec(ctx, `UPDATE sunreceiver.daily_tariffs SET "import_next"=NULL WHERE day=$1`,
+		time.Date(2026, 9, 1, 0, 0, 0, 0, loc))
+	if pgc.meterBoundaryCaptured(b) {
+		t.Fatal("meterBoundaryCaptured(00:00)=true при частичной записи, want false (импорт_next[D-1] NULL)")
+	}
+}

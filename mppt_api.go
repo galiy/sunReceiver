@@ -209,7 +209,14 @@ func (s *mpptSite) FetchMPPTs(ctx context.Context) ([]mpptRaw, error) {
 //
 // Возвращает также ts актуальности данных (поле timestamp ответа API).
 func mapMPPTAPI(r mpptRaw) (valuesContract, time.Time, bool) {
-	ts := time.Unix(r.Timestamp, 0)
+	// timestamp=0 (отсутствует/не распарсилось) — не использовать: time.Unix(0,0) не
+	// IsZero() и дал бы снимок с 1970 (сиротская точка в sunreceiver:series:1970-01,
+	// дашборд на секунду считает MPPT offline). Нулевое время — saveWindowSnapshot
+	// возьмёт now (время опроса).
+	var ts time.Time
+	if r.Timestamp != 0 {
+		ts = time.Unix(r.Timestamp, 0)
+	}
 	out := valuesContract{}
 	var ok bool
 	var v float64

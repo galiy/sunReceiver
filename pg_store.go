@@ -100,7 +100,10 @@ CREATE TABLE IF NOT EXISTS sunreceiver.bms_averages (
 }
 
 // InsertAveraged сохраняет одну усреднённую за 5 минут точку (ts — начало
-// промежутка). Idempотентна по (ip, ts): повторная запись игнорируется.
+// промежутка). Идемпотентна по (ip, ts), но повторная запись ОБНОВЛЯЕТ строку:
+// поздняя запись того же промежутка полнее ранней (backfill при старте может
+// записать частичную версию незавершённого бакета, а живой цикл затем усредняет
+// его целиком) — как в InsertBMSAveraged, чтобы более полная запись побеждала.
 func (s *pgStore) InsertAveraged(ip, name string, ts time.Time, deviceSN string, vc valuesContract) error {
 	vals, err := json.Marshal(vc)
 	if err != nil {
@@ -109,7 +112,10 @@ func (s *pgStore) InsertAveraged(ip, name string, ts time.Time, deviceSN string,
 	_, err = s.pool.Exec(s.ctx, `
 INSERT INTO sunreceiver.averages (ip, name, ts, device_sn, values)
 VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT (ip, ts) DO NOTHING`,
+ON CONFLICT (ip, ts) DO UPDATE
+  SET name = EXCLUDED.name,
+      device_sn = EXCLUDED.device_sn,
+      values = EXCLUDED.values`,
 		ip, name, ts.UTC(), deviceSN, vals)
 	if err != nil {
 		return fmt.Errorf("pg insert avg %s: %w", ip, err)
