@@ -1,3 +1,19 @@
+// sunReceiver
+// Copyright (C) 2026  Aleksandr Galinskii
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 package main
 
 import (
@@ -11,12 +27,12 @@ func TestDecodeMeterRegs(t *testing.T) {
 		0x015A, 0xA467, 0, 0, 0, 0, 0, 0, // 0-7: Total(0-1)
 		0x0036, 0x7AB0, // 8-9 Export
 		0x0124, 0x29B7, // 10-11 Import
-		2368,     // 12 Voltage
-		738,      // 13 Current
-		0xF970,   // 14 ActivePower (signed -1680)
-		0xFE38,   // 15 ReactivePower (signed -456)
-		964,      // 16 PF
-		4999,     // 17 Freq
+		2368,                      // 12 Voltage
+		738,                       // 13 Current
+		0xF970,                    // 14 ActivePower (signed -1680)
+		0xFE38,                    // 15 ReactivePower (signed -456)
+		964,                       // 16 PF
+		4999,                      // 17 Freq
 		0, 0, 0, 0, 0, 0, 0, 0, 0, // 18-26
 	}
 	r := decodeMeterRegs(regs)

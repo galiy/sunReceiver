@@ -1,3 +1,19 @@
+// sunReceiver
+// Copyright (C) 2026  Aleksandr Galinskii
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 package main
 
 import (
@@ -36,15 +52,15 @@ const (
 // meterTags — метки мгновенных значений счётчика (приставка meter_), попадающие
 // в универсальный контракт values для дашборда (единица в суффиксе).
 var meterTags = []string{
-	"meter_voltage",       // V
-	"meter_current",       // A
-	"meter_active_power",  // W (знаковое: + потребление, − отдача)
-	"meter_reactive_power",// var
+	"meter_voltage",        // V
+	"meter_current",        // A
+	"meter_active_power",   // W (знаковое: + потребление, − отдача)
+	"meter_reactive_power", // var
 	"meter_power_factor",
-	"meter_frequency",     // Hz
-	"meter_import",        // kWh (накопительный, потребление из сети)
-	"meter_export",        // kWh (накопительный, отдача в сеть)
-	"meter_total",         // kWh (накопительный, общая)
+	"meter_frequency", // Hz
+	"meter_import",    // kWh (накопительный, потребление из сети)
+	"meter_export",    // kWh (накопительный, отдача в сеть)
+	"meter_total",     // kWh (накопительный, общая)
 }
 
 // meterReadings — необработанные показания счётчика за один опрос; используются

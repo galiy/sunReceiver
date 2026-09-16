@@ -1,3 +1,19 @@
+// sunReceiver
+// Copyright (C) 2026  Aleksandr Galinskii
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 package main
 
 import (
@@ -38,11 +54,11 @@ func TestMapMAPAPIParse(t *testing.T) {
 		"battery_voltage": 52.0,
 		"l1_voltage":      52.0,
 		"l1_current":      4.0,
-		"ac_active_power":  208.0, // 52.0 × 4
+		"ac_active_power": 208.0, // 52.0 × 4
 		"grid_frequency":  50.0,
 		"grid_voltage":    220.0,
 		"grid_power":      1141.2, // из _PNET_calc (достоверная), а не _PNET=910
-		"battery_power":   200.0, // −(−200)
+		"battery_power":   200.0,  // −(−200)
 	}
 	for k, want := range checks {
 		got, ok := vals[k].(float64)

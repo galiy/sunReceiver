@@ -1,3 +1,19 @@
+// sunReceiver
+// Copyright (C) 2026  Aleksandr Galinskii
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 // Package modbusmap — минимальный Modbus-TCP клиент для МАП Титанатор («КЭС»).
 //
 // МАП хранит ячейки побайтно и отвечает на функ 03 (чтение регистров) словами:
@@ -74,8 +90,8 @@ func (c *Client) ReadRegisters(ctx context.Context, start uint16, count uint16) 
 	// MBAP + PDU (func 03, start, count)
 	lenField := 6
 	req := make([]byte, 0, 12)
-	req = binary.BigEndian.AppendUint16(req, c.nextTxn()) // transaction id
-	req = binary.BigEndian.AppendUint16(req, 0)           // protocol
+	req = binary.BigEndian.AppendUint16(req, c.nextTxn())      // transaction id
+	req = binary.BigEndian.AppendUint16(req, 0)                // protocol
 	req = binary.BigEndian.AppendUint16(req, uint16(lenField)) // length
 	req = append(req, c.Unit)
 	req = append(req, 0x03)

@@ -1,3 +1,19 @@
+// sunReceiver
+// Copyright (C) 2026  Aleksandr Galinskii
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 package main
 
 import (
@@ -1554,25 +1570,25 @@ func runInverterPoll(store *redisStore, t invTarget, stop context.Context) {
 			}
 			now := time.Now() // фактическое время получения данных этого инвертора
 			log.Printf("%s: %s (%s)", t.IP, describeResult(res), now.Sub(t0).Round(time.Millisecond))
-		if !res.OK || !res.HasData {
-			// heartbeat_only / no data / ошибка — снимок не сохраняем
-			continue
-		}
-		// Аппаратные серийные номера постоянны: если в этом цикле не удалось их
-		// прочитать (инвертор выключился на закате, регистры/диапазон HW не
-		// отдались), берём из предыдущего снимка — иначе номер «пропадает» в
-		// таблице у оффлайн-инвертора.
-		if res.InverterSN == "" || res.DeviceSN == "" {
-			if prev, err := store.CurrentOne(t.IP); err == nil {
-				if res.InverterSN == "" {
-					res.InverterSN = prev.InverterSN
-				}
-				if res.DeviceSN == "" {
-					res.DeviceSN = prev.DeviceSN
+			if !res.OK || !res.HasData {
+				// heartbeat_only / no data / ошибка — снимок не сохраняем
+				continue
+			}
+			// Аппаратные серийные номера постоянны: если в этом цикле не удалось их
+			// прочитать (инвертор выключился на закате, регистры/диапазон HW не
+			// отдались), берём из предыдущего снимка — иначе номер «пропадает» в
+			// таблице у оффлайн-инвертора.
+			if res.InverterSN == "" || res.DeviceSN == "" {
+				if prev, err := store.CurrentOne(t.IP); err == nil {
+					if res.InverterSN == "" {
+						res.InverterSN = prev.InverterSN
+					}
+					if res.DeviceSN == "" {
+						res.DeviceSN = prev.DeviceSN
+					}
 				}
 			}
-		}
-		snap := deviceSnapshot{
+			snap := deviceSnapshot{
 				Name:       t.Name,
 				IP:         t.IP,
 				Timestamp:  now.Format(time.RFC3339),
