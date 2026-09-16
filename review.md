@@ -968,7 +968,7 @@ protocol/length, исключительный ответ (`func|0x80`) и byteco
 
 ## Батч 3 — веб-дашборд (3 пункта)
 
-### 3.1 Дубль точки на стыке PG/Redis (поток 3.1)
+### 3.1 Дубль точки на стыке PG/Redis (поток 3.1) ✅
 
 - **Файл**: `dashboard.go`, `loadRangeUncached` (3282-3296).
 - **Проблема**: PG читает `[start, cutoff]` включительно (`Averages`: `ts <= $2`,
@@ -981,7 +981,7 @@ protocol/length, исключительный ответ (`func|0x80`) и byteco
 - **Фикс**: `oldEnd := cutoff` → `oldEnd := cutoff.Add(-time.Second)` (аналог BMS).
   Сырые снимки Redis на `[cutoff, …]` закрывают шов — лап не будет.
 
-### 3.2 /api/series и /api/bms: кламп диапазона + from>to (поток 3.2, 3.4)
+### 3.2 /api/series и /api/bms: кламп диапазона + from>to (поток 3.2, 3.4) ✅
 
 - **Файлы**: `dashboard.go` — `apiSeries` (2923-2943) и `apiBMSSeries` (найти).
 - **Проблема**: `to` далеко в будущем → `eachMonth(cutoff, to)` идёт помесячно по
@@ -1003,7 +1003,7 @@ protocol/length, исключительный ответ (`func|0x80`) и byteco
   }
   ```
 
-### 3.3 Авто-refresh: не «замораживать» правый край (поток 3.3)
+### 3.3 Авто-refresh: не «замораживать» правый край (поток 3.3) ✅
 
 - **Файл**: `dashboard.go`. Затронуты страницы /charts и /bms (на /energy такого
   таймера нет — проверить grep `preserveZoom=true; load`).

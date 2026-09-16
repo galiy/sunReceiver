@@ -1076,6 +1076,7 @@ function endOfToday(){ var d=new Date(); d.setHours(23,59,59,999); return d; }
 Chart.register(ChartZoom);
 
 var preserveZoom=false;
+var userZoomed=false; // true — пользователь зумнул/сдвинул (нестандартное окно); false — стандартный вид (правый край догоняет now)
 var hoverPix={};
 // hiddenSets[chartId] — метки датасетов, которые пользователь скрыл кликом по
 // легенде. При пересоздании графика (обновление по таймеру) выбор восстанавливается,
@@ -1263,6 +1264,7 @@ function srWindowChanged(chartId){
 		document.getElementById('datePick').value=toInputDate(from);
 		setActiveBtn(null);
 		preserveZoom=true;
+		userZoomed=true; // перезагрузка ПОСЛЕ зума/панорамы — окно нестандартное
 		loadAll();
 	},300);
 }
@@ -1366,6 +1368,7 @@ function setActiveBtn(activeBtn){
 function setPeriod(from,to,mode,activeBtn){
 	selRange.from=from; selRange.to=to; periodMode=mode;
 	preserveZoom=false;
+	userZoomed=false; // пресет/поля «С/по» — возврат к стандартному виду (правый край догоняет now)
 	setActiveBtn(activeBtn);
 	var dFrom=dayStart(from);
 	document.getElementById('fromPick').value=toInputDateTime(from);
@@ -1404,7 +1407,7 @@ async function loadTotalChart(){
 		buildTotalChart(data);
 	}catch(e){}
 }
-document.getElementById('btnTotalReset').addEventListener('click',function(){ if(window.totalChart) window.totalChart.resetZoom(); });
+document.getElementById('btnTotalReset').addEventListener('click',function(){ userZoomed=false; if(window.totalChart) window.totalChart.resetZoom(); });
 
 // Активная мощность по инверторам
 function buildChart(data){
@@ -1429,7 +1432,7 @@ async function loadChart(){
 		buildChart(data);
 	}catch(e){}
 }
-document.getElementById('btnReset').addEventListener('click',function(){ if(window.powerChart) window.powerChart.resetZoom(); });
+document.getElementById('btnReset').addEventListener('click',function(){ userZoomed=false; if(window.powerChart) window.powerChart.resetZoom(); });
 
 // Напряжения (МАП + счётчик). Счётчик на левой оси (белая линия).
 function buildGridVChart(data){
@@ -1461,7 +1464,7 @@ async function loadGridVChart(){
 		buildGridVChart(data);
 	}catch(e){}
 }
-document.getElementById('btnGridVReset').addEventListener('click',function(){ if(window.gridVChart) window.gridVChart.resetZoom(); });
+document.getElementById('btnGridVReset').addEventListener('click',function(){ userZoomed=false; if(window.gridVChart) window.gridVChart.resetZoom(); });
 
 // Мощности (МАП + счётчик). Активная мощность счётчика белой линией на левой оси.
 function buildGridPChart(data){
@@ -1493,7 +1496,7 @@ async function loadGridPChart(){
 		buildGridPChart(data);
 	}catch(e){}
 }
-document.getElementById('btnGridPReset').addEventListener('click',function(){ if(window.gridPChart) window.gridPChart.resetZoom(); });
+document.getElementById('btnGridPReset').addEventListener('click',function(){ userZoomed=false; if(window.gridPChart) window.gridPChart.resetZoom(); });
 
 // ---------- Кнопки выбора периода ----------
 document.getElementById('btnToday').addEventListener('click',function(){ setPeriod(startOfToday(), endOfToday(), 'day', 'btnToday'); });
@@ -1521,13 +1524,14 @@ document.getElementById('btnRange').addEventListener('click',function(){
 });
 document.getElementById('btnRefresh').addEventListener('click',function(){
 	preserveZoom=false;
+	userZoomed=false; // принудительное обновление — возврат к стандартному виду
 	loadAll();
 });
 
 document.getElementById('fromPick').value=toInputDateTime(selRange.from);
 document.getElementById('toPick').value=toInputDateTime(selRange.to);
 document.getElementById('datePick').value=toInputDate(selRange.from);
-loadAll(); setInterval(function(){ preserveZoom=true; loadAll(); },60000);
+loadAll(); setInterval(function(){ preserveZoom=userZoomed; loadAll(); },60000);
 // Мобильная версия: touch-жесты по графикам (щипок — зум по X, свайп —
 // панорама, двойной тап — сброс зума; хинт со значениями на мобильной
 // отключён — он мешал зуму).
@@ -2181,6 +2185,7 @@ function setBmsRangeLabels(){
 
 // ---------- Выбор периода (общий для всех графиков BMS) ----------
 var preserveZoom=false;
+var userZoomed=false; // true — зум/сдвиг (нестандартное окно); false — стандартный вид
 var selRange={from:startOfToday(), to:endOfToday()};
 var periodMode='day';
 function startOfToday(){ var d=new Date(); d.setHours(0,0,0,0); return d; }
@@ -2203,6 +2208,7 @@ function setActiveBtn(activeBtn){ for(var i=0;i<PERIOD_BTNS.length;i++) document
 function setPeriod(from,to,mode,activeBtn){
   selRange.from=from; selRange.to=to; periodMode=mode;
   preserveZoom=false;
+  userZoomed=false; // пресет/поля «С/по» — возврат к стандартному виду
   setActiveBtn(activeBtn);
   var dFrom=dayStart(from);
   document.getElementById('fromPick').value=toInputDateTime(from);
@@ -2269,6 +2275,7 @@ function bmsWindowChanged(chartId){
     document.getElementById('datePick').value=toInputDate(from);
     setActiveBtn(null);
     preserveZoom=true;
+    userZoomed=true; // перезагрузка ПОСЛЕ зума/панорамы — окно нестандартное
     loadBmsCharts();
   },300);
 }
@@ -2475,12 +2482,12 @@ document.getElementById('btnRange').addEventListener('click',function(){
   if(!f.value||!t.value) return;
   setPeriod(dtFromStr(f.value), dtFromStr(t.value), 'custom', null);
 });
-document.getElementById('btnRefresh').addEventListener('click',function(){ preserveZoom=false; loadBmsCharts(); });
+document.getElementById('btnRefresh').addEventListener('click',function(){ preserveZoom=false; userZoomed=false; loadBmsCharts(); });
 // Кнопки «Сброс зума» по каждому графику BMS.
 for(var _b=0;_b<BMS_CHART_IDS.length;_b++){
   (function(id){
     var btn=document.getElementById(BMS_RESET_BTN[id]);
-    if(btn) btn.addEventListener('click',function(){ var c=BMS_CHARTS[id]; if(c) try{ c.resetZoom(); }catch(e){} });
+    if(btn) btn.addEventListener('click',function(){ userZoomed=false; var c=BMS_CHARTS[id]; if(c) try{ c.resetZoom(); }catch(e){} });
   })(BMS_CHART_IDS[_b]);
 }
 // Инициализация полей периода и первичная загрузка; дальше — раз в минуту (зум
@@ -2490,7 +2497,7 @@ document.getElementById('toPick').value=toInputDateTime(selRange.to);
 document.getElementById('datePick').value=toInputDate(selRange.from);
 setActiveBtn('btnToday');
 loadBmsCharts();
-setInterval(function(){ preserveZoom=true; loadBmsCharts(); },60000);
+setInterval(function(){ preserveZoom=userZoomed; loadBmsCharts(); },60000);
 
 // Мобильная версия: touch-жесты по графикам BMS (щипок — зум по X, свайп —
 // панорама, двойной тап — сброс зума; tooltip на тап отключён — мешал зуму).
@@ -2594,6 +2601,18 @@ func (h *dashboardHandler) apiBMSSeries(w http.ResponseWriter, r *http.Request, 
 		if t, err := time.Parse(time.RFC3339, s); err == nil {
 			from = t
 		}
+	}
+	// Кламп диапазона (как в apiSeries): to <= now, from >= нижний предел,
+	// from >= to → 400.
+	if to.After(now) {
+		to = now
+	}
+	if minFrom := recentCutoff(now).AddDate(0, 0, -400); from.Before(minFrom) {
+		from = minFrom
+	}
+	if !from.Before(to) {
+		http.Error(w, "from >= to", http.StatusBadRequest)
+		return
 	}
 	cutoff := recentCutoff(now)
 	var pts []bmsSeriesPoint
@@ -2934,6 +2953,20 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 		if t, err := time.Parse(time.RFC3339, v); err == nil {
 			to = t
 		}
+	}
+	// Кламп диапазона: to не дальше now (иначе eachMonth(goto, to) идёт помесячно
+	// по пустым месяцам за годы — медленный ответ на «глый» LAN-эндпоинт); from —
+	// с нижним пределом (recentCutoff − 400 дней), чтобы огромный from не тянул весь
+	// averages + sumActive. «Перевёрнутый» диапазон (from >= to) — 400.
+	if to.After(now) {
+		to = now
+	}
+	if minFrom := recentCutoff(now).AddDate(0, 0, -400); from.Before(minFrom) {
+		from = minFrom
+	}
+	if !from.Before(to) {
+		http.Error(w, "from >= to", http.StatusBadRequest)
+		return
 	}
 
 	snaps, err := h.loadRange(from, to, now)
@@ -3283,8 +3316,13 @@ func (h *dashboardHandler) loadRangeUncached(start, end time.Time, now time.Time
 	cutoff := recentCutoff(now)
 	var all []deviceSnapshot
 	// Старая часть периода (до cutoff) — из PostgreSQL.
+	// oldEnd = cutoff−1с (аналог BMS-ветки apiBMSSeries): cutoff = 00:00 вчера —
+	// граница 5-минутного промежутка; если бы PG читал [start, cutoff] включительно,
+	// 5-мин точка ровно на cutoff и сырой снимок Redis на cutoff дали бы дубль точки
+	// (одинаковый T) в поинверторном ряду byIP (нет dedup) — «шторка» на графике.
+	// Сырые снимки Redis на [cutoff, …] закрывают шов — лап не будет.
 	if h.pg != nil && start.Before(cutoff) {
-		oldEnd := cutoff
+		oldEnd := cutoff.Add(-time.Second)
 		if end.Before(oldEnd) {
 			oldEnd = end
 		}
