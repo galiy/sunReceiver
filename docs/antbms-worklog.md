@@ -485,6 +485,6 @@ scan (`PROBE_BUDGET_SEC 21`), анти-spin в `service_fds`, bad-кэш на re
 - **Фикс**: индексы max/min ячейки из кадра BMS — 1-based, дашборд
   сравнивал с 0-based `i` — подсветка min/max падала на соседние ячейки
   (исправлено: `i+1===d.max_cell_idx`).
-- Проверено в проде (.253): таблица создана, 5-мин точки (samples≈240)
+- Проверено в проде: таблица создана, 5-мин точки (samples≈240)
   в PG и Redis, series-API и страница работают. Тесты: `bms_accumulator_test.go`,
   `redis_store_test.go` (BMS-ряд, skip без Redis).
