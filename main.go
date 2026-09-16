@@ -26,6 +26,14 @@ const (
 	port       = "8899"
 	pollPeriod = 10 * time.Second
 	timeout    = 15 * time.Second
+	// defaultIdleWindow — «тишина» между байтами ответа (Deye): паузы < 4 с.
+	defaultIdleWindow = 4 * time.Second
+	// sofarIdleWindow — Sofar LSW-3 шлёт куски с паузами до ~6.5 с — окно шире.
+	sofarIdleWindow = 8 * time.Second
+	// maxExchangeTotal — общий лимит приёма ОДНОГО ответа Solarman: живые ответы
+	// идут до ~30 с (Sofar pacing), Deye ~8 с; «зомби»-логгер без лимита держал
+	// бы Exchange часами.
+	maxExchangeTotal = 60 * time.Second
 )
 
 type targetKind int
@@ -187,6 +195,12 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mpptSectio
 		}
 		if t.Name == "" {
 			return nil, nil, nil, nil, fmt.Errorf("config %s: пустое имя name для %s", path, t.IP)
+		}
+		// Deye/Sofar: без серийного номера логгера (logger_sn=0) логгер отвечает
+		// кодом 0x06 (heartbeat_only) — данные получать невозможно. Ловим при
+		// старте (fatal), а не маскируем вечным heartbeat_only с логами на poll.
+		if (kind == kindDeyeString || kind == kindSofar) && t.LoggerSN == 0 {
+			return nil, nil, nil, nil, fmt.Errorf("config %s: %s (%s): не задан logger_sn — без SN логгера логгер отвечает кодом 0x06 и данные получать невозможно", path, t.Name, t.IP)
 		}
 		targets = append(targets, invTarget{IP: t.IP, Name: t.Name, LoggerSN: t.LoggerSN, Kind: kind, Unit: 1, Slot: -1, Order: nextOrder})
 		nextOrder++
@@ -734,8 +748,9 @@ func clientFor(ip string, sn uint32) *solarman.Client {
 	c := &solarman.Client{
 		Address:    key,
 		DeviceSN:   sn,
-		IdleWindow: 4 * time.Second,
+		IdleWindow: defaultIdleWindow,
 		Timeout:    timeout,
+		MaxTotal:   maxExchangeTotal,
 	}
 	clientsByKey[key] = c
 	return c
@@ -903,7 +918,7 @@ func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 	client := clientFor(t.IP, t.LoggerSN)
 	// Sofar LSW-3 шлёт кадры с паузами до ~6.5 с (pacing) — окно тишины шире.
 	if t.Kind == kindSofar {
-		client.IdleWindow = 8 * time.Second
+		client.IdleWindow = sofarIdleWindow
 	}
 
 	var frames []solarman.Frame
@@ -1036,16 +1051,22 @@ func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 			for i := 0; i < len(b); i++ {
 				cells[0x0400+uint16(i)] = b[i]
 			}
+		} else {
+			log.Printf("%s: MAP: блок 0x0400: %v", t.IP, err)
 		}
 		if b, err := mc.ReadRegisters(ctx, 0x0530, 0x40); err == nil {
 			for i := 0; i < len(b); i++ {
 				cells[0x0530+uint16(i)] = b[i]
 			}
+		} else {
+			log.Printf("%s: MAP: блок 0x0530: %v", t.IP, err)
 		}
 		if b, err := mc.ReadRegisters(ctx, 0x0580, 0x24); err == nil {
 			for i := 0; i < len(b); i++ {
 				cells[0x0580+uint16(i)] = b[i]
 			}
+		} else {
+			log.Printf("%s: MAP: блок 0x0580: %v", t.IP, err)
 		}
 		res.Values = mapMAPRegisters(cells)
 		if _, has := cells[0x405]; has && cells[0x406] > 0 {

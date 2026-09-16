@@ -202,9 +202,13 @@ func groupForBackfill(snaps []deviceSnapshot, start, end time.Time) map[accBucke
 //      снимки медленных инверторов, и уже потом читает накопленное из Redis и
 //      пишет усреднённую точку в PG (см. averageBucket).
 //
-// Граница b фиксируется в момент срабатывания таймера (а НЕ берётся от текущего
-// времени после задержки), поэтому при любых задержках в цикле усредняется именно
-// завершённый промежуток [b-avgStep, b), а не смежный/незавершённый.
+// Целевая граница (target = nextBoundary) фиксируется ДО ожидания таймера и
+// используется как b, а НЕ берётся от time.Now() после задержки: если таймер
+// сработал с большой задержкой (сна/подвес машины, GC-пауза), time.Now() уже
+// мог пересечь следующую границу и b уехал бы вперёд (усреднился бы ещё не
+// завершённый бакет). После задержки усредняются ВСЕ завершённые на данный
+// момент границы, начиная с target (в норме ровно одна; после сна/задержки —
+// несколько), каждая — [b-avgStep, b).
 //
 // Сам averageBucket выполняется в отдельной горутине с обработкой stop: медленное
 // усреднение (QuerySeries + вставка в PG) не задерживает планировщик и не смещает
@@ -225,29 +229,35 @@ func runAccumulator(store *redisStore, pg *pgStore, ctx context.Context) {
 
 	for {
 		now := time.Now()
-		// 1) Ждём ближайшую границу 5-минутного промежутка и фиксируем её.
-		boundary := time.NewTimer(time.Until(nextBoundary(now)))
-		var b time.Time
+		// 1) Целевая граница, на которую ждём (фиксируем ДО таймера).
+		target := nextBoundary(now)
+		boundary := time.NewTimer(time.Until(target))
 		select {
 		case <-boundary.C:
-			b = floorToStep(time.Now())
+			// граница наступила
 		case <-ctx.Done():
 			stopTimer(boundary)
 			waitBuckets()
 			return
 		}
 
-		// 2) Ждём отсрочку, чтобы собрать запаздывающие снимки промежутка
-		//    [b-avgStep, b), затем усредняем в отдельной горутине.
+		// 2) Ждём отсрочку, чтобы собрать запаздывающие снимки.
 		delay := time.NewTimer(avgDelay)
 		select {
 		case <-delay.C:
-			start, end := b.Add(-avgStep), b
-			bucketWg.Add(1)
-			go func() {
-				defer bucketWg.Done()
-				averageBucket(store, pg, start, end)
-			}()
+			// Все ЗАВЕРШЁННЫЕ на данный момент границы, начиная с target
+			// (в норме ровно одна; после сна/задержки — несколько).
+			for b := target; ; b = b.Add(avgStep) {
+				if b.After(floorToStep(time.Now())) {
+					break
+				}
+				start := b.Add(-avgStep)
+				bucketWg.Add(1)
+				go func(start, end time.Time) {
+					defer bucketWg.Done()
+					averageBucket(store, pg, start, end)
+				}(start, b)
+			}
 		case <-ctx.Done():
 			stopTimer(delay)
 			waitBuckets()

@@ -174,7 +174,6 @@ func (s *redisStore) SaveSnapshotWindow(snap deviceSnapshot, ts time.Time) error
 		s.mapWin = map[string]mapWinMember{}
 	}
 	prev, had = s.mapWin[snap.IP]
-	s.mapWin[snap.IP] = mapWinMember{window: winUnix, member: member}
 	s.mapMu.Unlock()
 
 	pipe := s.rdb.TxPipeline()
@@ -185,10 +184,17 @@ func (s *redisStore) SaveSnapshotWindow(snap deviceSnapshot, ts time.Time) error
 	pipe.ZAdd(s.ctx, key, redis.Z{Score: float64(winUnix), Member: member})
 	pipe.HSet(s.ctx, redisCurrentKey, snap.IP, b)
 	pipe.Expire(s.ctx, key, 40*24*time.Hour)
-	_, err = pipe.Exec(s.ctx)
-	if err != nil {
+	if _, err := pipe.Exec(s.ctx); err != nil {
+		// mapWin НЕ обновляем: в памяти prev.member остался старый (совпадает с
+		// тем, что реально в Redis), следующая запись корректно ZRem-ит его.
+		// При обновлении до Exec при сбое Redis в памяти был бы новый member, а в
+		// Redis — старый → дубль точки (ZRem нового = no-op + ZAdd старого).
 		return fmt.Errorf("save window %s: %w", snap.IP, err)
 	}
+	// mapWin обновляем только после успешного Exec (prev для следующей замены).
+	s.mapMu.Lock()
+	s.mapWin[snap.IP] = mapWinMember{window: winUnix, member: member}
+	s.mapMu.Unlock()
 	return nil
 }
 
