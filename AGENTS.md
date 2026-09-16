@@ -228,7 +228,7 @@ ANT BMS по USB-serial, 140-байтные live-кадры 19200) публик�
   засечку времени).
 - **Redis-ключи**:
   - **`sunreceiver:bms`** — HASH текущего состояния: поле = `deviceName`
-    (напр. `AntBms 320 A/h`), значение = JSON устройства `bmsDevice` (bms_poller.go):
+    (напр. `AntBms 320 A/h (/dev/ttyUSB2)`), значение = JSON устройства `bmsDevice` (bms_poller.go):
     deviceName, port, timestamp/time (актуальность кадра), cell_count, cells_v[] (V),
     current_a (A, знаковый), soc (%), capacity_ah, remaining_ah, temperatures_c[] (°C,
     каналы T1..T6), charge_mos/discharge_mos/balancer (0/1), power_w (W),
@@ -250,9 +250,10 @@ ANT BMS по USB-serial, 140-байтные live-кадры 19200) публик�
   индексный range-scan (`pgStore.BMSAverages`); в Redis те же точки — 2 календарных
   суток (`QueryBMSSeries`).
 - **`deviceName`** — первое поле объекта устройства, генерируется bmslistener как
-  `AntBms <ёмкость> A/h` (мягкий идентификатор: батареи различаются по ёмкости;
-  аппаратного серийника у ANT BMS нет, `port` — позиционный). В URL имя кодируется
-  `encodeURIComponent` (в имени есть пробелы и `/` — `A/h`); Go-хендлеры берут
+  `AntBms <ёмкость> A/h (<port>)` (мягкий идентификатор: порт в имени — чтобы две
+  батареи с близкой ёмкостью не сливались в одно имя; аппаратного серийника у ANT
+  BMS нет, `port` — позиционный). В URL имя кодируется
+  `encodeURIComponent` (в имени есть пробелы и `/` — `A/h`, `(...)`); Go-хендлеры берут
   декодированный `r.URL.Path` с TrimPrefix.
 - **Температуры T1–T6**: производитель не публикует соответствие каналов и мест;
   по открытым источникам (AFE SH367309U: 2 внешних NTC + датчик платы; мануал ANT:
