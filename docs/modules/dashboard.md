@@ -1,6 +1,7 @@
 # Модуль веб-дашборда (`dashboard.go`)
 
-HTTP-сервер (флаг `-dashboard`, по умолч. `:8080`) — HTML-страницы + JSON API.
+HTTP-сервер (флаг `-dashboard`, по умолч. — порт из `dashboard_port` в
+`sunReceiver.json`, иначе `:8080`) — HTML-страницы + JSON API.
 Сам дашборд **не пишет** ни в Redis, ни в PG — только чтение.
 
 ## API-эндпоинты
