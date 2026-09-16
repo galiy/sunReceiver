@@ -38,6 +38,8 @@ import (
 )
 
 const (
+	// version — версия сборки сервиса (вывод через --version).
+	version    = "0.1.0"
 	port       = "8899"
 	pollPeriod = 10 * time.Second
 	timeout    = 15 * time.Second
@@ -1333,6 +1335,13 @@ func pollAndSaveMap(ctx context.Context, store *redisStore, now time.Time) {
 
 func main() {
 	log.SetFlags(log.Ltime)
+
+	for _, a := range os.Args[1:] {
+		if a == "--version" || a == "-version" {
+			fmt.Printf("sunReceiver %s\n", version)
+			return
+		}
+	}
 
 	cfgPath := configPath()
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
