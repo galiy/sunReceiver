@@ -252,6 +252,32 @@ func saveBMSClosedBuckets(store *redisStore, pg *pgStore, pts []bmsAvgPoint, par
 	}
 }
 
+// recomputeMinMaxCells пересчитывает индексы и напряжения max/min ячеек из
+// фактического массива ячеек (cells_v), а не из меток, заявленных BMS в кадре
+// (f[115]/f[118]): встроенная метка может не совпадать с реальными напряжениями
+// (в т.ч. при нескольких ячейках с одинаковым напряжением BMS «прыгает» между
+// ними), из-за чего красная/синяя ячейка на дашборде не соответствует фактически
+// минимальной/максимальной. При равенстве берётся первая (наименьший индекс) —
+// подсветка остаётся стабильной. Индексы 1-based, как в кадре и на дашборде.
+func recomputeMinMaxCells(d *bmsDevice) {
+	if len(d.CellsV) == 0 {
+		return
+	}
+	maxIdx, minIdx := 0, 0
+	for i := 1; i < len(d.CellsV); i++ {
+		if d.CellsV[i] > d.CellsV[maxIdx] {
+			maxIdx = i
+		}
+		if d.CellsV[i] < d.CellsV[minIdx] {
+			minIdx = i
+		}
+	}
+	d.MaxCellIdx = maxIdx + 1
+	d.MinCellIdx = minIdx + 1
+	d.MaxCellV = d.CellsV[maxIdx]
+	d.MinCellV = d.CellsV[minIdx]
+}
+
 // pollAndSaveBMS делает один запрос read_bms.php и обновляет коллекцию в
 // Redis: устройство появляется/исчезает с дашборда по факту наличия в ответе
 // (как MPPT). При ошибке запроса предыдущее состояние в Redis сохраняется
@@ -287,6 +313,12 @@ func pollAndSaveBMS(ctx context.Context, store *redisStore) *bmsCollection {
 		}
 	} else {
 		bmsEmptyStreak = 0
+	}
+	// Индексы/напряжения max/min ячеек пересчитываем из фактических cells_v —
+	// метка из кадра BMS (f[115]/f[118]) может не соответствовать реальным
+	// напряжениям (см. recomputeMinMaxCells).
+	for i := range col.Devices {
+		recomputeMinMaxCells(&col.Devices[i])
 	}
 	// Проверяем коллизию имён в пределах коллекции: если два устройства имеют
 	// одинаковый DeviceName, их ключи разводятся по USB-порту (resolveBMSKey).

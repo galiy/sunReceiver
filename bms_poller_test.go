@@ -205,3 +205,31 @@ func TestResolveBMSKey(t *testing.T) {
 		t.Fatalf("collide resolveBMSKey(b) = %q, want @/dev/ttyUSB1", k)
 	}
 }
+
+// TestRecomputeMinMaxCells: индексы/напряжения max/min пересчитываются из
+// фактических cells_v, а не из метки кадра BMS (f[115]/f[118]), которая может
+// не соответствовать реальным напряжениям. При равных напряжениях берётся
+// первая ячейка (наименьший индекс) — подсветка стабильна. Индексы 1-based.
+func TestRecomputeMinMaxCells(t *testing.T) {
+	// В кадре BMS «ошибочно» заявлены max=2, min=16; фактические min — ячейка 10.
+	d := bmsDevice{
+		CellsV:     []float64{3.26, 3.26, 3.24, 3.25, 3.24, 3.25, 3.24, 3.25, 3.24, 3.237, 3.24, 3.25, 3.24, 3.25, 3.26, 3.26},
+		MaxCellIdx: 2,
+		MinCellIdx: 16,
+		MaxCellV:   3.261,
+		MinCellV:   3.234,
+	}
+	recomputeMinMaxCells(&d)
+	if d.MaxCellIdx != 1 || d.MaxCellV != 3.26 {
+		t.Fatalf("max = %d / %v, want первая max-ячейка: 1 / 3.26", d.MaxCellIdx, d.MaxCellV)
+	}
+	if d.MinCellIdx != 10 || d.MinCellV != 3.237 {
+		t.Fatalf("min = %d / %v, want мин-ячейка: 10 / 3.237", d.MinCellIdx, d.MinCellV)
+	}
+	// Пустой cells_v — функция ничего не перезаписывает.
+	empty := bmsDevice{CellsV: nil, MaxCellIdx: 2, MinCellIdx: 16}
+	recomputeMinMaxCells(&empty)
+	if empty.MaxCellIdx != 2 || empty.MinCellIdx != 16 {
+		t.Fatalf("empty: индексы не должны меняться, got %d/%d", empty.MaxCellIdx, empty.MinCellIdx)
+	}
+}
