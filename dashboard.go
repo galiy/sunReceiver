@@ -97,6 +97,14 @@ type currentResponse struct {
 	GeneratedAt string  `json:"generated_at"`
 	TotalPower  float64 `json:"total_power"`
 	TotalPV     float64 `json:"total_pv"`
+	// Суммарные показатели по группам инверторов «Дом» (всё, кроме Deye Left/Right)
+	// и «Гараж» (инверторы с именами "Deye Left"/"Deye Right"). ShowGarage — есть ли в
+	// таблице инверторов хотя бы один из инверторов «Гараж» (нет — плашки «Гараж» скрыты).
+	TotalPowerHome  float64 `json:"total_power_home"`
+	TotalPVHome     float64 `json:"total_pv_home"`
+	TotalPowerGarage float64 `json:"total_power_garage"`
+	TotalPVGarage   float64 `json:"total_pv_garage"`
+	ShowGarage      bool    `json:"show_garage"`
 	MapGridV    float64 `json:"map_grid_voltage"`
 	MapGridP    float64 `json:"map_grid_power"`
 	MapBatV     float64 `json:"map_battery_voltage"`
@@ -185,6 +193,12 @@ func snapFloat(v valuesContract, key string) (float64, bool) {
 		return 0, false
 	}
 	return toFloat(raw)
+}
+
+// isGarageDevice возвращает true, если инвертор относится к группе «Гараж»
+// (имя "Deye Left" или "Deye Right"). Все остальные инверторы — группа «Дом».
+func isGarageDevice(name string) bool {
+	return name == "Deye Left" || name == "Deye Right"
 }
 
 // isMAPDevice возвращает true, если снимок принадлежит устройству МАП (kindMAP,
@@ -661,14 +675,21 @@ h1 { font-size:22px; margin:0 0 4px; }
     <div class="group-title">Мощности инверторов</div>
     <div class="group-body">
       <div class="plate">
-        <div class="lbl">Суммарная активная мощность</div>
-        <div class="val"><span id="kpiTotal">—</span><span class="unit">W</span></div>
+        <div class="lbl">Суммарная активная<br>мощность (Дом)</div>
+        <div class="val"><span id="kpiTotalHome">—</span><span class="unit">W</span></div>
         <div class="sub" id="kpiSub">Нет данных</div>
       </div>
       <div class="plate">
-        <div class="lbl">Суммарная мощность PV</div>
-        <div class="val"><span id="kpiPV">—</span><span class="unit">W</span></div>
-        <div class="sub" id="kpiPVSub">Нет данных</div>
+        <div class="lbl">Суммарная мощность<br>PV (Дом)</div>
+        <div class="val"><span id="kpiPVHome">—</span><span class="unit">W</span></div>
+      </div>
+      <div class="plate" id="kpiGaragePlate1">
+        <div class="lbl">Суммарная активная<br>мощность (Гараж)</div>
+        <div class="val"><span id="kpiTotalGarage">—</span><span class="unit">W</span></div>
+      </div>
+      <div class="plate" id="kpiGaragePlate2">
+        <div class="lbl">Суммарная мощность<br>PV (Гараж)</div>
+        <div class="val"><span id="kpiPVGarage">—</span><span class="unit">W</span></div>
       </div>
     </div>
   </div>
@@ -877,10 +898,10 @@ async function tick(){
 		var r=await fetch('/api/current');
 		if(!r.ok) return;
 		var data=await r.json();
-		// Плашка суммарной мощности
-		var kpiEl=document.getElementById('kpiTotal');
-		var n=Number(data.total_power);
-		if(isFinite(n) && data.total_power>0){
+		// Плашка суммарной мощности (Дом)
+		var kpiEl=document.getElementById('kpiTotalHome');
+		var n=Number(data.total_power_home);
+		if(isFinite(n) && data.total_power_home>0){
 			kpiEl.textContent=n.toLocaleString('ru-RU',{maximumFractionDigits:1});
 			// Число инверторов онлайн — без устройства МАП (батарея/сеть), счётчика
 			// и offline-устройств (последний снимок старше STALE_MS, напр. ночью).
@@ -892,13 +913,17 @@ async function tick(){
 			kpiEl.textContent='—';
 			document.getElementById('kpiSub').textContent='Нет данных';
 		}
-		// Плашка суммарной мощности PV
-		var pvEl=document.getElementById('kpiPV');
-		var pv=Number(data.total_pv);
-		if(isFinite(pv) && data.total_pv>0){
-			pvEl.textContent=pv.toLocaleString('ru-RU',{maximumFractionDigits:1});
-		}else{
-			pvEl.textContent='—';
+		// Плашка суммарной мощности PV (Дом)
+		setKpi('kpiPVHome', data.total_pv_home);
+		// Плашки «Гараж» показываем только если в таблице инверторов есть хотя бы один
+		// из инверторов "Deye Left"/"Deye Right"; иначе скрываем их целиком.
+		var showGarage = data.show_garage;
+		var gp1=document.getElementById('kpiGaragePlate1'), gp2=document.getElementById('kpiGaragePlate2');
+		if(gp1) gp1.style.display = showGarage ? '' : 'none';
+		if(gp2) gp2.style.display = showGarage ? '' : 'none';
+		if(showGarage){
+			setKpi('kpiTotalGarage', data.total_power_garage);
+			setKpi('kpiPVGarage', data.total_pv_garage);
 		}
 		// Плашки МАП: напряжение/мощность сети и батареи.
 		if(showMap){
@@ -2944,6 +2969,11 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	})
 	var total float64
 	var totalPV float64
+	// Суммарные показатели по группам «Дом»/«Гараж»: «Гараж» — инверторы с именами
+	// "Deye Left"/"Deye Right", «Дом» — всё остальное (кроме МАП/счётчика).
+	var totalHome, totalPVHome float64
+	var totalGarage, totalPVGarage float64
+	showGarage := false
 	var gridV, gridP, batV, batP float64
 	// Устройство считаем «живым», если снимок не старше 20 минут (то же окно
 	// STALE_MS, что на дашборде): инвертор, выключенный ночью, в текущую сумму
@@ -2971,21 +3001,39 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
+		if isGarageDevice(d.Name) {
+			showGarage = true
+		}
 		if ts, err := time.Parse(time.RFC3339, d.Timestamp); err != nil || !ts.After(staleCutoff) {
 			continue
 		}
+		var p float64
 		if v, ok := snapFloat(d.Values, "ac_active_power"); ok {
-			total += v
+			p += v
 		}
+		var pv float64
 		if v, ok := snapFloat(d.Values, "pv1_power"); ok {
-			totalPV += v
+			pv += v
 		}
 		if v, ok := snapFloat(d.Values, "pv2_power"); ok {
-			totalPV += v
+			pv += v
 		}
+		if isGarageDevice(d.Name) {
+			totalGarage += p
+			totalPVGarage += pv
+		} else {
+			totalHome += p
+			totalPVHome += pv
+		}
+		total += p
+		totalPV += pv
 	}
 	total = math.Round(total*10) / 10
 	totalPV = math.Round(totalPV*10) / 10
+	totalHome = math.Round(totalHome*10) / 10
+	totalPVHome = math.Round(totalPVHome*10) / 10
+	totalGarage = math.Round(totalGarage*10) / 10
+	totalPVGarage = math.Round(totalPVGarage*10) / 10
 	gridV = math.Round(gridV*10) / 10
 	gridP = math.Round(gridP*10) / 10
 	batV = math.Round(batV*10) / 10
@@ -3042,6 +3090,11 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 		GeneratedAt:           time.Now().Format(time.RFC3339),
 		TotalPower:            total,
 		TotalPV:               totalPV,
+		TotalPowerHome:        totalHome,
+		TotalPVHome:           totalPVHome,
+		TotalPowerGarage:      totalGarage,
+		TotalPVGarage:         totalPVGarage,
+		ShowGarage:            showGarage,
 		MapGridV:              gridV,
 		MapGridP:              gridP,
 		MapBatV:               batV,
