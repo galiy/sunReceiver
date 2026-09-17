@@ -9,6 +9,11 @@ HTTP-сервер — адрес из обязательного поля `dashb
 - `/api/current` — `HGETALL sunreceiver:current` (последнее состояние всех
   устройств). Go-сторона выделяет `total_power`/`total_pv` (сумма только
   fresh-устройств) и живые тарифы текущего дня (`meter_import_day`/...).
+  Суммарные показатели дополнительно разбиваются на группы «Дом»/«Гараж»:
+  `total_power_home`/`total_pv_home` (всё, кроме Deye Left/Right) и
+  `total_power_garage`/`total_pv_garage` (инверторы с именами `"Deye Left"`/`"Deye Right"`).
+  Флаг `show_garage` — есть ли в таблице инверторов хотя бы один из «Гараж»-инверторов;
+  если нет, плашки «Гараж» на дашборде скрыты.
 - `/api/series` — временные ряды `ac_active_power` по инверторам, суммарный `total`,
   ряды МАП `map_grid_voltage`/`map_grid_power`/`map_battery_voltage`/`map_battery_power`,
   ряды счётчика `meter_*`. Применяется `downsampleSeries`.
