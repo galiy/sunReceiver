@@ -492,8 +492,8 @@ var commonContractTags = []string{
 
 // needsRounding — true, если тэг относится к величинам, которые округляются до
 // 1 знака после запятой (напряжение, ток, мощность, энергия, температура).
-// Частота (grid_frequency/meter_frequency) и коэффициент мощности
-// (meter_power_factor) НЕ округляются — входят в контракт с точностью с датчика.
+// Коэффициент мощности (meter_power_factor) НЕ округляется — входит в контракт
+// с точностью с датчика.
 func needsRounding(tag string) bool {
 	return strings.HasSuffix(tag, "voltage") ||
 		strings.HasSuffix(tag, "current") ||
@@ -502,17 +502,29 @@ func needsRounding(tag string) bool {
 		strings.Contains(tag, "temperature")
 }
 
-// round1 округляет числовое значение до 1 знака после запятой (для тегов,
-// для которых needsRounding). Числа возвращает как float, прочее — как есть.
+// needsRound2 возвращает true для частот (grid_frequency/meter_frequency) — они
+// входят в контракт с точностью датчика (2 знака, как даёт логгер/счётчик). Значение
+// строится умножением на ratio (напр. ×0.01), что в double даёт бинарный артефакт
+// вида 50.010000000000002 — округляем до 2 знаков, сохраняя заявленную точность.
+func needsRound2(tag string) bool {
+	return strings.HasSuffix(tag, "frequency")
+}
+
+// round1 округляет числовое значение (для тегов, для которых needsRounding) до
+// 1 знака после запятой; частотные теги (needsRound2) — до 2 знаков. Числа
+// возвращает как float, прочее — как есть.
 func round1(tag string, v any) any {
-	if !needsRounding(tag) {
+	mult := 10.0
+	if needsRound2(tag) {
+		mult = 100
+	} else if !needsRounding(tag) {
 		return v
 	}
 	switch n := v.(type) {
 	case int:
-		return math.Round(float64(n)*10) / 10
+		return math.Round(float64(n)*mult) / mult
 	case float64:
-		return math.Round(n*10) / 10
+		return math.Round(n*mult) / mult
 	}
 	return v
 }
