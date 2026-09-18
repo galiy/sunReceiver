@@ -205,3 +205,46 @@ func TestAlertDetectorReset(t *testing.T) {
 		t.Fatalf("после reset+стабильность хотим A4, got ok=%v msg=%q", ok, msg)
 	}
 }
+
+func TestMeterVoltageFromSnapFresh(t *testing.T) {
+	now := time.Now()
+	snap := deviceSnapshot{
+		Timestamp: now.Format(time.RFC3339),
+		Values:    valuesContract{"meter_voltage": 237.9},
+	}
+	if v, ok := meterVoltageFromSnap(snap, now); !ok || v != 237.9 {
+		t.Fatalf("свежий снимок: want 237.9/true, got %v/%v", v, ok)
+	}
+}
+
+func TestMeterVoltageFromSnapStale(t *testing.T) {
+	now := time.Now()
+	// Снимок остался от последнего удачного опроса, но счётчик давно молчит
+	// (timestamp старше окна свежести) — напряжение НЕ показываем.
+	snap := deviceSnapshot{
+		Timestamp: now.Add(-time.Hour).Format(time.RFC3339),
+		Values:    valuesContract{"meter_voltage": 237.9},
+	}
+	if v, ok := meterVoltageFromSnap(snap, now); ok || v != 0 {
+		t.Fatalf("устаревший снимок: want 0/false, got %v/%v (нельзя показывать напряжение как живое)", v, ok)
+	}
+}
+
+func TestMeterVoltageFromSnapInvalidTimestamp(t *testing.T) {
+	now := time.Now()
+	snap := deviceSnapshot{
+		Timestamp: "не-дата",
+		Values:    valuesContract{"meter_voltage": 237.9},
+	}
+	if _, ok := meterVoltageFromSnap(snap, now); ok {
+		t.Fatal("битый timestamp: хотим ok=false")
+	}
+}
+
+func TestMeterVoltageFromSnapNoField(t *testing.T) {
+	now := time.Now()
+	snap := deviceSnapshot{Timestamp: now.Format(time.RFC3339), Values: valuesContract{}}
+	if _, ok := meterVoltageFromSnap(snap, now); ok {
+		t.Fatal("нет meter_voltage: хотим ok=false")
+	}
+}
