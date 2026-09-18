@@ -282,45 +282,50 @@ func TestAlertDetectorRecoverOrder(t *testing.T) {
 	}
 }
 
-func TestMeterVoltageFromSnapFresh(t *testing.T) {
+func TestMeterInfoFromSnapFresh(t *testing.T) {
 	now := time.Now()
 	snap := deviceSnapshot{
 		Timestamp: now.Format(time.RFC3339),
 		Values:    valuesContract{"meter_voltage": 237.9},
 	}
-	if v, ok := meterVoltageFromSnap(snap, now); !ok || v != 237.9 {
-		t.Fatalf("свежий снимок: want 237.9/true, got %v/%v", v, ok)
+	val, _, state := meterInfoFromSnap(snap, now)
+	if state != meterStateFresh || val != 237.9 {
+		t.Fatalf("свежий снимок: want 237.9/fresh, got %v/%v", val, state)
 	}
 }
 
-func TestMeterVoltageFromSnapStale(t *testing.T) {
+func TestMeterInfoFromSnapStale(t *testing.T) {
 	now := time.Now()
 	// Снимок остался от последнего удачного опроса, но счётчик давно молчит
-	// (timestamp старше окна свежести) — напряжение НЕ показываем.
+	// (timestamp старше окна свежести) — счётчик недоступен.
 	snap := deviceSnapshot{
 		Timestamp: now.Add(-time.Hour).Format(time.RFC3339),
 		Values:    valuesContract{"meter_voltage": 237.9},
 	}
-	if v, ok := meterVoltageFromSnap(snap, now); ok || v != 0 {
-		t.Fatalf("устаревший снимок: want 0/false, got %v/%v (нельзя показывать напряжение как живое)", v, ok)
+	val, ts, state := meterInfoFromSnap(snap, now)
+	if state != meterStateStale || val != 0 {
+		t.Fatalf("устаревший снимок: want 0/stale, got %v/%v (нельзя показывать напряжение как живое)", val, state)
+	}
+	if !ts.Before(now) {
+		t.Fatalf("stale: хотим timestamp последнего снэпшота в прошлом, got %v", ts)
 	}
 }
 
-func TestMeterVoltageFromSnapInvalidTimestamp(t *testing.T) {
+func TestMeterInfoFromSnapInvalidTimestamp(t *testing.T) {
 	now := time.Now()
 	snap := deviceSnapshot{
 		Timestamp: "не-дата",
 		Values:    valuesContract{"meter_voltage": 237.9},
 	}
-	if _, ok := meterVoltageFromSnap(snap, now); ok {
-		t.Fatal("битый timestamp: хотим ok=false")
+	if _, _, state := meterInfoFromSnap(snap, now); state != meterStateNone {
+		t.Fatalf("битый timestamp: want none, got %v", state)
 	}
 }
 
-func TestMeterVoltageFromSnapNoField(t *testing.T) {
+func TestMeterInfoFromSnapNoField(t *testing.T) {
 	now := time.Now()
 	snap := deviceSnapshot{Timestamp: now.Format(time.RFC3339), Values: valuesContract{}}
-	if _, ok := meterVoltageFromSnap(snap, now); ok {
-		t.Fatal("нет meter_voltage: хотим ok=false")
+	if _, _, state := meterInfoFromSnap(snap, now); state != meterStateStale {
+		t.Fatalf("нет meter_voltage: want stale, got %v", state)
 	}
 }
