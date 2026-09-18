@@ -25,14 +25,14 @@
 
 ## Цель (контекст задачи)
 
-Подключить через USB-serial (на ПАК «Малина», 192.168.13.60) плату **ANT BMS
+Подключить через USB-serial (на ПАК «Малина», 192.168.0.60) плату **ANT BMS
 22PHB-TB-8-22S-240A** и получить её данные. Это первый шаг к интеграции BMS
 в систему.
 
 ## Как добраться до продолжения (важно)
 
 - Рабочая сессия истории — `kilo_local_recall` по «ANT BMS». Документация — `docs/antbms.md`.
-- SSH-доступ к Малине: `root@192.168.13.60`, пароль в `.kilo/malina-ssh.json`.
+- SSH-доступ к Малине: `root@192.168.0.60`, пароль в `.kilo/malina-ssh.json`.
 - SSH запускать ТОЛЬКО с `-o PreferredAuthentications=password -o PubkeyAuthentication=no`
   (иначе отказ — публичный ключ отклоняется).
 - На Малине Python **2** (нет python3, нет pyserial). В heredoc-скриптах не использовать f-строки.
@@ -421,7 +421,7 @@ scan (`PROBE_BUDGET_SEC 21`), анти-spin в `service_fds`, bad-кэш на re
   за ~12 ч = повод копать), FD 5, VmData 180 kB. Если PID сменился (рестарт) —
   baseline сбрасывается, сверку вести от нового старта.
 - Команда-снимок (одна строка, тот же формат):
-   `ssh root@192.168.13.60 'P=$(pgrep -x bmslistener); ps -o pid,etime,pcpu,pmem,rss,vsz,comm -p $P; grep -E "VmRSS|VmSize|VmData" /proc/$P/status; awk "{print \"cpu_ticks:\", \$14+\$15}" /proc/$P/stat; echo "fd: $(ls /proc/$P/fd | wc -l)"; date +%H:%M:%S'`
+   `ssh root@192.168.0.60 'P=$(pgrep -x bmslistener); ps -o pid,etime,pcpu,pmem,rss,vsz,comm -p $P; grep -E "VmRSS|VmSize|VmData" /proc/$P/status; awk "{print \"cpu_ticks:\", \$14+\$15}" /proc/$P/stat; echo "fd: $(ls /proc/$P/fd | wc -l)"; date +%H:%M:%S'`
 
 ### Сверка с baseline (2026-09-15, 17:48 MSK) — СТАБИЛЬНО
 

@@ -180,6 +180,7 @@ type configFile struct {
 	Map           *mapSection      `json:"map"`
 	DB            *dbConfig        `json:"db"`
 	Meter         *meterSection    `json:"meter"`
+	Notify        *notifySection   `json:"notify"`
 	DashboardPort int              `json:"dashboard_port"` // порт веб-дашборда; 0 — дефолт 8080
 }
 
@@ -301,6 +302,18 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	if cf.DashboardPort == 0 {
 		return nil, nil, nil, nil, 0, fmt.Errorf("config %s: не задано обязательное поле dashboard_port (порт веб-дашборда)", path)
 	}
+	// Уведомления в MAX (раздел notify): токен обязателен, адресат — user_id или chat_id.
+	notifyCfg = cf.Notify
+	if notifyCfg != nil {
+		if notifyCfg.Disabled != nil && *notifyCfg.Disabled {
+			log.Printf("config: notify disabled=true — уведомления в MAX выключены (раздел в конфиге, но без оповещений)")
+			notifyCfg = nil
+		} else if notifyCfg.Token == "" {
+			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе notify не задан token", path)
+		} else if notifyCfg.UserID == "" && notifyCfg.ChatID == "" {
+			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе notify не задан адресат — нужно user_id или chat_id", path)
+		}
+	}
 	return targets, cf.DB, cf.Meter, cf.Map, cf.DashboardPort, nil
 }
 
@@ -404,6 +417,42 @@ func devKey(t invTarget) string {
 // version — версия сборки сервиса. Переопределяется при сборке через
 // -ldflags "-X main.version=<версия>"; по умолчанию "dev" (локальная сборка).
 var version = "dev"
+
+// mapSourceIdentity возвращает devKey (IP) и логическое имя МАП, по которому
+// ведётся мониторинг уведомлений. Источник МАП — RS232/Modbus (цель kindMAP) или
+// веб-API ПАК «Малина» (mapAPI). При ни одного — ("", ""): мониторинг не запускается.
+func mapSourceIdentity() (string, string) {
+	for _, t := range targets {
+		if t.Kind == kindMAP {
+			return devKey(t), t.Name
+		}
+	}
+	if mapAPI != nil {
+		return mapAPI.ip, mapAPI.name
+	}
+	return "", ""
+}
+
+// mapSourceName возвращает строковое имя активного источника МАП (для логов).
+func mapSourceName() string {
+	for _, t := range targets {
+		if t.Kind == kindMAP {
+			return "RS232/Modbus"
+		}
+	}
+	if mapAPI != nil {
+		return "веб-API ПАК «Малина»"
+	}
+	return "нет источника"
+}
+
+// meterCfgIP возвращает IP счётчика для справочного напряжения ("" если не настроен).
+func meterCfgIP(c *meterConfig) string {
+	if c == nil {
+		return ""
+	}
+	return c.IP
+}
 
 var targets []invTarget
 
@@ -1255,6 +1304,18 @@ func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 			res.HasData = true
 			res.DeviceSN = fmt.Sprintf("map-%s", devKey(t))
 		}
+		// Фиксируем результат Modbus-опроса МАП для монитора уведомлений.
+		now := time.Now()
+		if res.HasData {
+			// Напряжение сети МАП (grid_voltage): 0 = нет сети (см. mapMAPRegisters).
+			grid, hasGrid := 0.0, false
+			if v, ok := res.Values["grid_voltage"]; ok {
+				grid, hasGrid = toFloat(v)
+			}
+			mapTracker.trackOK("modbus", now, hasGrid, grid)
+		} else {
+			mapTracker.trackErr("modbus", "опрос по RS232/Modbus не удался (нет данных от МАП)", now)
+		}
 
 	default:
 		log.Printf("%s: неизвестный kind %s — опрос пропущен", t.IP, t.Kind)
@@ -1616,6 +1677,20 @@ func main() {
 		}()
 	} else {
 		log.Printf("map/mppt: опрос отключён (map.disabled=true или нет источников МАП/MPPT)")
+	}
+	// Уведомления в MAX. Мониторинг МАП выполняется ТОЛЬКО если включён опрос МАП
+	// в целом (есть источник МАП — RS232/Modbus или веб-API ПАК «Малина»). Если
+	// опрос МАП выключен — уведомления не формируются, даже при настроенном notify.
+	mapIP, mapName := mapSourceIdentity()
+	if notifyCfg != nil && mapIP != "" {
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			runNotifyMonitor(store, notifyCfg, mapIP, mapName, meterCfgIP(meterCfg), stopCtx)
+		}()
+		log.Printf("notify: уведомления в MAX включены (МАП %s, источник %s)", mapName, mapSourceName())
+	} else if notifyCfg != nil {
+		log.Printf("notify: опрос МАП выключен или нет источника МАП — уведомления в MAX не формируются")
 	}
 	// ANT BMS (read_bms.php) — 1 раз в секунду: актуальное состояние в отдельном
 	// Redis-ключе (HASH sunreceiver:bms) + накопление 5-минутных усреднённых

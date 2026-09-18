@@ -1,4 +1,4 @@
-# Веб-интерфейс Микроарт (192.168.13.60) — read_json.php
+# Веб-интерфейс Микроарт (192.168.0.60) — read_json.php
 
 > Проверено живьём 2026-09-07, текущее время ~21:44.
 
@@ -212,5 +212,5 @@ UID 1097, 1750, 1751, соответствуют MPPT-1/2/3). Поля совп�
 
 ```
 curl -u "admin:$(jq -r .mppt.password sunReceiver.json)" \
-     "http://192.168.13.60/read_json.php?device=mppt"
+     "http://192.168.0.60/read_json.php?device=mppt"
 ```

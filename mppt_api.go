@@ -417,19 +417,27 @@ func mapMAPAPI(r mapRaw) (valuesContract, time.Time, bool) {
 func pollMAPAPI(ctx context.Context) DeviceResult {
 	res := DeviceResult{OK: true}
 	r, err := mppt.FetchMAP(ctx)
+	now := time.Now()
 	if err != nil {
 		res.OK = false
 		log.Printf("map api: %v", err)
+		mapTracker.trackErr("api", fmt.Sprintf("веб-API ПАК «Малина» недоступно (%v)", err), now)
 		return res
 	}
 	vals, _, ok := mapMAPAPI(*r)
 	if !ok {
 		res.OK = false
 		log.Printf("map api: нет данных (Uacc отсутствует/нулевой)")
+		mapTracker.trackErr("api", "веб-API ПАК «Малина» не отдаёт данные МАП (нет напряжения АКБ)", now)
 		return res
 	}
 	res.HasData = true
 	res.Values = vals
 	res.DeviceSN = "map-api"
+	// Источник — веб-API; фиксируем timestamp ответа (для детекции «устаревшего
+	// времени, которое не изменяется») и валидность опроса (наличие напряжения сети).
+	mapTracker.trackAPITS(r.Timestamp, now)
+	grid, hasGrid := parseFloat(r.UNet)
+	mapTracker.trackOK("api", now, hasGrid, grid)
 	return res
 }

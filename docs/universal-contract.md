@@ -41,7 +41,7 @@
 ```jsonc
 {
   "name":      "Deye Left",              // логическое имя инвертора (из config.json)
-  "ip":        "192.168.13.70",          // IP даталоггера
+  "ip":        "192.168.0.70",          // IP даталоггера
   "timestamp": "2026-09-03T15:58:46+00:00",
   "device_sn": "69c12409",               // серийный номер даталоггера (hex)
   "values":    { /* только 15 общих тегов — ниже */ }
@@ -59,12 +59,12 @@
 
 | IP | name | Модель |
 |---|---|---|
-| 192.168.13.70 | Deye Left | Deye (string) |
-| 192.168.13.76 | Sofar-2.5 | Sofar K-TLX (LSW-3) |
-| 192.168.13.79 | Deye Right | Deye (string) |
-| 192.168.13.91 | Bineos Left | Deye (string) |
-| 192.168.13.92 | Bineos Center | Deye (string) |
-| 192.168.13.93 | Bineos Right | Deye (string) |
+| 192.168.0.70 | Deye Left | Deye (string) |
+| 192.168.0.76 | Sofar-2.5 | Sofar K-TLX (LSW-3) |
+| 192.168.0.79 | Deye Right | Deye (string) |
+| 192.168.0.91 | Bineos Left | Deye (string) |
+| 192.168.0.92 | Bineos Center | Deye (string) |
+| 192.168.0.93 | Bineos Right | Deye (string) |
 
 ### Группы тегов (справочно)
 
