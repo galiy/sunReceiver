@@ -108,7 +108,8 @@ type maxClient struct {
 	// Адресат: user_id (личный диалог) ИЛИ chat_id (чат/канал).
 	userID string
 	chatID string
-	hc     *http.Client
+	hc     *http.Client // обычный клиент (короткий таймаут 5 с) для отправки
+	hcLong *http.Client // клиент для long polling /updates (таймаут 35 с > timeout запроса)
 }
 
 func newMaxClient(n *notifySection) *maxClient {
@@ -117,6 +118,7 @@ func newMaxClient(n *notifySection) *maxClient {
 		userID: n.UserID,
 		chatID: n.ChatID,
 		hc:     &http.Client{Timeout: maxRequestTimeout},
+		hcLong: &http.Client{Timeout: 35 * time.Second},
 	}
 }
 
@@ -654,7 +656,7 @@ func (m *monitorState) fetchUpdates(ctx context.Context, marker int64, types str
 		return nil, 0, err
 	}
 	req.Header.Set("Authorization", m.client.token)
-	resp, err := m.client.hc.Do(req)
+	resp, err := m.client.hcLong.Do(req)
 	if err != nil {
 		return nil, 0, err
 	}
