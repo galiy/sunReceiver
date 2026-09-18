@@ -118,7 +118,7 @@ func newMaxClient(n *notifySection) *maxClient {
 		userID: n.UserID,
 		chatID: n.ChatID,
 		hc:     &http.Client{Timeout: maxRequestTimeout},
-		hcLong: &http.Client{Timeout: 35 * time.Second},
+		hcLong: &http.Client{Timeout: 50 * time.Second},
 	}
 }
 
@@ -698,7 +698,7 @@ func (m *monitorState) pollSubscriber(stop context.Context) {
 			return
 		default:
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		updates, next, err := m.fetchUpdates(ctx, marker, subscriberEvents)
 		cancel()
 		if err != nil {
