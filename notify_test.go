@@ -142,43 +142,39 @@ func TestAlertDetectorHysteresis(t *testing.T) {
 	now := time.Now()
 
 	// Первая итерация аварии — сообщение ещё не шлём (не прошло стабильности).
-	if msg, ok := d.evaluate(now, true, func(alarm bool) (string, bool) {
+	if msg, isDown, ok := d.evaluate(now, true, func(alarm bool) (string, bool) {
 		return "ALARM", true
 	}); ok {
-		t.Fatalf("до стабильности не должно быть сообщения, получили %q", msg)
+		t.Fatalf("до стабильности не должно быть сообщения, got %q/%v", msg, isDown)
 	}
 	// После 30 с стабильной аварии — шлём один раз.
-	if msg, ok := d.evaluate(now.Add(35*time.Second), true, func(alarm bool) (string, bool) {
+	if msg, isDown, ok := d.evaluate(now.Add(35*time.Second), true, func(alarm bool) (string, bool) {
 		return "ALARM", true
-	}); !ok || msg != "ALARM" {
-		t.Fatalf("после стабильности хотим ALARM, got ok=%v msg=%q", ok, msg)
+	}); !ok || msg != "ALARM" || !isDown {
+		t.Fatalf("после стабильности хотим ALARM/down, got ok=%v msg=%q isDown=%v", ok, msg, isDown)
 	}
-	// Повторные итерации аварии — не дублируем.
-	if _, ok := d.evaluate(now.Add(40*time.Second), true, func(alarm bool) (string, bool) {
+	// Подтверждаем доставку.
+	d.confirmDispatched(true)
+	// Пока авария держится — не дублируем.
+	if _, _, ok := d.evaluate(now.Add(40*time.Second), true, func(alarm bool) (string, bool) {
 		return "ALARM", true
 	}); ok {
 		t.Fatalf("дедупликация: повторная авария не должна слать")
 	}
-	// Восстановление: переход в норму на now+80с, стабильность 30с — после неё
-	// и не раньше шлём одно сообщение. Промежуточная итерация на +90с ещё не
-	// прошла стабильность (с момента перехода прошло меньше 30с).
-	if _, ok := d.evaluate(now.Add(80*time.Second), false, func(alarm bool) (string, bool) {
+	// Восстановление: переход в норму, после стабильности — одно сообщение.
+	if _, _, ok := d.evaluate(now.Add(80*time.Second), false, func(alarm bool) (string, bool) {
 		return "RECOVER", true
 	}); ok {
 		t.Fatalf("до стабильности восстановления не должно слать")
 	}
-	if _, ok := d.evaluate(now.Add(90*time.Second), false, func(alarm bool) (string, bool) {
+	if msg, isDown, ok := d.evaluate(now.Add(115*time.Second), false, func(alarm bool) (string, bool) {
 		return "RECOVER", true
-	}); ok {
-		t.Fatalf("через 10с после перехода восстановление ещё не стабильно")
+	}); !ok || msg != "RECOVER" || isDown {
+		t.Fatalf("после стабильности хотим RECOVER/up, got ok=%v msg=%q isDown=%v", ok, msg, isDown)
 	}
-	if msg, ok := d.evaluate(now.Add(115*time.Second), false, func(alarm bool) (string, bool) {
-		return "RECOVER", true
-	}); !ok || msg != "RECOVER" {
-		t.Fatalf("после стабильности хотим RECOVER, got ok=%v msg=%q", ok, msg)
-	}
+	d.confirmDispatched(false)
 	// Повторное восстановление — не дублируем.
-	if _, ok := d.evaluate(now.Add(125*time.Second), false, func(alarm bool) (string, bool) {
+	if _, _, ok := d.evaluate(now.Add(125*time.Second), false, func(alarm bool) (string, bool) {
 		return "RECOVER", true
 	}); ok {
 		t.Fatalf("дедупликация восстановления")
@@ -188,21 +184,101 @@ func TestAlertDetectorHysteresis(t *testing.T) {
 func TestAlertDetectorReset(t *testing.T) {
 	d := &alertDetector{stable: 30 * time.Second}
 	now := time.Now()
-	// отправленное восстановление должно аннулироваться только reset(),
-	// после которого следующая авария анализируется заново.
-	if _, ok := d.evaluate(now, true, func(alarm bool) (string, bool) { return "A1", true }); ok {
+	if _, _, ok := d.evaluate(now, true, func(alarm bool) (string, bool) { return "A1", true }); ok {
 		t.Fatal("не должно слать до стабильности")
 	}
-	if msg, ok := d.evaluate(now.Add(31*time.Second), true, func(alarm bool) (string, bool) { return "A2", true }); !ok || msg != "A2" {
+	if msg, _, ok := d.evaluate(now.Add(31*time.Second), true, func(alarm bool) (string, bool) { return "A2", true }); !ok || msg != "A2" {
 		t.Fatalf("хотим A2, got ok=%v msg=%q", ok, msg)
 	}
+	d.confirmDispatched(true)
 	d.reset()
 	// после reset новый считай аварии снова пройдёт стабильность.
-	if msg, ok := d.evaluate(now.Add(32*time.Second), true, func(alarm bool) (string, bool) { return "A3", true }); ok || msg != "" {
+	if msg, _, ok := d.evaluate(now.Add(32*time.Second), true, func(alarm bool) (string, bool) { return "A3", true }); ok || msg != "" {
 		t.Fatalf("после reset: до стабильности не слать, got ok=%v msg=%q", ok, msg)
 	}
-	if msg, ok := d.evaluate(now.Add(65*time.Second), true, func(alarm bool) (string, bool) { return "A4", true }); !ok || msg != "A4" {
+	if msg, _, ok := d.evaluate(now.Add(65*time.Second), true, func(alarm bool) (string, bool) { return "A4", true }); !ok || msg != "A4" {
 		t.Fatalf("после reset+стабильность хотим A4, got ok=%v msg=%q", ok, msg)
+	}
+}
+
+// TestAlertDetectorRetryUntilDispatched — проверка «outbox»: сформированное
+// пограничное сообщение повторяется каждый такт, пока не будет подтверждена
+// успешная отправка (confirmDispatched), и не теряется при сбое сети/MAX.
+func TestAlertDetectorRetryUntilDispatched(t *testing.T) {
+	d := &alertDetector{stable: 30 * time.Second}
+	now := time.Now()
+
+	// Момент падения: фиксируем downSince.
+	if _, _, ok := d.evaluate(now, true, func(alarm bool) (string, bool) {
+		return "ALARM", true
+	}); ok {
+		t.Fatal("в момент падения не должно слать")
+	}
+	// Созрела авария, но отправка не удалась (confirm не вызывается).
+	if msg, _, ok := d.evaluate(now.Add(35*time.Second), true, func(alarm bool) (string, bool) {
+		return "ALARM", true
+	}); !ok || msg != "ALARM" {
+		t.Fatalf("авария должна сформироваться, got ok=%v msg=%q", ok, msg)
+	}
+	// Следующие такты — то же сообщение повторяется (пробуем дослать).
+	for _, tm := range []time.Time{now.Add(40 * time.Second), now.Add(50 * time.Second), now.Add(60 * time.Second)} {
+		if msg, isDown, ok := d.evaluate(tm, true, func(alarm bool) (string, bool) {
+			return "ALARM", true
+		}); !ok || msg != "ALARM" || !isDown {
+			t.Fatalf("ретрай: хотим ALARM, got ok=%v msg=%q isDown=%v", ok, msg, isDown)
+		}
+	}
+	// Успешно доставлено — после confirm повторная отправка не идёт.
+	d.confirmDispatched(true)
+	if _, _, ok := d.evaluate(now.Add(65*time.Second), true, func(alarm bool) (string, bool) {
+		return "ALARM", true
+	}); ok {
+		t.Fatal("после подтверждения не должно дублировать")
+	}
+}
+
+// TestAlertDetectorRecoverOrder — при сбое отправки авария приоритетно
+// ретраится, и только после её доставки уходит восстановление (порядок важен).
+func TestAlertDetectorRecoverOrder(t *testing.T) {
+	d := &alertDetector{stable: 30 * time.Second}
+	now := time.Now()
+	// Момент падения: фиксируем downSince.
+	if _, _, ok := d.evaluate(now, true, func(alarm bool) (string, bool) {
+		return "ALARM", true
+	}); ok {
+		t.Fatal("в момент падения не должно слать")
+	}
+	// Авария сформирована, но отправка сорвалась.
+	if msg, isDown, ok := d.evaluate(now.Add(35*time.Second), true, func(alarm bool) (string, bool) {
+		return "ALARM", true
+	}); !ok || msg != "ALARM" || !isDown {
+		t.Fatalf("авария должна сформироваться, got ok=%v msg=%q", ok, msg)
+	}
+	// Состояние вернулось в норму, но авария не доставлена — ретраим её приоритетно.
+	if msg, isDown, ok := d.evaluate(now.Add(80*time.Second), false, func(alarm bool) (string, bool) {
+		return "RECOVER", true
+	}); !ok || msg != "ALARM" || !isDown {
+		t.Fatalf("приоритет: хотим ALARM, got ok=%v msg=%q isDown=%v", ok, msg, isDown)
+	}
+	// Доставляем аварию.
+	d.confirmDispatched(true)
+	// Восстановление уходит после стабильности нормы, не раньше.
+	if msg, _, ok := d.evaluate(now.Add(85*time.Second), false, func(alarm bool) (string, bool) {
+		return "RECOVER", true
+	}); ok || msg != "" {
+		t.Fatalf("восстановление должно дождаться стабильности, got ok=%v msg=%q", ok, msg)
+	}
+	if msg, isDown, ok := d.evaluate(now.Add(120*time.Second), false, func(alarm bool) (string, bool) {
+		return "RECOVER", true
+	}); !ok || msg != "RECOVER" || isDown {
+		t.Fatalf("хотим RECOVER/up, got ok=%v msg=%q isDown=%v", ok, msg, isDown)
+	}
+	d.confirmDispatched(false)
+	// После доставки восстановления авария закрыта — повторного сообщения нет.
+	if _, _, ok := d.evaluate(now.Add(130*time.Second), false, func(alarm bool) (string, bool) {
+		return "RECOVER", true
+	}); ok {
+		t.Fatal("после подтверждения восстановления не должно дублировать")
 	}
 }
 
