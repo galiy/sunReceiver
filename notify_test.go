@@ -20,6 +20,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -327,5 +330,83 @@ func TestMeterInfoFromSnapNoField(t *testing.T) {
 	snap := deviceSnapshot{Timestamp: now.Format(time.RFC3339), Values: valuesContract{}}
 	if _, _, state := meterInfoFromSnap(snap, now); state != meterStateStale {
 		t.Fatalf("нет meter_voltage: want stale, got %v", state)
+	}
+}
+
+// TestSubscriberLifecycle — полный цикл подписки: регистрация первого (запись в
+// конфиг + приветствие), отказ второму, отписка текущего (очистка конфига).
+func TestSubscriberLifecycle(t *testing.T) {
+	var responses []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// /messages — отправка; извлекаем текст для проверки приветствия/отказа.
+		if strings.HasSuffix(r.URL.Path, "/messages") {
+			body := make([]byte, 4096)
+			n, _ := r.Body.Read(body)
+			responses = append(responses, string(body[:n]))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"message":{"body":{"mid":"mid.1"}}}`))
+	}))
+	defer srv.Close()
+	orig := maxAPIBase
+	maxAPIBase = srv.URL
+	defer func() { maxAPIBase = orig }()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "sunReceiver.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"notify":{"token":"tok"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	st := &monitorState{
+		client:     newMaxClient(&notifySection{Token: "tok"}),
+		configPath: cfgPath,
+	}
+
+	// 1) Первый подписчик (bot_started) — регистрируется, приветствие.
+	firstUser, firstChat := "111222333", "444555666"
+	st.handleSubscriberEvent(maxUpdate{UpdateType: "bot_started", ChatID: 444555666, User: struct {
+		UserID    int64  `json:"user_id"`
+		FirstName string `json:"first_name"`
+		LastName  string `json:"last_name"`
+	}{UserID: 111222333}})
+	if u, c := st.client.recipient(); u != firstUser || c != firstChat {
+		t.Fatalf("первый подписчик: recipient=%q/%q, want %q/%q", u, c, firstUser, firstChat)
+	}
+	if len(responses) != 1 || !strings.Contains(responses[0], "зарегистрированы") {
+		t.Fatalf("первому должно быть отправлено приветствие, got %d: %v", len(responses), responses)
+	}
+	// Адресат записан в конфиг.
+	b, _ := os.ReadFile(cfgPath)
+	if !strings.Contains(string(b), firstUser) || !strings.Contains(string(b), firstChat) {
+		t.Fatalf("адресат должен быть записан в конфиг:\n%s", b)
+	}
+
+	// 2) Второй подписчик — отказ, адресат не перезаписывается.
+	st.handleSubscriberEvent(maxUpdate{UpdateType: "bot_started", ChatID: 777888999, User: struct {
+		UserID    int64  `json:"user_id"`
+		FirstName string `json:"first_name"`
+		LastName  string `json:"last_name"`
+	}{UserID: 123456789}})
+	if u, c := st.client.recipient(); u != firstUser || c != firstChat {
+		t.Fatalf("второй подписчик не должен перезаписать адресат: %q/%q", u, c)
+	}
+	if len(responses) != 2 || !strings.Contains(responses[1], "Регистрация невозможна") {
+		t.Fatalf("второму должен быть отправлен отказ, got %d: %v", len(responses), responses)
+	}
+
+	// 3) Отписка текущего подписчика — адресат очищается в конфиге, режим ожидания.
+	st.handleSubscriberEvent(maxUpdate{UpdateType: "bot_stopped", ChatID: 444555666, User: struct {
+		UserID    int64  `json:"user_id"`
+		FirstName string `json:"first_name"`
+		LastName  string `json:"last_name"`
+	}{UserID: 111222333}})
+	if st.client.hasRecipient() {
+		t.Fatalf("после отписки адресат должен быть очищен")
+	}
+	b, _ = os.ReadFile(cfgPath)
+	if strings.Contains(string(b), firstUser) || strings.Contains(string(b), firstChat) {
+		t.Fatalf("после отписки адресат должен быть удалён из конфига:\n%s", b)
 	}
 }

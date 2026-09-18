@@ -302,7 +302,9 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	if cf.DashboardPort == 0 {
 		return nil, nil, nil, nil, 0, fmt.Errorf("config %s: не задано обязательное поле dashboard_port (порт веб-дашборда)", path)
 	}
-	// Уведомления в MAX (раздел notify): токен обязателен, адресат — user_id или chat_id.
+	// Уведомления в MAX (раздел notify): токен обязателен. Адресат (user_id или
+	// chat_id) НЕ обязателен — если он пуст, бот регистрирует первого подписчика
+	// автоматически (bot_started/bot_added) и дописывает его в конфиг.
 	notifyCfg = cf.Notify
 	if notifyCfg != nil {
 		if notifyCfg.Disabled != nil && *notifyCfg.Disabled {
@@ -310,8 +312,6 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 			notifyCfg = nil
 		} else if notifyCfg.Token == "" {
 			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе notify не задан token", path)
-		} else if notifyCfg.UserID == "" && notifyCfg.ChatID == "" {
-			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе notify не задан адресат — нужно user_id или chat_id", path)
 		}
 	}
 	return targets, cf.DB, cf.Meter, cf.Map, cf.DashboardPort, nil
