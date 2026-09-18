@@ -469,35 +469,49 @@ func (m *monitorState) voltReport(now time.Time, estimatedDown bool) {
 	}
 }
 
-// meterVoltage читает справочное напряжение электросчётчика из current. Возвращает
-// (значение, ok): ok=true только если снимок СВЕЖИЙ (не старше meterFreshWindow) и
-// содержит meter_voltage. Если счётчик обесточен и перестал отдавать данные, в Redis
-// остаётся последний успешный снимок со старым timestamp — он устаревший, поэтому
-// ok=false и напряжение в алерте не показывается (иначе выглядело бы «напряжение есть»).
-func (m *monitorState) meterVoltage(now time.Time) (float64, bool) {
+// Состояние счётчика для сообщения (по свежести снэпшота).
+const (
+	meterStateNone  = iota // счётчик не опрашивается / нет снэпшота
+	meterStateFresh        // снэпшот свежий — есть актуальное напряжение
+	meterStateStale        // снэпшот устарел — счётчик молчит (не отвечает)
+)
+
+// meterInfo читает справочный снэпшот электросчётчика из current.
+// Возвращает напряжение, время снэпшота и его состояние:
+//   - meterStateNone — счётчик не опрашивается или снэпшота нет;
+//   - meterStateFresh — снэпшот свежий (< meterFreshWindow), val актуально;
+//   - meterStateStale — снэпшот устарел (счётчик молчит), ts — время снэпшота.
+//
+// Если счётчик обесточен и перестал отдавать данные, в Redis остаётся последний
+// успешный снимок со старым timestamp — он устаревший (meterStateStale), и его
+// напряжение в алерте не показывается (иначе выглядело бы «напряжение есть»).
+func (m *monitorState) meterInfo(now time.Time) (val float64, ts time.Time, state int) {
 	if m.meterIP == "" || m.store == nil {
-		return 0, false
+		return 0, time.Time{}, meterStateNone
 	}
 	snap, err := m.store.CurrentOne(m.meterIP)
 	if err != nil {
-		return 0, false
+		return 0, time.Time{}, meterStateNone
 	}
-	return meterVoltageFromSnap(snap, now)
+	return meterInfoFromSnap(snap, now)
 }
 
-// meterVoltageFromSnap извлекает напряжение счётчика из снимка, считая его
-// актуальным только при свежем timestamp (не старше meterFreshWindow). Вынесено
-// отдельно для юнит-теста.
-func meterVoltageFromSnap(snap deviceSnapshot, now time.Time) (float64, bool) {
-	if ts, e := time.Parse(time.RFC3339, snap.Timestamp); e != nil || now.Sub(ts) > meterFreshWindow {
-		return 0, false
+// meterInfoFromSnap классифицирует снэпшот счётчика по свежести timestamp.
+// Вынесено отдельно для юнит-теста.
+func meterInfoFromSnap(snap deviceSnapshot, now time.Time) (val float64, ts time.Time, state int) {
+	t, e := time.Parse(time.RFC3339, snap.Timestamp)
+	if e != nil {
+		return 0, time.Time{}, meterStateNone
+	}
+	if now.Sub(t) > meterFreshWindow {
+		return 0, t, meterStateStale
 	}
 	if v, ok := snap.Values["meter_voltage"]; ok {
-		if f, ok := toFloat(v); ok {
-			return f, true
+		if f, ok2 := toFloat(v); ok2 {
+			return f, t, meterStateFresh
 		}
 	}
-	return 0, false
+	return 0, t, meterStateStale
 }
 
 // noVoltMessage строит текст уведомления о пропадании напряжения сети МАП.
@@ -510,9 +524,15 @@ func (m *monitorState) noVoltMessage(grid float64, has bool, now time.Time) stri
 	}
 	msg := fmt.Sprintf("⚠️ МАП (%s): %s", m.name, cur)
 	if m.meterIP != "" {
-		mv, ok := m.meterVoltage(now)
-		if ok {
-			msg += fmt.Sprintf(". Напряжение счётчика: %.0f В", mv)
+		val, ts, state := m.meterInfo(now)
+		switch state {
+		case meterStateFresh:
+			msg += fmt.Sprintf(". Напряжение счётчика: %.0f В", val)
+		case meterStateStale:
+			// Счётчик молчит — сообщаем, что он недоступен, и время последнего
+			// успешного снэпшота (когда у него ещё было напряжение).
+			msg += fmt.Sprintf(". Счётчик недоступен (последний снэпшот: %s)",
+				ts.Local().Format("2006-01-02 15:04:05"))
 		}
 	}
 	return msg

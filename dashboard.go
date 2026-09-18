@@ -855,30 +855,47 @@ function agoStr(t){
 	return Math.floor(h/24)+' д '+(h%24)+' ч';
 }
 
-// METER_PARAMS — параметры счётчика для плашки: [тег, подпись, единица, знаковый].
-// Знаковые (активная/реактивная мощность) окрашиваются: отрицательная — отдача.
+// MTR_STALE_MS — окно «молчания» электросчётчика DDS238. Если последний снэпшот
+// счётчика старше этого окна (счётчик обесточен/не отвечает), оперативные плашки
+// (напряжение/ток/мощность/частота/коэффициент) выводят «—», а накопленные
+// (потребление/отдача/тотал) продолжают показывать последнее значение. Отдельно
+// от STALE_MS (20 мин для инверторов): счётчик опрашивается раз в секунду, и уже
+// 20 с молчания означают, что данных нет. Отличается от «просто нулей»: ноль —
+// это реальное значение счётчика, «—» — данных оперативных нет.
+var MTR_STALE_MS=20*1000;
+// METER_PARAMS — параметры счётчика для плашки: [тег, подпись, единица, знаковый,
+// накопленный]. Знаковые (активная/реактивная мощность) окрашиваются: отрицательная —
+// отдача. Последние три (накопленные) продолжают отображаться даже при устаревшем
+// снэпшоте; оперативные при устаревании выводят «—».
 var METER_PARAMS = [
-	['meter_voltage','Напряжение','V',false],
-	['meter_current','Ток','A',false],
-	['meter_active_power','Активная мощность','W',true],
-	['meter_reactive_power','Реактивная мощность','var',true],
-	['meter_power_factor','Коэффициент мощности','',false],
-	['meter_frequency','Частота','Hz',false],
-	['meter_import','Потребление (Import)','kWh',false],
-	['meter_export','Отдача (Export)','kWh',false],
-	['meter_total','Общая (Total)','kWh',false]
+	['meter_voltage','Напряжение','V',false,false],
+	['meter_current','Ток','A',false,false],
+	['meter_active_power','Активная мощность','W',true,false],
+	['meter_reactive_power','Реактивная мощность','var',true,false],
+	['meter_power_factor','Коэффициент мощности','',false,false],
+	['meter_frequency','Частота','Hz',false,false],
+	['meter_import','Потребление (Import)','kWh',false,true],
+	['meter_export','Отдача (Export)','kWh',false,true],
+	['meter_total','Общая (Total)','kWh',false,true]
 ];
 // renderMeter строит HTML статистик плашки счётчика из его снимка (или «Нет данных»).
+// При устаревшем снэпшоте (> MTR_STALE_MS) оперативные значения выводятся как «—»,
+// накопленные (import/export/total) продолжают показываться.
 function renderMeter(meter){
 	var stats=document.getElementById('meterStats');
 	if(!stats) return;
 	if(!meter){ stats.innerHTML='<span class="missing">Нет данных</span>'; return; }
 	var ts=document.getElementById('meterTs');
 	if(ts) ts.textContent=meter.timestamp? 'Актуально: '+fmtSec(meter.timestamp) : '—';
+	// Свежесть снэпшота счётчика (0.02 окна — только для оперативных плашек).
+	var t=(meter.timestamp)? new Date(meter.timestamp).getTime() : NaN;
+	var stale=!isFinite(t) || (Date.now()-t)>MTR_STALE_MS;
 	var h='';
 	for(var i=0;i<METER_PARAMS.length;i++){
-		var t=METER_PARAMS[i][0], lbl=METER_PARAMS[i][1], unit=METER_PARAMS[i][2], signed=METER_PARAMS[i][3];
+		var t=METER_PARAMS[i][0], lbl=METER_PARAMS[i][1], unit=METER_PARAMS[i][2], signed=METER_PARAMS[i][3], cumulative=METER_PARAMS[i][4];
 		var raw=meter.values? meter.values[t] : undefined;
+		// Оперативное значение при устаревшем снэпшоте данных не имеем — «—».
+		if(stale && !cumulative){ h+='<div class="meter-stat"><div class="lbl">'+esc(lbl)+'</div><div class="val off">—</div></div>'; continue; }
 		if(raw===undefined||raw===null){ h+='<div class="meter-stat"><div class="lbl">'+esc(lbl)+'</div><div class="val off">—</div></div>'; continue; }
 		var n=Number(raw);
 		var cls='val', txt;
