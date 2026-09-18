@@ -43,8 +43,8 @@
   },
   "notify": {
     "token": "CHANGE_ME",
-    "user_id": "1234567890",
-    "chat_id": "1234567890",
+    "user_id": "",
+    "chat_id": "",
     "disabled": false,
     "stable_window_sec": 30,
     "map_undeclared_sec": 20,

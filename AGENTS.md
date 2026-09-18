@@ -65,7 +65,10 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 `{"name", "ip", "port", "unit", "first_reg", "register_count"}` (имеет приоритет над
 legacy-файлом `dds238.json`). Уведомления в мессенджер MAX — раздел **`notify`**
 `{"token", "user_id", "chat_id", "disabled", "stable_window_sec", "map_undeclared_sec", "grid_voltage_low"}`
-(токен бота MAX обязателен, адресат — `user_id`/`chat_id`). Опрос Deye/Sofar — раз в 10 секунд; МАП и MPPT — 1 раз
+(токен бота MAX обязателен; адресат `user_id`/`chat_id` — **необязателен**: если
+пуст, бот регистрирует первого подписчика по `bot_started`/`bot_added`/`message_created`
+и дописывает адресат в конфиг, последующие отписки/отказы — см.
+[`docs/modules/notify.md`](docs/modules/notify.md)). Опрос Deye/Sofar — раз в 10 секунд; МАП и MPPT — 1 раз
 в секунду (с сохранением 1 точки за 10 с); BMS — 1 раз в секунду.
 
 **Шаблон `sunReceiver.sample.json`** (в git) — публичный пример структуры конфига.
