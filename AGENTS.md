@@ -25,6 +25,7 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 | МАП + MPPT | [`docs/modules/map-mppt.md`](docs/modules/map-mppt.md) |
 | Счётчик DDS238 | [`docs/dds238-meter.md`](docs/dds238-meter.md) |
 | ANT BMS | [`docs/antbms.md`](docs/antbms.md) |
+| Уведомления в MAX | [`docs/modules/notify.md`](docs/modules/notify.md) |
 | Протокол Solarman V5 (реверс) | [`docs/research/solarman-v5.md`](docs/research/solarman-v5.md) |
 | Регистры Sofar K-TLX | [`docs/research/sofar-registers.md`](docs/research/sofar-registers.md) |
 | Регистры Deye string | [`docs/research/deye-registers.md`](docs/research/deye-registers.md) |
@@ -62,7 +63,9 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 **`dashboard_port`** — **ОБЯЗАТЕЛЬНОЕ** (отсутствие = ошибка загрузки конфига; в
 `sunReceiver.sample.json` указан 80, на проде 8080). Счётчик DDS238 — раздел **`meter`**
 `{"name", "ip", "port", "unit", "first_reg", "register_count"}` (имеет приоритет над
-legacy-файлом `dds238.json`). Опрос Deye/Sofar — раз в 10 секунд; МАП и MPPT — 1 раз
+legacy-файлом `dds238.json`). Уведомления в мессенджер MAX — раздел **`notify`**
+`{"token", "user_id", "chat_id", "disabled", "stable_window_sec", "map_undeclared_sec", "grid_voltage_low"}`
+(токен бота MAX обязателен, адресат — `user_id`/`chat_id`). Опрос Deye/Sofar — раз в 10 секунд; МАП и MPPT — 1 раз
 в секунду (с сохранением 1 точки за 10 с); BMS — 1 раз в секунду.
 
 **Шаблон `sunReceiver.sample.json`** (в git) — публичный пример структуры конфига.
@@ -96,6 +99,11 @@ legacy-файлом `dds238.json`). Опрос Deye/Sofar — раз в 10 се�
 - **ANT BMS** — `bms_poller.go`, `bms_accumulator.go`, `bmslistener/`. Полное описание —
   [`docs/antbms.md`](docs/antbms.md). Демон bmslistener (установка на ПАК «Малина») —
   [`docs/modules/bms-listener.md`](docs/modules/bms-listener.md).
+- **Уведомления в MAX** — `notify.go` (`maxClient` + трекер состояния МАП
+  `mapTrack` + `runNotifyMonitor`): события мониторинга МАП (недоступен / нет
+  напряжения сети) и восстановление, отправка через Bot API MAX с гистерезисом
+  и дедупликацией. Работают только когда включён опрос МАП. Полное описание —
+  [`docs/modules/notify.md`](docs/modules/notify.md).
 
 ### Универсальный контракт `values`
 

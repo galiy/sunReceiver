@@ -41,6 +41,7 @@ DDS238 (Modbus TCP), нормализует всё в единый контра�
 | **МАП + MPPT** (`mppt_api.go`, `modbusmap/`) | МАП (батарея/сеть) через Modbus TCP или веб-API; MPPT-контроллеры через `read_json.php?device=mppt` (динамический состав) | [modules/map-mppt.md](modules/map-mppt.md) |
 | **Счётчик DDS238** (`meter_*.go`) | Мгновенные значения `meter_*` + посуточные тарифы «День/Ночь» (`daily_tariffs`) с добором пропущенных границ | [dds238-meter.md](dds238-meter.md) |
 | **ANT BMS** (`bms_poller.go`, `bmslistener/`) | Опрос батарей через `read_bms.php` → shm bmslistener; 5-мин усреднённые точки в Redis+PG | [antbms.md](antbms.md), [modules/bms-listener.md](modules/bms-listener.md) |
+| **Уведомления в MAX** (`notify.go`) | Отправка событий мониторинга МАП (недоступен / нет напряжения сети) в мессенджер MAX через Bot API, с гистерезисом и дедупликацией | [modules/notify.md](modules/notify.md) |
 | **Универсальный контракт `values`** | Набор общих тегов с одинаковыми именами/единицами для всех марок (PV, AC, фазы, энергия, МАП) | [universal-contract.md](universal-contract.md) |
 
 ## Что опрашивается
@@ -65,6 +66,9 @@ DDS238 (Modbus TCP), нормализует всё в единый контра�
   `meter.disabled` (`true` — пулеры отключены, плашки/кнопка «Электроэнергия» скрыты).
 - **BMS** — поле `map.bms_path`; состав батарей динамический по ответу `read_bms.php`.
   При `map.bms_disabled=true` пулер отключён, батарейки с дашборда скрыты.
+- **Уведомления** — раздел `notify` (бот MAX): события мониторинга МАП
+  (недоступен / напряжение сети ниже порога) + восстановление, с гистерезисом
+  `stable_window` и дедупликацией. Работают **только** когда включён опрос МАП.
 
 ## Хранение данных
 
@@ -82,7 +86,7 @@ DDS238 (Modbus TCP), нормализует всё в единый контра�
 ## Конфигурация
 
 Один файл **`sunReceiver.json`** рядом с бинарником (`os.Executable()`; при
-`go run .` — fallback в CWD). Разделы: `invertors`, `map` (с подразделом `rs485`), `db`, `meter`.
+`go run .` — fallback в CWD). Разделы: `invertors`, `map` (с подразделом `rs485`), `db`, `meter`, `notify`.
 Файл приватный (пароли — в открытом виде, в `.gitignore`); публичный шаблон
 структуры — [`sunReceiver.sample.json`](../sunReceiver.sample.json) (обновлять при
 любом изменении структуры конфига: IP — случайные из `192.168.0.x`, серийные
@@ -94,6 +98,7 @@ DDS238 (Modbus TCP), нормализует всё в единый контра�
 | `map` | `disabled` (обязательное: `true` — все пулеры МАП/MPPT/BMS отключены, плашки МАП скрыты), `bms_disabled` (обязательное: `true` — пулер ANT BMS отключён, батарейки скрыты), `rs485` (подраздел: `name`, `ip`, `unit` (Modbus, умолч. 1), `disabled` (обязательное: `false`=Modbus/RS485, `true`=веб-API ПАК «Малина»)); веб-API: `base_url`, `mppt_path`, `map_path` (необязательное — путь к read_json.php?device=map, при отсутствии выводится из mppt_path), `login`, `password`, `bms_path` (включает опрос ANT BMS) |
 | `db` | `redis` (host:port), `pg` (DSN с паролем) |
 | `meter` | `disabled` (обязательное: `true` — пулеры отключены, плашки/кнопка «Электроэнергия» скрыты), `name`, `ip`, `port`, `unit`, `first_reg`, `register_count` |
+| `notify` | `token` (обязательное, токен бота MAX), `user_id`/`chat_id` (адресат, хотя бы одно), `disabled`, `stable_window_sec`, `map_undeclared_sec`, `grid_voltage_low` — см. [modules/notify.md](modules/notify.md) |
 
 ## Лицензия
 

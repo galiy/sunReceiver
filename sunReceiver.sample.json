@@ -40,5 +40,14 @@
     "unit": 1,
     "first_reg": 0,
     "register_count": 27
+  },
+  "notify": {
+    "token": "CHANGE_ME",
+    "user_id": "1234567890",
+    "chat_id": "1234567890",
+    "disabled": false,
+    "stable_window_sec": 30,
+    "map_undeclared_sec": 20,
+    "grid_voltage_low": 195
   }
 }
