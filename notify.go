@@ -254,13 +254,25 @@ type alertDetector struct {
 	downSince time.Time
 	lastUp    bool // в состоянии нормы (после аварии)
 	upSince   time.Time
-	sentDown  bool
-	sentUp    bool
+	sentDown  bool // аварийное сообщение доставлено (одно на переход)
+	// pendingDown/pendingUp — «outbox» детектора: текст пограничного сообщения,
+	// сформированный, но ещё НЕ доставленный. Хранится до успешной отправки и
+	// повторяется каждый такт (ретрай), чтобы не потерять алерт при сбое сети/MAX.
+	pendingDown string
+	pendingUp   string
 }
 
-// evaluate принимает текущий признак аварии и возвращает текст сообщения, который
-// нужно отправить сейчас или "" (ничего). Признак считается по последним данным.
-func (d *alertDetector) evaluate(now time.Time, alarm bool, buildMsg func(alarm bool) (string, bool)) (string, bool) {
+// evaluate принимает текущий признак аварии и возвращает сообщение, которое нужно
+// отправить сейчас (и его направление), либо ok=false. Недоставленное ранее
+// пограничное сообщение (pending) возвращается приоритетно до подтверждения.
+func (d *alertDetector) evaluate(now time.Time, alarm bool, buildMsg func(alarm bool) (string, bool)) (msg string, isDown bool, ok bool) {
+	// Сначала доставляем неотправленную аварию (приоритетно), затем восстановление.
+	if d.pendingDown != "" {
+		return d.pendingDown, true, true
+	}
+	if d.pendingUp != "" {
+		return d.pendingUp, false, true
+	}
 	if alarm {
 		if !d.lastDown {
 			d.lastDown = true
@@ -272,32 +284,43 @@ func (d *alertDetector) evaluate(now time.Time, alarm bool, buildMsg func(alarm 
 			d.upSince = time.Time{}
 		}
 		if !d.sentDown && now.Sub(d.downSince) >= d.stable {
-			msg, ok := buildMsg(true)
-			if ok {
-				d.sentDown = true
-				return msg, true
+			if msg, b := buildMsg(true); b {
+				d.pendingDown = msg
+				return msg, true, true
 			}
 		}
-		return "", false
+		return "", false, false
 	}
 	// Норма.
 	if !d.lastUp {
 		d.lastUp = true
 		d.upSince = now
-		d.sentUp = false
 	}
-	if d.lastDown && d.sentDown && !d.sentUp && now.Sub(d.upSince) >= d.stable {
-		msg, ok := buildMsg(false)
-		if ok {
-			d.sentUp = true
-			return msg, true
+	if d.lastDown && now.Sub(d.upSince) >= d.stable {
+		if msg, b := buildMsg(false); b {
+			d.pendingUp = msg
+			return msg, false, true
 		}
 	}
-	// Выход из состояния аварии (повторного down не будет до новой аварии).
-	if d.lastDown && !d.sentDown && now.Sub(d.upSince) >= d.stable {
-		d.lastDown = false
+	return "", false, false
+}
+
+// confirmDispatched вызывается ПОСЛЕ успешной отправки сообщения: помечает его
+// доставленным и очищает outbox детектора. Если отправка не удалась — confirm не
+// вызывается, и evaluate продолжит возвращать то же сообщение на следующем такте.
+// Для восстановления дополнительно закрывается авария (lastDown=false), чтобы
+// следующая авария анализировалась заново.
+func (d *alertDetector) confirmDispatched(isDown bool) {
+	if isDown {
+		d.pendingDown = ""
+		d.sentDown = true
+		return
 	}
-	return "", false
+	d.pendingUp = ""
+	d.lastDown = false
+	d.downSince = time.Time{}
+	d.upSince = time.Time{}
+	d.sentDown = false
 }
 
 // reset возвращает детектор в исходное состояние без отправки сообщения
@@ -309,7 +332,8 @@ func (d *alertDetector) reset() {
 	d.lastUp = false
 	d.upSince = time.Time{}
 	d.sentDown = false
-	d.sentUp = false
+	d.pendingDown = ""
+	d.pendingUp = ""
 }
 
 // monitorState — поведение монитора, персистентное между итерациями.
@@ -384,14 +408,14 @@ func (m *monitorState) iterate(now time.Time) {
 
 // downReport — событие «МАП недоступен» + восстановление.
 func (m *monitorState) downReport(now time.Time, down bool, statusStr string) {
-	msg, ok := m.down.evaluate(now, down, func(alarm bool) (string, bool) {
+	msg, isDown, ok := m.down.evaluate(now, down, func(alarm bool) (string, bool) {
 		if alarm {
 			return m.downMessage(statusStr), true
 		}
 		return m.downRecoverMessage(), true
 	})
 	if ok {
-		m.send(msg)
+		m.dispatch(&m.down, msg, isDown)
 	}
 }
 
@@ -434,14 +458,14 @@ func (m *monitorState) voltReport(now time.Time, estimatedDown bool) {
 	}
 	grid, has := m.track.gridVoltage()
 	alarm := !has || grid < m.gridLow
-	msg, ok := m.noVolt.evaluate(now, alarm, func(alarm bool) (string, bool) {
+	msg, isDown, ok := m.noVolt.evaluate(now, alarm, func(alarm bool) (string, bool) {
 		if alarm {
 			return m.noVoltMessage(grid, has, now), true
 		}
 		return m.noVoltRecoverMessage(), true
 	})
 	if ok {
-		m.send(msg)
+		m.dispatch(&m.noVolt, msg, isDown)
 	}
 }
 
@@ -499,13 +523,26 @@ func (m *monitorState) noVoltRecoverMessage() string {
 	return fmt.Sprintf("✅ МАП (%s): напряжение сети в норме", m.name)
 }
 
-// send отправляет сообщение в MAX и логирует результат.
-func (m *monitorState) send(msg string) {
+// send отправляет сообщение в MAX. Возвращает ошибку, если отправка не удалась.
+// Подтверждение доставки — ответ 200 (тело с message/mid).
+func (m *monitorState) send(msg string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), maxRequestTimeout)
 	defer cancel()
 	if err := m.client.send(ctx, msg); err != nil {
+		return err
+	}
+	return nil
+}
+
+// dispatch отправляет сообщение в MAX; при успехе подтверждает доставку детектору
+// (пограничное состояние снимается). При неудаче — ничего не подтверждаем, и на
+// следующем такте evaluate повторит отправку того же сообщения (outbox в памяти):
+// алерт не теряется при сбое сети/MAX.
+func (m *monitorState) dispatch(d *alertDetector, msg string, isDown bool) {
+	if err := m.send(msg); err != nil {
 		log.Printf("notify: отправка в MAX не удалась: %v", err)
 		return
 	}
+	d.confirmDispatched(isDown)
 	log.Printf("notify: отправлено в MAX: %s", msg)
 }
