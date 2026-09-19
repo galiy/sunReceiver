@@ -42,6 +42,9 @@ const (
 	relayDefaultBlinkHz   = 2.0
 	relayDefaultKeepalive = 2 * time.Second
 
+	// Период принятия решения индикаторами (опрос Redis и пересчёт состояния).
+	relayDecisionInterval = 2 * time.Second
+
 	// Дефолты параметров анализа состояния ламп.
 	defaultStaleWindow     = 20 * time.Second
 	defaultMeterPowerTag   = "meter_active_power"
@@ -517,7 +520,7 @@ func (c *relayController) persistLocked() {
 const redLampName = "red"
 
 // runRelayLampController — фоновый цикл управления красной лампой на основе
-// текущего состояния счётчика (снэпшот meter_* в Redis current). Каждую секунду
+// текущего состояния счётчика (снэпшот meter_* в Redis current). Каждые 2 секунды
 // принимает решение по последовательному алгоритму; лампа переключается только
 // при фактическом изменении состояния (SetLampByName — no-op при том же самом).
 // Параметры (окно протухания, тег мощности, направление) берутся из конфига.
@@ -531,7 +534,7 @@ func runRelayLampController(store *redisStore, meterCfg *meterConfig, c *relayCo
 	if c == nil {
 		return
 	}
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(relayDecisionInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -591,7 +594,7 @@ func redLampDecision(loader relaySnapshotLoader, cfg *relaySection, meterCfg *me
 const whiteLampName = "white"
 
 // runWhiteLampController — фоновый цикл управления белой лампой на основе данных
-// МАП (grid_voltage) и счётчика (meter_voltage) о напряжении сети. Каждую секунду
+// МАП (grid_voltage) и счётчика (meter_voltage) о напряжении сети. Каждые 2 секунды
 // принимает решение по последовательному алгоритму (первое условие решает).
 // Параметры (окна протухания, теги, порог) — из конфига.
 //  1. МАП недоступен или отключён (mapIP == "" или снэпшот протух/отсутствует)
@@ -605,7 +608,7 @@ func runWhiteLampController(store *redisStore, mapIP string, meterCfg *meterConf
 	if c == nil {
 		return
 	}
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(relayDecisionInterval)
 	defer ticker.Stop()
 	for {
 		select {
