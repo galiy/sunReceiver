@@ -26,6 +26,7 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 | Счётчик DDS238 | [`docs/dds238-meter.md`](docs/dds238-meter.md) |
 | ANT BMS | [`docs/antbms.md`](docs/antbms.md) |
 | Уведомления в MAX | [`docs/modules/notify.md`](docs/modules/notify.md) |
+| Сетевое реле SR-201 (лампы-индикаторы) | [`docs/relay_sr-201(2light).md`](docs/relay_sr-201(2light).md) |
 | Протокол Solarman V5 (реверс) | [`docs/research/solarman-v5.md`](docs/research/solarman-v5.md) |
 | Регистры Sofar K-TLX | [`docs/research/sofar-registers.md`](docs/research/sofar-registers.md) |
 | Регистры Deye string | [`docs/research/deye-registers.md`](docs/research/deye-registers.md) |
@@ -68,7 +69,12 @@ legacy-файлом `dds238.json`). Уведомления в мессендже
 (токен бота MAX обязателен; адресат `user_id`/`chat_id` — **необязателен**: если
 пуст, бот регистрирует первого подписчика по `bot_started`/`bot_added`/`message_created`
 и дописывает адресат в конфиг, последующие отписки/отказы — см.
-[`docs/modules/notify.md`](docs/modules/notify.md)). Опрос Deye/Sofar — раз в 10 секунд; МАП и MPPT — 1 раз
+[`docs/modules/notify.md`](docs/modules/notify.md)). Сетевое реле SR-201 (лампы-индикаторы) — раздел
+**`relay`** `{"disabled", "ip", "udp_port", "blink_hz", "keepalive", "lamps", "meter_stale_sec",
+"map_stale_sec", "meter_power_tag", "meter_voltage_tag", "map_grid_tag", "voltage_present_min"}`
+(**`disabled` — ОБЯЗАТЕЛЬНОЕ** поле: `false` — модуль включён, `true` — модуля нет, лампы не
+управляются; `ip` обязателен при `disabled=false`), полностью описан в
+[`docs/relay_sr-201(2light).md`](docs/relay_sr-201(2light).md). Опрос Deye/Sofar — раз в 10 секунд; МАП и MPPT — 1 раз
 в секунду (с сохранением 1 точки за 10 с); BMS — 1 раз в секунду.
 
 **Шаблон `sunReceiver.sample.json`** (в git) — публичный пример структуры конфига.
@@ -107,6 +113,13 @@ legacy-файлом `dds238.json`). Уведомления в мессендже
   напряжения сети) и восстановление, отправка через Bot API MAX с гистерезисом
   и дедупликацией. Работают только когда включён опрос МАП. Полное описание —
   [`docs/modules/notify.md`](docs/modules/notify.md).
+- **Сетевое реле SR-201 (лампы-индикаторы)** — `relay_control.go`:
+  контроллер (`relayController` + `runRelayControl`), поддерживающий состояние
+  ламп по UDP (мигание `blink_hz`, повтор steady через `keepalive`), и два
+  фоновых цикла-индикатора `runRelayLampController` (красная — отдача в сеть)
+  и `runWhiteLampController` (белая — наличие напряжения сети). Данные — только
+  из Redis, анализ не встроен в пулеры; состояния задаются из других модулей через
+  `SetRelayLamp`. Полное описание — [`docs/relay_sr-201(2light).md`](docs/relay_sr-201(2light).md).
 
 ### Универсальный контракт `values`
 

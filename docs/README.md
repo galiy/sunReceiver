@@ -42,6 +42,7 @@ DDS238 (Modbus TCP), нормализует всё в единый контра�
 | **Счётчик DDS238** (`meter_*.go`) | Мгновенные значения `meter_*` + посуточные тарифы «День/Ночь» (`daily_tariffs`) с добором пропущенных границ | [dds238-meter.md](dds238-meter.md) |
 | **ANT BMS** (`bms_poller.go`, `bmslistener/`) | Опрос батарей через `read_bms.php` → shm bmslistener; 5-мин усреднённые точки в Redis+PG | [antbms.md](antbms.md), [modules/bms-listener.md](modules/bms-listener.md) |
 | **Уведомления в MAX** (`notify.go`) | Отправка событий мониторинга МАП (недоступен / нет напряжения сети) в мессенджер MAX через Bot API, с гистерезисом и дедупликацией | [modules/notify.md](modules/notify.md) |
+| **Сетевое реле SR-201** (`relay_control.go`) | Управление двойным реле по UDP (белая/красная лампы): поддержка состояния (вкл/выкл/мигание 2 Гц) + автоиндикаторы (отдача в сеть, наличие напряжения сети) | [relay_sr-201(2light).md](relay_sr-201(2light).md) |
 | **Универсальный контракт `values`** | Набор общих тегов с одинаковыми именами/единицами для всех марок (PV, AC, фазы, энергия, МАП) | [universal-contract.md](universal-contract.md) |
 
 ## Что опрашивается
@@ -86,7 +87,7 @@ DDS238 (Modbus TCP), нормализует всё в единый контра�
 ## Конфигурация
 
 Один файл **`sunReceiver.json`** рядом с бинарником (`os.Executable()`; при
-`go run .` — fallback в CWD). Разделы: `invertors`, `map` (с подразделом `rs485`), `db`, `meter`, `notify`.
+`go run .` — fallback в CWD). Разделы: `invertors`, `map` (с подразделом `rs485`), `db`, `meter`, `notify`, `relay`.
 Файл приватный (пароли — в открытом виде, в `.gitignore`); публичный шаблон
 структуры — [`sunReceiver.sample.json`](../sunReceiver.sample.json) (обновлять при
 любом изменении структуры конфига: IP — случайные из `192.168.0.x`, серийные
@@ -99,6 +100,7 @@ DDS238 (Modbus TCP), нормализует всё в единый контра�
 | `db` | `redis` (host:port), `pg` (DSN с паролем) |
 | `meter` | `disabled` (обязательное: `true` — пулеры отключены, плашки/кнопка «Электроэнергия» скрыты), `name`, `ip`, `port`, `unit`, `first_reg`, `register_count` |
 | `notify` | `token` (обязательное, токен бота MAX), `user_id`/`chat_id` (адресат, хотя бы одно), `disabled`, `stable_window_sec`, `map_undeclared_sec`, `grid_voltage_low` — см. [modules/notify.md](modules/notify.md) |
+| `relay` | `disabled` (обязательное: `true` — модуля нет), `ip` (обязательное при `disabled=false`), `udp_port`, `blink_hz`, `keepalive`, `lamps[]` (`name`, `relay`), `meter_stale_sec`, `map_stale_sec`, `meter_power_tag`, `meter_voltage_tag`, `map_grid_tag`, `voltage_present_min` — см. [relay_sr-201(2light).md](relay_sr-201(2light).md) |
 
 ## Лицензия
 
