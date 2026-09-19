@@ -176,6 +176,8 @@ func TestRedLampDecision(t *testing.T) {
 		{"unparseable ts", meter, &fakeSnapshotLoader{snaps: map[string]deviceSnapshot{meter.IP: {IP: meter.IP, Timestamp: "not-a-time", Values: map[string]any{"meter_active_power": -100.0}}}}, lampBlink},
 		// 3. Мощность положительная (потребление) → не горит.
 		{"positive power", meter, &fakeSnapshotLoader{snaps: map[string]deviceSnapshot{meter.IP: freshSnap(now, meter.IP, "meter_active_power", 200.0)}}, lampOff},
+		// 3. Мощность НУЛЕВАЯ (нет потока) → не горит.
+		{"zero power", meter, &fakeSnapshotLoader{snaps: map[string]deviceSnapshot{meter.IP: freshSnap(now, meter.IP, "meter_active_power", 0.0)}}, lampOff},
 		// 4. Мощность отрицательная (отдача) → горит.
 		{"negative power", meter, &fakeSnapshotLoader{snaps: map[string]deviceSnapshot{meter.IP: freshSnap(now, meter.IP, "meter_active_power", -300.0)}}, lampOn},
 		// Нечисловое значение — считаем недоступным → мигает.
