@@ -323,9 +323,11 @@ PL2303 (`/dev/ttyUSB*`), на которых ANT BMS вещают 140-байтн
 - корень изначально read-only → `mount -o remount,rw /`; бинарь кладётся в
   `/usr/sbin/bmslistener`, юнит в `/etc/systemd/system/bmslistener.service`, затем
   `systemctl daemon-reload && systemctl enable --now bmslistener`.
-- Логи пишутся самим демоном в `/tmp/bmslistener.log` (systemd 215 на этой плате не
-  собирает stderr в journal; юнит без `StandardOutput=file` — т.к. `append:` не
-  поддерживается в 215).
+- Логи демон теперь шлёт **только в syslog-сокет** `/dev/log` → rsyslog Малины →
+  правило `*.* @192.168.13.253` → `/var/log/malina/malina.log` на `.253`
+  (rsyslog 215 на этой плате не собирает stderr в journal; юнит без
+  `StandardOutput=file` — т.к. `append:` не поддерживается в 215). Локального
+  файла `/tmp/bmslistener.log` **больше нет** (был до 2026-09-19, удалён).
 
 **Поведение (по ТЗ):**
 - каждые 30 с сканирует `/dev/ttyUSB*` на предмет новых BMS (поток 140-байтных кадров);
@@ -438,7 +440,8 @@ scan (`PROBE_BUDGET_SEC 21`), анти-spin в `service_fds`, bad-кэш на re
 | FD | 5 | 5 | без изменений |
 | CPU-тики (utime+stime) | 947 = 9.47 с / 3087 с ≈ 0.31% | 20749 = 207.5 с / 69430 с ≈ **0.30%** | линейно (прогноз по baseline ~213 с, факт 207.5) — дрейфа нет |
 
-**Журнал** (systemd 215 — journal файлов нет, лог демона `/tmp/bmslistener.log`):
+**Журнал** (systemd 215 — journal файлов нет; с 2026-09-19 логи демона уходят в
+syslog-сокет `/dev/log` → `.253`, локального `/tmp/bmslistener.log` нет):
 в логе текущего запуска (pid 14406, 2344 строки) — только 5 строк старта
 (starting / 2× probe OK / 2× added) + 2339× `scan: /dev/ttyUSB0 is in use by other, skip`
 (МАП держит ttyUSB0 — ожидаемо). За 19.5 ч **0** forget / read-error / probe-fail.

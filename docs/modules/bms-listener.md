@@ -60,6 +60,28 @@ sudo make install-web
 
 Откат установки: `sudo make uninstall` (бинарник, юнит и веб-скрипт удаляются).
 
+## Логирование
+
+bmslistener пишет логи **только в syslog-сокет** `/dev/log` (unix-dgram, формат
+RFC 3164 `<PRI>Mmm dd HH:MM:SS hostname msg`), без локального файла. Это сделано,
+чтобы на Малине не рос безлимитно файл-лог (ротация для него не настроена, а
+`/tmp` там — tmpfs всего 5 МБ). Поток: `bms_log()` → `/dev/log` → rsyslog Малины
+(правило `*.* @192.168.13.253`, UDP 514) → `/var/log/malina/malina.log` на `.253`
+(фильтр `26-malina.conf`: `:hostname, startswith, "malina"`). Локального файла на
+Малине нет — единственный источник — `.253`; на самой Малине остаётся только
+дубль в stderr (в systemd уходит в `/dev/null`).
+
+Факты, проверенные 2026-09-19:
+- На этой плате (Raspbian jessie, systemd 215) классического `/dev/log` до
+  перезапуска rsyslog не было; imuxsock слушает именно `/dev/log`, а системного
+  `/run/systemd/journal/syslog` (виртуального журнала journald) нет — отправка в
+  универсальный `syslog()`/`logger` туда не долетает. Работает отправка датаграммой
+  в `/dev/log`.
+- End-to-end проверено: строки `bmslistener:` реально появляются в
+  `/var/log/malina/malina.log` на `.253`.
+- Инфраструктура (rsyslog-форвард, правило на `.253`, ротация `malina.log`) —
+  в приватном `.kilo/malina-opt-context.md`.
+
 Затем запустить и проверить:
 
 ```sh
