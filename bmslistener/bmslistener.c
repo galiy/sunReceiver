@@ -62,6 +62,8 @@
 #include <sys/stat.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <stdint.h>
 #include <stdarg.h>
 
@@ -70,19 +72,66 @@
 #define VERSION "dev"
 #endif
 
-/* ---------- лог в файл (systemd 215 на этой плате не собирает stderr в журнал) ---------- */
+/* ---------- лог: syslog-сокет (уходит по rsyslog на .253) + фолбэк в локальный файл ----------
+ * На этой плате imuxsock слушает unix-dgram-сокет /dev/log (классический путь;
+ * системного /run/systemd/journal/syslog тут нет — socket-unit syslog.socket
+ * активен, но журнала journald нет). Датаграмму туда принимает rsyslog и по
+ * правилу `*.* @192.168.13.253` пересылает на .253 в /var/log/malina/malina.log
+ * (фильтр hostname startswith "malina"). Проверено end-to-end (2026-09-19).
+ * Если сокет недоступен — фолбэк на локальный файл, чтобы события не терялись
+ * даже при выключенном rsyslog.
+ *
+ * Syslog-формат (RFC 3164): "<PRI>Mmm dd HH:MM:SS hostname tag: msg".
+ * PRI = facility*8 + severity: facility=3 (daemon), severity=5 (notice) = 29. */
+#define SYSLOG_SOCKET "/dev/log"
+#define LOG_PRI       29      /* facility daemon (3) * 8 + severity notice (5) */
+#define LOG_LOCALFILE "/tmp/bmslistener.log"
+
+static void bms_syslog_send(const char *line) {
+    /* line уже содержит "bmslistener: ...\n" без PRI/hostname — оборачиваем в RFC-форму */
+    static int fd = -1;
+    if (fd < 0) {
+        struct sockaddr_un sa; memset(&sa, 0, sizeof sa);
+        sa.sun_family = AF_UNIX;
+        snprintf(sa.sun_path, sizeof sa.sun_path, "%s", SYSLOG_SOCKET);
+        fd = socket(AF_UNIX, SOCK_DGRAM, 0);
+        if (fd >= 0 && connect(fd, (struct sockaddr *)&sa, sizeof sa) != 0) { close(fd); fd = -1; }
+    }
+    if (fd < 0) return; /* нет сокета — тихо падаем на файл */
+
+    /* RFC3164-время "Mmm dd HH:MM:SS" (без года) — из локальных часов Малины */
+    char st[32];
+    struct tm tmv; time_t now = time(NULL); localtime_r(&now, &tmv);
+    strftime(st, sizeof st, "%b %e %H:%M:%S", &tmv);
+
+    char host[64] = "hostname"; gethostname(host, sizeof host - 1); host[sizeof host - 1] = 0;
+    char buf[1100];
+    /* line уже самодостаточна (начинается с "bmslistener: ..."), поэтому тэг не дублируем,
+       иначе на .253 получилось бы "bmslistener: bmslistener: ..." */
+    int n = snprintf(buf, sizeof buf, "<%d>%s %s %s",
+                     LOG_PRI, st, host, line);
+    if (n < 0) return;
+    if (n >= (int)sizeof buf) n = (int)sizeof buf - 1;
+    (void)send(fd, buf, (size_t)n, MSG_NOSIGNAL);
+}
+
 static void bms_log(const char *fmt, ...) {
     va_list ap;
     char line[1024];
     va_start(ap, fmt);
     vsnprintf(line, sizeof line, fmt, ap);
     va_end(ap);
-    int fd = open("/tmp/bmslistener.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+
+    /* 1) в syslog-сокет (чтобы улетело на .253) */
+    bms_syslog_send(line);
+
+    /* 2) фолбэк в локальный файл — и как запас, и для мгновенного ручного просмотра */
+    int fd = open(LOG_LOCALFILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd >= 0) {
         (void)write(fd, line, strlen(line));
         close(fd);
     }
-    /* дубль в stderr на случай фонового запуска из консоли */
+    /* 3) дубль в stderr на случай фонового запуска из консоли */
     fputs(line, stderr);
 }
 
