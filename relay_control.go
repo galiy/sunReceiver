@@ -525,7 +525,7 @@ const redLampName = "red"
 // Последовательный перебор (первое истинное условие решает, далее не проверяется):
 //  1. Модуль счётчика отключён (meterCfg == nil)                  → лампа НЕ горит;
 //  2. Счётчик недоступен (снэпшот отсутствует/старше окна)       → лампа МИГАЕТ;
-//  3. Мощность сети ПОЛОЖИТЕЛЬНАЯ (потребление из сети)          → лампа НЕ горит;
+//  3. Мощность сети ПОЛОЖИТЕЛЬНАЯ или НУЛЕВАЯ (потребление/0)    → лампа НЕ горит;
 //  4. Мощность сети ОТРИЦАТЕЛЬНАЯ (отдача в сеть)                → лампа ГОРИТ.
 func runRelayLampController(store *redisStore, meterCfg *meterConfig, c *relayController, stop context.Context) {
 	if c == nil {
@@ -573,12 +573,13 @@ func redLampDecision(loader relaySnapshotLoader, cfg *relaySection, meterCfg *me
 	if snapshotStale(snap, cfg.meterStale()) {
 		return lampBlink
 	}
-	// 3./4. Знак активной мощности сети (+ потребление, − отдача).
+	// 3./4. Знак активной мощности сети (+ потребление, 0 — нет потока, − отдача).
 	p, ok := valueAsFloat(snap.Values[cfg.meterPowerTag()])
 	if !ok {
 		return lampBlink
 	}
-	if p > 0 {
+	if p >= 0 {
+		// Мощность положительная или НУЛЕВАЯ — лампа не горит (горит только при отдаче).
 		return lampOff
 	}
 	return lampOn
