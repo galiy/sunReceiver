@@ -72,20 +72,19 @@
 #define VERSION "dev"
 #endif
 
-/* ---------- лог: syslog-сокет (уходит по rsyslog на .253) + фолбэк в локальный файл ----------
+/* ---------- лог: syslog-сокет (уходит по rsyslog на .253), без локального файла ----------
  * На этой плате imuxsock слушает unix-dgram-сокет /dev/log (классический путь;
  * системного /run/systemd/journal/syslog тут нет — socket-unit syslog.socket
  * активен, но журнала journald нет). Датаграмму туда принимает rsyslog и по
  * правилу `*.* @192.168.13.253` пересылает на .253 в /var/log/malina/malina.log
  * (фильтр hostname startswith "malina"). Проверено end-to-end (2026-09-19).
- * Если сокет недоступен — фолбэк на локальный файл, чтобы события не терялись
- * даже при выключенном rsyslog.
+ * Локальный файл НЕ пишем: единственный источник — .253, чтобы файл на Малине
+ * не рос безлимитно (ротация не настроена, /tmp — tmpfs 5МБ).
  *
  * Syslog-формат (RFC 3164): "<PRI>Mmm dd HH:MM:SS hostname tag: msg".
  * PRI = facility*8 + severity: facility=3 (daemon), severity=5 (notice) = 29. */
 #define SYSLOG_SOCKET "/dev/log"
 #define LOG_PRI       29      /* facility daemon (3) * 8 + severity notice (5) */
-#define LOG_LOCALFILE "/tmp/bmslistener.log"
 
 static void bms_syslog_send(const char *line) {
     /* line уже содержит "bmslistener: ...\n" без PRI/hostname — оборачиваем в RFC-форму */
@@ -122,16 +121,10 @@ static void bms_log(const char *fmt, ...) {
     vsnprintf(line, sizeof line, fmt, ap);
     va_end(ap);
 
-    /* 1) в syslog-сокет (чтобы улетело на .253) */
+    /* в syslog-сокет — единственный канал (улетает на .253) */
     bms_syslog_send(line);
 
-    /* 2) фолбэк в локальный файл — и как запас, и для мгновенного ручного просмотра */
-    int fd = open(LOG_LOCALFILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (fd >= 0) {
-        (void)write(fd, line, strlen(line));
-        close(fd);
-    }
-    /* 3) дубль в stderr на случай фонового запуска из консоли */
+    /* дубль в stderr на случай фонового запуска из консоли (в systemd — в /dev/null) */
     fputs(line, stderr);
 }
 
