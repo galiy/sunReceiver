@@ -51,9 +51,10 @@ const tariffCacheTTL = 60 * time.Second
 //     (счётчик опрашивается, meter.disabled != true);
 //   - ShowBMS — показывать блок BMS-батареек (пулер ANT BMS запущен).
 type dashFlags struct {
-	ShowMap   bool
-	ShowMeter bool
-	ShowBMS   bool
+	ShowMap    bool
+	ShowMeter  bool
+	ShowBMS    bool
+	ShowRelay  bool
 }
 
 // dashboardHandler — веб-дашборд: отдаёт три HTML-страницы и JSON API.
@@ -67,6 +68,7 @@ type dashboardHandler struct {
 	store *redisStore
 	pg    *pgStore
 	flags dashFlags
+	relay *relayController
 
 	// Кэш loadRange: 4 одинаковых запроса /api/series за цикл сойдутся в один
 	// read из Redis/PG. Ключ — от (start, end).
@@ -3581,11 +3583,64 @@ func recoverMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// apiRelay отвечает на /api/relay.
+//   - GET — снимок состояния ламп (имя, канал, текущее состояние).
+//   - POST (JSON {"name": <имя лампы>, "state": "off|on|blink"}) — переключает
+//     лампу в заданное состояние, сохраняя текущее состояние второй лампы.
+func (h *dashboardHandler) apiRelay(w http.ResponseWriter, r *http.Request) {
+	if h.relay == nil {
+		http.Error(w, "relay controller is not configured", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method == http.MethodPost {
+		var req struct {
+			Name  string    `json:"name"`
+			State lampState `json:"state"`
+		}
+		// Разбираем state как строку ("on"/"off"/"blink").
+		var raw struct {
+			Name  string `json:"name"`
+			State string `json:"state"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+			http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		st, ok := parseLampState(raw.State)
+		if !ok {
+			http.Error(w, `unknown state (use "off","on","blink"): `+raw.State, http.StatusBadRequest)
+			return
+		}
+		req.Name = raw.Name
+		req.State = st
+		if req.Name == "" {
+			http.Error(w, "missing lamp name", http.StatusBadRequest)
+			return
+		}
+		if err := h.relay.SetLampByName(req.Name, req.State); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	_ = json.NewEncoder(w).Encode(relayStatusResponse{
+		GeneratedAt: time.Now().Format(time.RFC3339),
+		Lamps:       h.relay.Snapshot(),
+	})
+}
+
+// relayStatusResponse — ответ /api/relay.
+type relayStatusResponse struct {
+	GeneratedAt string            `json:"generated_at"`
+	Lamps       []relayLampStatus `json:"lamps"`
+}
+
 // serveDashboard — HTTP-сервер веб-дашборда. При закрытии stop аккуратно
 // завершает сервер (http.Server.Shutdown, бюджет 5 с), чтобы main мог закрыть
 // пулы Redis/PG после завершения всех фоновых горутин (bgWg).
-func serveDashboard(addr string, store *redisStore, pg *pgStore, stop context.Context, flags dashFlags) {
-	h := &dashboardHandler{store: store, pg: pg, flags: flags}
+func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayController, stop context.Context, flags dashFlags) {
+	h := &dashboardHandler{store: store, pg: pg, flags: flags, relay: relay}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.index)
 	mux.HandleFunc("/charts", h.charts)
@@ -3596,6 +3651,9 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore, stop context.Co
 	mux.HandleFunc("/api/tariffs", h.apiTariffs)
 	mux.HandleFunc("/api/bms", h.apiBMS)
 	mux.HandleFunc("/api/bms/", h.apiBMSOne)
+	if relay != nil {
+		mux.HandleFunc("/api/relay", h.apiRelay)
+	}
 	srv := &http.Server{
 		Addr: addr, Handler: recoverMiddleware(mux),
 		// Таймауты защищают от slowloris и «висящих» соединений, не ограничивая

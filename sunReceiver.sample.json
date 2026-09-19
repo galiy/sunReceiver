@@ -49,5 +49,22 @@
     "stable_window_sec": 30,
     "map_undeclared_sec": 20,
     "grid_voltage_low": 195
+  },
+  "relay": {
+    "disabled": false,
+    "ip": "192.168.0.34",
+    "udp_port": 6723,
+    "blink_hz": 2.0,
+    "keepalive": "2s",
+    "lamps": [
+      { "name": "white", "relay": 1 },
+      { "name": "red", "relay": 2 }
+    ],
+    "meter_stale_sec": 20,
+    "map_stale_sec": 20,
+    "meter_power_tag": "meter_active_power",
+    "meter_voltage_tag": "meter_voltage",
+    "map_grid_tag": "grid_voltage",
+    "voltage_present_min": 0
   }
 }

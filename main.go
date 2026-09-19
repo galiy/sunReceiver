@@ -181,6 +181,7 @@ type configFile struct {
 	DB            *dbConfig        `json:"db"`
 	Meter         *meterSection    `json:"meter"`
 	Notify        *notifySection   `json:"notify"`
+	Relay         *relaySection    `json:"relay"` // сетевое реле SR-201 (лампы), управление по UDP
 	DashboardPort int              `json:"dashboard_port"` // порт веб-дашборда; 0 — дефолт 8080
 }
 
@@ -195,14 +196,14 @@ func configPath() string {
 
 // loadConfig читает и проверяет sunReceiver.json, возвращает список целей
 // (инверторы + МАП, без отключённых), настройки БД/счётчика/МАП-веб-API и порт дашборда.
-func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection, int, error) {
+func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection, *relaySection, int, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, nil, nil, 0, fmt.Errorf("read config %s: %w", path, err)
+		return nil, nil, nil, nil, nil, 0, fmt.Errorf("read config %s: %w", path, err)
 	}
 	var cf configFile
 	if err := json.Unmarshal(b, &cf); err != nil {
-		return nil, nil, nil, nil, 0, fmt.Errorf("parse config %s: %w", path, err)
+		return nil, nil, nil, nil, nil, 0, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	targets := make([]invTarget, 0, len(cf.Invertors)+1)
 	nextOrder := 0 // порядок устройства на дашборде = позиция в конфиге (в порядке invertors, затем map)
@@ -210,7 +211,7 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	// Инверторы (Deye/Sofar) из invertors; отключённые (disabled=true) пропускаются.
 	for _, t := range cf.Invertors {
 		if t.Disabled == nil {
-			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: для %s (%s) не задано обязательное поле disabled (false/true)", path, t.Name, t.IP)
+			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: для %s (%s) не задано обязательное поле disabled (false/true)", path, t.Name, t.IP)
 		}
 		if *t.Disabled {
 			log.Printf("config: %s (%s) отключён (disabled=true) — не опрашивается", t.Name, t.IP)
@@ -227,19 +228,19 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 			log.Printf("config: тип %q для %s не ожидается в invertors (используйте раздел map/mppt) — пропущен", t.Type, t.IP)
 			continue
 		default:
-			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: неизвестный тип %q для %s", path, t.Type, t.IP)
+			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: неизвестный тип %q для %s", path, t.Type, t.IP)
 		}
 		if t.IP == "" {
-			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустой ip (type=%s)", path, t.Type)
+			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустой ip (type=%s)", path, t.Type)
 		}
 		if t.Name == "" {
-			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустое имя name для %s", path, t.IP)
+			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустое имя name для %s", path, t.IP)
 		}
 		// Deye/Sofar: без серийного номера логгера (logger_sn=0) логгер отвечает
 		// кодом 0x06 (heartbeat_only) — данные получать невозможно. Ловим при
 		// старте (fatal), а не маскируем вечным heartbeat_only с логами на poll.
 		if (kind == kindDeyeString || kind == kindSofar) && t.LoggerSN == 0 {
-			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: %s (%s): не задан logger_sn — без SN логгера логгер отвечает кодом 0x06 и данные получать невозможно", path, t.Name, t.IP)
+			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %s (%s): не задан logger_sn — без SN логгера логгер отвечает кодом 0x06 и данные получать невозможно", path, t.Name, t.IP)
 		}
 		targets = append(targets, invTarget{IP: t.IP, Name: t.Name, LoggerSN: t.LoggerSN, Kind: kind, Unit: 1, Slot: -1, Order: nextOrder})
 		nextOrder++
@@ -252,25 +253,36 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	// map/mppt/bms) и bms_disabled (отключает только пулер ANT BMS).
 	if cf.Map != nil {
 		if cf.Map.Disabled == nil {
-			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано обязательное поле disabled (false/true)", path)
+			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано обязательное поле disabled (false/true)", path)
 		}
 		if cf.Map.BMSDisabled == nil {
-			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано обязательное поле bms_disabled (false/true)", path)
+			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано обязательное поле bms_disabled (false/true)", path)
 		}
 		if *cf.Map.Disabled {
 			log.Printf("config: map disabled=true — пулеры МАП, MPPT и BMS не запускаются")
 		}
 	}
 	if cf.Meter != nil && cf.Meter.Disabled == nil {
-		return nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе meter не задано обязательное поле disabled (false/true)", path)
+		return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе meter не задано обязательное поле disabled (false/true)", path)
+	}
+	// Сетевое реле SR-201 (лампы) — раздел "relay". Disabled обязателен: true
+	// отключает контроллер ламп; false — запускает управление по UDP. IP обязателен
+	// только при активном контроллере.
+	if cf.Relay != nil {
+		if cf.Relay.Disabled == nil {
+			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе relay не задано обязательное поле disabled (false/true)", path)
+		}
+		if !*cf.Relay.Disabled && cf.Relay.IP == "" {
+			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе relay не задан ip устройства relay-sr201-2l", path)
+		}
 	}
 	if cf.Map != nil && cf.Map.RS485 != nil && !*cf.Map.Disabled {
 		rs485 := cf.Map.RS485
 		if rs485.Disabled == nil {
-			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: в подразделе map.rs485 не задано обязательное поле disabled (false/true)", path)
+			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в подразделе map.rs485 не задано обязательное поле disabled (false/true)", path)
 		}
 		if rs485.IP == "" {
-			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустой ip в подразделе map.rs485", path)
+			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустой ip в подразделе map.rs485", path)
 		}
 		name := rs485.Name
 		if name == "" {
@@ -295,12 +307,12 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 		mpptOk := cf.Map != nil && cf.Map.BaseURL != "" && cf.Map.MPPTPath != "" &&
 			cf.Map.Login != "" && cf.Map.Password != ""
 		if !mpptOk {
-			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: нет ни одного активного устройства", path)
+			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: нет ни одного активного устройства", path)
 		}
 	}
 	// Порт веб-дашборда — обязательное поле dashboard_port.
 	if cf.DashboardPort == 0 {
-		return nil, nil, nil, nil, 0, fmt.Errorf("config %s: не задано обязательное поле dashboard_port (порт веб-дашборда)", path)
+		return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: не задано обязательное поле dashboard_port (порт веб-дашборда)", path)
 	}
 	// Уведомления в MAX (раздел notify): токен обязателен. Адресат (user_id или
 	// chat_id) НЕ обязателен — если он пуст, бот регистрирует первого подписчика
@@ -311,10 +323,10 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 			log.Printf("config: notify disabled=true — уведомления в MAX выключены (раздел в конфиге, но без оповещений)")
 			notifyCfg = nil
 		} else if notifyCfg.Token == "" {
-			return nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе notify не задан token", path)
+			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе notify не задан token", path)
 		}
 	}
-	return targets, cf.DB, cf.Meter, cf.Map, cf.DashboardPort, nil
+	return targets, cf.DB, cf.Meter, cf.Map, cf.Relay, cf.DashboardPort, nil
 }
 
 // defaultDashboardAddr собирает адрес веб-дашборда из обязательного конфиг-порта.
@@ -1518,9 +1530,10 @@ func main() {
 	var dbCfg *dbConfig
 	var meterSec *meterSection
 	var mapSec *mapSection
+	var relaySec *relaySection
 	var dashPort int
 	var err error
-	targets, dbCfg, meterSec, mapSec, dashPort, err = loadConfig(cfgPath)
+	targets, dbCfg, meterSec, mapSec, relaySec, dashPort, err = loadConfig(cfgPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1559,11 +1572,23 @@ func main() {
 	// Флаги видимости блоков дашборда, вычисленные из конфигурации:
 	//   - ShowMap — МАП/MPPT включены (map.disabled != true);
 	//   - ShowMeter — счётчик реально опрашивается (не disabled и не «неполный»);
-	//   - ShowBMS — пулер ANT BMS запущен (bms_disabled != true, заполнен bms_path).
+	//   - ShowBMS — пулер ANT BMS запущен (bms_disabled != true, заполнен bms_path);
+	//   - ShowRelay — контроллер ламп SR-201 включен (relay.disabled != true).
 	dash := dashFlags{
-		ShowMap:   mapSec != nil && (mapSec.Disabled == nil || !*mapSec.Disabled),
-		ShowMeter: meterCfg != nil,
-		ShowBMS:   bmsSite != nil,
+		ShowMap:    mapSec != nil && (mapSec.Disabled == nil || !*mapSec.Disabled),
+		ShowMeter:  meterCfg != nil,
+		ShowBMS:    bmsSite != nil,
+		ShowRelay:  relaySec != nil && (relaySec.Disabled == nil || !*relaySec.Disabled),
+	}
+
+	// Сетевое реле SR-201 (лампы): управление по UDP, состояние поддерживает
+	// фоновый цикл runRelayControl. Контроллер создаётся сразу (новый экземпляр
+	// при старте переведёт реле в желаемые состояния из конфига/Redis), а ДОСТУП
+	// из других модулей — через SetRelayLamp / relayCtl.
+	relaySec = buildRelayCfg(relaySec)
+	if relaySec != nil && relaySec.Disabled != nil && *relaySec.Disabled {
+		log.Printf("relay: контроллер ламп SR-201 выключен (relay.disabled=true)")
+		relaySec = nil
 	}
 
 	rdb, err := openRedis(redisAddr)
@@ -1572,6 +1597,11 @@ func main() {
 	}
 	defer rdb.Close()
 	store := &redisStore{rdb: rdb, ctx: context.Background()}
+
+	relayCtl = newRelayController(relaySec, store)
+	if relayCtl != nil {
+		log.Printf("relay: управление лампами SR-201 (%s, UDP %d, blink_hz=%.1f)", relaySec.IP, relaySec.UDPPort, relaySec.BlinkHz)
+	}
 
 	// Persistent-хранилище PostgreSQL: только усреднённые 5-минутные точки,
 	// пишутся фоновым процессом аккумуляции (см. accumulator.go) после накопления
@@ -1720,10 +1750,33 @@ func main() {
 		}()
 	}
 
+	if relayCtl != nil {
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			runRelayControl(relayCtl, stopCtx)
+		}()
+		// Красная лампа — индикатор отдачи в сеть: управляется по алгоритму на
+		// основе текущего состояния счётчика (см. runRelayLampController).
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			runRelayLampController(store, meterCfg, relayCtl, stopCtx)
+		}()
+		// Белая лампа — индикатор наличия напряжения сети: на основе данных МАП
+		// (grid_voltage) и счётчика (meter_voltage), см. runWhiteLampController.
+		mapIP, _ := mapSourceIdentity()
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			runWhiteLampController(store, mapIP, meterCfg, relayCtl, stopCtx)
+		}()
+	}
+
 	bgWg.Add(1)
 	go func() {
 		defer bgWg.Done()
-		serveDashboard(dashboardAddr, store, pg, stopCtx, dash)
+		serveDashboard(dashboardAddr, store, pg, relayCtl, stopCtx, dash)
 	}()
 
 	// Windows-сборка сворачивается в трей (меню «Закрыть»); на POSIX (Linux)
