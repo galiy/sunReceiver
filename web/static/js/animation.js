@@ -15,7 +15,7 @@
 // ---------- Спрайты (PNG на прозрачном фоне) ----------
 var SPR = {
   grid:    {file:'power-line-pylon', w:64, h:135},
-  meter:   {file:'dds238-meter',     w:70, h:126},
+  meter:   {file:'dds238-meter',     w:100,h:126},
   map:     {file:'map-converter',    w:120,h:51},
   house:   {file:'country-house',    w:120,h:86},
   garage:  {file:'garage',           w:110,h:78},
@@ -68,22 +68,23 @@ function spriteNode(svg, key, cx, cy, label, raise){
   img.setAttribute('class','anim-sprite');
   g.appendChild(img);
   if(key==='meter'){
-    // Накладка накопленных показаний на ЖК счётчика: потребление и отдача за всё
-    // время (значения обновляются tick-ом).
+    // Накладка накопленных показаний на ЖК счётчика: приход (импорт) и расход
+    // (отдача) за всё время. Без слов-подписей — только значения, цветом
+    // (приход красный, расход зелёный); значения обновляются tick-ом.
     var box=document.createElementNS(NS,'rect');
-    box.setAttribute('x',cx-spec.w/2+spec.w*0.05);
+    box.setAttribute('x',cx-spec.w/2+spec.w*0.02);
     box.setAttribute('y',cy-raise-spec.h*0.20);
-    box.setAttribute('width',spec.w*0.90);
+    box.setAttribute('width',spec.w*0.96);
     box.setAttribute('height',spec.h*0.42);
     box.setAttribute('rx',4); box.setAttribute('fill','#eef7f1'); box.setAttribute('class','anim-meter-box');
     g.appendChild(box);
     var d=document.createElementNS(NS,'text');
-    d.setAttribute('x',cx+spec.w*0.38); d.setAttribute('y',cy-raise-spec.h*0.02); d.setAttribute('text-anchor','end');
-    d.setAttribute('class','anim-meter-read'); d.textContent='Приход —';
+    d.setAttribute('x',cx+spec.w*0.44); d.setAttribute('y',cy-raise-spec.h*0.02); d.setAttribute('text-anchor','end');
+    d.setAttribute('class','anim-meter-read anim-meter-import'); d.textContent='—';
     g.appendChild(d);
     var n=document.createElementNS(NS,'text');
-    n.setAttribute('x',cx+spec.w*0.38); n.setAttribute('y',cy-raise+spec.h*0.16); n.setAttribute('text-anchor','end');
-    n.setAttribute('class','anim-meter-read'); n.textContent='Отдача —';
+    n.setAttribute('x',cx+spec.w*0.44); n.setAttribute('y',cy-raise+spec.h*0.16); n.setAttribute('text-anchor','end');
+    n.setAttribute('class','anim-meter-read anim-meter-export'); n.textContent='—';
     g.appendChild(n);
     meterReadEls.push({day:d, night:n});
   }
@@ -413,8 +414,8 @@ function refreshEdges(obj, data){
   // Показания счётчика (есть только в схеме Дома: meterReads на объекте).
   var reads=obj.meterReads||[];
   for(var k=0;k<reads.length;k++){
-    reads[k].day.textContent='Приход '+fmtKWh(data.meter_import_total);
-    reads[k].night.textContent='Отдача '+fmtKWh(data.meter_export_total);
+    reads[k].day.textContent=fmtKWh(data.meter_import_total);
+    reads[k].night.textContent=fmtKWh(data.meter_export_total);
   }
 }
 
