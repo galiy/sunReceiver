@@ -6,9 +6,9 @@
 .anim-body { overflow-x:auto; }
 .anim-svg { display:block; width:100%; height:auto; }
 .anim-wire { stroke:#3a4752; stroke-width:2; fill:none; }
-.anim-bus-wire { stroke:#3a4752; stroke-width:2; } /* шина-соединитель («Внутренняя сеть» и линия батареи) без подписи */
 .anim-sprite { opacity:1; }
-.anim-bus { fill:#eef1f4; stroke:#8a97a3; stroke-width:2; }
+.anim-bus { fill:#d98a3d; stroke:#8a5a24; stroke-width:1.5; } /* шина-соединитель: медная полоса */
+.anim-bus-bolt { fill:#f2c98a; stroke:#8a5a24; stroke-width:1.5; } /* зажим-болт на шине */
 .anim-name { fill:#6b7785; font-size:12px; }
 .anim-meter-box { stroke:#8a97a3; stroke-width:1; }
 .anim-meter-read { fill:#2b3238; font-size:10px; font-weight:700; }
