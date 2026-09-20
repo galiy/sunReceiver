@@ -79,3 +79,39 @@ func vals(out []seriesPoint) []float64 {
 	}
 	return vs
 }
+
+// TestPlacementOrder проверяет порядок размещений для рамки «Мощности инверторов»:
+// только сетевые инверторы (Deye/Sofar), по первому появлению в конфиге, пустое
+// размещение приводится к «Дом», а MPPT (КЭС) и МАП в список не попадают.
+func TestPlacementOrder(t *testing.T) {
+	targets := []invTarget{
+		{Name: "Sofar A", Kind: kindSofar, Placement: "Гараж"},
+		{Name: "MAP", Kind: kindMAP},
+		{Name: "MPPT 0", Kind: kindMPPT, IP: "host#mppt0"},
+		{Name: "Deye B", Kind: kindDeyeString, Placement: "Гараж"},
+		{Name: "Sofar C", Kind: kindSofar, Placement: ""}, // пусто → «Дом»
+	}
+	got := placementOrder(targets)
+	want := []string{"Гараж", "Дом"}
+	if len(got) != len(want) {
+		t.Fatalf("placementOrder: want %v, got %v", want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("placementOrder[%d]: want %q, got %q (full %v)", i, want[i], got[i], got)
+		}
+	}
+}
+
+// TestPlacementOrderDefaultHome — все инверторы без размещения сводятся к единственному
+// размещению «Дом».
+func TestPlacementOrderDefaultHome(t *testing.T) {
+	targets := []invTarget{
+		{Name: "A", Kind: kindDeyeString},
+		{Name: "B", Kind: kindSofar},
+	}
+	got := placementOrder(targets)
+	if len(got) != 1 || got[0] != "Дом" {
+		t.Fatalf("placementOrder: want [Дом], got %v", got)
+	}
+}

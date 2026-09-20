@@ -70,6 +70,12 @@ type dashboardHandler struct {
 	flags dashFlags
 	relay *relayController
 
+	// placements — упорядоченный список размещений сетевых инверторов (Deye/Sofar)
+	// из sunReceiver.json (см. placementOrder). Определяет число и порядок пар плашек
+	// «Суммарная активная / PV» в рамке «Мощности инверторов»: одна пара на каждое
+	// размещение. MPPT-контроллеры (КЭС) в этот список не входят.
+	placements []string
+
 	// Кэш loadRange: 4 одинаковых запроса /api/series за цикл сойдутся в один
 	// read из Redis/PG. Ключ — от (start, end).
 	cacheMu sync.Mutex
@@ -99,19 +105,15 @@ type currentResponse struct {
 	GeneratedAt string  `json:"generated_at"`
 	TotalPower  float64 `json:"total_power"`
 	TotalPV     float64 `json:"total_pv"`
-	// Суммарные показатели по группам инверторов «Дом» (всё, кроме Deye Left/Right)
-	// и «Гараж» (инверторы с именами "Deye Left"/"Deye Right"). ShowGarage — есть ли в
-	// таблице инверторов хотя бы один из инверторов «Гараж» (нет — плашки «Гараж» скрыты).
-	TotalPowerHome   float64 `json:"total_power_home"`
-	TotalPVHome      float64 `json:"total_pv_home"`
-	TotalPowerGarage float64 `json:"total_power_garage"`
-	TotalPVGarage    float64 `json:"total_pv_garage"`
-	ShowGarage       bool    `json:"show_garage"`
-	MapGridV         float64 `json:"map_grid_voltage"`
-	MapGridP         float64 `json:"map_grid_power"`
-	MapBatV          float64 `json:"map_battery_voltage"`
-	MapBatP          float64 `json:"map_battery_power"`
-	MapCons          float64 `json:"map_consumption"`
+	// Суммарные показатели по размещениям инверторов (группа «Мощности инверторов»):
+	// по одной паре плашек «активная + PV» на каждое размещение из sunReceiver.json
+	// (поле placement). MPPT-контроллеры (КЭС) в эту сумму не входят.
+	Placements []placementPower `json:"placements"`
+	MapGridV   float64          `json:"map_grid_voltage"`
+	MapGridP   float64          `json:"map_grid_power"`
+	MapBatV    float64          `json:"map_battery_voltage"`
+	MapBatP    float64          `json:"map_battery_power"`
+	MapCons    float64          `json:"map_consumption"`
 	// Расчётные тарифные величины счётчика за текущие календарные сутки (kWh):
 	// потребление/отдача «День»/«Ночь», посчитанные из актуальных показаний
 	// счётчика (Redis) и фиксированных граничных показаний (PG daily_tariffs).
@@ -197,10 +199,13 @@ func snapFloat(v valuesContract, key string) (float64, bool) {
 	return toFloat(raw)
 }
 
-// isGarageDevice возвращает true, если инвертор относится к группе «Гараж»
-// (имя "Deye Left" или "Deye Right"). Все остальные инверторы — группа «Дом».
-func isGarageDevice(name string) bool {
-	return name == "Deye Left" || name == "Deye Right"
+// placementPower — суммарная мощность инверторов одного размещения («Мощности
+// инверторов»): активная мощность (W) и суммарная мощность PV (W). MPPT-контроллеры
+// (КЭС) и МАП в эти суммы не входят.
+type placementPower struct {
+	Name  string  `json:"name"`
+	Power float64 `json:"power"`
+	PV    float64 `json:"pv"`
 }
 
 // isMAPDevice возвращает true, если снимок принадлежит устройству МАП (kindMAP,
@@ -600,17 +605,33 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	})
 	var total float64
 	var totalPV float64
-	// Суммарные показатели по группам «Дом»/«Гараж»: «Гараж» — инверторы с именами
-	// "Deye Left"/"Deye Right", «Дом» — всё остальное (кроме МАП/счётчика).
-	var totalHome, totalPVHome float64
-	var totalGarage, totalPVGarage float64
-	showGarage := false
+	// Суммарные показатели по размещениям инверторов (группа «Мощности инверторов»):
+	// одна пара плашек «активная + PV» на каждое размещение, имя/порядок — из
+	// placementOrder (sunReceiver.json). KES (MPPT-контроллеры) и МАП в суммы не входят.
 	var gridV, gridP, batV, batP float64
 	// Устройство считаем «живым», если снимок не старше 20 минут (то же окно
 	// STALE_MS, что на дашборде): инвертор, выключенный ночью, в текущую сумму
 	// не входит, а его устаревшее значение (напр. 9 Вт заката) не выставляется
 	// как текущая мощность.
 	staleCutoff := time.Now().Add(-20 * time.Minute)
+	// Порядок размещений: из конфига (placementOrder); размещение, найденное в
+	// данных, но отсутствующее в списке (старый снимок удалённого устройства),
+	// дописывается в конец. placePower — накопленные суммы по каждому размещению.
+	order := make([]string, 0, len(h.placements))
+	order = append(order, h.placements...)
+	placePower := map[string]*placementPower{}
+	getPlace := func(name string) *placementPower {
+		if name == "" {
+			name = "Дом"
+		}
+		pp, ok := placePower[name]
+		if !ok {
+			pp = &placementPower{Name: name}
+			placePower[name] = pp
+			order = append(order, name)
+		}
+		return pp
+	}
 	for _, d := range devices {
 		// Мощности устройства МАП (батарея/сеть) в сумме по инверторам не участвуют:
 		// они отображаются только на плашках/графиках МАП.
@@ -632,8 +653,10 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
-		if isGarageDevice(d.Name) {
-			showGarage = true
+		// MPPT-контроллеры (КЭС) и электросчётчик в рамке «Мощности инверторов» и в
+		// общей сумме по инверторам не участвуют.
+		if isMPPTKey(d.IP) || isMeterDevice(d.Values) {
+			continue
 		}
 		if ts, err := time.Parse(time.RFC3339, d.Timestamp); err != nil || !ts.After(staleCutoff) {
 			continue
@@ -649,22 +672,32 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 		if v, ok := snapFloat(d.Values, "pv2_power"); ok {
 			pv += v
 		}
-		if isGarageDevice(d.Name) {
-			totalGarage += p
-			totalPVGarage += pv
-		} else {
-			totalHome += p
-			totalPVHome += pv
-		}
+		pp := getPlace(d.Placement)
+		pp.Power += p
+		pp.PV += pv
 		total += p
 		totalPV += pv
 	}
+	// Собираем итоговый список размещений в порядке из конфига (плюс дописанные),
+	// округляя значения. Пустые размещения (все инверторы offline/молчат) остаются в
+	// списке с нулями — плашка выводит «—».
+	placements := make([]placementPower, 0, len(order))
+	for _, name := range order {
+		pp, ok := placePower[name]
+		if !ok {
+			continue
+		}
+		placements = append(placements, placementPower{
+			Name:  pp.Name,
+			Power: math.Round(pp.Power*10) / 10,
+			PV:    math.Round(pp.PV*10) / 10,
+		})
+	}
+	if placements == nil {
+		placements = []placementPower{}
+	}
 	total = math.Round(total*10) / 10
 	totalPV = math.Round(totalPV*10) / 10
-	totalHome = math.Round(totalHome*10) / 10
-	totalPVHome = math.Round(totalPVHome*10) / 10
-	totalGarage = math.Round(totalGarage*10) / 10
-	totalPVGarage = math.Round(totalPVGarage*10) / 10
 	gridV = math.Round(gridV*10) / 10
 	gridP = math.Round(gridP*10) / 10
 	batV = math.Round(batV*10) / 10
@@ -721,11 +754,7 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 		GeneratedAt:           time.Now().Format(time.RFC3339),
 		TotalPower:            total,
 		TotalPV:               totalPV,
-		TotalPowerHome:        totalHome,
-		TotalPVHome:           totalPVHome,
-		TotalPowerGarage:      totalGarage,
-		TotalPVGarage:         totalPVGarage,
-		ShowGarage:            showGarage,
+		Placements:            placements,
 		MapGridV:              gridV,
 		MapGridP:              gridP,
 		MapBatV:               batV,
@@ -1295,8 +1324,8 @@ func buildDashboardMux(pages map[string]http.HandlerFunc, static http.Handler, a
 // serveDashboard — HTTP-сервер веб-дашборда. При закрытии stop аккуратно
 // завершает сервер (http.Server.Shutdown, бюджет 5 с), чтобы main мог закрыть
 // пулы Redis/PG после завершения всех фоновых горутин (bgWg).
-func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayController, stop context.Context, flags dashFlags, authUser, authPass string) {
-	h := &dashboardHandler{store: store, pg: pg, flags: flags, relay: relay}
+func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayController, stop context.Context, flags dashFlags, placements []string, authUser, authPass string) {
+	h := &dashboardHandler{store: store, pg: pg, flags: flags, relay: relay, placements: placements}
 	// Внутренние страницы (индекс/графики) открыты; данные и управление —
 	// в `/api/*`, защищаются HTTP Basic (если заданы учётные данные).
 	pages := map[string]http.HandlerFunc{

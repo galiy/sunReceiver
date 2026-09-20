@@ -200,38 +200,58 @@ function renderMeter(meter){
 	}
 	stats.innerHTML=h;
 }
+// invPlatesSig — подпись набора размещений, по которой решаем, нужно ли пересобирать
+// плашки рамки «Мощности инверторов» (при смене набора). Значения обновляются в tick
+// точечно по id, без пересоздания DOM каждую секунду.
+var invPlatesSig='';
+function invPlural(n){ var m10=n%10, m100=n%100; if(m10===1 && m100!==11) return 'инвертор'; if(m10>=2 && m10<=4 && (m100<10||m100>=20)) return 'инвертора'; return 'инверторов'; }
+// renderInvPlates перестраивает плашки рамки «Мощности инверторов» по набору
+// размещений из /api/current: одна пара плашек (активная + PV) на каждое размещение,
+// в порядке, заданном sunReceiver.json. Пересобираем только при изменении набора
+// (число или имена размещений) — сами значения потом обновляются в tick.
+function renderInvPlates(placements){
+	var names=(placements||[]).map(function(p){return p.name;});
+	var sig=names.join('\u0000');
+	if(sig===invPlatesSig) return;
+	invPlatesSig=sig;
+	var box=document.getElementById('invPowerGroup');
+	if(!box) return;
+	var h='';
+	for(var i=0;i<names.length;i++){
+		// Под «Суммарной активной мощностью» первого размещения — строка
+		// «N инверторов онлайн» (информация о доступности устройств).
+		var sub=(i===0)?'<div class="sub" id="invPlatesSub">Нет данных</div>':'';
+		h+='<div class="plate">'
+		 +'<div class="lbl">Суммарная активная<br>мощность ('+esc(names[i])+')</div>'
+		 +'<div class="val"><span id="kpiPlaceP'+i+'">—</span><span class="unit">W</span></div>'+sub
+		 +'</div>';
+		h+='<div class="plate">'
+		 +'<div class="lbl">Суммарная мощность<br>PV ('+esc(names[i])+')</div>'
+		 +'<div class="val"><span id="kpiPlacePV'+i+'">—</span><span class="unit">W</span></div>'
+		 +'</div>';
+	}
+	box.innerHTML=h;
+}
+
 async function tick(){
 	try{
 		var r=await fetch('/api/current');
 		if(!r.ok) return;
 		var data=await r.json();
-		// Плашка суммарной мощности (Дом)
-		var kpiEl=document.getElementById('kpiTotalHome');
-		var n=Number(data.total_power_home);
-		if(isFinite(n) && data.total_power_home>0){
-			kpiEl.textContent=n.toLocaleString('ru-RU',{maximumFractionDigits:1});
-			// Число инверторов онлайн — без устройства МАП (батарея/сеть), счётчика
-			// и offline-устройств (последний снимок старше STALE_MS, напр. ночью).
-			var invCount=0;
-			for(var i=0;i<data.devices.length;i++) if(!isMAPDeviceJS(data.devices[i]) && !isMeterDevice(data.devices[i]) && !isStaleDev(data.devices[i])) invCount++;
-			function invPlural(n){ var m10=n%10, m100=n%100; if(m10===1 && m100!==11) return 'инвертор'; if(m10>=2 && m10<=4 && (m100<10||m100>=20)) return 'инвертора'; return 'инверторов'; }
-			document.getElementById('kpiSub').textContent=invCount+' '+invPlural(invCount)+' онлайн';
-		}else{
-			kpiEl.textContent='—';
-			document.getElementById('kpiSub').textContent='Нет данных';
+		// Плашки «Мощности инверторов»: одна пара (активная + PV) на каждое размещение.
+		var placements=data.placements||[];
+		renderInvPlates(placements);
+		// Число инверторов онлайн — без устройства МАП (батарея/сеть), счётчика,
+		// MPPT-контроллеров (КЭС) и offline-устройств (снимок старше STALE_MS, напр.
+		// ночью). Отображается под первой плашкой:
+		var invCount=0;
+		for(var i=0;i<data.devices.length;i++) if(!isMAPDeviceJS(data.devices[i]) && !isMeterDevice(data.devices[i]) && String(data.devices[i].ip||'').indexOf('#mppt')<0 && !isStaleDev(data.devices[i])) invCount++;
+		for(var i=0;i<placements.length;i++){
+			setKpi('kpiPlaceP'+i, placements[i].power);
+			setKpi('kpiPlacePV'+i, placements[i].pv);
 		}
-		// Плашка суммарной мощности PV (Дом)
-		setKpi('kpiPVHome', data.total_pv_home);
-		// Плашки «Гараж» показываем только если в таблице инверторов есть хотя бы один
-		// из инверторов "Deye Left"/"Deye Right"; иначе скрываем их целиком.
-		var showGarage = data.show_garage;
-		var gp1=document.getElementById('kpiGaragePlate1'), gp2=document.getElementById('kpiGaragePlate2');
-		if(gp1) gp1.style.display = showGarage ? '' : 'none';
-		if(gp2) gp2.style.display = showGarage ? '' : 'none';
-		if(showGarage){
-			setKpi('kpiTotalGarage', data.total_power_garage);
-			setKpi('kpiPVGarage', data.total_pv_garage);
-		}
+		var subEl=document.getElementById('invPlatesSub');
+		if(subEl) subEl.textContent=invCount ? (invCount+' '+invPlural(invCount)+' онлайн') : 'Нет данных';
 		// Плашки МАП: напряжение/мощность сети и батареи.
 		if(showMap){
 			setKpi('kpiGridV', data.map_grid_voltage);
