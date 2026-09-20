@@ -140,9 +140,13 @@ func (c *Client) ReadRegisters(ctx context.Context, start uint16, count uint16) 
 		return nil, fmt.Errorf("несовпадение unit id: ожидался %d, получен %d", c.Unit, hdr[6])
 	}
 	mbLen := int(binary.BigEndian.Uint16(hdr[4:6]))
-	if mbLen < 3 || mbLen > 2+1+1+2*int(count) {
+	// Полный ответ = unit(1) + func(1) + bytecount(1) + data(2*count) → 3+2*count.
+	// Нижняя граница +2*count защищает слайс rest[2:2+bc] от выхода за пределы
+	// (усечённый/повреждённый кадр с завышенным MBAP-length иначе дал бы панику
+	// в горутине пулера); верхняя — от чужого/мусорного кадра.
+	if mbLen < 3+2*int(count) || mbLen > 3+2*int(count) {
 		c.closeConn()
-		return nil, fmt.Errorf("некорректный MBAP length=%d", mbLen)
+		return nil, fmt.Errorf("некорректный MBAP length=%d, ждали %d", mbLen, 3+2*int(count))
 	}
 	rest := make([]byte, mbLen-1) // минус unit id (уже в hdr[6])
 	if _, err := ReadFull(c.conn, rest); err != nil {
@@ -155,6 +159,7 @@ func (c *Client) ReadRegisters(ctx context.Context, start uint16, count uint16) 
 	}
 	bc := int(rest[1])
 	if bc != 2*int(count) {
+		c.closeConn()
 		return nil, fmt.Errorf("bytecount=%d, ждали %d", bc, 2*int(count))
 	}
 	data := rest[2 : 2+bc]

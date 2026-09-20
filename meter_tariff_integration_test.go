@@ -27,7 +27,7 @@ func TestMeterTariffPGIntegration(t *testing.T) {
 	if os.Getenv("METER_PG_TEST") == "" {
 		t.Skip("METER_PG_TEST not set")
 	}
-	pgc, err := openPG("postgres://localhost:5432/sunreceiver?sslmode=disable")
+	pgc, err := openPG(context.Background(), "postgres://localhost:5432/sunreceiver?sslmode=disable")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestMeterTariffBoundaryZeroAtomic(t *testing.T) {
 	if os.Getenv("METER_PG_TEST") == "" {
 		t.Skip("METER_PG_TEST not set")
 	}
-	pgc, err := openPG("postgres://localhost:5432/sunreceiver?sslmode=disable")
+	pgc, err := openPG(context.Background(), "postgres://localhost:5432/sunreceiver?sslmode=disable")
 	if err != nil {
 		t.Fatal(err)
 	}

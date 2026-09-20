@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -1247,25 +1248,52 @@ type relayStatusResponse struct {
 	Lamps       []relayLampStatus `json:"lamps"`
 }
 
+// apiBasicAuth — HTTP Basic-аутентификация для `/api/*` дашборда. При пустых
+// user/pass — проход без проверки (доступ снаружи закрывает обратный прокси).
+// Используется constant-time сравнение, защищающее от timing-атак по паролю.
+func apiBasicAuth(user, pass string) func(http.Handler) http.Handler {
+	if user == "" && pass == "" {
+		return func(next http.Handler) http.Handler { return next }
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			u, p, ok := r.BasicAuth()
+			valid := ok &&
+				subtle.ConstantTimeCompare([]byte(u), []byte(user)) == 1 &&
+				subtle.ConstantTimeCompare([]byte(p), []byte(pass)) == 1
+			if !valid {
+				w.Header().Set("WWW-Authenticate", `Basic realm="sunreceiver"`)
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // serveDashboard — HTTP-сервер веб-дашборда. При закрытии stop аккуратно
 // завершает сервер (http.Server.Shutdown, бюджет 5 с), чтобы main мог закрыть
 // пулы Redis/PG после завершения всех фоновых горутин (bgWg).
-func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayController, stop context.Context, flags dashFlags) {
+func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayController, stop context.Context, flags dashFlags, authUser, authPass string) {
 	h := &dashboardHandler{store: store, pg: pg, flags: flags, relay: relay}
+	// Внутренние страницы (индекс/графики) открыты; данные и управление —
+	// в `/api/*`, защищаются HTTP Basic (если заданы учётные данные).
+	api := http.NewServeMux()
+	api.HandleFunc("/current", h.apiCurrent)
+	api.HandleFunc("/series", h.apiSeries)
+	api.HandleFunc("/tariffs", h.apiTariffs)
+	api.HandleFunc("/bms", h.apiBMS)
+	api.HandleFunc("/bms/", h.apiBMSOne)
+	if relay != nil {
+		api.HandleFunc("/relay", h.apiRelay)
+	}
 	mux := http.NewServeMux()
+	mux.Handle("/api/", apiBasicAuth(authUser, authPass)(api))
 	mux.Handle("/static/", staticFiles())
 	mux.HandleFunc("/", h.index)
 	mux.HandleFunc("/charts", h.charts)
 	mux.HandleFunc("/energy", h.energy)
 	mux.HandleFunc("/bms/", h.bmsDetail)
-	mux.HandleFunc("/api/current", h.apiCurrent)
-	mux.HandleFunc("/api/series", h.apiSeries)
-	mux.HandleFunc("/api/tariffs", h.apiTariffs)
-	mux.HandleFunc("/api/bms", h.apiBMS)
-	mux.HandleFunc("/api/bms/", h.apiBMSOne)
-	if relay != nil {
-		mux.HandleFunc("/api/relay", h.apiRelay)
-	}
 	srv := &http.Server{
 		Addr: addr, Handler: recoverMiddleware(mux),
 		// Таймауты защищают от slowloris и «висящих» соединений, не ограничивая

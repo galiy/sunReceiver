@@ -1,5 +1,7 @@
 {
   "dashboard_port": 80,
+  "dashboard_user": "CHANGE_ME",
+  "dashboard_password": "CHANGE_ME_PASSWORD",
   "invertors": [
     { "ip": "192.168.0.16", "name": "Bineos Left", "type": "deye", "logger_sn": 7890123456, "disabled": false },
     { "ip": "192.168.0.17", "name": "Bineos Center", "type": "deye", "logger_sn": 8901234567, "disabled": false },
