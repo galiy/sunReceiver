@@ -78,11 +78,11 @@ function spriteNode(svg, key, cx, cy, label, raise){
     box.setAttribute('rx',4); box.setAttribute('fill','#eef7f1'); box.setAttribute('class','anim-meter-box');
     g.appendChild(box);
     var d=document.createElementNS(NS,'text');
-    d.setAttribute('x',cx); d.setAttribute('y',cy-raise-spec.h*0.02); d.setAttribute('text-anchor','middle');
+    d.setAttribute('x',cx+spec.w*0.38); d.setAttribute('y',cy-raise-spec.h*0.02); d.setAttribute('text-anchor','end');
     d.setAttribute('class','anim-meter-read'); d.textContent='Приход —';
     g.appendChild(d);
     var n=document.createElementNS(NS,'text');
-    n.setAttribute('x',cx); n.setAttribute('y',cy-raise+spec.h*0.16); n.setAttribute('text-anchor','middle');
+    n.setAttribute('x',cx+spec.w*0.38); n.setAttribute('y',cy-raise+spec.h*0.16); n.setAttribute('text-anchor','end');
     n.setAttribute('class','anim-meter-read'); n.textContent='Отдача —';
     g.appendChild(n);
     meterReadEls.push({day:d, night:n});
@@ -403,8 +403,12 @@ function refreshEdges(obj, data){
 }
 
 function fmtKWh(v){
-  v=Math.round((v||0)*100)/100;
-  return (v===0?'0':v)+' кВт·ч';
+  v=Math.round((v||0)*10)/10;
+  var neg=v<0, s=(''+Math.abs(v)).split('.'), int=s[0], dec=s[1]||'';
+  var out='';
+  while(int.length>3){ out=' '+int.slice(-3)+out; int=int.slice(0,-3); }
+  out=int+out+(dec?'.'+dec:'');
+  return (neg?'-':'')+out+' кВт·ч';
 }
 
 function fmtSec(t){
