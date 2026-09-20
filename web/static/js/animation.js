@@ -1,8 +1,12 @@
+(function(){
 'use strict';
 
-// Страница анимации: две схемы (Дом и Гараж) со спрайтами и ортогональными
-// связями. «Внутренняя сеть» и «линия батареи» — проводники-шины без подписи:
-// это не устройства, а узлы-соединители из UML (нужны только для замысла формул).
+// Анимация схем Дом/Гараж: связи с бегущим током и подписью мощности (1/с).
+// Используется на главной странице внутри спойлеров «Дом»/«Гараж» (ранее — отдельная
+// страница /animation). Обёрнуто в IIFE, чтобы не конфликтовать с dashboard.js
+// (там тоже есть глобальная tick); здесь tick/loop/BUILT — локальные.
+// «Внутренняя сеть» и «линия батареи» — проводники-шины без подписи: это не
+// устройства, а узлы-соединители из UML (нужны только для замысла формул).
 // Ширина шины определяется числом подключённых устройств, толщина — как у связи.
 // Все связи — ломаные под прямыми углами со скруглениями на углах; огоньки бегут
 // вдоль пути, цвет — по направлению (из сети красный, выработка/в сеть зелёный),
@@ -380,11 +384,11 @@ async function tick(){
   var lh=layoutHouse(data.house);
   var oh=ensureScheme('house', lh, 'svgHouse');
   refreshEdges(oh, data.house);
-  document.getElementById('animHouseTs').textContent=ts;
+  var tsH=document.getElementById('animHouseTs'); if(tsH) tsH.textContent=ts;
   var lg=layoutGarage(data.garage);
   var og=ensureScheme('garage', lg, 'svgGarage');
   refreshEdges(og, data.garage);
-  document.getElementById('animGarageTs').textContent=ts;
+  var tsG=document.getElementById('animGarageTs'); if(tsG) tsG.textContent=ts;
 }
 
 var animStart=performance.now();
@@ -397,3 +401,5 @@ function loop(now){
 requestAnimationFrame(loop);
 
 tick(); setInterval(tick, 1000);
+
+})();

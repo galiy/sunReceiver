@@ -334,7 +334,7 @@ async function tickBMS(){
       var soc=Math.max(0,Math.min(100,Number(d.soc)||0));
       h+='<a class="bms-btn" href="/bms/'+encodeURIComponent(d.key||d.deviceName)+'" title="Порт: '+esc(d.port)+'">'
         +'<div class="bms-batt">'
-        +'<div class="bms-batt-fill" style="height:'+Math.max(4,soc)+'%;background:'+bmsSocColor(soc)+'"></div>'
+        +'<div class="bms-batt-fill" style="width:'+Math.max(4,soc)+'%;background:'+bmsSocColor(soc)+'"></div>'
         +'<span class="bms-batt-soc">'+soc+'%</span>'
         +'</div>'
         +'<div class="bms-name">'+esc(d.deviceName)+'</div>'
@@ -345,3 +345,22 @@ async function tickBMS(){
 }
 tick(); setInterval(tick,1000);
 tickBMS(); setInterval(tickBMS,60000);
+
+// Спойлеры (<details> на главной). Открытость храним на клиенте (localStorage) и
+// восстанавливаем при загрузке. Ключ — data-spoil элемента.
+function initSpoilers(){
+  var heads=document.querySelectorAll('.spoiler-head');
+  for(var i=0;i<heads.length;i++){
+    (function(head){
+      var spoiler=head.parentElement;
+      var key=spoiler.getAttribute('data-spoil');
+      if(!key) return;
+      if(localStorage.getItem('sunr.spoil.'+key)==='1') spoiler.classList.add('open');
+      head.addEventListener('click', function(){
+        spoiler.classList.toggle('open');
+        localStorage.setItem('sunr.spoil.'+key, spoiler.classList.contains('open')?'1':'0');
+      });
+    })(heads[i]);
+  }
+}
+initSpoilers();

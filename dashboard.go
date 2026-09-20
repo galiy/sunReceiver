@@ -383,15 +383,6 @@ func (h *dashboardHandler) energy(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *dashboardHandler) animation(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	if err := webTemplates.ExecuteTemplate(w, "animation.html", map[string]any{"active": "animation", "flags": h.flags, "CacheBust": webCacheBust}); err != nil {
-		log.Printf("dashboard: render /animation: %v", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-	}
-}
-
 // apiBMS отдаёт актуальное состояние всех ANT BMS (HASH sunreceiver:bms,
 // пулер bms_poller.go) для батареек на главной странице (обновление раз в минуту).
 func (h *dashboardHandler) apiBMS(w http.ResponseWriter, r *http.Request) {
@@ -1614,7 +1605,6 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayCon
 		"/":         h.index,
 		"/charts":   h.charts,
 		"/energy":   h.energy,
-		"/animation": h.animation,
 		"/bms/":     h.bmsDetail,
 	}
 	api := map[string]http.HandlerFunc{
