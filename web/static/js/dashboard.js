@@ -4,7 +4,7 @@
 // сервером, поэтому и обновления соответствующих элементов пропускаем.
 var showMap = document.body.dataset.showMap === '1';
 var showMeter = document.body.dataset.showMeter === '1';
-var showBMS = document.body.dataset.showBMS === '1';
+var showBMS = document.body.dataset.showBms === '1';
 
 // ---------- Утилиты ----------
 function esc(s){ return String(s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
