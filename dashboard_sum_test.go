@@ -72,6 +72,52 @@ func distinctVals(out []seriesPoint) []float64 {
 	return vs
 }
 
+// TestPlacementTotals проверяет группировку суммарных мощностей по размещениям:
+// порядок из конфига, отсутствие дублей «Дом» (регрессия), исключение MPPT (КЭС),
+// счётчика и МАП, а также исключение оффлайн (молчащих) инверторов.
+func TestPlacementTotals(t *testing.T) {
+	now := time.Now()
+	old := now.Add(-time.Hour)
+	order := []string{"Дом", "Гараж"}
+	device := func(name, ip, placement string, ts time.Time, power, pv float64) deviceSnapshot {
+		return deviceSnapshot{
+			Timestamp: ts.Format(time.RFC3339),
+			Name:      name, IP: ip, Placement: placement,
+			Values: valuesContract{"ac_active_power": power, "pv1_power": pv},
+		}
+	}
+	devices := []deviceSnapshot{
+		device("Deye A", "10.0.0.1", "Дом", now, 100, 110),
+		device("Sofar B", "10.0.0.2", "Гараж", now, 50, 60),
+		device("Deye C", "10.0.0.3", "Дом", now, 7, 8),
+		// MPPT (КЭС), счётчик и МАП — не участвуют.
+		{Name: "MPPT 0", IP: "host#mppt0", Timestamp: now.Format(time.RFC3339), Placement: "Дом",
+			Values: valuesContract{"ac_active_power": 999, "pv1_power": 999}},
+		{Name: "Meter", IP: "10.0.0.9", Timestamp: now.Format(time.RFC3339), Placement: "Дом",
+			Values: valuesContract{"meter_voltage": 230.0}},
+		{Name: "MAP", IP: "10.0.0.8", Timestamp: now.Format(time.RFC3339),
+			Values: valuesContract{"battery_voltage": 52.0}},
+		// Оффлайн-инвертор (старый снимок) — не входит.
+		device("Deye Off", "10.0.0.4", "Дом", old, 500, 500),
+	}
+	got, total, totalPV := placementTotals(devices, order, now.Add(-20*time.Minute))
+	if len(got) != 2 {
+		t.Fatalf("want 2 placements, got %v", got)
+	}
+	if got[0].Name != "Дом" || got[1].Name != "Гараж" {
+		t.Fatalf("placement order wrong: %v", got)
+	}
+	if got[0].Power != 107 || got[0].PV != 118 {
+		t.Fatalf("Дом totals wrong: %v", got[0])
+	}
+	if got[1].Power != 50 || got[1].PV != 60 {
+		t.Fatalf("Гараж totals wrong: %v", got[1])
+	}
+	if total != 157 || totalPV != 178 {
+		t.Fatalf("overall totals wrong: %v / %v", total, totalPV)
+	}
+}
+
 func vals(out []seriesPoint) []float64 {
 	var vs []float64
 	for _, pp := range out {

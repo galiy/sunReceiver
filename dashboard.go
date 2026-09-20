@@ -233,6 +233,80 @@ func isMPPTKey(ip string) bool {
 	return strings.Contains(ip, "#mppt")
 }
 
+// placementTotals группирует свежие снимки сетевых инверторов (Deye/Sofar) по
+// размещениям (field placement) и считает суммарные активную и PV-мощности.
+// Устройства МАП, MPPT-контроллеры (КЭС) и электросчётчик исключаются — они не
+// участвуют в рамке «Мощности инверторов». Порядок размещений — как в order
+// (из placementOrder); размещение, найденное в данных, но отсутствующее в order
+// (старый снимок), дописывается в конец, дубли исключаются. Возвращает список
+// размещений (ровно те, что присутствуют в данных), общую активную и PV-мощность.
+func placementTotals(devices []deviceSnapshot, order []string, staleCutoff time.Time) ([]placementPower, float64, float64) {
+	orderIdx := make(map[string]bool, len(order))
+	placeOrder := make([]string, 0, len(order))
+	for _, p := range order {
+		placeOrder = append(placeOrder, p)
+		orderIdx[p] = true
+	}
+	placePower := map[string]*placementPower{}
+	getPlace := func(name string) *placementPower {
+		if name == "" {
+			name = "Дом"
+		}
+		pp, ok := placePower[name]
+		if !ok {
+			pp = &placementPower{Name: name}
+			placePower[name] = pp
+			if !orderIdx[name] {
+				orderIdx[name] = true
+				placeOrder = append(placeOrder, name)
+			}
+		}
+		return pp
+	}
+	var total, totalPV float64
+	for _, d := range devices {
+		// Мощности МАП (батарея/сеть), MPPT-контроллеров (КЭС) и электросчётчика в
+		// сумме по инверторам не участвуют: они отображаются на своих плашках/графиках.
+		if isMAPDevice(d.Values) || isMPPTKey(d.IP) || isMeterDevice(d.Values) {
+			continue
+		}
+		// Молчащий (оффлайн) инвертор в текущую сумму не входит.
+		if ts, err := time.Parse(time.RFC3339, d.Timestamp); err != nil || !ts.After(staleCutoff) {
+			continue
+		}
+		var p, pv float64
+		if v, ok := snapFloat(d.Values, "ac_active_power"); ok {
+			p += v
+		}
+		if v, ok := snapFloat(d.Values, "pv1_power"); ok {
+			pv += v
+		}
+		if v, ok := snapFloat(d.Values, "pv2_power"); ok {
+			pv += v
+		}
+		pp := getPlace(d.Placement)
+		pp.Power += p
+		pp.PV += pv
+		total += p
+		totalPV += pv
+	}
+	placements := make([]placementPower, 0, len(placeOrder))
+	for _, name := range placeOrder {
+		pp, ok := placePower[name]
+		if !ok {
+			continue
+		}
+		placements = append(placements, placementPower{
+			Name:  pp.Name,
+			Power: math.Round(pp.Power*10) / 10,
+			PV:    math.Round(pp.PV*10) / 10,
+		})
+	}
+	return placements,
+		math.Round(total*10)/10,
+		math.Round(totalPV*10)/10
+}
+
 func (h *dashboardHandler) charts(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -605,99 +679,39 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	})
 	var total float64
 	var totalPV float64
-	// Суммарные показатели по размещениям инверторов (группа «Мощности инверторов»):
-	// одна пара плашек «активная + PV» на каждое размещение, имя/порядок — из
-	// placementOrder (sunReceiver.json). KES (MPPT-контроллеры) и МАП в суммы не входят.
+	var placements []placementPower
+	// Напряжение/мощность сети и батареи МАП — из снимков устройства МАП (батарея/сеть).
 	var gridV, gridP, batV, batP float64
 	// Устройство считаем «живым», если снимок не старше 20 минут (то же окно
 	// STALE_MS, что на дашборде): инвертор, выключенный ночью, в текущую сумму
 	// не входит, а его устаревшее значение (напр. 9 Вт заката) не выставляется
 	// как текущая мощность.
 	staleCutoff := time.Now().Add(-20 * time.Minute)
-	// Порядок размещений: из конфига (placementOrder); размещение, найденное в
-	// данных, но отсутствующее в списке (старый снимок удалённого устройства),
-	// дописывается в конец. placePower — накопленные суммы по каждому размещению.
-	order := make([]string, 0, len(h.placements))
-	order = append(order, h.placements...)
-	placePower := map[string]*placementPower{}
-	getPlace := func(name string) *placementPower {
-		if name == "" {
-			name = "Дом"
-		}
-		pp, ok := placePower[name]
-		if !ok {
-			pp = &placementPower{Name: name}
-			placePower[name] = pp
-			order = append(order, name)
-		}
-		return pp
-	}
+	// Суммарные показатели по размещениям инверторов (группа «Мощности инверторов»):
+	// одна пара плашек «активная + PV» на каждое размещение, имя/порядок — из
+	// placementOrder (sunReceiver.json). MPPT-контроллеры (КЭС), счётчик и МАП в
+	// суммы не входят (см. placementTotals).
+	placements, total, totalPV = placementTotals(devices, h.placements, staleCutoff)
 	for _, d := range devices {
-		// Мощности устройства МАП (батарея/сеть) в сумме по инверторам не участвуют:
-		// они отображаются только на плашках/графиках МАП.
-		if isMAPDevice(d.Values) {
-			if ts, err := time.Parse(time.RFC3339, d.Timestamp); err != nil || !ts.After(staleCutoff) {
-				continue
-			}
-			if v, ok := snapFloat(d.Values, "grid_voltage"); ok {
-				gridV = v
-			}
-			if v, ok := snapFloat(d.Values, "grid_power"); ok {
-				gridP = v
-			}
-			if v, ok := snapFloat(d.Values, "battery_voltage"); ok {
-				batV = v
-			}
-			if v, ok := snapFloat(d.Values, "battery_power"); ok {
-				batP = v
-			}
-			continue
-		}
-		// MPPT-контроллеры (КЭС) и электросчётчик в рамке «Мощности инверторов» и в
-		// общей сумме по инверторам не участвуют.
-		if isMPPTKey(d.IP) || isMeterDevice(d.Values) {
+		if !isMAPDevice(d.Values) {
 			continue
 		}
 		if ts, err := time.Parse(time.RFC3339, d.Timestamp); err != nil || !ts.After(staleCutoff) {
 			continue
 		}
-		var p float64
-		if v, ok := snapFloat(d.Values, "ac_active_power"); ok {
-			p += v
+		if v, ok := snapFloat(d.Values, "grid_voltage"); ok {
+			gridV = v
 		}
-		var pv float64
-		if v, ok := snapFloat(d.Values, "pv1_power"); ok {
-			pv += v
+		if v, ok := snapFloat(d.Values, "grid_power"); ok {
+			gridP = v
 		}
-		if v, ok := snapFloat(d.Values, "pv2_power"); ok {
-			pv += v
+		if v, ok := snapFloat(d.Values, "battery_voltage"); ok {
+			batV = v
 		}
-		pp := getPlace(d.Placement)
-		pp.Power += p
-		pp.PV += pv
-		total += p
-		totalPV += pv
+		if v, ok := snapFloat(d.Values, "battery_power"); ok {
+			batP = v
+		}
 	}
-	// Собираем итоговый список размещений в порядке из конфига (плюс дописанные),
-	// округляя значения. Пустые размещения (все инверторы offline/молчат) остаются в
-	// списке с нулями — плашка выводит «—».
-	placements := make([]placementPower, 0, len(order))
-	for _, name := range order {
-		pp, ok := placePower[name]
-		if !ok {
-			continue
-		}
-		placements = append(placements, placementPower{
-			Name:  pp.Name,
-			Power: math.Round(pp.Power*10) / 10,
-			PV:    math.Round(pp.PV*10) / 10,
-		})
-	}
-	if placements == nil {
-		placements = []placementPower{}
-	}
-	total = math.Round(total*10) / 10
-	totalPV = math.Round(totalPV*10) / 10
 	gridV = math.Round(gridV*10) / 10
 	gridP = math.Round(gridP*10) / 10
 	batV = math.Round(batV*10) / 10
