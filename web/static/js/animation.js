@@ -112,7 +112,7 @@ function makeEdge(svg, opts){
   svg.appendChild(dotG);
 
   return {path:path, total:total, dots:dots, dotG:dotG, txt:txt,
-    rule:opts.rule, value:0, active:false, toEnd:true};
+    rule:opts.rule, getValue:opts.getValue, value:0, active:false, toEnd:true};
 }
 
 function updateEdge(e){
@@ -165,6 +165,15 @@ function centers(center, n, step){
   return out;
 }
 
+// Равномерная раскладка n точек внутри [left,right] (влезает в канву).
+function spread(left, right, n){
+  if(n<=0) return [];
+  if(n===1) return [Math.round((left+right)/2)];
+  var step=(right-left)/(n-1), out=[];
+  for(var i=0;i<n;i++) out.push(left+i*step);
+  return out;
+}
+
 // ---------- Схема Дома ----------
 // Магистраль сверху (сеть слева → счётчик → МАП → дом справа); от МАП вниз две
 // ветви: левая — «Внутренняя сеть» (шина) → инверторы → панели; правая — батарея
@@ -183,7 +192,7 @@ function layoutHouse(data){
   var mapPortL=mapX-30, mapPortR=mapX+30;
 
   // Ветвь инверторов — левый блок; ветвь КЭС — правый блок (под батареей).
-  var invXs=centers(400, n, 165);
+  var invXs=spread(150, 850, n);
   var kesXs=centers(battX, k, 140);
 
   var nodes=[
@@ -275,7 +284,7 @@ function layoutGarage(data){
   var n=invs.length;
   var MAI=170, BUSY=360, INVY=470, PANY=600;
   var gridX=140, innerX=520, garageX=880;
-  var invXs=centers(410, n, 170);
+  var invXs=spread(150, 850, n);
 
   var nodes=[
     {key:'grid', cx:gridX, cy:MAI, label:'Сеть'},
