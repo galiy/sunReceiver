@@ -129,6 +129,8 @@ function updateEdge(e){
   var col=isGreen?GREEN:RED;
   for(var i=0;i<e.dots.length;i++) e.dots[i].el.setAttribute('fill',col);
   if(e.txt){
+    // Цвет мощности: при движении огоньков — как у них, при 0 — нейтральный.
+    e.txt.style.fill = e.active ? col : '#2b3238';
     var rv=Math.round(v*10)/10;
     e.txt.textContent=(rv===0?'0':(v>0?'+':'')+rv)+' W';
   }
@@ -189,16 +191,16 @@ function layoutHouse(data){
   var kes=data.kes||[];
   var n=invs.length, k=kes.length;
 
-  var MAI=150, BUSY=330, INVY=450, PANY=580;
-  var BATTY=250, KESY=460, KPANY=590;
-  var gridX=110, meterX=330, mapX=560, houseX=880, battX=920;
+  var MAI=140, BUSY=300, INVY=420, PANY=555;
+  var BATTY=230, KESY=430, KPANY=565;
+  var gridX=90, meterX=260, mapX=470, houseX=790, battX=920;
   // Порты подключения к МАП снизу: слева — ветвь инверторов, справа — батарея.
   // Разные x, чтобы линии не накладывались друг на друга.
   var mapBotY=MAI+26;             // низ спрайта МАП
   var mapPortL=mapX-30, mapPortR=mapX+30;
 
   // Ветвь инверторов — левый блок; ветвь КЭС — правый блок (под батареей).
-  var invXs=spread(150, 850, n);
+  var invXs=spread(140, 830, n);
   var kesXs=centers(battX, k, 140);
 
   var nodes=[
@@ -225,12 +227,12 @@ function layoutHouse(data){
   // Ветвь «Внутренняя сеть» → инверторы → панели (слева).
   if(n>0){
     var x1=invXs[0], x2=invXs[n-1];
-    var dropX=Math.round((invXs[0]+invXs[n-1])/2);
-    // МАП (левый порт) → вниз к шине («Внутренняя сеть»). При выдаче (Σac>0)
-    // энергия идёт от инверторов вверх к МАП, при потреблении — вниз к ним.
-    edges.push({pts:[[mapPortL,mapBotY],[mapPortL,BUSY-40],[dropX,BUSY-40],[dropX,BUSY]],
+    // МАП (левый порт) → вниз к шине («Внутренняя сеть») — прямая вертикаль, без
+    // промежуточного горизонтального изгиба (иначе два близких поворота сливаются
+    // в S-образную кривую). При выдаче (Σac>0) энергия идёт вверх к МАП.
+    edges.push({pts:[[mapPortL,mapBotY],[mapPortL,BUSY]],
       rule:{greenSign:1,greenDir:'toStart'},
-      label:{x:mapPortL-14, y:(mapBotY+BUSY-40)/2},
+      label:{x:mapPortL-14, y:(mapBotY+BUSY)/2},
       getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }});
     // Шина («Внутренняя сеть») — проводник без подписи, ширина по числу устройств.
     edges.push({bus:true, x1:x1, x2:x2, y:BUSY});
@@ -293,9 +295,9 @@ function layoutHouse(data){
 function layoutGarage(data){
   var invs=data.inverters||[];
   var n=invs.length;
-  var MAI=170, BUSY=360, INVY=470, PANY=600;
-  var gridX=140, innerX=520, garageX=880;
-  var invXs=spread(150, 850, n);
+  var MAI=150, BUSY=320, INVY=430, PANY=560;
+  var gridX=110, innerX=470, garageX=810;
+  var invXs=spread(140, 780, n);
 
   var nodes=[
     {key:'grid', cx:gridX, cy:MAI, label:'Сеть'},
@@ -316,12 +318,11 @@ function layoutGarage(data){
 
   if(n>0){
     var x1=invXs[0], x2=invXs[n-1];
-    var dropX=Math.round((invXs[0]+invXs[n-1])/2);
-    // Шина → вниз к горизонтальной шине инверторов. При выдаче (Σac>0) энергия
-    // идёт от инверторов вверх к магистрали (toStart), при потреблении — вниз.
-    edges.push({pts:[[innerX,MAI],[innerX,BUSY-40],[dropX,BUSY-40],[dropX,BUSY]],
+    // Шина → вниз к горизонтальной шине инверторов — прямая вертикаль. При выдаче
+    // (Σac>0) энергия идёт от инверторов вверх к магистрали (toStart).
+    edges.push({pts:[[innerX,MAI],[innerX,BUSY]],
       rule:{greenSign:1,greenDir:'toStart'},
-      label:{x:innerX-14, y:(MAI+BUSY-40)/2},
+      label:{x:innerX-14, y:(MAI+BUSY)/2},
       getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }});
     edges.push({bus:true, x1:x1, x2:x2, y:BUSY});
     for(var i=0;i<n;i++){
@@ -349,7 +350,7 @@ function ensureScheme(which, layoutData, container){
   var obj=buildScheme(container, layoutData.nodes, layoutData.edges);
   BUILT[which]={sig:sig, obj:obj};
   var svg=obj.svg;
-  svg.setAttribute('viewBox','0 0 1060 '+layoutData.height);
+  svg.setAttribute('viewBox','0 0 1000 '+layoutData.height);
   svg.setAttribute('preserveAspectRatio','xMidYMid meet');
   return obj;
 }
