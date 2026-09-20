@@ -1,0 +1,74 @@
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#eef1f4; color:#2b3238; margin:0; padding:20px; overflow-x:hidden; }
+h1 { font-size:22px; margin:0 0 4px; }
+.sub { color:#6b7785; margin:0 0 20px; font-size:13px; }
+.top-nav { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:20px; }
+.top-nav .ttl { margin:0; }
+.top-nav .sub { margin:4px 0 0; }
+.nav-btn { background:#428bca; color:#fff; border:none; border-radius:8px; padding:9px 16px; font-size:14px; font-weight:600; cursor:pointer; text-decoration:none; white-space:nowrap; }
+.nav-btn:hover { background:#346fa1; }
+.nav-btn.secondary { background:#ffffff; border:1px solid #d0d6de; color:#2b3238; }
+#chartbox { background:#ffffff; border:1px solid #d0d6de; border-radius:10px; padding:16px; margin-bottom:20px; max-width:100%; }
+#chartbox h2 { margin:0 0 8px; font-size:16px; }
+.chart-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:10px 12px; margin-bottom:8px; font-size:13px; color:#6b7785; }
+.chart-toolbar button { background:#ffffff; color:#2b3238; border:1px solid #d0d6de; border-radius:6px; padding:4px 10px; cursor:pointer; font-size:13px; }
+.chart-toolbar button:hover { background:#f0f2f5; }
+.period-panel { display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px; font-size:13px; color:#6b7785; }
+.period-panel button { background:#ffffff; color:#2b3238; border:1px solid #d0d6de; border-radius:6px; padding:5px 12px; cursor:pointer; font-size:13px; }
+.period-panel button:hover { background:#f0f2f5; }
+.period-panel button.active { background:#428bca; border-color:#428bca; color:#fff; }
+.period-panel input[type=date], .period-panel input[type=datetime-local] { background:#ffffff; color:#2b3238; border:1px solid #d0d6de; border-radius:6px; padding:4px 8px; font-size:13px; color-scheme:light; }
+.period-panel input[type=date]:focus, .period-panel input[type=datetime-local]:focus { outline:none; border-color:#428bca; }
+.period-panel .nav-arrow { padding:5px 10px; font-size:16px; line-height:1; }
+.chart-wrap { position:relative; height:340px; }
+.charts { display:flex; flex-wrap:wrap; gap:16px; margin-bottom:20px; }
+.charts #chartbox { flex:1 1 46%; min-width:min(420px,100%); margin-bottom:0; }
+.missing { color:#6b7785; font-style:italic; }
+/* Сводная таблица параметров по инверторам */
+.pivot-wrap { background:#ffffff; border:1px solid #d0d6de; border-radius:10px; padding:14px 16px; margin:16px 0 20px; overflow-x:auto; }
+.pivot-table { border-collapse:collapse; width:100%; font-size:13px; color:#2b3238; }
+.pivot-table th, .pivot-table td { border:1px solid #d0d6de; padding:6px 10px; text-align:center; white-space:nowrap; }
+.pivot-table thead th { font-size:12px; font-weight:600; color:#ffffff; background:linear-gradient(135deg,#428bca,#346fa1); }
+.pivot-table .p-label { text-align:left; color:#6b7785; width:auto; }
+.pivot-table td.p-val { font-variant-numeric:tabular-nums; font-weight:600; }
+.pivot-table tr.p-power td.p-val { color:#37b24d; }
+.pivot-table td.stale-time { color:#f03e3e; }
+.pivot-table td.stale-keep { color:#8a94a0; }
+.pivot-table td.p-unit { color:#6b7785; font-weight:400; }
+.pivot-table td.p-empty { color:#a9b1bb; }
+.pivot-table tr:nth-child(even) td { background:#f4f7fa; }
+/* Группы верхних плашек: общая рамка с заголовком и рядом плашек одинакового размера */
+.group { background:#ffffff; border:1px solid #d0d6de; border-radius:10px; padding:14px 16px; }
+.group-top { margin-bottom:16px; }
+.group-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:10px; }
+.group-title { font-size:14px; font-weight:700; color:#ffffff; margin-bottom:10px; background:linear-gradient(135deg,#428bca,#346fa1); padding:8px 12px; border-radius:8px; }
+.group-head .group-title { margin-bottom:0; }
+.group-body { display:flex; flex-wrap:wrap; gap:10px; }
+/* Рамки «Потребление/Отдача» (сегодня/месяц/год): плашки в 2 ряда × 2 колонки */
+.group.tariff-grid .group-body { display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; gap:10px; }
+.group.tariff-grid .plate { min-width:0; }
+.groups-row { display:flex; align-items:stretch; gap:16px; margin:0 0 16px; }
+.groups-row .group { flex:1 1 0; min-width:0; }
+/* Единая плашка (для счётчика, инверторов и МАП) — приводятся к одному размеру */
+.plate, .meter-stat { flex:1; background:#ffffff; border:1px solid #d0d6de; border-radius:10px; padding:10px 16px; min-width:130px; display:flex; flex-direction:column; gap:4px; }
+.plate .lbl, .meter-stat .lbl { font-size:11px; color:#6b7785; text-transform:uppercase; letter-spacing:.05em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.plate .val, .meter-stat .val { font-size:26px; font-weight:700; line-height:1.1; font-variant-numeric:tabular-nums; }
+.plate .unit, .meter-stat .unit { font-size:14px; color:#6b7785; font-weight:400; margin-left:5px; }
+.plate .sub, .meter-stat .sub, .kpi-sub { font-size:11px; color:#6b7785; }
+.meter-stat .pos { color:#37b24d; } /* положительная величина / потребление */
+.meter-stat .neg { color:#C8385A; } /* отрицательная величина / отдача в сеть */
+.meter-stat .off { color:#f08c00; } /* нулевое/неопределённое */
+.meter-ts { font-size:12px; color:#6b7785; }
+.meter-note { font-size:11px; color:#6b7785; margin-top:8px; }
+/* BMS (ANT батарея) — крупные кнопки-батарейки (высота ~4 см): заполнение =
+   остаточный заряд (SOC). */
+.bms-btn { flex:0 0 auto; display:flex; flex-direction:column; align-items:center; gap:10px; background:#ffffff; border:1px solid #d0d6de; border-radius:14px; padding:18px 22px 14px; text-decoration:none; min-width:170px; }
+.bms-btn:hover { border-color:#428bca; }
+.bms-batt { position:relative; width:56px; height:150px; border:3px solid #a6c9e2; border-radius:11px; background:#ffffff; }
+.bms-batt::before { content:''; position:absolute; top:-9px; left:50%; transform:translateX(-50%); width:26px; height:7px; background:#a6c9e2; border-radius:3px 3px 0 0; }
+.bms-batt-fill { position:absolute; left:4px; right:4px; bottom:4px; border-radius:6px; transition:height .6s; }
+.bms-batt-soc { position:absolute; left:0; right:0; top:50%; transform:translateY(-50%); text-align:center; font-size:26px; font-weight:700; color:#2b3238; text-shadow:0 1px 4px rgba(255,255,255,.9); font-variant-numeric:tabular-nums; }
+.bms-name { font-size:15px; font-weight:600; color:#2b3238; white-space:nowrap; }
+/* Мобильная версия: панель периодов на главной — безделка (графиков на главной нет). */
+@media (max-width: 900px) { #mainPeriod { display:none; } }
