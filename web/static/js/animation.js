@@ -98,13 +98,28 @@ function spriteNode(svg, key, cx, cy, label, raise){
   svg.appendChild(g);
 }
 
-// ---------- Шина: горизонтальный проводник без подписи ----------
-function drawBus(svg, x1, x2, y){
-  var l=document.createElementNS(NS,'line');
-  l.setAttribute('x1',x1); l.setAttribute('y1',y);
-  l.setAttribute('x2',x2); l.setAttribute('y2',y);
-  l.setAttribute('class','anim-bus-wire');
-  svg.appendChild(l);
+// ---------- Шина: широкая медная полоса с болтами в точках присоединения ----------
+// x1/x2 — крайние x полосы, bolts — массив x-координат мест присоединения (болты).
+function drawBus(svg, x1, x2, y, bolts){
+  var grp=document.createElementNS(NS,'g');
+  // Полоса шины (медь), чуть шире обычного провода.
+  var bar=document.createElementNS(NS,'rect');
+  var bh=9;
+  bar.setAttribute('x',x1); bar.setAttribute('y',y-bh/2);
+  bar.setAttribute('width',x2-x1); bar.setAttribute('height',bh);
+  bar.setAttribute('rx',2);
+  bar.setAttribute('class','anim-bus');
+  grp.appendChild(bar);
+  // Зажим-болты в местах присоединения (по одному на каждый отвод).
+  bolts=bolts||[];
+  for(var i=0;i<bolts.length;i++){
+    var b=document.createElementNS(NS,'circle');
+    b.setAttribute('cx',bolts[i]); b.setAttribute('cy',y);
+    b.setAttribute('r',6);
+    b.setAttribute('class','anim-bus-bolt');
+    grp.appendChild(b);
+  }
+  svg.appendChild(grp);
 }
 
 // ---------- Связь ----------
@@ -186,7 +201,7 @@ function buildScheme(container, nodes, edges){
   var readings=[]; meterReadEls=readings;
   var objs=[];
   for(var i=0;i<edges.length;i++){
-    if(edges[i].bus){ drawBus(svg, edges[i].x1, edges[i].x2, edges[i].y); continue; }
+    if(edges[i].bus){ drawBus(svg, edges[i].x1, edges[i].x2, edges[i].y, edges[i].bolts); continue; }
     objs.push(makeEdge(svg, edges[i]));
   }
   for(var j=0;j<nodes.length;j++){ var n=nodes[j]; spriteNode(svg, n.key, n.cx, n.cy, n.label, n.raise); }
@@ -267,8 +282,8 @@ function layoutHouse(data){
       rule:{greenSign:1,greenDir:'toStart'},
       label:{x:mapPortL-14, y:(mapBotY+BUSY)/2},
       getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }});
-    // Шина («Внутренняя сеть») — проводник без подписи, ширина по числу устройств.
-    edges.push({bus:true, x1:x1, x2:x2, y:BUSY});
+    // Шина («Внутренняя сеть») — медная с болтами в точках присоединения инверторов.
+    edges.push({bus:true, x1:x1, x2:x2, y:BUSY, bolts:invXs});
     for(var i=0;i<n;i++){
       var ix=invXs[i], inv=invs[i];
       nodes.push({key:inv.kind,cx:ix,cy:INVY,label:inv.name});
@@ -304,7 +319,7 @@ function layoutHouse(data){
       rule:{greenSign:1,greenDir:'toEnd'},
       label:{x:battX-14, y:(BATTY+30+KESY-40)/2},
       getValue:function(d){ var s=0; for(var i=0;i<d.kes.length;i++) s+=d.kes[i].ac; return s; }});
-    edges.push({bus:true, x1:kx1, x2:kx2, y:KESY-40});
+    edges.push({bus:true, x1:kx1, x2:kx2, y:KESY-40, bolts:kesXs});
     for(var j=0;j<k;j++){
       var kx=kesXs[j], kes=kes[j];
       nodes.push({key:'kes',cx:kx,cy:KESY,label:kes.name});
@@ -358,7 +373,7 @@ function layoutGarage(data){
       rule:{greenSign:1,greenDir:'toStart'},
       label:{x:innerX-14, y:(MAI+BUSY)/2},
       getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }});
-    edges.push({bus:true, x1:x1, x2:x2, y:BUSY});
+    edges.push({bus:true, x1:x1, x2:x2, y:BUSY, bolts:invXs});
     for(var i=0;i<n;i++){
       var ix=invXs[i], inv=invs[i];
       nodes.push({key:inv.kind,cx:ix,cy:INVY,label:inv.name});
