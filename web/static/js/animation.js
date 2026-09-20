@@ -251,15 +251,17 @@ function layoutHouse(data){
     }
   }
 
-  // Ветвь батарея → КЭС → панели (справа).
+  // МАП (правый порт) → батарея: связь всегда (по UML map -- batt, battery_power),
+  // даже если КЭС нет (иначе батарея остаётся ни с чем не связанной).
+  edges.push({pts:[[mapPortR,mapBotY],[mapPortR,BATTY]], rule:{greenSign:1,greenDir:'toEnd'},
+    label:{x:mapPortR-14, y:(mapBotY+BATTY)/2},
+    getValue:function(d){return d.map_battery_power;}});
+  edges.push({pts:[[mapPortR,BATTY],[battX,BATTY]], rule:{greenSign:1,greenDir:'toEnd'},
+    label:{x:(mapPortR+battX)/2, y:BATTY-12},
+    getValue:function(d){return d.map_battery_power;}});
+
+  // Ветвь батарея → КЭС → панели (справа) — только при наличии КЭС.
   if(k>0){
-    // МАП (правый порт) → батарея: вниз, потом горизонталь к батарее.
-    edges.push({pts:[[mapPortR,mapBotY],[mapPortR,BATTY]], rule:{greenSign:1,greenDir:'toEnd'},
-      label:{x:mapPortR-14, y:(mapBotY+BATTY)/2},
-      getValue:function(d){return d.map_battery_power;}});
-    edges.push({pts:[[mapPortR,BATTY],[battX,BATTY]], rule:{greenSign:1,greenDir:'toEnd'},
-      label:{x:(mapPortR+battX)/2, y:BATTY-12},
-      getValue:function(d){return d.map_battery_power;}});
     // батарея → КЭС (через горизонтальную шину на уровне KESY-40).
     var kx1=kesXs[0], kx2=kesXs[k-1];
     edges.push({pts:[[battX,BATTY+sprH('battery')/2],[battX,KESY-40]],
