@@ -236,16 +236,25 @@ func isMPPTKey(ip string) bool {
 // placementTotals группирует свежие снимки сетевых инверторов (Deye/Sofar) по
 // размещениям (field placement) и считает суммарные активную и PV-мощности.
 // Устройства МАП, MPPT-контроллеры (КЭС) и электросчётчик исключаются — они не
-// участвуют в рамке «Мощности инверторов». Порядок размещений — как в order
-// (из placementOrder); размещение, найденное в данных, но отсутствующее в order
-// (старый снимок), дописывается в конец, дубли исключаются. Возвращает список
-// размещений (ровно те, что присутствуют в данных), общую активную и PV-мощность.
+// участвуют в рамке «Мощности инверторов». Возвращает список размещений В ПОРЯДКЕ,
+// заданном конфигом (order из placementOrder) — каждое размещение присутствует в
+// результате всегда (ноль, если ни один его инвертор не дал свежих данных, напр.
+// ночью), плюс размещения из старых снимков, найденные в данных, но отсутствующие
+// в конфиге (дописываются в конец, дубли исключаются). Плюс общая активная и
+// PV-мощность (сумма по всем размещениям).
 func placementTotals(devices []deviceSnapshot, order []string, staleCutoff time.Time) ([]placementPower, float64, float64) {
-	orderIdx := make(map[string]bool, len(order))
+	inOrder := make(map[string]bool, len(order))
 	placeOrder := make([]string, 0, len(order))
 	for _, p := range order {
 		placeOrder = append(placeOrder, p)
-		orderIdx[p] = true
+		inOrder[p] = true
+	}
+	// configured — размещения из конфига: они отображаются всегда (с норлём при
+	// отсутствии свежих данных), тогда как «чужие» размещения из старых снимков —
+	// только при наличии данных.
+	configured := make(map[string]bool, len(order))
+	for _, p := range order {
+		configured[p] = true
 	}
 	placePower := map[string]*placementPower{}
 	getPlace := func(name string) *placementPower {
@@ -256,8 +265,8 @@ func placementTotals(devices []deviceSnapshot, order []string, staleCutoff time.
 		if !ok {
 			pp = &placementPower{Name: name}
 			placePower[name] = pp
-			if !orderIdx[name] {
-				orderIdx[name] = true
+			if !inOrder[name] {
+				inOrder[name] = true
 				placeOrder = append(placeOrder, name)
 			}
 		}
@@ -294,6 +303,12 @@ func placementTotals(devices []deviceSnapshot, order []string, staleCutoff time.
 	for _, name := range placeOrder {
 		pp, ok := placePower[name]
 		if !ok {
+			// Размещение из конфига без свежих данных (все инверторы оффлайн) — плашка
+			// выводится с нулями («—»). «Чужие» размещения без данных пропускаем.
+			if !configured[name] {
+				continue
+			}
+			placements = append(placements, placementPower{Name: name})
 			continue
 		}
 		placements = append(placements, placementPower{
