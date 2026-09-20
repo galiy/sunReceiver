@@ -209,7 +209,7 @@ function layoutHouse(data){
 
   // Ветвь «Внутренняя сеть» → инверторы → панели (слева).
   if(n>0){
-    var x1=invXs[0]-40, x2=invXs[n-1]+40;
+    var x1=invXs[0], x2=invXs[n-1];
     var dropX=Math.round((invXs[0]+invXs[n-1])/2);
     // МАП (левый порт) → вниз к шине («Внутренняя сеть»).
     edges.push({pts:[[mapPortL,mapBotY],[mapPortL,BUSY-40],[dropX,BUSY-40],[dropX,BUSY]],
@@ -244,7 +244,7 @@ function layoutHouse(data){
       label:{x:(mapPortR+battX)/2, y:BATTY-12},
       getValue:function(d){return d.map_battery_power;}});
     // батарея → КЭС (через горизонтальную шину на уровне KESY-40).
-    var kx1=kesXs[0]-40, kx2=kesXs[k-1]+40;
+    var kx1=kesXs[0], kx2=kesXs[k-1];
     edges.push({pts:[[battX,BATTY+sprH('battery')/2],[battX,KESY-40]],
       rule:{greenSign:1,greenDir:'toEnd'},
       label:{x:battX-14, y:(BATTY+30+KESY-40)/2},
@@ -294,7 +294,7 @@ function layoutGarage(data){
   ];
 
   if(n>0){
-    var x1=invXs[0]-40, x2=invXs[n-1]+40;
+    var x1=invXs[0], x2=invXs[n-1];
     var dropX=Math.round((invXs[0]+invXs[n-1])/2);
     // Шина → вниз к горизонтальной шине инверторов.
     edges.push({pts:[[innerX,MAI],[innerX,BUSY-40],[dropX,BUSY-40],[dropX,BUSY]],
