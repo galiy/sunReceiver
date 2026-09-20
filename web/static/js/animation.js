@@ -49,7 +49,10 @@ function pathWithRounds(pts, r){
 }
 
 // ---------- Спрайт-узел ----------
-function spriteNode(svg, key, cx, cy, label){
+// raise — поднять спрайт вверх на N px (точка подключения магистрали тогда
+// приходится в нижнюю часть стены, а не в крышу, напр. у Дома/Гаража).
+function spriteNode(svg, key, cx, cy, label, raise){
+  raise=raise||0;
   var g=document.createElementNS(NS,'g');
   var spec=SPR[sprKey(key)]||SPR.grid;
   var img=document.createElementNS(NS,'image');
@@ -57,12 +60,12 @@ function spriteNode(svg, key, cx, cy, label){
   img.setAttribute('width',spec.w);
   img.setAttribute('height',spec.h);
   img.setAttribute('x',cx-spec.w/2);
-  img.setAttribute('y',cy-spec.h/2);
+  img.setAttribute('y',cy-raise-spec.h/2);
   img.setAttribute('class','anim-sprite');
   g.appendChild(img);
   if(label){
     var t=document.createElementNS(NS,'text');
-    t.setAttribute('x',cx); t.setAttribute('y',cy+spec.h/2+14);
+    t.setAttribute('x',cx); t.setAttribute('y',cy-raise+spec.h/2+14);
     t.setAttribute('text-anchor','middle');
     t.setAttribute('class','anim-name');
     t.textContent=label;
@@ -159,7 +162,7 @@ function buildScheme(container, nodes, edges){
     if(edges[i].bus){ drawBus(svg, edges[i].x1, edges[i].x2, edges[i].y); continue; }
     objs.push(makeEdge(svg, edges[i]));
   }
-  for(var j=0;j<nodes.length;j++){ var n=nodes[j]; spriteNode(svg, n.key, n.cx, n.cy, n.label); }
+  for(var j=0;j<nodes.length;j++){ var n=nodes[j]; spriteNode(svg, n.key, n.cx, n.cy, n.label, n.raise); }
   return {svg:svg, edges:objs};
 }
 
@@ -207,7 +210,7 @@ function layoutHouse(data){
     {key:'grid', cx:gridX, cy:MAI, label:'Сеть'},
     {key:'meter',cx:meterX,cy:MAI, label:'Счётчик'},
     {key:'map',  cx:mapX,  cy:MAI, label:'МАП'},
-    {key:'house',cx:houseX,cy:MAI, label:'Дом'},
+    {key:'house',cx:houseX,cy:MAI, label:'Дом', raise:26},
     {key:'battery',cx:battX,cy:BATTY, label:'Батарея'}
   ];
 
@@ -301,7 +304,7 @@ function layoutGarage(data){
 
   var nodes=[
     {key:'grid', cx:gridX, cy:MAI, label:'Сеть'},
-    {key:'garage',cx:garageX,cy:MAI,label:'Гараж'}
+    {key:'garage',cx:garageX,cy:MAI,label:'Гараж', raise:24}
   ];
 
   var edges=[
