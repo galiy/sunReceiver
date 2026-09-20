@@ -31,6 +31,22 @@ function sprH(key){ var s=SPR[sprKey(key)]||SPR.grid; return s.h; }
 var GREEN='#37b24d', RED='#f03e3e';
 var NS='http://www.w3.org/2000/svg';
 
+// Количество и скорость огоньков зависят от мощности: чем больше мощность, тем
+// их больше (вплотную, шаг ~9px) и тем быстрее они бегут. Диапазон: 100 Вт —
+// минимум (пара огоньков, еле ползут), 20 кВт — максимум (вплотную, очень быстро).
+var P_MIN=100, P_MAX=20000;     // Вт
+var DOTS_MIN=2, DOTS_SPACING=9; // предельная плотность: ~9px между огоньками
+var MAX_DOTS=26;                // пул кружков на одну связь
+function capacity(total){ return Math.max(DOTS_MIN, Math.min(MAX_DOTS, Math.round(total/DOTS_SPACING))); }
+function pwLerp(v){ // 0..1 по мощности, вне [P_MIN,P_MAX] — зажим
+  var t=(Math.abs(v)-P_MIN)/(P_MAX-P_MIN);
+  return t<0?0:(t>1?1:t);
+}
+function dotsFor(t, cap){ return Math.max(DOTS_MIN, Math.round(DOTS_MIN + (cap-DOTS_MIN)*t)); }
+function speedFor(t){ // px/с: 12 (100 Вт) .. 520 (20 кВт)
+  return 12 + (520-12)*t;
+}
+
 // ---------- Путь с закруглениями в углах ----------
 function pathWithRounds(pts, r){
   r = r===undefined?12:r;
@@ -144,18 +160,19 @@ function makeEdge(svg, opts){
   }
 
   var dotG=document.createElementNS(NS,'g');
-  var dots=[], N=3;
-  for(var i=0;i<N;i++){
+  var dots=[], MAX=MAX_DOTS;
+  for(var i=0;i<MAX;i++){
     var c=document.createElementNS(NS,'circle');
     c.setAttribute('r',4);
     c.setAttribute('fill',GREEN);
     dotG.appendChild(c);
-    dots.push({el:c, phase:i/N});
+    dots.push({el:c});
   }
   svg.appendChild(dotG);
 
   return {path:path, total:total, dots:dots, dotG:dotG, txt:txt,
-    rule:opts.rule, getValue:opts.getValue, value:0, active:false, toEnd:true};
+    rule:opts.rule, getValue:opts.getValue, value:0, active:false, toEnd:true,
+    capacity:capacity(total), nDots:0, speed:0};
 }
 
 function updateEdge(e){
@@ -169,6 +186,9 @@ function updateEdge(e){
   var isGreen = (rule.greenSign>0) ? (v>0) : (v<0);
   e.toEnd = rule.greenDir==='toEnd' ? isGreen : !isGreen;
   e.active = Math.abs(v)>0.05;
+  var t=pwLerp(v);                 // 0 (100 Вт) .. 1 (20 кВт)
+  e.nDots=dotsFor(t, e.capacity);
+  e.speed=speedFor(t)/e.total;     // доля пути в секунду
   var col=isGreen?GREEN:RED;
   for(var i=0;i<e.dots.length;i++) e.dots[i].el.setAttribute('fill',col);
   if(e.txt){
@@ -185,13 +205,16 @@ function animateEdge(e, t){
   var g=e.dotG;
   if(!e.active){ g.style.display='none'; return; }
   g.style.display='';
-  var speed=0.18;
+  var N=e.nDots, sp=e.speed;
   for(var i=0;i<e.dots.length;i++){
-    var ph=(e.dots[i].phase + t*speed) % 1;
+    var el=e.dots[i].el;
+    if(i>=N){ el.style.display='none'; continue; }
+    el.style.display='';
+    var ph=(i/N + t*sp) % 1;
     var f=e.toEnd ? ph : (1-ph);
     var pt=e.path.getPointAtLength(f*e.total);
-    e.dots[i].el.setAttribute('cx', pt.x);
-    e.dots[i].el.setAttribute('cy', pt.y);
+    el.setAttribute('cx', pt.x);
+    el.setAttribute('cy', pt.y);
   }
 }
 
