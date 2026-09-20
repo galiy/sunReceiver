@@ -1,7 +1,14 @@
 'use strict';
 
-// ---------- Спрайты (PNG на прозрачном фоне, скопированы из animation/) ----------
-// Ключ — тип узла; размеры подобраны под макет (сохраняют пропорции исходника).
+// Страница анимации: две схемы (Дом и Гараж) со спрайтами и ортогональными
+// связями. «Внутренняя сеть» и «линия батареи» — проводники-шины без подписи:
+// это не устройства, а узлы-соединители из UML (нужны только для замысла формул).
+// Ширина шины определяется числом подключённых устройств, толщина — как у связи.
+// Все связи — ломаные под прямыми углами со скруглениями на углах; огоньки бегут
+// вдоль пути, цвет — по направлению (из сети красный, выработка/в сеть зелёный),
+// мощность обновляется раз в секунду.
+
+// ---------- Спрайты (PNG на прозрачном фоне) ----------
 var SPR = {
   grid:    {file:'power-line-pylon', w:64, h:135},
   meter:   {file:'dds238-meter',     w:52, h:116},
@@ -14,84 +21,89 @@ var SPR = {
   kes:     {file:'kes-dominator',    w:66, h:74},
   battery: {file:'battery-lifepo4',  w:104,h:64}
 };
-function sprKey(kind){ return (kind==='deye'||kind==='sofar') ? kind : (kind==='kes'?'kes':kind) || 'grid'; }
+function sprKey(kind){ return (kind==='deye'||kind==='sofar'||kind==='kes') ? kind : (kind||'grid'); }
+function sprH(key){ var s=SPR[sprKey(key)]||SPR.grid; return s.h; }
 
-// ---------- Цвета огоньков ----------
-var GREEN = '#37b24d';
-var RED   = '#f03e3e';
-var WIRE  = '#3a4752';
+var GREEN='#37b24d', RED='#f03e3e';
+var NS='http://www.w3.org/2000/svg';
 
-// ---------- Утилиты ----------
-function createSvg(container){
-  var svg = document.getElementById(container);
-  svg.setAttribute('width','100%');
-  return svg;
-}
-function imageNode(svg, key, cx, cy, label){
-  var g = document.createElementNS('http://www.w3.org/2000/svg','g');
-  if(key==='bus'){
-    // «Внутренняя сеть» — условный узел-соединитель (нет спрайта): светлый
-    // прямоугольник с меткой.
-    var r=document.createElementNS('http://www.w3.org/2000/svg','rect');
-    r.setAttribute('x',cx-52); r.setAttribute('y',cy-26);
-    r.setAttribute('width',104); r.setAttribute('height',52);
-    r.setAttribute('rx',8);
-    r.setAttribute('class','anim-bus');
-    g.appendChild(r);
-  } else {
-    var spec = SPR[sprKey(key)] || SPR.grid;
-    var img = document.createElementNS('http://www.w3.org/2000/svg','image');
-    img.setAttribute('href','/static/img/animation/'+spec.file+'.png?v='+CACHE_BUST);
-    img.setAttribute('width',spec.w);
-    img.setAttribute('height',spec.h);
-    img.setAttribute('x',cx-spec.w/2);
-    img.setAttribute('y',cy-spec.h);
-    img.setAttribute('class','anim-sprite');
-    g.appendChild(img);
+// ---------- Путь с закруглениями в углах ----------
+function pathWithRounds(pts, r){
+  r = r===undefined?12:r;
+  var d='M '+pts[0][0]+' '+pts[0][1];
+  for(var i=1;i<pts.length-1;i++){
+    var p=pts[i], a=pts[i-1], n=pts[i+1];
+    var v1=[p[0]-a[0], p[1]-a[1]];
+    var v2=[n[0]-p[0], n[1]-p[1]];
+    var l1=Math.sqrt(v1[0]*v1[0]+v1[1]*v1[1])||1;
+    var l2=Math.sqrt(v2[0]*v2[0]+v2[1]*v2[1])||1;
+    var rr=Math.min(r, l1/2, l2/2);
+    var s=[p[0]-v1[0]/l1*rr, p[1]-v1[1]/l1*rr];
+    var e=[p[0]+v2[0]/l2*rr, p[1]+v2[1]/l2*rr];
+    d+=' L '+s[0]+' '+s[1];
+    d+=' Q '+p[0]+' '+p[1]+' '+e[0]+' '+e[1];
   }
+  var last=pts[pts.length-1];
+  d+=' L '+last[0]+' '+last[1];
+  return d;
+}
+
+// ---------- Спрайт-узел ----------
+function spriteNode(svg, key, cx, cy, label){
+  var g=document.createElementNS(NS,'g');
+  var spec=SPR[sprKey(key)]||SPR.grid;
+  var img=document.createElementNS(NS,'image');
+  img.setAttribute('href','/static/img/animation/'+spec.file+'.png?v='+CACHE_BUST);
+  img.setAttribute('width',spec.w);
+  img.setAttribute('height',spec.h);
+  img.setAttribute('x',cx-spec.w/2);
+  img.setAttribute('y',cy-spec.h/2);
+  img.setAttribute('class','anim-sprite');
+  g.appendChild(img);
   if(label){
-    var t=document.createElementNS('http://www.w3.org/2000/svg','text');
-    t.setAttribute('x',cx);
-    t.setAttribute('y',cy+16);
+    var t=document.createElementNS(NS,'text');
+    t.setAttribute('x',cx); t.setAttribute('y',cy+spec.h/2+14);
     t.setAttribute('text-anchor','middle');
     t.setAttribute('class','anim-name');
     t.textContent=label;
     g.appendChild(t);
   }
   svg.appendChild(g);
-  return g;
 }
 
-// ---------- Связь (линия + бегущие огоньки + подпись мощности) ----------
-function makeEdge(svg, ax, ay, bx, by, direction){
-  // direction: {greenSign:+1|-1, greenDir:'toA'|'toB'} — правило цвета/направления.
-  var line = document.createElementNS('http://www.w3.org/2000/svg','line');
-  line.setAttribute('x1',ax); line.setAttribute('y1',ay);
-  line.setAttribute('x2',bx); line.setAttribute('y2',by);
-  line.setAttribute('class','anim-wire');
-  svg.appendChild(line);
+// ---------- Шина: горизонтальный проводник без подписи ----------
+function drawBus(svg, x1, x2, y){
+  var l=document.createElementNS(NS,'line');
+  l.setAttribute('x1',x1); l.setAttribute('y1',y);
+  l.setAttribute('x2',x2); l.setAttribute('y2',y);
+  l.setAttribute('class','anim-bus-wire');
+  svg.appendChild(l);
+}
 
-  // Подпись мощности — в середине линии, перпендикулярный сдвиг.
-  var mx=(ax+bx)/2, my=(ay+by)/2;
-  var dx=bx-ax, dy=by-ay;
-  var len=Math.sqrt(dx*dx+dy*dy)||1;
-  // Перпендикуляр (нормированный).
-  var px=-dy/len, py=dx/len;
-  var off=18; // сдвиг подписи в сторону от линии
-  var lx=mx+px*off, ly=my+py*off;
-  var txt=document.createElementNS('http://www.w3.org/2000/svg','text');
-  txt.setAttribute('x',lx); txt.setAttribute('y',ly-4);
-  txt.setAttribute('text-anchor','middle');
-  txt.setAttribute('class','anim-power');
-  txt.textContent='—';
-  svg.appendChild(txt);
+// ---------- Связь ----------
+function makeEdge(svg, opts){
+  var path=document.createElementNS(NS,'path');
+  path.setAttribute('d', pathWithRounds(opts.pts));
+  path.setAttribute('fill','none');
+  path.setAttribute('class','anim-wire');
+  svg.appendChild(path);
+  var total=path.getTotalLength();
 
-  // Группа огоньков: несколько точек, бегущих по линии.
-  var dots=[];
-  var N=3;
-  var dotG=document.createElementNS('http://www.w3.org/2000/svg','g');
+  var txt=null;
+  if(opts.label){
+    txt=document.createElementNS(NS,'text');
+    txt.setAttribute('x',opts.label.x);
+    txt.setAttribute('y',opts.label.y);
+    txt.setAttribute('text-anchor',opts.label.anchor||'middle');
+    txt.setAttribute('class','anim-power');
+    txt.textContent='—';
+    svg.appendChild(txt);
+  }
+
+  var dotG=document.createElementNS(NS,'g');
+  var dots=[], N=3;
   for(var i=0;i<N;i++){
-    var c=document.createElementNS('http://www.w3.org/2000/svg','circle');
+    var c=document.createElementNS(NS,'circle');
     c.setAttribute('r',4);
     c.setAttribute('fill',GREEN);
     dotG.appendChild(c);
@@ -99,207 +111,228 @@ function makeEdge(svg, ax, ay, bx, by, direction){
   }
   svg.appendChild(dotG);
 
-  return {
-    ax:ax, ay:ay, bx:bx, by:by, direction:direction,
-    txt:txt, dots:dots, dotG:dotG,
-    value:0, active:false
-  };
+  return {path:path, total:total, dots:dots, dotG:dotG, txt:txt,
+    rule:opts.rule, value:0, active:false, toEnd:true};
 }
 
-// Обновляет геометрию/цвет/активность огоньков по текущему значению.
 function updateEdge(e){
-  var v=e.value;
-  var dir=e.direction;
-  var isGreen;
-  if(dir.greenSign>0){ isGreen = v>0; }
-  else { isGreen = v<0; }
-  // Направление движения огоньков: к зелёному концу (генерация) или обратно.
-  var toGreen = (dir.greenDir==='toA');
-  var flowsToGreen = isGreen ? toGreen : !toGreen;
-  // Физический поток направлен «к зелёному» когда зелёный, иначе «от зелёного».
-  // flowsToGreen — огоньки бегут в сторону greenDir; при красном — против.
-  e.flowToGreen = flowsToGreen;
-  e.active = Math.abs(v) > 0.05;
-  var col = isGreen ? GREEN : RED;
-  for(var i=0;i<e.dots.length;i++){ e.dots[i].el.setAttribute('fill',col); }
-  // Подпись: значение со знаком, W.
-  e.txt.textContent = (Math.round(v*10)/10 === 0 ? '0' : (v>0?'+':'')+(Math.round(v*10)/10)) + ' W';
+  var v=e.value, rule=e.rule;
+  var isGreen = (rule.greenSign>0) ? (v>0) : (v<0);
+  e.toEnd = rule.greenDir==='toEnd' ? isGreen : !isGreen;
+  e.active = Math.abs(v)>0.05;
+  var col=isGreen?GREEN:RED;
+  for(var i=0;i<e.dots.length;i++) e.dots[i].el.setAttribute('fill',col);
+  if(e.txt){
+    var rv=Math.round(v*10)/10;
+    e.txt.textContent=(rv===0?'0':(v>0?'+':'')+rv)+' W';
+  }
 }
 
-// Кадр анимации: двигает огоньки по сегменту в зависимости от направления.
 function animateEdge(e, t){
   var g=e.dotG;
   if(!e.active){ g.style.display='none'; return; }
   g.style.display='';
-  var toGreen;
-  if(e.flowToGreen) toGreen=true; else toGreen=false;
-  var ax=e.ax, ay=e.ay, bx=e.bx, by=e.by;
-  var sx, sy, ex, ey;
-  if(toGreen){ sx=ax; sy=ay; ex=bx; ey=by; } else { sx=bx; sy=by; ex=ax; ey=ay; }
-  var speed=0.35; // доля пути в секунду
+  var speed=0.18;
   for(var i=0;i<e.dots.length;i++){
     var ph=(e.dots[i].phase + t*speed) % 1;
-    var x=sx+(ex-sx)*ph, y=sy+(ey-sy)*ph;
-    var c=e.dots[i].el;
-    c.setAttribute('cx',x); c.setAttribute('cy',y);
+    var f=e.toEnd ? ph : (1-ph);
+    var pt=e.path.getPointAtLength(f*e.total);
+    e.dots[i].el.setAttribute('cx', pt.x);
+    e.dots[i].el.setAttribute('cy', pt.y);
   }
 }
 
-// ---------- Построение схемы ----------
-// nodes: [{key,cx,cy,label}], edges: [{a:{x,y},b:{x,y},rule,getValue}]
-function buildScheme(container, nodes, edges, getValueFor){
-  var svg = createSvg(container);
+// ---------- Сборка ----------
+function buildScheme(container, nodes, edges){
+  var svg=document.getElementById(container);
   svg.innerHTML='';
-  var edgeObjs=[];
+  var objs=[];
   for(var i=0;i<edges.length;i++){
-    var ed=edges[i];
-    var obj=makeEdge(svg, ed.a.x, ed.a.y, ed.b.x, ed.b.y, ed.rule);
-    obj.getValue=ed.getValue;
-    edgeObjs.push(obj);
+    if(edges[i].bus){ drawBus(svg, edges[i].x1, edges[i].x2, edges[i].y); continue; }
+    objs.push(makeEdge(svg, edges[i]));
   }
-  // Узлы поверх проводов.
-  for(var j=0;j<nodes.length;j++){
-    var n=nodes[j];
-    imageNode(svg, n.key, n.cx, n.cy, n.label);
-  }
-  return {svg:svg, edges:edgeObjs};
+  for(var j=0;j<nodes.length;j++){ var n=nodes[j]; spriteNode(svg, n.key, n.cx, n.cy, n.label); }
+  return {svg:svg, edges:objs};
 }
 
-// ---------- Данные ----------
-var LAST={ house:{ts:'—', data:null, sig:''}, garage:{ts:'—', data:null, sig:''} };
-var BUILT={ house:null, garage:null };
+var BUILT={house:null, garage:null};
 
-// Серия из n центров, симметрично вокруг center, шагом step.
-function centersAround(center, n, step){
+function centers(center, n, step){
   var out=[];
   if(n<=0) return out;
   var start=center - step*(n-1)/2;
-  for(var i=0;i<n;i++) out.push(start + i*step);
+  for(var i=0;i<n;i++) out.push(start+i*step);
   return out;
 }
 
-// Настраивает layout Дома (пересборка только при смене числа устройств).
+// ---------- Схема Дома ----------
+// Магистраль сверху (сеть слева → счётчик → МАП → дом справа); от МАП вниз две
+// ветви: левая — «Внутренняя сеть» (шина) → инверторы → панели; правая — батарея
+// (шина) → КЭС → панели.
 function layoutHouse(data){
   var invs=data.inverters||[];
   var kes=data.kes||[];
   var n=invs.length, k=kes.length;
 
-  var row1y=130, row2y=360, row3y=560, row4y=720;
-  var grid={x:120,y:row1y};
-  var meter={x:360,y:row1y};
-  var map={x:620,y:row1y};
-  var house={x:920,y:row1y};
-  var inner={x:400,y:row2y};
-  var battery={x:790,y:row2y};
+  var MAI=150, BUSY=330, INVY=450, PANY=580;
+  var BATTY=250, KESY=460, KPANY=590;
+  var gridX=110, meterX=330, mapX=560, houseX=880, battX=920;
 
-  var invXs=centersAround(inner.x, n, 170);
-  var kesXs=centersAround(battery.x, k, 150);
+  // Ветвь инверторов — левый блок; ветвь КЭС — правый блок (под батареей).
+  var invXs=centers(400, n, 165);
+  var kesXs=centers(battX, k, 140);
 
   var nodes=[
-    {key:'grid',cx:grid.x,cy:grid.y,label:'Сеть'},
-    {key:'meter',cx:meter.x,cy:meter.y,label:'Счётчик'},
-    {key:'map',cx:map.x,cy:map.y,label:'МАП'},
-    {key:'house',cx:house.x,cy:house.y,label:'Дом'},
-    {key:'bus',cx:inner.x,cy:inner.y,label:'Внутренняя сеть'},
-    {key:'battery',cx:battery.x,cy:battery.y,label:'Батарея'}
+    {key:'grid', cx:gridX, cy:MAI, label:'Сеть'},
+    {key:'meter',cx:meterX,cy:MAI, label:'Счётчик'},
+    {key:'map',  cx:mapX,  cy:MAI, label:'МАП'},
+    {key:'house',cx:houseX,cy:MAI, label:'Дом'},
+    {key:'battery',cx:battX,cy:BATTY, label:'Батарея'}
   ];
+
   var edges=[
-    {a:{x:grid.x,y:row1y}, b:{x:meter.x,y:row1y}, rule:{greenSign:-1,greenDir:'toA'}, getValue:function(d){return d.meter_active_power;}},
-    {a:{x:meter.x,y:row1y}, b:{x:map.x,y:row1y}, rule:{greenSign:-1,greenDir:'toA'}, getValue:function(d){return d.map_grid_power;}},
-    {a:{x:map.x,y:row1y}, b:{x:house.x,y:row1y}, rule:{greenSign:-1,greenDir:'toA'}, getValue:function(d){return d.house_power;}},
-    {a:{x:map.x,y:row1y}, b:{x:inner.x,y:row2y}, rule:{greenSign:1,greenDir:'toA'}, getValue:function(d){
-        var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s;}},
-    {a:{x:map.x,y:row1y}, b:{x:battery.x,y:row2y}, rule:{greenSign:1,greenDir:'toA'}, getValue:function(d){return d.map_battery_power;}}
+    // Магистраль (горизонтальная, на уровне MAI).
+    {pts:[[gridX,MAI],[meterX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
+     label:{x:(gridX+meterX)/2, y:MAI-12},
+     getValue:function(d){return d.meter_active_power;}},
+    {pts:[[meterX,MAI],[mapX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
+     label:{x:(meterX+mapX)/2, y:MAI-12},
+     getValue:function(d){return d.map_grid_power;}},
+    {pts:[[mapX,MAI],[houseX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
+     label:{x:(mapX+houseX)/2, y:MAI-12},
+     getValue:function(d){return d.house_power;}}
   ];
-  for(var i=0;i<n;i++){
-    var ix=invXs[i], inv=invs[i];
-    nodes.push({key:inv.kind,cx:ix,cy:row3y,label:inv.name});
-    nodes.push({key:'panel',cx:ix,cy:row4y,label:''});
-    // панель → инвертор
-    edges.push({a:{x:ix,y:row4y}, b:{x:ix,y:row3y}, rule:{greenSign:1,greenDir:'toB'}, getValue:(function(idx){return function(d){return d.inverters[idx].pv;};})(i)});
-    // инвертор → внутр. сеть (ac>0 выдача → к сети, b)
-    edges.push({a:{x:ix,y:row3y}, b:{x:inner.x,y:row2y}, rule:{greenSign:1,greenDir:'toB'}, getValue:(function(idx){return function(d){return d.inverters[idx].ac;};})(i)});
+
+  // Ветвь «Внутренняя сеть» → инверторы → панели (слева).
+  if(n>0){
+    var x1=invXs[0]-40, x2=invXs[n-1]+40;
+    var dropX=Math.round((invXs[0]+invXs[n-1])/2);
+    // МАП → вниз к шине («Внутренняя сеть»).
+    edges.push({pts:[[mapX,MAI],[mapX,BUSY-40],[dropX,BUSY-40],[dropX,BUSY]],
+      rule:{greenSign:1,greenDir:'toEnd'},
+      label:{x:mapX-14, y:(MAI+BUSY-40)/2},
+      getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }});
+    // Шина («Внутренняя сеть») — проводник без подписи, ширина по числу устройств.
+    edges.push({bus:true, x1:x1, x2:x2, y:BUSY});
+    for(var i=0;i<n;i++){
+      var ix=invXs[i], inv=invs[i];
+      nodes.push({key:inv.kind,cx:ix,cy:INVY,label:inv.name});
+      nodes.push({key:'panel',cx:ix,cy:PANY,label:''});
+      // инвертор → шина (вверх)
+      edges.push({pts:[[ix,INVY-sprH(inv.kind)/2],[ix,BUSY]], rule:{greenSign:1,greenDir:'toEnd'},
+        label:{x:ix+38,y:(INVY-39+BUSY)/2},
+        getValue:(function(idx){return function(d){return d.inverters[idx].ac;};})(i)});
+      // панель → инвертор (вверх)
+      var pvTop=INVY+sprH(inv.kind)/2, pvBot=PANY-31;
+      edges.push({pts:[[ix,pvTop],[ix,pvBot]], rule:{greenSign:1,greenDir:'toEnd'},
+        label:{x:ix+38,y:(pvTop+pvBot)/2},
+        getValue:(function(idx){return function(d){return d.inverters[idx].pv;};})(i)});
+    }
   }
-  for(var j=0;j<k;j++){
-    var kx=kesXs[j], kes=kes[j];
-    nodes.push({key:'kes',cx:kx,cy:row3y,label:kes.name});
-    nodes.push({key:'panel',cx:kx,cy:row4y,label:''});
-    edges.push({a:{x:kx,y:row4y}, b:{x:kx,y:row3y}, rule:{greenSign:1,greenDir:'toB'}, getValue:(function(idx){return function(d){return d.kes[idx].pv;};})(j)});
-    edges.push({a:{x:kx,y:row3y}, b:{x:battery.x,y:row2y}, rule:{greenSign:1,greenDir:'toB'}, getValue:(function(idx){return function(d){return d.kes[idx].ac;};})(j)});
+
+  // Ветвь батарея → КЭС → панели (справа).
+  if(k>0){
+    // МАП → батарея: вниз до уровня BATTY, потом горизонтально к батарее.
+    edges.push({pts:[[mapX,MAI],[mapX,BATTY]], rule:{greenSign:1,greenDir:'toEnd'},
+      label:{x:mapX-14, y:(MAI+BATTY)/2},
+      getValue:function(d){return d.map_battery_power;}});
+    edges.push({pts:[[mapX,BATTY],[battX,BATTY]], rule:{greenSign:1,greenDir:'toEnd'},
+      label:{x:(mapX+battX)/2, y:BATTY-12},
+      getValue:function(d){return d.map_battery_power;}});
+    // батарея → КЭС (через горизонтальную шину на уровне KESY-40).
+    var kx1=kesXs[0]-40, kx2=kesXs[k-1]+40;
+    edges.push({pts:[[battX,BATTY+sprH('battery')/2],[battX,KESY-40]],
+      rule:{greenSign:1,greenDir:'toEnd'},
+      label:{x:battX-14, y:(BATTY+30+KESY-40)/2},
+      getValue:function(d){ var s=0; for(var i=0;i<d.kes.length;i++) s+=d.kes[i].ac; return s; }});
+    edges.push({bus:true, x1:kx1, x2:kx2, y:KESY-40});
+    for(var j=0;j<k;j++){
+      var kx=kesXs[j], kes=kes[j];
+      nodes.push({key:'kes',cx:kx,cy:KESY,label:kes.name});
+      nodes.push({key:'panel',cx:kx,cy:KPANY,label:''});
+      edges.push({pts:[[kx,KESY-sprH('kes')/2],[kx,KESY-40]], rule:{greenSign:1,greenDir:'toEnd'},
+        label:{x:kx+38,y:(KESY-37+KESY-40)/2},
+        getValue:(function(idx){return function(d){return d.kes[idx].ac;};})(j)});
+      var kPvTop=KESY+sprH('kes')/2, kPvBot=KPANY-31;
+      edges.push({pts:[[kx,kPvTop],[kx,kPvBot]], rule:{greenSign:1,greenDir:'toEnd'},
+        label:{x:kx+38,y:(kPvTop+kPvBot)/2},
+        getValue:(function(idx){return function(d){return d.kes[idx].pv;};})(j)});
+    }
   }
-  // высота канвы
-  var h = row4y + 90;
-  return {nodes:nodes, edges:edges, height:h};
+
+  return {nodes:nodes, edges:edges, height:KPANY+80};
 }
 
+// ---------- Схема Гаража ----------
+// Магистраль сверху (сеть слева → «Внутренняя сеть» → гараж справа); от шины вниз
+// ветвь инверторов → панели.
 function layoutGarage(data){
   var invs=data.inverters||[];
   var n=invs.length;
-  var row1y=140, row2y=380, row3y=540;
-  var grid={x:160,y:row1y};
-  var inner={x:500,y:row1y};
-  var garage={x:850,y:row1y};
-  var invXs=centersAround(inner.x, n, 170);
+  var MAI=170, BUSY=360, INVY=470, PANY=600;
+  var gridX=140, innerX=520, garageX=880;
+  var invXs=centers(410, n, 170);
+
   var nodes=[
-    {key:'grid',cx:grid.x,cy:grid.y,label:'Сеть'},
-    {key:'bus',cx:inner.x,cy:inner.y,label:'Внутренняя сеть'},
-    {key:'garage',cx:garage.x,cy:garage.y,label:'Гараж'}
+    {key:'grid', cx:gridX, cy:MAI, label:'Сеть'},
+    {key:'garage',cx:garageX,cy:MAI,label:'Гараж'}
   ];
+
   var edges=[
-    {a:{x:grid.x,y:row1y}, b:{x:inner.x,y:row1y}, rule:{greenSign:1,greenDir:'toA'}, getValue:function(d){
-        var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s;}},
-    {a:{x:inner.x,y:row1y}, b:{x:garage.x,y:row1y}, rule:{greenSign:-1,greenDir:'toA'}, getValue:function(d){return d.garage_power;}}
+    // Сеть → шина (магистраль).
+    {pts:[[gridX,MAI],[innerX,MAI]], rule:{greenSign:1,greenDir:'toEnd'},
+     label:{x:(gridX+innerX)/2, y:MAI-12},
+     getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }},
+    // Шина → гараж.
+    {pts:[[innerX,MAI],[garageX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
+     label:{x:(innerX+garageX)/2, y:MAI-12},
+     getValue:function(d){return d.garage_power;}}
   ];
-  for(var i=0;i<n;i++){
-    var ix=invXs[i], inv=invs[i];
-    nodes.push({key:inv.kind,cx:ix,cy:row2y,label:inv.name});
-    nodes.push({key:'panel',cx:ix,cy:row3y,label:''});
-    edges.push({a:{x:ix,y:row3y}, b:{x:ix,y:row2y}, rule:{greenSign:1,greenDir:'toB'}, getValue:(function(idx){return function(d){return d.inverters[idx].pv;};})(i)});
-    edges.push({a:{x:ix,y:row2y}, b:{x:inner.x,y:row1y}, rule:{greenSign:1,greenDir:'toA'}, getValue:(function(idx){return function(d){return d.inverters[idx].ac;};})(i)});
+
+  if(n>0){
+    var x1=invXs[0]-40, x2=invXs[n-1]+40;
+    var dropX=Math.round((invXs[0]+invXs[n-1])/2);
+    // Шина → вниз к горизонтальной шине инверторов.
+    edges.push({pts:[[innerX,MAI],[innerX,BUSY-40],[dropX,BUSY-40],[dropX,BUSY]],
+      rule:{greenSign:1,greenDir:'toEnd'},
+      label:{x:innerX-14, y:(MAI+BUSY-40)/2},
+      getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }});
+    edges.push({bus:true, x1:x1, x2:x2, y:BUSY});
+    for(var i=0;i<n;i++){
+      var ix=invXs[i], inv=invs[i];
+      nodes.push({key:inv.kind,cx:ix,cy:INVY,label:inv.name});
+      nodes.push({key:'panel',cx:ix,cy:PANY,label:''});
+      edges.push({pts:[[ix,INVY-sprH(inv.kind)/2],[ix,BUSY]], rule:{greenSign:1,greenDir:'toEnd'},
+        label:{x:ix+38,y:(INVY-39+BUSY)/2},
+        getValue:(function(idx){return function(d){return d.inverters[idx].ac;};})(i)});
+      var pvTop=INVY+sprH(inv.kind)/2, pvBot=PANY-31;
+      edges.push({pts:[[ix,pvTop],[ix,pvBot]], rule:{greenSign:1,greenDir:'toEnd'},
+        label:{x:ix+38,y:(pvTop+pvBot)/2},
+        getValue:(function(idx){return function(d){return d.inverters[idx].pv;};})(i)});
+    }
   }
-  return {nodes:nodes, edges:edges, height:row3y+90};
+
+  return {nodes:nodes, edges:edges, height:PANY+80};
 }
 
-// Собирает/пересобирает схему только при изменении набора устройств.
+// ---------- Пересборка схемы при изменении набора устройств ----------
 function ensureScheme(which, layoutData, container){
-  var sig = layoutData.nodes.map(function(n){return n.label;}).join('|');
-  var built = BUILT[which];
-  if(built && built.sig===sig && layoutData.height===built.height){
-    return built.obj;
-  }
-  var obj = buildScheme(container, layoutData.nodes, layoutData.edges, null);
-  BUILT[which]={sig:sig, height:layoutData.height, obj:obj};
+  var sig=layoutData.nodes.map(function(n){return n.label;}).join('|')+'#'+layoutData.height;
+  if(BUILT[which] && BUILT[which].sig===sig) return BUILT[which].obj;
+  var obj=buildScheme(container, layoutData.nodes, layoutData.edges);
+  BUILT[which]={sig:sig, obj:obj};
   var svg=obj.svg;
-  svg.setAttribute('viewBox','0 0 1040 '+layoutData.height);
+  svg.setAttribute('viewBox','0 0 1060 '+layoutData.height);
   svg.setAttribute('preserveAspectRatio','xMidYMid meet');
   return obj;
 }
 
-// Обновляет значения связей из свежих данных.
 function refreshEdges(obj, data){
   for(var i=0;i<obj.edges.length;i++){
     var e=obj.edges[i];
-    var v=e.getValue(data);
-    e.value = v;
+    e.value=e.getValue(data);
     updateEdge(e);
   }
-}
-
-async function tick(){
-  var r=await fetch('/api/animation');
-  if(!r.ok) return;
-  var data=await r.json();
-  var ts=data.generated_at? ('Актуально: '+fmtSec(data.generated_at)):'—';
-  // Дом
-  var lh=layoutHouse(data.house);
-  var oh=ensureScheme('house', lh, 'svgHouse');
-  refreshEdges(oh, data.house);
-  document.getElementById('animHouseTs').textContent=ts;
-  // Гараж
-  var lg=layoutGarage(data.garage);
-  var og=ensureScheme('garage', lg, 'svgGarage');
-  refreshEdges(og, data.garage);
-  document.getElementById('animGarageTs').textContent=ts;
 }
 
 function fmtSec(t){
@@ -308,8 +341,22 @@ function fmtSec(t){
   return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());
 }
 
-// Цикл анимации: общая rAF-петля двигает огоньки по всем связям.
-var animStart = performance.now();
+async function tick(){
+  var r=await fetch('/api/animation');
+  if(!r.ok) return;
+  var data=await r.json();
+  var ts=data.generated_at?('Актуально: '+fmtSec(data.generated_at)):'—';
+  var lh=layoutHouse(data.house);
+  var oh=ensureScheme('house', lh, 'svgHouse');
+  refreshEdges(oh, data.house);
+  document.getElementById('animHouseTs').textContent=ts;
+  var lg=layoutGarage(data.garage);
+  var og=ensureScheme('garage', lg, 'svgGarage');
+  refreshEdges(og, data.garage);
+  document.getElementById('animGarageTs').textContent=ts;
+}
+
+var animStart=performance.now();
 function loop(now){
   var t=(now-animStart)/1000;
   if(BUILT.house) for(var i=0;i<BUILT.house.obj.edges.length;i++) animateEdge(BUILT.house.obj.edges[i], t);

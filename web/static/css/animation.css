@@ -6,6 +6,7 @@
 .anim-body { overflow-x:auto; }
 .anim-svg { display:block; width:100%; height:auto; }
 .anim-wire { stroke:#3a4752; stroke-width:2; fill:none; }
+.anim-bus-wire { stroke:#3a4752; stroke-width:2; } /* шина-соединитель («Внутренняя сеть» и линия батареи) без подписи */
 .anim-sprite { opacity:1; }
 .anim-bus { fill:#eef1f4; stroke:#8a97a3; stroke-width:2; }
 .anim-name { fill:#6b7785; font-size:12px; }
