@@ -156,6 +156,9 @@ function updateEdge(e){
   var col=isGreen?GREEN:RED;
   for(var i=0;i<e.dots.length;i++) e.dots[i].el.setAttribute('fill',col);
   if(e.txt){
+    // При нулевой мощности подпись гасим полностью.
+    if(v===0){ e.txt.style.visibility='hidden'; return; }
+    e.txt.style.visibility='';
     // Цвет мощности: при движении огоньков — как у них, при 0 — нейтральный.
     e.txt.style.fill = e.active ? col : '#2b3238';
     e.txt.textContent=fmtPower(v);
