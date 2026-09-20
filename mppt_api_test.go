@@ -31,7 +31,7 @@ func closeEnough(a, b float64) bool {
 
 func TestMapMAPAPIParse(t *testing.T) {
 	// Фрагмент ответа read_json.php?device=map (docs/read_json.md) + _PNET_calc.
-	body := `{"timestamp":"1788806657","_Uacc":"52.0","_Iacc":"4","_UNET":"220","_PNET":"910","_PNET_calc":"1141.2","_PLoad":"-200","_TFNET":"50.0"}`
+	body := `{"timestamp":"1788806657","_Uacc":"52.0","_Iacc":"4","_UNET":"220","_PNET":"910","_PNET_calc":"1141.2","_PLoad":"-200","_PLoad_calc":"208","_TFNET":"50.0"}`
 	var r mapRaw
 	if err := json.Unmarshal([]byte(body), &r); err != nil {
 		t.Fatalf("unmarshal mapRaw: %v", err)
@@ -58,7 +58,7 @@ func TestMapMAPAPIParse(t *testing.T) {
 		"grid_frequency":  50.0,
 		"grid_voltage":    220.0,
 		"grid_power":      1141.2, // из _PNET_calc (достоверная), а не _PNET=910
-		"battery_power":   200.0,  // −(−200)
+		"battery_power":   -208.0, // −_PLoad_calc (= −(I×U)), а не −_PLoad=−(−200)
 	}
 	for k, want := range checks {
 		got, ok := vals[k].(float64)
@@ -89,8 +89,9 @@ func TestMapMAPAPINoGridPowerWithoutCalc(t *testing.T) {
 }
 
 func TestMapMAPAPIChargeSign(t *testing.T) {
-	// Заряд АКБ: _Iacc < 0, _PLoad > 0 (поступление в АКБ) → battery_power отрицательная.
-	body := `{"timestamp":"1","_Uacc":"52.0","_Iacc":"-3.9","_UNET":"0","_PNET":"0","_PLoad":"200","_TFNET":"50.0"}`
+	// Заряд АКБ: battery_power = −_PLoad_calc (положительное _PLoad_calc → отрицательная).
+	// _PLoad_calc — достоверная батарейная мощность (I×U), используется вместо _PLoad.
+	body := `{"timestamp":"1","_Uacc":"52.0","_Iacc":"-3.9","_UNET":"0","_PNET":"0","_PLoad":"200","_PLoad_calc":"200","_TFNET":"50.0"}`
 	var r mapRaw
 	if err := json.Unmarshal([]byte(body), &r); err != nil {
 		t.Fatalf("unmarshal mapRaw: %v", err)

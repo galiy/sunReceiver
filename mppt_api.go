@@ -288,7 +288,8 @@ type mapRaw struct {
 	Iacc      string // Ток АКБ, А (знак «−» = заряд) (_IAcc_med, 0x432/0x433)
 	UNet      string // Напряжение сети, В (0 = нет сети) (_UNET, 0x422)
 	PNetCalc  string // Расчётная мощность сети, Вт (_PNET_calc = _UNET × _INET) — ДОСТОВЕРНАЯ
-	PLoad     string // Мощность по АКБ, Вт (_PLoad)
+	PLoad     string // Мощность нагрузки по АКБ, Вт (_PLoad) — НЕ батарейная (нагрузка потребителя)
+	PLoadCalc string // Расчётная мощность батареи, Вт (_PLoad_calc = _Uacc × _Iacc) — ДОСТОВЕРНАЯ
 	TFNet     string // Частота сети, Гц (_TFNET)
 }
 
@@ -312,6 +313,7 @@ func (r *mapRaw) UnmarshalJSON(data []byte) error {
 	str("_UNET", &r.UNet)
 	str("_PNET_calc", &r.PNetCalc)
 	str("_PLoad", &r.PLoad)
+	str("_PLoad_calc", &r.PLoadCalc)
 	str("_TFNET", &r.TFNet)
 	if v, ok := raw["timestamp"]; ok {
 		var n int64
@@ -359,9 +361,10 @@ func (s *mpptSite) FetchMAP(ctx context.Context) (*mapRaw, error) {
 //     у МАП сырое поле _PNET сильно занижено (~ в 5 раз против электросчётчика),
 //     расчётное _PNET_calc сходится со счётчиком. Отрицательное = отдача в сеть,
 //     положительное = потребление из сети — согласуется с контрактом Modbus;
-//   - battery_power = −_PLoad: в API мощность по АКБ _PLoad имеет знак, обратный
-//     контракту Modbus (Modbus: отдача в нагрузку положительная, заряд отрицательная;
-//     в API _PLoad для отдачи отрицательный), поэтому инвертируем знак.
+//   - battery_power = −_PLoad_calc: расчётная мощность батареи = _Uacc × _Iacc
+//     (знак обратный контракту: _PLoad_calc положительное при заряде,
+//     отрицательное при отдаче). НЕ _PLoad — это мощность нагрузки по АКБ
+//     (потребителя), при заряде завышенная (~8100 Вт против I×U 5685 Вт).
 //
 // Возвращает также ts актуальности данных (поле timestamp ответа API).
 func mapMAPAPI(r mapRaw) (valuesContract, time.Time, bool) {
@@ -397,8 +400,17 @@ func mapMAPAPI(r mapRaw) (valuesContract, time.Time, bool) {
 	if v, ok = parseFloat(r.PNetCalc); ok {
 		out["grid_power"] = v
 	}
-	if v, ok = parseFloat(r.PLoad); ok {
+	// Мощность батареи — расчётная _PLoad_calc (= _Uacc × _Iacc), достоверная.
+	// Поле _PLoad — это мощность НАГРУЗКИ по АКБ (потребителя), не батарейная, и
+	// при заряде она сильно завышена (замер: PLoad 8100 Вт против I×U 5685 Вт), поэтому
+	// для battery_power не используется. Знак: _PLoad_calc положительное при заряде,
+	// отрицательное при отдаче — инвертируем к контракту (заряд −, отдача +).
+	if v, ok = parseFloat(r.PLoadCalc); ok {
 		out["battery_power"] = -v
+	} else if okU && okI {
+		// Фолбэк: отсутствует _PLoad_calc (старая прошивка) — считаем I×U напрямую,
+		// иначе battery_power не выставляем (заведомо недостоверный _PLoad не берём).
+		out["battery_power"] = -(uacc * iacc)
 	}
 
 	if len(out) == 0 {
