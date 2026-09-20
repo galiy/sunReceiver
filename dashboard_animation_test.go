@@ -23,13 +23,39 @@ import (
 
 // animSnap строит снимок устройства с заданными тегами и timestamp.
 func animSnap(name, ip, placement string, ts time.Time, tags map[string]float64) deviceSnapshot {
+	return animSnapKind(name, ip, placement, ts, tags, "")
+}
+
+func animSnapKind(name, ip, placement string, ts time.Time, tags map[string]float64, kind string) deviceSnapshot {
 	v := valuesContract{}
 	for k, val := range tags {
 		v[k] = val
 	}
 	return deviceSnapshot{
 		Timestamp: ts.Format(time.RFC3339),
-		Name:      name, IP: ip, Placement: placement, Values: v,
+		Name:      name, IP: ip, Placement: placement, Kind: kind, Values: v,
+	}
+}
+
+// TestBuildAnimationKindFromConfig — марка инвертора берётся из конфига (снимок.Kind),
+// а не из тегов: даже «молчащий» Deye (без dc_total_power в старом снимке) остаётся
+// deye, а не превращается в sofar (регрессия выбора спрайта).
+func TestBuildAnimationKindFromConfig(t *testing.T) {
+	now := time.Now()
+	old := now.Add(-time.Hour)
+	devices := []deviceSnapshot{
+		// старый снимок Deye без телега dc_total_power → Kind из конфига "deye".
+		animSnapKind("Deye Off", "10.0.0.1", "Дом", old, map[string]float64{"ac_active_power": 0}, "deye"),
+	}
+	res := buildAnimationResponse(devices, now)
+	if len(res.House.Inverters) != 1 {
+		t.Fatalf("want 1 inverter, got %d", len(res.House.Inverters))
+	}
+	if res.House.Inverters[0].Kind != "deye" {
+		t.Fatalf("kind: want deye (из конфига), got %q", res.House.Inverters[0].Kind)
+	}
+	if !res.House.Inverters[0].Stale {
+		t.Fatalf("inverter должен быть stale")
 	}
 }
 
@@ -40,18 +66,18 @@ func TestBuildAnimationResponse(t *testing.T) {
 	now := time.Now()
 	old := now.Add(-time.Hour) // «молчащее» устройство
 	devices := []deviceSnapshot{
-		animSnap("Deye Дом1", "10.0.0.1", "Дом", now, map[string]float64{"ac_active_power": 100, "dc_total_power": 120}),
-		animSnap("Sofar Дом2", "10.0.0.2", "Дом", now, map[string]float64{"ac_active_power": 50, "pv1_power": 40, "pv2_power": 20}),
-		animSnap("Deye Гараж1", "10.0.0.3", "Гараж", now, map[string]float64{"ac_active_power": 30, "dc_total_power": 35}),
-		animSnap("Sofar Гараж2", "10.0.0.4", "Гараж", now, map[string]float64{"ac_active_power": 20, "pv1_power": 25}),
+		animSnapKind("Deye Дом1", "10.0.0.1", "Дом", now, map[string]float64{"ac_active_power": 100, "dc_total_power": 120}, "deye"),
+		animSnapKind("Sofar Дом2", "10.0.0.2", "Дом", now, map[string]float64{"ac_active_power": 50, "pv1_power": 40, "pv2_power": 20}, "sofar"),
+		animSnapKind("Deye Гараж1", "10.0.0.3", "Гараж", now, map[string]float64{"ac_active_power": 30, "dc_total_power": 35}, "deye"),
+		animSnapKind("Sofar Гараж2", "10.0.0.4", "Гараж", now, map[string]float64{"ac_active_power": 20, "pv1_power": 25}, "sofar"),
 		// MPPT (КЭС) — всегда в Дом, под батареей.
-		animSnap("КЭС1", "host#mppt0", "", now, map[string]float64{"ac_active_power": 200, "pv1_power": 210}),
+		animSnapKind("КЭС1", "host#mppt0", "", now, map[string]float64{"ac_active_power": 200, "pv1_power": 210}, "kes"),
 		// МАП (батарея/сеть): маркер batter_voltage; сеть и батарея.
 		animSnap("МАП", "10.0.0.8", "", now, map[string]float64{"battery_voltage": 52, "grid_power": 300, "battery_power": -150}),
 		// Счётчик: маркер meter_voltage.
 		animSnap("Счётчик", "10.0.0.9", "", now, map[string]float64{"meter_voltage": 230, "meter_active_power": 250}),
 		// Молчащий инвертор (Дом) — Stale=true, мощность не входит в дом.
-		animSnap("Deye Off", "10.0.0.5", "Дом", old, map[string]float64{"ac_active_power": 500, "dc_total_power": 500}),
+		animSnapKind("Deye Off", "10.0.0.5", "Дом", old, map[string]float64{"ac_active_power": 500, "dc_total_power": 500}, "deye"),
 	}
 
 	res := buildAnimationResponse(devices, now)

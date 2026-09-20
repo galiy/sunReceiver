@@ -949,7 +949,7 @@ func buildAnimationResponse(devices []deviceSnapshot, now time.Time) animationRe
 		}
 		inv := animInverter{
 			Name:  d.Name,
-			Kind:  inverterKind(d.Values),
+			Kind:  inverterKind(d.Values, d.Kind),
 			PV:    animPV(d.Values),
 			AC:    snapOrZero(d.Values, "ac_active_power"),
 			Stale: stale(d),
@@ -1001,10 +1001,19 @@ func buildAnimationResponse(devices []deviceSnapshot, now time.Time) animationRe
 	return res
 }
 
-// inverterKind определяет марку сетевого инвертора по его тегам: наличие
-// dc_total_power — признак Deye (тег есть только у Deye, main.go:923); иначе —
-// Sofar. Используется для выбора спрайта на странице анимации.
-func inverterKind(v valuesContract) string {
+// inverterKind определяет марку сетевого инвертора по снимку: поле Kind задаётся
+// пулером из конфига (invTarget.Kind) и содержит "deye"/"sofar"/"kes". Для
+// старых снимков без Kind — эвристика по тегам: наличие dc_total_power (тег только
+// у Deye) → deye, иначе sofar. Используется для выбора спрайта на странице анимации.
+func inverterKind(v valuesContract, kind string) string {
+	switch kind {
+	case "deye":
+		return "deye"
+	case "sofar":
+		return "sofar"
+	case "kes":
+		return "kes"
+	}
 	if _, ok := v["dc_total_power"]; ok {
 		return "deye"
 	}
