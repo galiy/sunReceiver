@@ -29,7 +29,7 @@ import (
 // вынесен в отдельные файлы (web/static/js), порядок проверяется по позициям
 // тегов <script src> в отрендеренном HTML.
 func TestMobileCommonScriptOrder(t *testing.T) {
-	data := map[string]any{"active": "home", "flags": dashFlags{ShowMap: true, ShowMeter: true, ShowBMS: true}}
+	data := map[string]any{"active": "home", "flags": dashFlags{ShowMap: true, ShowMeter: true, ShowBMS: true}, "CacheBust": "cafebabe1"}
 	cases := []struct {
 		name string
 		page string // имя шаблона страницы
@@ -47,12 +47,12 @@ func TestMobileCommonScriptOrder(t *testing.T) {
 			t.Fatalf("%s: render: %v", tc.name, err)
 		}
 		html := buf.String()
-		common := strings.Index(html, `<script src="`+commonSrc+`">`)
+		common := strings.Index(html, `<script src="`+commonSrc)
 		if common < 0 {
 			t.Errorf("%s: common.js не подключён в странице", tc.name)
 			continue
 		}
-		page := strings.Index(html, `<script src="`+tc.js+`">`)
+		page := strings.Index(html, `<script src="`+tc.js)
 		if page < 0 {
 			t.Errorf("%s: скрипт страницы %q не найден", tc.name, tc.js)
 			continue

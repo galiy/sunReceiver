@@ -17,7 +17,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"embed"
+	"fmt"
 	"html/template"
 	"io/fs"
 	"net/http"
@@ -30,6 +32,30 @@ import (
 //
 //go:embed web
 var webFS embed.FS
+
+// webCacheBust — кэш-бастер статики: хеш содержимого всех файлов web/ (SHA-256,
+// первые 12 hex-символов). Подставляется в URL /static/*?v= внутри шаблонов, чтобы
+// при любом изменении ассета между релизами браузеры получали новый URL и
+// инвалидировали immutable-кэш. Не зависит от main.version: на проде бинарник
+// собирается без -ldflags, и version остаётся "dev" (постоянным), поэтому чистый
+// версионный бейдж здесь не сработал бы.
+var webCacheBust = func() string {
+	h := sha256.New()
+	_ = fs.WalkDir(webFS, "web", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := webFS.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("web: %w", err)
+		}
+		h.Write([]byte(path))
+		h.Write([]byte{0})
+		h.Write(b)
+		return nil
+	})
+	return fmt.Sprintf("%x", h.Sum(nil))[:12]
+}()
 
 // webTemplates — набор HTML-шаблонов дашборда. Каждая страница — свой файл
 // (index/charts/energy/bms.html), все собраны в один набор вместе с base.html,
@@ -53,10 +79,34 @@ func staticFiles() http.Handler {
 	}
 	files := http.FileServer(http.FS(sub))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		// http.FS(web) срезает ведущий "/", поэтому путь /static/css/site.css
 		// открывается как static/css/site.css внутри каталога web/ — StripPrefix
 		// не нужен (иначе путь терял бы префикс static/).
-		files.ServeHTTP(w, r)
+		files.ServeHTTP(&cacheControlWriter{ResponseWriter: w}, r)
 	})
+}
+
+// cacheControlWriter ставит Cache-Control только на успешные (2xx) ответы
+// staticFiles, чтобы 404-ответы (несуществующий ассет) не кэшировались на год.
+type cacheControlWriter struct {
+	http.ResponseWriter
+	wroteHeader bool
+}
+
+func (w *cacheControlWriter) WriteHeader(code int) {
+	if !w.wroteHeader {
+		w.wroteHeader = true
+		if code >= 200 && code < 300 {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		}
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *cacheControlWriter) Write(b []byte) (int, error) {
+	if !w.wroteHeader {
+		w.wroteHeader = true
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	}
+	return w.ResponseWriter.Write(b)
 }
