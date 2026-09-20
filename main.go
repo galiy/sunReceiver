@@ -101,6 +101,10 @@ type invTarget struct {
 	Slot     int
 	UID      string // для kindMPPT: UID контроллера из read_json.php (стабильный идентификатор)
 	Order    int    // порядок устройства на дашборде (индекс в конфиге; MPPT — всегда последними)
+	// Placement — размещение инвертора (группа на дашборде «Мощности инверторов»),
+	// из поля placement sunReceiver.json; пустое значение приводится к «Дом».
+	// У MPPT-контроллеров (КЭС) не используется — они в рамке не участвуют.
+	Placement string
 	// InverterSN — кэш серийного номера инвертора (для Deye/Sofar) на время жизни
 	// пулера: серийник постоянен, благодаря этому HW-диапазон не перечитывается с
 	// 3 ретраями на каждый опрос (см. runInverterPoll). Для остальных марок не используется.
@@ -109,13 +113,17 @@ type invTarget struct {
 
 // configInverter — запись инвертора (Deye/Sofar) в sunReceiver.json разделе "invertors".
 // Disabled — ОБЯЗАТЕЛЬНОЕ поле (отсутствие = ошибка конфига): false = опрашивается,
-// true = временно отключён (устройство в конфиге, но не опрашивается).
+// true = временно отключён (устройство в конфиге, но не опрашивается). Placement —
+// размещение инвертора (необязательное; по умолчанию «Дом»): инверторы одной группы
+// суммируются на дашборде в отдельной рамке «Мощности инверторов» (пара плашек
+// «активная + PV» на каждое размещение).
 type configInverter struct {
-	IP       string `json:"ip"`
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	LoggerSN uint32 `json:"logger_sn"`
-	Disabled *bool  `json:"disabled"`
+	IP        string `json:"ip"`
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	LoggerSN  uint32 `json:"logger_sn"`
+	Placement string `json:"placement,omitempty"`
+	Disabled  *bool  `json:"disabled"`
 }
 
 // mapRS485Section — настройка МАП Титанатор по Modbus TCP/RS485 внутри раздела "map".
@@ -246,7 +254,11 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 		if (kind == kindDeyeString || kind == kindSofar) && t.LoggerSN == 0 {
 			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %s (%s): не задан logger_sn — без SN логгера логгер отвечает кодом 0x06 и данные получать невозможно", path, t.Name, t.IP)
 		}
-		targets = append(targets, invTarget{IP: t.IP, Name: t.Name, LoggerSN: t.LoggerSN, Kind: kind, Unit: 1, Slot: -1, Order: nextOrder})
+		placement := t.Placement
+		if placement == "" {
+			placement = "Дом"
+		}
+		targets = append(targets, invTarget{IP: t.IP, Name: t.Name, LoggerSN: t.LoggerSN, Kind: kind, Unit: 1, Slot: -1, Order: nextOrder, Placement: placement})
 		nextOrder++
 	}
 
@@ -335,6 +347,30 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 		}
 	}
 	return targets, cf.DB, cf.Meter, cf.Map, cf.Relay, cf.DashboardPort, nil
+}
+
+// placementOrder возвращает упорядоченный список размещений сетевых инверторов
+// (Deye/Sofar) — по порядку первого появления в targets (т.е. в sunReceiver.json),
+// пустое размещение приводится к «Дом». MPPT-контроллеры (КЭС) и МАП не участвуют:
+// у них нет размещения (КЭС в рамке «Мощности инверторов» не считаются). Список
+// задаёт порядок пар плашек (активная + PV) в рамке и передаётся на дашборд.
+func placementOrder(targets []invTarget) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, t := range targets {
+		if t.Kind != kindDeyeString && t.Kind != kindSofar {
+			continue
+		}
+		p := t.Placement
+		if p == "" {
+			p = "Дом"
+		}
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // dashboardAuthUser/dashboardAuthPass — учётные данные HTTP Basic для `/api/*`
@@ -659,7 +695,10 @@ type deviceSnapshot struct {
 	DeviceSN   string         `json:"device_sn,omitempty"`
 	InverterSN string         `json:"inverter_sn,omitempty"`
 	Order      int            `json:"order,omitempty"`
-	Values     valuesContract `json:"values"`
+	// Placement — размещение инвертора (группа «Мощности инверторов»); у МАП,
+	// MPPT-контроллеров (КЭС) и счётчика не заполняется.
+	Placement string         `json:"placement,omitempty"`
+	Values    valuesContract `json:"values"`
 }
 
 func int16val(v uint16) int {
@@ -1449,6 +1488,7 @@ func saveWindowSnapshot(store *redisStore, t invTarget, res DeviceResult, now ti
 		DeviceSN:   res.DeviceSN,
 		InverterSN: res.InverterSN,
 		Order:      t.Order,
+		Placement:  t.Placement,
 		Values:     res.Values,
 	}
 	if err := store.SaveSnapshotWindow(snap, ts); err != nil {
@@ -1792,7 +1832,7 @@ func main() {
 	bgWg.Add(1)
 	go func() {
 		defer bgWg.Done()
-		serveDashboard(dashboardAddr, store, pg, relayCtl, stopCtx, dash, dashboardAuthUser, dashboardAuthPass)
+		serveDashboard(dashboardAddr, store, pg, relayCtl, stopCtx, dash, placementOrder(targets), dashboardAuthUser, dashboardAuthPass)
 	}()
 
 	// Windows-сборка сворачивается в трей (меню «Закрыть»); на POSIX (Linux)
@@ -1902,6 +1942,7 @@ func runInverterPoll(store *redisStore, t invTarget, stop context.Context) {
 				DeviceSN:   res.DeviceSN,
 				InverterSN: res.InverterSN,
 				Order:      t.Order,
+				Placement:  t.Placement,
 				Values:     res.Values,
 			}
 			if err := store.SaveSnapshot(snap, now); err != nil {
