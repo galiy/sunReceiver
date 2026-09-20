@@ -2066,15 +2066,19 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#e
 .trow .tval { width:52px; text-align:right; font-variant-numeric:tabular-nums; }
 .trow .tname { flex:0 0 150px; width:150px; }
 .tnote { color:#6b7785; font-size:11px; margin:10px 0 0; line-height:1.4; }
-.bms-charts { display:flex; flex-direction:column; gap:16px; margin-top:24px; }
+.bms-charts { display:flex; flex-wrap:wrap; gap:16px; margin-top:24px; }
 .bms-charts-title { margin:28px 0 12px; font-size:16px; }
-.bms-charts .card { margin-bottom:0; overflow:hidden; position:relative; }
+.bms-charts .card { margin-bottom:0; overflow:hidden; position:relative; flex:1 1 46%; min-width:min(420px,100%); }
 .bms-charts .chart-wrap { position:relative; height:300px; }
-.card-order { position:absolute; top:10px; right:12px; display:flex; gap:4px; z-index:2; }
-.card-order button { background:#ffffff; color:#2b3238; border:1px solid #d0d6de; border-radius:6px; width:30px; height:26px; cursor:pointer; font-size:12px; line-height:1; }
+.card-order { position:absolute; top:8px; right:10px; display:grid; grid-template-columns:24px 24px 24px; grid-auto-rows:24px; gap:2px; z-index:2; }
+.card-order button { background:#ffffff; color:#2b3238; border:1px solid #d0d6de; border-radius:5px; width:24px; height:24px; cursor:pointer; font-size:11px; line-height:1; }
 .card-order button:hover { background:#f0f2f5; }
 .card-order button:disabled { opacity:.35; cursor:default; }
 .card-order button:disabled:hover { background:#ffffff; }
+.card-order .ord-up { grid-column:2; grid-row:1; }
+.card-order .ord-left { grid-column:1; grid-row:2; }
+.card-order .ord-down { grid-column:2; grid-row:2; }
+.card-order .ord-right { grid-column:3; grid-row:2; }
 .period-panel { display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px; font-size:13px; color:#6b7785; }
 .period-panel button { background:#ffffff; color:#2b3238; border:1px solid #d0d6de; border-radius:6px; padding:5px 12px; cursor:pointer; font-size:13px; }
 .period-panel button:hover { background:#f0f2f5; }
@@ -2153,44 +2157,44 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#e
 <div class="charts bms-charts">
   <div class="card">
     <h2>Заряд (SOC), %</h2>
-    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button></div>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-left" type="button" title="Переместить влево">&larr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button><button class="ord-right" type="button" title="Переместить вправо">&rarr;</button></div>
     <div class="chart-toolbar"><span id="bmsCapChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="chart-wrap"><canvas id="bmsCapChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Напряжение пакета, V</h2>
-    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button></div>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-left" type="button" title="Переместить влево">&larr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button><button class="ord-right" type="button" title="Переместить вправо">&rarr;</button></div>
     <div class="chart-toolbar"><span id="bmsVoltChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="chart-wrap"><canvas id="bmsVoltChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Ток, A</h2>
-    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button></div>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-left" type="button" title="Переместить влево">&larr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button><button class="ord-right" type="button" title="Переместить вправо">&rarr;</button></div>
     <div class="chart-toolbar"><span id="bmsCurChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="chart-wrap"><canvas id="bmsCurChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Мощность, W</h2>
-    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button></div>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-left" type="button" title="Переместить влево">&larr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button><button class="ord-right" type="button" title="Переместить вправо">&rarr;</button></div>
     <div class="chart-toolbar"><span id="bmsPwrChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="chart-wrap"><canvas id="bmsPwrChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Напряжения ячеек, V</h2>
-    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button></div>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-left" type="button" title="Переместить влево">&larr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button><button class="ord-right" type="button" title="Переместить вправо">&rarr;</button></div>
     <div class="chart-toolbar"><span id="bmsCellsChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="lg-chips" id="bmsCellsChartLg"></div>
     <div class="chart-wrap"><canvas id="bmsCellsChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Разброс ячеек (max&minus;min), V</h2>
-    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button></div>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-left" type="button" title="Переместить влево">&larr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button><button class="ord-right" type="button" title="Переместить вправо">&rarr;</button></div>
     <div class="chart-toolbar"><span id="bmsSpreadChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="chart-wrap"><canvas id="bmsSpreadChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Температуры T1–T4 (батарея, силовые ключи, плата), &deg;C</h2>
-    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button></div>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-left" type="button" title="Переместить влево">&larr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button><button class="ord-right" type="button" title="Переместить вправо">&rarr;</button></div>
     <div class="chart-toolbar"><span id="bmsTempChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="lg-chips" id="bmsTempChartLg"></div>
     <div class="chart-wrap"><canvas id="bmsTempChart"></canvas></div>
@@ -2371,7 +2375,23 @@ function syncBmsZoomToOthers(fromChart){
     });
   }finally{ zoomSyncing=false; }
 }
-var bmsZoomSyncPlugin={ id:'bmsZoomSync', afterDraw:function(chart){ try{ checkBmsZoomSync(chart); }catch(e){} } };
+// Вертикальная тёмная чёрточка по курсору на графиках BMS (только десктоп).
+var bmsHoverPix={};
+function drawBmsCursor(chart){
+  try{
+    if(SR_COARSE || window.__srTouched) return;
+    var px=bmsHoverPix[chart.canvas.id];
+    if(px===undefined) return;
+    var x=chart.scales&&chart.scales.x, y=chart.scales&&chart.scales.y;
+    if(!x||!y) return;
+    if(!isFinite(px)||px<x.left||px>x.right) return;
+    var ctx=chart.ctx; ctx.save();
+    ctx.beginPath(); ctx.moveTo(px,y.top); ctx.lineTo(px,y.bottom);
+    ctx.strokeStyle='rgba(15,18,22,0.75)'; ctx.lineWidth=1; ctx.stroke();
+    ctx.restore();
+  }catch(e){}
+}
+var bmsZoomSyncPlugin={ id:'bmsZoomSync', afterDraw:function(chart){ try{ checkBmsZoomSync(chart); drawBmsCursor(chart); }catch(e){} } };
 // ---------- Перезагрузка данных после зума/сдвига ----------
 // Окно X общее для всех графиков BMS. После завершения зума/панорамы данные
 // удаляются и загружаются заново с бэкенда под новое окно; поля «С/по»
@@ -2487,6 +2507,13 @@ function bmsRender(id, datasets, yTitle, legend, zero){
   var bmsOpts={
     responsive:true, maintainAspectRatio:false,
     interaction:{ mode:'index', intersect:false },
+    onHover:function(event,elements,chart){
+      if(SR_COARSE || window.__srTouched) return;
+      if(chart && chart.canvas){
+        if(event && isFinite(event.x)) bmsHoverPix[chart.canvas.id]=event.x;
+        try{ chart.update('none'); }catch(e){}
+      }
+    },
     animation:{ duration:200 },
     plugins:{
       legend: { display:false },
@@ -2512,6 +2539,9 @@ function bmsRender(id, datasets, yTitle, legend, zero){
     plugins:[bmsZoomSyncPlugin],
     options:bmsOpts
   });
+  // Сброс чёрточки курсора при уходе мыши с графика.
+  var bmsCanvasEl=document.getElementById(id);
+  if(!bmsCanvasEl.__srMLBound){ bmsCanvasEl.__srMLBound=true; bmsCanvasEl.addEventListener('mouseleave',function(){ delete bmsHoverPix[id]; try{ BMS_CHARTS[id]&&BMS_CHARTS[id].update('none'); }catch(e){} }); }
   // На touch встроенный tooltip Chart.js отключён (показывается по тапу — хинт).
   // __srTouched — страховка, если SR_COARSE на устройстве не сработал.
   if(SR_COARSE || window.__srTouched){ BMS_CHARTS[id].options.plugins.tooltip.enabled=false; }
@@ -2631,17 +2661,24 @@ if(SR_COARSE){
 
 load(); setInterval(load,1000);
 
-// ---------- Изменение порядка графиков BMS (одна колонка) ----------
-// Порядок карточек в .bms-charts можно менять стрелками вверх/вниз; порядок
-// сохраняется в localStorage (bmsChartOrder) и восстанавливается при загрузке.
-// Графики переживают перестроение (destroy/rebuild по canvas-элементу), поэтому
-// достаточно двигать DOM-карточки — инстансы Chart.js привязаны к кубику по id.
+// ---------- Изменение порядка графиков BMS (реактивная сетка 2 колонки) ----------
+// Порядок карточек в .bms-charts можно менять стрелками вверх/вниз/влево/вправо.
+// Макет — flex-wrap с 2 колонками (flex:1 1 46%), значит DOM-порядок == порядок
+// row-major: чётный индекс — левая колонка, нечётный — правая; COLS=2.
+// Вверх/вниз — сдвиг на COLS (±2, та же колонка), влево/вправо — на ±1 (соседняя
+// колонка того же ряда). Порядок сохраняется в localStorage (bmsChartOrder) и
+// восстанавливается при загрузке. Инстансы Chart.js привязаны к canvas по id,
+// поэтому достаточно двигать DOM-карточки.
+var BMS_ORDER_COLS=2;
 function bmsRefreshOrderBtns(){
   var cards=document.querySelectorAll('.bms-charts > .card');
   for(var i=0;i<cards.length;i++){
     var up=cards[i].querySelector('.ord-up'), down=cards[i].querySelector('.ord-down');
-    if(up) up.disabled=(i===0);
-    if(down) down.disabled=(i===cards.length-1);
+    var left=cards[i].querySelector('.ord-left'), right=cards[i].querySelector('.ord-right');
+    if(up) up.disabled=(i-BMS_ORDER_COLS<0);
+    if(down) down.disabled=(i+BMS_ORDER_COLS>=cards.length);
+    if(left) left.disabled=(i%BMS_ORDER_COLS!==1);
+    if(right) right.disabled=(i%BMS_ORDER_COLS!==0 || i+1>=cards.length);
   }
 }
 function bmsSaveOrder(){
@@ -2671,15 +2708,22 @@ function bmsMoveCard(btn,dir){
   if(!card) return;
   var cards=card.parentNode.querySelectorAll('.card');
   var idx=Array.prototype.indexOf.call(cards,card);
-  var target=dir<0? cards[idx-1] : cards[idx+1];
-  if(!target) return;
-  if(dir<0) card.parentNode.insertBefore(card,target);
-  else card.parentNode.insertBefore(target,card);
+  var target=-1;
+  if(dir==='up') target=(idx-BMS_ORDER_COLS>=0)? idx-BMS_ORDER_COLS : -1;
+  else if(dir==='down') target=(idx+BMS_ORDER_COLS<cards.length)? idx+BMS_ORDER_COLS : -1;
+  else if(dir==='left') target=(idx%BMS_ORDER_COLS===1)? idx-1 : -1;
+  else if(dir==='right') target=(idx%BMS_ORDER_COLS===0 && idx+1<cards.length)? idx+1 : -1;
+  if(target<0) return;
+  var ref=cards[target];
+  if(target>idx) card.parentNode.insertBefore(card, ref.nextSibling);
+  else card.parentNode.insertBefore(card, ref);
   bmsSaveOrder();
   bmsRefreshOrderBtns();
 }
-document.querySelectorAll('.bms-charts .ord-up').forEach(function(b){ b.addEventListener('click',function(){ bmsMoveCard(this,-1); }); });
-document.querySelectorAll('.bms-charts .ord-down').forEach(function(b){ b.addEventListener('click',function(){ bmsMoveCard(this,1); }); });
+document.querySelectorAll('.bms-charts .ord-up').forEach(function(b){ b.addEventListener('click',function(){ bmsMoveCard(this,'up'); }); });
+document.querySelectorAll('.bms-charts .ord-down').forEach(function(b){ b.addEventListener('click',function(){ bmsMoveCard(this,'down'); }); });
+document.querySelectorAll('.bms-charts .ord-left').forEach(function(b){ b.addEventListener('click',function(){ bmsMoveCard(this,'left'); }); });
+document.querySelectorAll('.bms-charts .ord-right').forEach(function(b){ b.addEventListener('click',function(){ bmsMoveCard(this,'right'); }); });
 bmsLoadOrder();
 bmsRefreshOrderBtns();
 </script>
