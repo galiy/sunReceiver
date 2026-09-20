@@ -158,8 +158,7 @@ function updateEdge(e){
   if(e.txt){
     // Цвет мощности: при движении огоньков — как у них, при 0 — нейтральный.
     e.txt.style.fill = e.active ? col : '#2b3238';
-    var rv=Math.round(v*10)/10;
-    e.txt.textContent=(rv===0?'0':(v>0?'+':'')+rv)+' W';
+    e.txt.textContent=fmtPower(v);
   }
 }
 
@@ -400,6 +399,16 @@ function refreshEdges(obj, data){
     reads[k].day.textContent='Приход '+fmtKWh(data.meter_import_total);
     reads[k].night.textContent='Отдача '+fmtKWh(data.meter_export_total);
   }
+}
+
+function fmtPower(v){
+  var sign=(v>0?'+':(v<0?'-':''));
+  var a=Math.abs(v);
+  if(a>=1000){
+    var kw=Math.round(a/100)/10; // 1 знак после запятой, кВт
+    return sign+kw+' кВт';
+  }
+  return (a===0?'0':sign)+Math.round(a)+' Вт';
 }
 
 function fmtKWh(v){
