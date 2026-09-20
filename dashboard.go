@@ -2376,20 +2376,27 @@ function syncBmsZoomToOthers(fromChart){
   }finally{ zoomSyncing=false; }
 }
 // Вертикальная тёмная чёрточка по курсору на графиках BMS (только десктоп).
-var bmsHoverPix={};
+// Позиция хранится как значение по оси X — поэтому линия рисуется сразу на
+// ВСЕХ графиках страницы, когда курсор находится над одним из них.
+var bmsCursor={ active:false, value:null };
 function drawBmsCursor(chart){
   try{
     if(SR_COARSE || window.__srTouched) return;
-    var px=bmsHoverPix[chart.canvas.id];
-    if(px===undefined) return;
+    if(!bmsCursor.active || !isFinite(bmsCursor.value)) return;
     var x=chart.scales&&chart.scales.x, y=chart.scales&&chart.scales.y;
     if(!x||!y) return;
+    var px=x.getPixelForValue(bmsCursor.value);
     if(!isFinite(px)||px<x.left||px>x.right) return;
     var ctx=chart.ctx; ctx.save();
     ctx.beginPath(); ctx.moveTo(px,y.top); ctx.lineTo(px,y.bottom);
     ctx.strokeStyle='rgba(15,18,22,0.75)'; ctx.lineWidth=1; ctx.stroke();
     ctx.restore();
   }catch(e){}
+}
+function bmsUpdateAllCharts(){
+  BMS_CHART_IDS.forEach(function(id){
+    try{ BMS_CHARTS[id]&&BMS_CHARTS[id].update('none'); }catch(e){}
+  });
 }
 var bmsZoomSyncPlugin={ id:'bmsZoomSync', afterDraw:function(chart){ try{ checkBmsZoomSync(chart); drawBmsCursor(chart); }catch(e){} } };
 // ---------- Перезагрузка данных после зума/сдвига ----------
@@ -2509,10 +2516,15 @@ function bmsRender(id, datasets, yTitle, legend, zero){
     interaction:{ mode:'index', intersect:false },
     onHover:function(event,elements,chart){
       if(SR_COARSE || window.__srTouched) return;
-      if(chart && chart.canvas){
-        if(event && isFinite(event.x)) bmsHoverPix[chart.canvas.id]=event.x;
-        try{ chart.update('none'); }catch(e){}
+      if(chart && chart.canvas && chart.scales && chart.scales.x){
+        var v=chart.scales.x.getValueForPixel(event.x);
+        if(isFinite(v)){
+          bmsCursor.active=true; bmsCursor.value=v;
+          bmsUpdateAllCharts(); return;
+        }
       }
+      // Не удалось определить значение — прячем линию на всех графиках.
+      if(bmsCursor.active){ bmsCursor.active=false; bmsUpdateAllCharts(); }
     },
     animation:{ duration:200 },
     plugins:{
@@ -2539,9 +2551,9 @@ function bmsRender(id, datasets, yTitle, legend, zero){
     plugins:[bmsZoomSyncPlugin],
     options:bmsOpts
   });
-  // Сброс чёрточки курсора при уходе мыши с графика.
+  // Сброс чёрточки курсора при уходе мыши с графика (линия гаснет на всех).
   var bmsCanvasEl=document.getElementById(id);
-  if(!bmsCanvasEl.__srMLBound){ bmsCanvasEl.__srMLBound=true; bmsCanvasEl.addEventListener('mouseleave',function(){ delete bmsHoverPix[id]; try{ BMS_CHARTS[id]&&BMS_CHARTS[id].update('none'); }catch(e){} }); }
+  if(!bmsCanvasEl.__srMLBound){ bmsCanvasEl.__srMLBound=true; bmsCanvasEl.addEventListener('mouseleave',function(){ if(bmsCursor.active){ bmsCursor.active=false; bmsUpdateAllCharts(); } }); }
   // На touch встроенный tooltip Chart.js отключён (показывается по тапу — хинт).
   // __srTouched — страховка, если SR_COARSE на устройстве не сработал.
   if(SR_COARSE || window.__srTouched){ BMS_CHARTS[id].options.plugins.tooltip.enabled=false; }
