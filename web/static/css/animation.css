@@ -1,0 +1,18 @@
+/* Страница анимации: схемы дома и гаража с бегущим током. */
+.anim-scheme { background:#ffffff; border:1px solid #d0d6de; border-radius:10px; padding:14px 16px; margin-bottom:20px; max-width:100%; }
+.anim-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:8px; }
+.anim-title { font-size:16px; font-weight:600; color:#2b3238; }
+.anim-ts { font-size:12px; color:#6b7785; }
+.anim-body { overflow-x:auto; }
+.anim-svg { display:block; width:100%; height:auto; }
+.anim-wire { stroke:#3a4752; stroke-width:2; fill:none; }
+.anim-sprite { opacity:1; }
+.anim-bus { fill:#eef1f4; stroke:#8a97a3; stroke-width:2; }
+.anim-name { fill:#6b7785; font-size:12px; }
+.anim-power { fill:#2b3238; font-size:12px; font-weight:600; paint-order:stroke; stroke:#ffffff; stroke-width:3px; }
+.anim-legend { display:flex; align-items:center; gap:18px; flex-wrap:wrap; color:#6b7785; font-size:13px; margin-bottom:16px; }
+.anim-legend span { display:inline-flex; align-items:center; gap:6px; }
+.lg-dot { display:inline-block; width:10px; height:10px; border-radius:50%; }
+.lg-dot.green { background:#37b24d; }
+.lg-dot.red { background:#f03e3e; }
+.anim-legend .lg-note { color:#a9b1bb; }
