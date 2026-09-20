@@ -230,7 +230,7 @@ func isMPPTKey(ip string) bool {
 func (h *dashboardHandler) charts(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	if err := webTemplates.ExecuteTemplate(w, "charts.html", map[string]any{"active": "charts", "flags": h.flags}); err != nil {
+	if err := webTemplates.ExecuteTemplate(w, "charts.html", map[string]any{"active": "charts", "flags": h.flags, "CacheBust": webCacheBust}); err != nil {
 		log.Printf("dashboard: render /charts: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
@@ -239,7 +239,7 @@ func (h *dashboardHandler) charts(w http.ResponseWriter, r *http.Request) {
 func (h *dashboardHandler) energy(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	if err := webTemplates.ExecuteTemplate(w, "energy.html", map[string]any{"active": "energy", "flags": h.flags}); err != nil {
+	if err := webTemplates.ExecuteTemplate(w, "energy.html", map[string]any{"active": "energy", "flags": h.flags, "CacheBust": webCacheBust}); err != nil {
 		log.Printf("dashboard: render /energy: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
@@ -383,7 +383,7 @@ func (h *dashboardHandler) apiBMSSeries(w http.ResponseWriter, r *http.Request, 
 func (h *dashboardHandler) bmsDetail(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	if err := webTemplates.ExecuteTemplate(w, "bms.html", map[string]any{"active": "home", "flags": h.flags}); err != nil {
+	if err := webTemplates.ExecuteTemplate(w, "bms.html", map[string]any{"active": "home", "flags": h.flags, "CacheBust": webCacheBust}); err != nil {
 		log.Printf("dashboard: render /bms: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
@@ -392,7 +392,7 @@ func (h *dashboardHandler) bmsDetail(w http.ResponseWriter, r *http.Request) {
 func (h *dashboardHandler) index(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	if err := webTemplates.ExecuteTemplate(w, "index.html", map[string]any{"active": "home", "flags": h.flags}); err != nil {
+	if err := webTemplates.ExecuteTemplate(w, "index.html", map[string]any{"active": "home", "flags": h.flags, "CacheBust": webCacheBust}); err != nil {
 		log.Printf("dashboard: render /: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}

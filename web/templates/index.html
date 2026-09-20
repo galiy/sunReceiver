@@ -3,12 +3,12 @@
 <head>
 {{template "head" .}}
 <title>SunReceiver</title>
-<link rel="stylesheet" href="/static/css/dashboard.css">
+<link rel="stylesheet" href="/static/css/dashboard.css?v={{.CacheBust}}">
 </head>
 <body data-show-map="{{if .flags.ShowMap}}1{{else}}0{{end}}"
       data-show-meter="{{if .flags.ShowMeter}}1{{else}}0{{end}}"
       data-show-bms="{{if .flags.ShowBMS}}1{{else}}0{{end}}">
-<link rel="stylesheet" href="/static/css/site.css">
+<link rel="stylesheet" href="/static/css/site.css?v={{.CacheBust}}">
 <div class="top-nav">
   <div>
     <h1 class="ttl">SunReceiver</h1>
@@ -187,8 +187,8 @@
 
 <div class="pivot-wrap" id="cards"><div class="missing">Загрузка...</div></div>
 
-<script src="/static/js/common.js"></script>
-<script src="/static/js/dashboard.js"></script>
+<script src="/static/js/common.js?v={{.CacheBust}}"></script>
+<script src="/static/js/dashboard.js?v={{.CacheBust}}"></script>
 {{template "mnav" .}}
 </body>
 </html>
