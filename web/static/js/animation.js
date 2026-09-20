@@ -291,7 +291,6 @@ function layoutHouse(data){
   // «наоборот» (→ −battery_power) и направление развёрнуто (greenDir toStart), а
   // цвет сохранён: заряд (—) красный, отдача (+) зелёный — как на дисплее МАП.
   edges.push({pts:[[mapPortR,mapBotY],[mapPortR,BATTY]], rule:{greenSign:-1,greenDir:'toStart'},
-    label:{x:mapPortR-14, y:(mapBotY+BATTY)/2},
     getValue:function(d){return -d.map_battery_power;}});
   edges.push({pts:[[mapPortR,BATTY],[battX,BATTY]], rule:{greenSign:-1,greenDir:'toStart'},
     label:{x:(mapPortR+battX)/2, y:BATTY-12},
