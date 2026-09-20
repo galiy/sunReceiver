@@ -389,6 +389,17 @@ func placementOrder(targets []invTarget) []string {
 	return out
 }
 
+// placeByIP возвращает размещение каждого инвертора по IP (из конфига) — надёжный
+// источник для группировки анимации: у устаревшего снимка placement может не быть.
+// Охватывает сетевые инверторы (Deye/Sofar) и МАП/КЭС.
+func placeByIP(targets []invTarget) map[string]string {
+	m := make(map[string]string, len(targets))
+	for _, t := range targets {
+		m[t.IP] = t.Placement
+	}
+	return m
+}
+
 // dashboardAuthUser/dashboardAuthPass — учётные данные HTTP Basic для `/api/*`
 // дашборда (из конфига dashboard_user/dashboard_password). Пустые значения —
 // аутентификация не требуется. Заполняются в loadConfig.
@@ -1853,7 +1864,7 @@ func main() {
 	bgWg.Add(1)
 	go func() {
 		defer bgWg.Done()
-		serveDashboard(dashboardAddr, store, pg, relayCtl, stopCtx, dash, placementOrder(targets), dashboardAuthUser, dashboardAuthPass)
+		serveDashboard(dashboardAddr, store, pg, relayCtl, stopCtx, dash, placementOrder(targets), placeByIP(targets), dashboardAuthUser, dashboardAuthPass)
 	}()
 
 	// Windows-сборка сворачивается в трей (меню «Закрыть»); на POSIX (Linux)

@@ -47,7 +47,7 @@ func TestBuildAnimationKindFromConfig(t *testing.T) {
 		// старый снимок Deye без телега dc_total_power → Kind из конфига "deye".
 		animSnapKind("Deye Off", "10.0.0.1", "Дом", old, map[string]float64{"ac_active_power": 0}, "deye"),
 	}
-	res := buildAnimationResponse(devices, now)
+	res := buildAnimationResponse(devices, nil, now)
 	if len(res.House.Inverters) != 1 {
 		t.Fatalf("want 1 inverter, got %d", len(res.House.Inverters))
 	}
@@ -80,7 +80,7 @@ func TestBuildAnimationResponse(t *testing.T) {
 		animSnapKind("Deye Off", "10.0.0.5", "Дом", old, map[string]float64{"ac_active_power": 500, "dc_total_power": 500}, "deye"),
 	}
 
-	res := buildAnimationResponse(devices, now)
+	res := buildAnimationResponse(devices, nil, now)
 
 	if len(res.House.Inverters) != 3 {
 		t.Fatalf("house inverters: want 3 (2 fresh + 1 stale), got %d (%v)", len(res.House.Inverters), res.House.Inverters)
@@ -135,7 +135,7 @@ func TestBuildAnimationStaleMark(t *testing.T) {
 	}
 	// Молчащий инвертор (снимок > 20 мин) в формуле Дома не участвует: его
 	// устаревшая мощность (700 Вт) не «оживляет» дом ночью.
-	res := buildAnimationResponse(devices, now)
+	res := buildAnimationResponse(devices, nil, now)
 	if len(res.House.Inverters) != 1 || !res.House.Inverters[0].Stale {
 		t.Fatalf("inverter должен быть Stale=true: %v", res.House.Inverters)
 	}
@@ -150,5 +150,23 @@ func TestBuildAnimationStaleMark(t *testing.T) {
 	}
 	if res.House.MapGridPower != 0 {
 		t.Fatalf("stale map grid power: want 0, got %v", res.House.MapGridPower)
+	}
+}
+// TestBuildAnimationPlacementFromConfig проверяет, что размещение берётся из
+// конфига (placeByIP) даже для устаревшего снимка без поля placement.
+func TestBuildAnimationPlacementFromConfig(t *testing.T) {
+	now := time.Now()
+	// У снимка пустой placement — он был записан старой версией.
+	devices := []deviceSnapshot{
+		animSnap("Stale Left", "10.0.0.70", "", now, map[string]float64{"ac_active_power": 700}),
+	}
+	placeByIP := map[string]string{"10.0.0.70": "Гараж"}
+	res := buildAnimationResponse(devices, placeByIP, now)
+	if len(res.Garage.Inverters) != 1 || res.Garage.Inverters[0].Name != "Stale Left" {
+		t.Fatalf("инвертор из по конфигу должен быть в гараже: house=%v garage=%v",
+			res.House.Inverters, res.Garage.Inverters)
+	}
+	if len(res.House.Inverters) != 0 {
+		t.Fatalf("не должно быть инверторов в доме: %v", res.House.Inverters)
 	}
 }

@@ -76,6 +76,11 @@ type dashboardHandler struct {
 	// размещение. MPPT-контроллеры (КЭС) в этот список не входят.
 	placements []string
 
+	// placeByIP — размещение инвертора по IP из конфига (надёжный источник).
+	// У устаревшего снимка поле placement может отсутствовать (записано старой
+	// версией до его появления), поэтому группировку анимации строим по конфигу.
+	placeByIP map[string]string
+
 	// Кэш loadRange: 4 одинаковых запроса /api/series за цикл сойдутся в один
 	// read из Redis/PG. Ключ — от (start, end).
 	cacheMu sync.Mutex
@@ -882,7 +887,7 @@ func (h *dashboardHandler) apiAnimation(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	res := buildAnimationResponse(devices, time.Now())
+	res := buildAnimationResponse(devices, h.placeByIP, time.Now())
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(res)
@@ -894,7 +899,7 @@ func (h *dashboardHandler) apiAnimation(w http.ResponseWriter, r *http.Request) 
 // счётчика берёт мощности сети/батареи/счётчика. Считает мощность Дома по
 // формуле-разнице. Устройства со снимком старше окна (20 мин) помечаются Stale —
 // клиент показывает их мощность нулём (ночью инверторы/КЭС не отдают данные).
-func buildAnimationResponse(devices []deviceSnapshot, now time.Time) animationResponse {
+func buildAnimationResponse(devices []deviceSnapshot, placeByIP map[string]string, now time.Time) animationResponse {
 	// Сортируем как apiCurrent: MPPT — последними, остальные по Order.
 	sort.SliceStable(devices, func(i, j int) bool {
 		mi, mj := isMPPTKey(devices[i].IP), isMPPTKey(devices[j].IP)
@@ -961,7 +966,16 @@ func buildAnimationResponse(devices []deviceSnapshot, now time.Time) animationRe
 		if inv.Stale { // молчащее устройство: мощности считаем нулевыми
 			inv.PV, inv.AC = 0, 0
 		}
-		switch d.Placement {
+		// Размещение: приоритет у конфига (у устаревшего снимка placement может
+		// отсутствовать); пустое → «Дом».
+		pl := d.Placement
+		if m, ok := placeByIP[d.IP]; ok {
+			pl = m
+		}
+		if pl == "" {
+			pl = "Дом"
+		}
+		switch pl {
 		case "Гараж":
 			garage.Inverters = append(garage.Inverters, inv)
 		default: // «Дом» (в т.ч. пустое)
@@ -1592,8 +1606,8 @@ func buildDashboardMux(pages map[string]http.HandlerFunc, static http.Handler, a
 // serveDashboard — HTTP-сервер веб-дашборда. При закрытии stop аккуратно
 // завершает сервер (http.Server.Shutdown, бюджет 5 с), чтобы main мог закрыть
 // пулы Redis/PG после завершения всех фоновых горутин (bgWg).
-func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayController, stop context.Context, flags dashFlags, placements []string, authUser, authPass string) {
-	h := &dashboardHandler{store: store, pg: pg, flags: flags, relay: relay, placements: placements}
+func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayController, stop context.Context, flags dashFlags, placements []string, placeByIP map[string]string, authUser, authPass string) {
+	h := &dashboardHandler{store: store, pg: pg, flags: flags, relay: relay, placements: placements, placeByIP: placeByIP}
 	// Внутренние страницы (индекс/графики) открыты; данные и управление —
 	// в `/api/*`, защищаются HTTP Basic (если заданы учётные данные).
 	pages := map[string]http.HandlerFunc{
