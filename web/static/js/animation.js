@@ -177,6 +177,10 @@ function layoutHouse(data){
   var MAI=150, BUSY=330, INVY=450, PANY=580;
   var BATTY=250, KESY=460, KPANY=590;
   var gridX=110, meterX=330, mapX=560, houseX=880, battX=920;
+  // Порты подключения к МАП снизу: слева — ветвь инверторов, справа — батарея.
+  // Разные x, чтобы линии не накладывались друг на друга.
+  var mapBotY=MAI+26;             // низ спрайта МАП
+  var mapPortL=mapX-30, mapPortR=mapX+30;
 
   // Ветвь инверторов — левый блок; ветвь КЭС — правый блок (под батареей).
   var invXs=centers(400, n, 165);
@@ -207,10 +211,10 @@ function layoutHouse(data){
   if(n>0){
     var x1=invXs[0]-40, x2=invXs[n-1]+40;
     var dropX=Math.round((invXs[0]+invXs[n-1])/2);
-    // МАП → вниз к шине («Внутренняя сеть»).
-    edges.push({pts:[[mapX,MAI],[mapX,BUSY-40],[dropX,BUSY-40],[dropX,BUSY]],
+    // МАП (левый порт) → вниз к шине («Внутренняя сеть»).
+    edges.push({pts:[[mapPortL,mapBotY],[mapPortL,BUSY-40],[dropX,BUSY-40],[dropX,BUSY]],
       rule:{greenSign:1,greenDir:'toEnd'},
-      label:{x:mapX-14, y:(MAI+BUSY-40)/2},
+      label:{x:mapPortL-14, y:(mapBotY+BUSY-40)/2},
       getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }});
     // Шина («Внутренняя сеть») — проводник без подписи, ширина по числу устройств.
     edges.push({bus:true, x1:x1, x2:x2, y:BUSY});
@@ -232,12 +236,12 @@ function layoutHouse(data){
 
   // Ветвь батарея → КЭС → панели (справа).
   if(k>0){
-    // МАП → батарея: вниз до уровня BATTY, потом горизонтально к батарее.
-    edges.push({pts:[[mapX,MAI],[mapX,BATTY]], rule:{greenSign:1,greenDir:'toEnd'},
-      label:{x:mapX-14, y:(MAI+BATTY)/2},
+    // МАП (правый порт) → батарея: вниз, потом горизонталь к батарее.
+    edges.push({pts:[[mapPortR,mapBotY],[mapPortR,BATTY]], rule:{greenSign:1,greenDir:'toEnd'},
+      label:{x:mapPortR-14, y:(mapBotY+BATTY)/2},
       getValue:function(d){return d.map_battery_power;}});
-    edges.push({pts:[[mapX,BATTY],[battX,BATTY]], rule:{greenSign:1,greenDir:'toEnd'},
-      label:{x:(mapX+battX)/2, y:BATTY-12},
+    edges.push({pts:[[mapPortR,BATTY],[battX,BATTY]], rule:{greenSign:1,greenDir:'toEnd'},
+      label:{x:(mapPortR+battX)/2, y:BATTY-12},
       getValue:function(d){return d.map_battery_power;}});
     // батарея → КЭС (через горизонтальную шину на уровне KESY-40).
     var kx1=kesXs[0]-40, kx2=kesXs[k-1]+40;
