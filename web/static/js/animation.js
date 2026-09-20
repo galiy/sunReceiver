@@ -309,9 +309,10 @@ function layoutGarage(data){
   if(n>0){
     var x1=invXs[0], x2=invXs[n-1];
     var dropX=Math.round((invXs[0]+invXs[n-1])/2);
-    // Шина → вниз к горизонтальной шине инверторов.
+    // Шина → вниз к горизонтальной шине инверторов. При выдаче (Σac>0) энергия
+    // идёт от инверторов вверх к магистрали (toStart), при потреблении — вниз.
     edges.push({pts:[[innerX,MAI],[innerX,BUSY-40],[dropX,BUSY-40],[dropX,BUSY]],
-      rule:{greenSign:1,greenDir:'toEnd'},
+      rule:{greenSign:1,greenDir:'toStart'},
       label:{x:innerX-14, y:(MAI+BUSY-40)/2},
       getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }});
     edges.push({bus:true, x1:x1, x2:x2, y:BUSY});
