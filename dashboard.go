@@ -986,16 +986,9 @@ func buildAnimationResponse(devices []deviceSnapshot, placeByIP map[string]strin
 		}
 	}
 
-	// Мощность Дома (формула-разница): P_дом = Σ(инверторы→МАП) + P(батарея→МАП) − P(МАП→сеть).
-	// Молчащие (stale) инверторы в сумму не входят — их устаревшее значение не
-	// должно «оживлять» мощность дома ночью.
-	var sumInvHome float64
-	for _, inv := range house.Inverters {
-		if !inv.Stale {
-			sumInvHome += inv.AC
-		}
-	}
-	house.HousePower = sumInvHome + house.MapBatteryPower - house.MapGridPower
+	// Мощность Дома: P_дом = P(МАП→сеть) − P(батарея) — остаток от мощности сети
+	// после учёта батареи (по данным МАП). Знак отражает направление (в/из сети).
+	house.HousePower = house.MapGridPower - house.MapBatteryPower
 	// В гараже пока нет нагрузки — «остаток» нулевой.
 	garage.GaragePower = 0
 

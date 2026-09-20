@@ -222,7 +222,9 @@ function layoutHouse(data){
 
   var MAI=140, BUSY=300, INVY=420, PANY=555;
   var BATTY=230, KESY=430, KPANY=565;
-  var gridX=90, meterX=260, mapX=470, houseX=790, battX=920;
+  var gridX=90, meterX=260, mapX=470, houseX=790;
+  // Батарея: без КЭС — левее, под Домом; с КЭС — справа (ветвь КЭС под ней).
+  var battX = k>0 ? 920 : 790;
   // Порты подключения к МАП снизу: слева — ветвь инверторов, справа — батарея.
   // Разные x, чтобы линии не накладывались друг на друга.
   var mapBotY=MAI+26;             // низ спрайта МАП
