@@ -116,6 +116,12 @@ function makeEdge(svg, opts){
 }
 
 function updateEdge(e){
+  if(e.stale){ // молчащее устройство: не показываем мощность и огоньки
+    e.active=false;
+    if(e.txt) e.txt.style.visibility='hidden';
+    return;
+  }
+  if(e.txt) e.txt.style.visibility='';
   var v=e.value, rule=e.rule;
   var isGreen = (rule.greenSign>0) ? (v>0) : (v<0);
   e.toEnd = rule.greenDir==='toEnd' ? isGreen : !isGreen;
@@ -211,7 +217,7 @@ function layoutHouse(data){
     {pts:[[meterX,MAI],[mapX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
      label:{x:(meterX+mapX)/2, y:MAI-12},
      getValue:function(d){return d.map_grid_power;}},
-    {pts:[[mapX,MAI],[houseX,MAI]], rule:{greenSign:-1,greenDir:'toEnd'},
+    {pts:[[mapX,MAI],[houseX,MAI]], rule:{greenSign:1,greenDir:'toStart'},
      label:{x:(mapX+houseX)/2, y:MAI-12},
      getValue:function(d){return d.house_power;}}
   ];
@@ -234,13 +240,13 @@ function layoutHouse(data){
       nodes.push({key:'panel',cx:ix,cy:PANY,label:''});
       // инвертор → шина (вверх)
       edges.push({pts:[[ix,INVY-sprH(inv.kind)/2],[ix,BUSY]], rule:{greenSign:1,greenDir:'toEnd'},
-        label:{x:ix+38,y:(INVY-39+BUSY)/2},
+        label:{x:ix+38,y:(INVY-39+BUSY)/2}, stale:inv.stale,
         getValue:(function(idx){return function(d){return d.inverters[idx].ac;};})(i)});
       // панель → инвертор (вверх)
       var pvTop=INVY+sprH(inv.kind)/2, pvBot=PANY-31;
       // выработка: от панели (низ) вверх к инвертору (toStart)
       edges.push({pts:[[ix,pvTop],[ix,pvBot]], rule:{greenSign:1,greenDir:'toStart'},
-        label:{x:ix+38,y:(pvTop+pvBot)/2},
+        label:{x:ix+38,y:(pvTop+pvBot)/2}, stale:inv.stale,
         getValue:(function(idx){return function(d){return d.inverters[idx].pv;};})(i)});
     }
   }
@@ -266,12 +272,12 @@ function layoutHouse(data){
       nodes.push({key:'kes',cx:kx,cy:KESY,label:kes.name});
       nodes.push({key:'panel',cx:kx,cy:KPANY,label:''});
       edges.push({pts:[[kx,KESY-sprH('kes')/2],[kx,KESY-40]], rule:{greenSign:1,greenDir:'toEnd'},
-        label:{x:kx+38,y:(KESY-37+KESY-40)/2},
+        label:{x:kx+38,y:(KESY-37+KESY-40)/2}, stale:kes.stale,
         getValue:(function(idx){return function(d){return d.kes[idx].ac;};})(j)});
       var kPvTop=KESY+sprH('kes')/2, kPvBot=KPANY-31;
       // выработка: от панели (низ) вверх к КЭС (toStart)
       edges.push({pts:[[kx,kPvTop],[kx,kPvBot]], rule:{greenSign:1,greenDir:'toStart'},
-        label:{x:kx+38,y:(kPvTop+kPvBot)/2},
+        label:{x:kx+38,y:(kPvTop+kPvBot)/2}, stale:kes.stale,
         getValue:(function(idx){return function(d){return d.kes[idx].pv;};})(j)});
     }
   }
@@ -321,12 +327,12 @@ function layoutGarage(data){
       nodes.push({key:inv.kind,cx:ix,cy:INVY,label:inv.name});
       nodes.push({key:'panel',cx:ix,cy:PANY,label:''});
       edges.push({pts:[[ix,INVY-sprH(inv.kind)/2],[ix,BUSY]], rule:{greenSign:1,greenDir:'toEnd'},
-        label:{x:ix+38,y:(INVY-39+BUSY)/2},
+        label:{x:ix+38,y:(INVY-39+BUSY)/2}, stale:inv.stale,
         getValue:(function(idx){return function(d){return d.inverters[idx].ac;};})(i)});
       var pvTop=INVY+sprH(inv.kind)/2, pvBot=PANY-31;
       // выработка: от панели (низ) вверх к инвертору (toStart)
       edges.push({pts:[[ix,pvTop],[ix,pvBot]], rule:{greenSign:1,greenDir:'toStart'},
-        label:{x:ix+38,y:(pvTop+pvBot)/2},
+        label:{x:ix+38,y:(pvTop+pvBot)/2}, stale:inv.stale,
         getValue:(function(idx){return function(d){return d.inverters[idx].pv;};})(i)});
     }
   }

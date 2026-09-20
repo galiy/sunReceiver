@@ -938,13 +938,17 @@ func buildAnimationResponse(devices []deviceSnapshot, now time.Time) animationRe
 			continue
 		}
 		if isMPPTKey(d.IP) {
-			house.KES = append(house.KES, animInverter{
+			kes := animInverter{
 				Name:  d.Name,
 				Kind:  "kes",
 				PV:    animPV(d.Values),
 				AC:    snapOrZero(d.Values, "ac_active_power"),
 				Stale: stale(d),
-			})
+			}
+			if kes.Stale { // молчащее устройство: мощности считаем нулевыми
+				kes.PV, kes.AC = 0, 0
+			}
+			house.KES = append(house.KES, kes)
 			continue
 		}
 		inv := animInverter{
@@ -953,6 +957,9 @@ func buildAnimationResponse(devices []deviceSnapshot, now time.Time) animationRe
 			PV:    animPV(d.Values),
 			AC:    snapOrZero(d.Values, "ac_active_power"),
 			Stale: stale(d),
+		}
+		if inv.Stale { // молчащее устройство: мощности считаем нулевыми
+			inv.PV, inv.AC = 0, 0
 		}
 		switch d.Placement {
 		case "Гараж":

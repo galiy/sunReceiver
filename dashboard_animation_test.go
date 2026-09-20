@@ -139,6 +139,11 @@ func TestBuildAnimationStaleMark(t *testing.T) {
 	if len(res.House.Inverters) != 1 || !res.House.Inverters[0].Stale {
 		t.Fatalf("inverter должен быть Stale=true: %v", res.House.Inverters)
 	}
+	// Молчащее устройство: мощности PV/AC считаются нулевыми (не показываются).
+	inv := res.House.Inverters[0]
+	if inv.PV != 0 || inv.AC != 0 {
+		t.Fatalf("stale inverter PV/AC должны быть 0, got pv=%v ac=%v", inv.PV, inv.AC)
+	}
 	// МАП со старым снимком игнорируется — мощность сети 0, P_дом = 0 + 0 − 0 = 0.
 	if res.House.HousePower != 0 {
 		t.Fatalf("house power with stale devices: want 0, got %v", res.House.HousePower)
