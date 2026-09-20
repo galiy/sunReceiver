@@ -54,6 +54,9 @@ func staticFiles() http.Handler {
 	files := http.FileServer(http.FS(sub))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-		http.StripPrefix("/static/", files).ServeHTTP(w, r)
+		// http.FS(web) срезает ведущий "/", поэтому путь /static/css/site.css
+		// открывается как static/css/site.css внутри каталога web/ — StripPrefix
+		// не нужен (иначе путь терял бы префикс static/).
+		files.ServeHTTP(w, r)
 	})
 }
