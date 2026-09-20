@@ -85,6 +85,22 @@ func (k targetKind) String() string {
 	}
 }
 
+// invKindName возвращает значение поля deviceSnapshot.Kind для страницы анимации:
+// "deye"/"sofar" для сетевых инверторов, "kes" для MPPT-контроллеров (КЭС);
+// для МАП и счётчика — пустая строка (спрайт не требуется).
+func invKindName(k targetKind) string {
+	switch k {
+	case kindSofar:
+		return "sofar"
+	case kindDeyeString:
+		return "deye"
+	case kindMPPT:
+		return "kes"
+	default:
+		return ""
+	}
+}
+
 // invTarget — целевой инвертор. LoggerSN — серийный номер даталоггера,
 // обязателен для Deye (иначе логгер отвечает кодом 0x06 "serial number not match").
 // Name — логическое имя из sunReceiver.json (например, "Deye Left").
@@ -697,8 +713,12 @@ type deviceSnapshot struct {
 	Order      int            `json:"order,omitempty"`
 	// Placement — размещение инвертора (группа «Мощности инверторов»); у МАП,
 	// MPPT-контроллеров (КЭС) и счётчика не заполняется.
-	Placement string         `json:"placement,omitempty"`
-	Values    valuesContract `json:"values"`
+	Placement string `json:"placement,omitempty"`
+	// Kind — марка/тип устройства из конфига (invTarget.Kind): "deye"|"sofar" для
+	// сетевых инверторов, "kes" для MPPT-контроллеров (КЭС), "" — МАП/счётчик.
+	// Заполняется пулером; используется страницей анимации для выбора спрайта.
+	Kind     string         `json:"kind,omitempty"`
+	Values   valuesContract `json:"values"`
 }
 
 func int16val(v uint16) int {
@@ -1489,6 +1509,7 @@ func saveWindowSnapshot(store *redisStore, t invTarget, res DeviceResult, now ti
 		InverterSN: res.InverterSN,
 		Order:      t.Order,
 		Placement:  t.Placement,
+		Kind:       invKindName(t.Kind),
 		Values:     res.Values,
 	}
 	if err := store.SaveSnapshotWindow(snap, ts); err != nil {
@@ -1943,6 +1964,7 @@ func runInverterPoll(store *redisStore, t invTarget, stop context.Context) {
 				InverterSN: res.InverterSN,
 				Order:      t.Order,
 				Placement:  t.Placement,
+				Kind:       invKindName(t.Kind),
 				Values:     res.Values,
 			}
 			if err := store.SaveSnapshot(snap, now); err != nil {
