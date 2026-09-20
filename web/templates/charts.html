@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+{{template "head" .}}
+<title>Графики — SunReceiver</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" integrity="sha384-9nhczxUqK87bcKHh20fSQcTGD4qq5GhayNYSYWqwBkINBhOfQLg/P5HG5lF1urn4" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js" integrity="sha384-cVMg8E3QFwTvGCDuK+ET4PD341jF3W8nO1auiXfuZNQkzbUUiBGLsIQUE+b1mxws" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js" integrity="sha384-Cs3dgUx6+jDxxuqHvVH8Onpyj2LF1gKZurLDlhqzuJmUqVYMJ0THTWpxK5Z086Zm" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js" integrity="sha384-zPzbVRXfR492Sd5D+HydTYCxxgHAfgVO8KERbLlpeH5unsmbAEXrscGUUqLZG9BM" crossorigin="anonymous"></script>
+<link rel="stylesheet" href="/static/css/charts.css">
+</head>
+<body>
+<link rel="stylesheet" href="/static/css/site.css">
+<div class="top-nav">
+  <div>
+    <h1 class="ttl">Графики</h1>
+    <p class="sub">Временные ряды за выбранный период; статистика счётчика «день/ночь» за последние дни</p>
+  </div>
+  <a class="nav-btn secondary" href="/">&larr; Назад</a>
+</div>
+
+<div class="period-panel">
+  <button id="btnToday">Сегодня</button>
+  <button id="btnYesterday">Вчера</button>
+  <button id="btn7d">7 дней</button>
+  <button id="btnMonth">Месяц</button>
+  <button id="btnPeriodPrev" class="nav-arrow" title="Предыдущий период">&lsaquo;</button>
+  <input type="date" id="datePick" title="Выбрать день">
+  <button id="btnDate">За выбранный день</button>
+  <span style="color:#555">С</span>
+  <input type="datetime-local" id="fromPick" title="Начало периода">
+  <span style="color:#555">по</span>
+  <input type="datetime-local" id="toPick" title="Конец периода">
+  <button id="btnRange">Показать период</button>
+  <button id="btnPeriodNext" title="Следующий период">&rsaquo;</button>
+  <button id="btnRefresh" title="Принудительно обновить графики">Обновить графики</button>
+</div>
+
+<div class="lg-hint">ЛКМ по чипу — вкл/выкл линию · двойной ЛКМ — только эта линия · «Все» — показать все</div>
+<div class="charts">
+  <div id="chartbox">
+    <h2>Напряжение сети и батареи (МАП), V + напряжение счётчика</h2>
+    <div class="chart-toolbar">
+      <span id="gridVChartRange"></span>
+      <span>Зум: Ctrl+колесо / drag&ndash;панорама</span>
+    </div>
+    <div class="lg-chips" id="gridVChartLg"></div>
+    <div class="chart-wrap"><canvas id="gridVChart"></canvas></div>
+  </div>
+
+  <div id="chartbox">
+    <h2>Мощности сети и батареи (МАП), W + активная мощность счётчика</h2>
+    <div class="chart-toolbar">
+      <span id="gridPChartRange"></span>
+      <span>Зум: Ctrl+колесо / drag&ndash;панорама</span>
+    </div>
+    <div class="lg-chips" id="gridPChartLg"></div>
+    <div class="chart-wrap"><canvas id="gridPChart"></canvas></div>
+  </div>
+
+  <div id="chartbox">
+    <h2>Суммарная активная мощность, W</h2>
+    <div class="chart-toolbar">
+      <span id="totalChartRange"></span>
+      <span>Зум: Ctrl+колесо / drag&ndash;панорама</span>
+    </div>
+    <div class="chart-wrap"><canvas id="totalChart"></canvas></div>
+  </div>
+
+  <div id="chartbox">
+    <h2>Активная мощность по инверторам, W</h2>
+    <div class="chart-toolbar">
+      <span id="chartRange"></span>
+      <span>Зум: Ctrl+колесо / drag&ndash;панорама</span>
+    </div>
+    <div class="lg-chips" id="powerChartLg"></div>
+    <div class="chart-wrap"><canvas id="powerChart"></canvas></div>
+  </div>
+</div>
+
+<script src="/static/js/common.js"></script>
+<script src="/static/js/charts.js"></script>
+{{template "mnav" .}}
+</body>
+</html>

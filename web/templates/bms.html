@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+{{template "head" .}}
+<title>BMS — SunReceiver</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" integrity="sha384-9nhczxUqK87bcKHh20fSQcTGD4qq5GhayNYSYWqwBkINBhOfQLg/P5HG5lF1urn4" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js" integrity="sha384-cVMg8E3QFwTvGCDuK+ET4PD341jF3W8nO1auiXfuZNQkzbUUiBGLsIQUE+b1mxws" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js" integrity="sha384-Cs3dgUx6+jDxxuqHvVH8Onpyj2LF1gKZurLDlhqzuJmUqVYMJ0THTWpxK5Z086Zm" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js" integrity="sha384-zPzbVRXfR492Sd5D+HydTYCxxgHAfgVO8KERbLlpeH5unsmbAEXrscGUUqLZG9BM" crossorigin="anonymous"></script>
+<link rel="stylesheet" href="/static/css/bms.css">
+</head>
+<body>
+<link rel="stylesheet" href="/static/css/site.css">
+<div class="top-nav">
+  <div>
+    <h1 class="ttl" id="bmsTitle">ANT BMS</h1>
+    <p class="sub" id="bmsSub">Загрузка...</p>
+  </div>
+  <a class="nav-btn secondary" href="/">&larr; На главную</a>
+</div>
+
+<div class="kpi-row" id="kpiRow"><div class="missing">Загрузка...</div></div>
+
+<div class="cards">
+  <div class="card">
+    <h2>Напряжения ячеек, V <span class="delta" id="cellDelta"></span></h2>
+    <div class="legend">
+      <span><i style="background:#d9534f"></i>максимальное</span>
+      <span><i style="background:#428bca"></i>минимальное</span>
+      <span><i style="background:#37b24d"></i>остальные</span>
+    </div>
+    <div class="cells" id="cellsGrid"></div>
+  </div>
+  <div class="card">
+    <h2>Температуры, &deg;C</h2>
+    <div class="temps" id="tempsWrap"></div>
+    <p class="tnote">T1–T6 — NTC-датчики температуры. Производитель не публикует точное соответствие каналов и мест; подписи реконструированы по даташиту AFE (2 внешних датчика + датчик платы), мануалу ANT (до 4 внешних датчиков) и параметрам защит (температура батареи / силовых ключей). В нашей установке все каналы показывают одинаковую температуру (батарея и плата в одном корпусе).</p>
+    <h2 style="margin-top:20px">Мощностные ключи</h2>
+    <div class="mos-row" id="mosWrap"></div>
+  </div>
+</div>
+
+<h2 class="bms-charts-title">Графики (5-минутные средние, Redis)</h2>
+<div class="period-panel">
+  <button id="btnToday">Сегодня</button>
+  <button id="btnYesterday">Вчера</button>
+  <button id="btn7d">7 дней</button>
+  <button id="btnMonth">Месяц</button>
+  <button id="btnPeriodPrev" class="nav-arrow" title="Предыдущий период">&lsaquo;</button>
+  <input type="date" id="datePick" title="Выбрать день">
+  <button id="btnDate">За выбранный день</button>
+  <span style="color:#555">С</span>
+  <input type="datetime-local" id="fromPick" title="Начало периода">
+  <span style="color:#555">по</span>
+  <input type="datetime-local" id="toPick" title="Конец периода">
+  <button id="btnRange">Показать период</button>
+  <button id="btnPeriodNext" title="Следующий период">&rsaquo;</button>
+  <button id="btnRefresh" title="Принудительно обновить графики">Обновить графики</button>
+</div>
+<div class="lg-hint">ЛКМ по чипу — вкл/выкл линию · двойной ЛКМ — только эта линия · «Все» — показать все</div>
+<div class="charts bms-charts">
+  <div class="card">
+    <h2>Заряд (SOC), %</h2>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-left" type="button" title="Переместить влево">&larr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button><button class="ord-right" type="button" title="Переместить вправо">&rarr;</button></div>
+    <div class="chart-toolbar"><span id="bmsCapChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
+    <div class="chart-wrap"><canvas id="bmsCapChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Напряжение пакета, V</h2>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-left" type="button" title="Переместить влево">&larr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button><button class="ord-right" type="button" title="Переместить вправо">&rarr;</button></div>
+    <div class="chart-toolbar"><span id="bmsVoltChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
+    <div class="chart-wrap"><canvas id="bmsVoltChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Ток, A</h2>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-left" type="button" title="Переместить влево">&larr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button><button class="ord-right" type="button" title="Переместить вправо">&rarr;</button></div>
+    <div class="chart-toolbar"><span id="bmsCurChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
+    <div class="chart-wrap"><canvas id="bmsCurChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Мощность, W</h2>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-left" type="button" title="Переместить влево">&larr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button><button class="ord-right" type="button" title="Переместить вправо">&rarr;</button></div>
+    <div class="chart-toolbar"><span id="bmsPwrChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
+    <div class="chart-wrap"><canvas id="bmsPwrChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Напряжения ячеек, V</h2>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-left" type="button" title="Переместить влево">&larr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button><button class="ord-right" type="button" title="Переместить вправо">&rarr;</button></div>
+    <div class="chart-toolbar"><span id="bmsCellsChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
+    <div class="lg-chips" id="bmsCellsChartLg"></div>
+    <div class="chart-wrap"><canvas id="bmsCellsChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Разброс ячеек (max&minus;min), V</h2>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-left" type="button" title="Переместить влево">&larr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button><button class="ord-right" type="button" title="Переместить вправо">&rarr;</button></div>
+    <div class="chart-toolbar"><span id="bmsSpreadChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
+    <div class="chart-wrap"><canvas id="bmsSpreadChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Температуры T1–T4 (батарея, силовые ключи, плата), &deg;C</h2>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-left" type="button" title="Переместить влево">&larr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button><button class="ord-right" type="button" title="Переместить вправо">&rarr;</button></div>
+    <div class="chart-toolbar"><span id="bmsTempChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
+    <div class="lg-chips" id="bmsTempChartLg"></div>
+    <div class="chart-wrap"><canvas id="bmsTempChart"></canvas></div>
+  </div>
+</div>
+
+<p class="foot" id="bmsFoot"></p>
+
+<script src="/static/js/common.js"></script>
+<script src="/static/js/bms.js"></script>
+{{template "mnav" .}}
+</body>
+</html>

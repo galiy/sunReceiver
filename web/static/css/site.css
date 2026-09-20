@@ -1,0 +1,52 @@
+@media (max-width: 900px) {
+  html { -webkit-text-size-adjust: 100%; }
+  body { padding:12px 12px calc(16px + 56px + env(safe-area-inset-bottom, 0px)); }
+  .top-nav { margin-bottom:12px; }
+  .top-nav .ttl { font-size:19px; }
+  .top-nav .sub { font-size:12px; margin-bottom:0; }
+  .top-nav .nav-btn { display:none; }
+  .mnav { position:fixed; left:0; right:0; bottom:0; z-index:60; display:flex; background:#ffffff; border-top:1px solid #d0d6de; padding-bottom:env(safe-area-inset-bottom, 0px); }
+  .mnav a { flex:1 1 0; text-align:center; padding:9px 2px 10px; color:#6b7785; font-size:12px; font-weight:600; text-decoration:none; border-top:2px solid transparent; -webkit-tap-highlight-color:transparent; }
+  .mnav a.active { color:#346fa1; border-top-color:#428bca; background:rgba(66,139,202,0.10); }
+  button, .lg-chip, .bms-btn { -webkit-tap-highlight-color:transparent; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
+  .groups-row { flex-direction:column; gap:12px; margin-bottom:12px; }
+  .group-top { margin-bottom:12px; }
+  .group { padding:12px; }
+  .group-body .plate, .group-body .meter-stat { flex:1 1 44%; min-width:44%; }
+  .plate .val, .meter-stat .val { font-size:21px; }
+  .bms-btn { min-width:120px; padding:12px 14px 10px; }
+  .bms-batt { width:44px; height:96px; border-width:2px; }
+  .bms-batt::before { top:-8px; width:20px; height:6px; }
+  .bms-batt-soc { font-size:19px; }
+  .bms-name { font-size:13px; }
+  .pivot-wrap { margin:12px 0; padding:10px; -webkit-overflow-scrolling:touch; }
+  .pivot-table { min-width:600px; font-size:12px; }
+  .pivot-table th, .pivot-table td { padding:5px 8px; }
+  .pivot-table th:first-child, .pivot-table td:first-child { position:sticky; left:0; z-index:2; background:#ffffff; box-shadow:1px 0 0 0 #d0d6de; }
+  .pivot-table tbody tr:nth-child(even) td:first-child { background:#f4f7fa; }
+  .charts { gap:12px; margin-bottom:12px; }
+  .charts #chartbox { min-width:100%; }
+  #chartbox { padding:12px; }
+  #chartbox h2 { font-size:14px; }
+  .chart-wrap { height:290px; }
+  .period-panel { gap:8px; margin-bottom:12px; }
+  .period-panel button, .range-panel button, .chart-toolbar button { min-height:40px; padding:9px 14px; font-size:13px; }
+  .period-panel input[type=date], .period-panel input[type=datetime-local], .range-panel input[type=date], .range-panel input[type=datetime-local] { min-height:40px; padding:8px 10px; font-size:14px; }
+  .lg-chips { gap:8px; }
+  .lg-chip { padding:8px 14px 8px 10px; font-size:13px; }
+  .lg-hint { margin-bottom:8px; }
+  .kpi-row { gap:8px; }
+  .kpi { flex:1 1 46%; min-width:150px; padding:10px 12px; }
+  .kpi .val { font-size:22px; }
+  .cards { gap:12px; }
+  .card { flex:1 1 100%; min-width:0; padding:12px; }
+  .trow .tname { flex:0 0 110px; width:110px; font-size:11px; }
+  .tnote { font-size:10px; }
+  .bms-charts { gap:12px; margin-top:16px; }
+  .bms-charts-title { margin:20px 0 10px; font-size:15px; }
+  .bms-charts .chart-wrap { height:250px; }
+  .cell { width:34px; }
+  .cell-batt { width:24px; height:48px; }
+  .cell .mv { font-size:10px; }
+  .foot { font-size:11px; }
+}

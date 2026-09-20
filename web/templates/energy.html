@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+{{template "head" .}}
+<title>Электроэнергия — SunReceiver</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" integrity="sha384-9nhczxUqK87bcKHh20fSQcTGD4qq5GhayNYSYWqwBkINBhOfQLg/P5HG5lF1urn4" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js" integrity="sha384-cVMg8E3QFwTvGCDuK+ET4PD341jF3W8nO1auiXfuZNQkzbUUiBGLsIQUE+b1mxws" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js" integrity="sha384-Cs3dgUx6+jDxxuqHvVH8Onpyj2LF1gKZurLDlhqzuJmUqVYMJ0THTWpxK5Z086Zm" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js" integrity="sha384-zPzbVRXfR492Sd5D+HydTYCxxgHAfgVO8KERbLlpeH5unsmbAEXrscGUUqLZG9BM" crossorigin="anonymous"></script>
+<link rel="stylesheet" href="/static/css/energy.css">
+</head>
+<body>
+<link rel="stylesheet" href="/static/css/site.css">
+<div class="top-nav">
+  <div>
+    <h1 class="ttl">Электроэнергия</h1>
+    <p class="sub">Счётчик DDS238: потребление/отдача по тарифам «День»/«Ночь»</p>
+  </div>
+  <a class="nav-btn secondary" href="/">&larr; Назад</a>
+</div>
+
+<div class="lg-hint">ЛКМ по чипу — вкл/выкл · двойной ЛКМ — только этот показатель · «Все» — показать все</div>
+<div id="chartbox">
+  <h2>Потребление / отдача по тарифу «День» и «Ночь» по дням, kWh</h2>
+  <div class="range-panel" id="r1">
+    <button id="d1Month">Текущий месяц</button>
+    <button id="d1PrevMonth">Прошлый месяц</button>
+    <button id="d1Year">Текущий год</button>
+    <button id="d1Week">7 дней</button>
+    <button id="d1Days30">30 дней</button>
+    <span style="color:#555">С</span>
+    <input type="datetime-local" id="d1From">
+    <span style="color:#555">по</span>
+    <input type="datetime-local" id="d1To">
+    <button id="d1Apply">Показать</button>
+  </div>
+  <div class="chart-toolbar"><span class="range-status" id="s1"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
+  <div class="lg-chips" id="dailyTariffChartLg"></div>
+  <div class="chart-wrap"><canvas id="dailyTariffChart"></canvas></div>
+</div>
+
+<div id="chartbox">
+  <h2>Потребление / отдача по тарифу «День» и «Ночь» по месяцам, kWh</h2>
+  <div class="range-panel" id="r2">
+    <button id="d2Year">Текущий год</button>
+    <button id="d2PrevYear">Прошлый год</button>
+    <button id="d2Month">Текущий месяц</button>
+    <span style="color:#555">С</span>
+    <input type="datetime-local" id="d2From">
+    <span style="color:#555">по</span>
+    <input type="datetime-local" id="d2To">
+    <button id="d2Apply">Показать</button>
+  </div>
+  <div class="chart-toolbar"><span class="range-status" id="s2"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
+  <div class="lg-chips" id="monthlyTariffChartLg"></div>
+  <div class="chart-wrap"><canvas id="monthlyTariffChart"></canvas></div>
+</div>
+
+<script src="/static/js/common.js"></script>
+<script src="/static/js/energy.js"></script>
+{{template "mnav" .}}
+</body>
+</html>

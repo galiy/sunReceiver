@@ -18,64 +18,47 @@ package main
 
 import (
 	"bytes"
-	"html/template"
 	"strings"
 	"testing"
 )
 
-// Мобильная версия: mjs (определяет window.srBindChip/window.srTouchChart)
-// должен рендериться ПЕРЕД inline-скриптом страницы — скрипты страниц
-// синхронно вызывают srTouchChart при загрузке, и при обратном порядке
-// touch-жесты (щипок-зум, панорама) не привязываются (ReferenceError).
-func TestMobileMjsScriptOrder(t *testing.T) {
+// Мобильная версия: общий common.js (определяет window.srBindChip/window.srTouchChart)
+// должен подключаться ПЕРЕД <script src> скрипта страницы — скрипты страниц
+// синхронно вызывают srTouchChart при загрузке, и при обратном порядке touch-жесты
+// (щипок-зум, панорама) не привязываются (ReferenceError). Так как JS теперь
+// вынесен в отдельные файлы (web/static/js), порядок проверяется по позициям
+// тегов <script src> в отрендеренном HTML.
+func TestMobileCommonScriptOrder(t *testing.T) {
 	data := map[string]any{"active": "home", "flags": dashFlags{ShowMap: true, ShowMeter: true, ShowBMS: true}}
 	cases := []struct {
-		name   string
-		tmpl   *template.Template
-		marker string // маркер inline-скрипта страницы, идущего после mjs
+		name string
+		page string // имя шаблона страницы
+		js   string // файл JS страницы, идущий после common.js
 	}{
-		{"dash", dashboardTmpl, "setInterval(tick,1000)"},
-		{"charts", chartsTmpl, "function renderChart(id, datasets, opts)"},
-		{"energy", energyTmpl, "var TARIFF_COLORS"},
-		{"bms", bmsDetailTmpl, "function fmtNum(n,digits)"},
+		{"dash", "index.html", "/static/js/dashboard.js"},
+		{"charts", "charts.html", "/static/js/charts.js"},
+		{"energy", "energy.html", "/static/js/energy.js"},
+		{"bms", "bms.html", "/static/js/bms.js"},
 	}
+	const commonSrc = `/static/js/common.js`
 	for _, tc := range cases {
 		var buf bytes.Buffer
-		if err := tc.tmpl.Execute(&buf, data); err != nil {
+		if err := webTemplates.ExecuteTemplate(&buf, tc.page, data); err != nil {
 			t.Fatalf("%s: render: %v", tc.name, err)
 		}
 		html := buf.String()
-		def := strings.Index(html, "window.srBindChip = function")
-		if def < 0 {
-			t.Errorf("%s: mjs-скрипт не найден в странице", tc.name)
+		common := strings.Index(html, `<script src="`+commonSrc+`">`)
+		if common < 0 {
+			t.Errorf("%s: common.js не подключён в странице", tc.name)
 			continue
 		}
-		marker := strings.Index(html, tc.marker)
-		if marker < 0 {
-			t.Errorf("%s: маркер скрипта страницы %q не найден", tc.name, tc.marker)
+		page := strings.Index(html, `<script src="`+tc.js+`">`)
+		if page < 0 {
+			t.Errorf("%s: скрипт страницы %q не найден", tc.name, tc.js)
 			continue
 		}
-		if def > marker {
-			t.Errorf("%s: mjs (позиция %d) рендерится ПОСЛЕ скрипта страницы (маркер на %d) — srTouchChart будет undefined при загрузке", tc.name, def, marker)
+		if common > page {
+			t.Errorf("%s: common.js (позиция %d) подключён ПОСЛЕ скрипта страницы (%s на %d) — srTouchChart будет undefined при загрузке", tc.name, common, tc.js, page)
 		}
 	}
-	// srTouchChart определяется до синхронного вызова на load (charts + bms).
-	checkCall := func(page string, tmpl *template.Template, call string) {
-		var buf bytes.Buffer
-		if err := tmpl.Execute(&buf, data); err != nil {
-			t.Fatalf("%s: render: %v", page, err)
-		}
-		html := buf.String()
-		def := strings.Index(html, "window.srTouchChart = function")
-		callPos := strings.Index(html, call)
-		if def < 0 || callPos < 0 {
-			t.Errorf("%s: не найдены определение srTouchChart (pos %d) и вызов при загрузке (pos %d)", page, def, callPos)
-			return
-		}
-		if def > callPos {
-			t.Errorf("%s: вызов srTouchChart при загрузке (pos %d) идёт ДО его определения (pos %d)", page, callPos, def)
-		}
-	}
-	checkCall("charts", chartsTmpl, "srTouchChart(function(){ return window[id]; }")
-	checkCall("bms", bmsDetailTmpl, "srTouchChart(function(){ return BMS_CHARTS[id]; }")
 }
