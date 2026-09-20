@@ -250,9 +250,9 @@ function layoutHouse(data){
     {pts:[[meterX,MAI],[mapX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
      label:{x:(meterX+mapX)/2, y:MAI-12},
      getValue:function(d){return d.map_grid_power;}},
-    {pts:[[mapX,MAI],[houseX,MAI]], rule:{greenSign:1,greenDir:'toStart'},
-     label:{x:(mapX+houseX)/2, y:MAI-12},
-     getValue:function(d){return d.house_power;}}
+{pts:[[mapX,MAI],[houseX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
+      label:{x:(mapX+houseX)/2, y:MAI-12},
+      getValue:function(d){return d.house_power;}}
   ];
 
   // Ветвь «Внутренняя сеть» → инверторы → панели (слева).
