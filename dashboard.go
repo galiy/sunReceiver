@@ -2173,6 +2173,11 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#e
     <div class="chart-wrap"><canvas id="bmsCellsChart"></canvas></div>
   </div>
   <div class="card">
+    <h2>Разброс ячеек (max&minus;min), V</h2>
+    <div class="chart-toolbar"><span id="bmsSpreadChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
+    <div class="chart-wrap"><canvas id="bmsSpreadChart"></canvas></div>
+  </div>
+  <div class="card">
     <h2>Температуры T1–T4 (батарея, силовые ключи, плата), &deg;C</h2>
     <div class="chart-toolbar"><span id="bmsTempChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="lg-chips" id="bmsTempChartLg"></div>
@@ -2277,7 +2282,7 @@ async function load(){
 // ---------- Графики (5-минутные средние из Redis) ----------
 Chart.register(ChartZoom);
 var CHART_COLORS=['#428bca','#5cb85c','#f0ad4e','#d9534f','#5bc0de','#9463b8','#7f8fa6','#17a2b8','#c3b91c','#e91e63','#6d9ee8','#f7b32b','#4c9f70','#9c6bcf','#4db6ac','#8d6e63'];
-var BMS_CHART_IDS=['bmsCapChart','bmsVoltChart','bmsCurChart','bmsPwrChart','bmsCellsChart','bmsTempChart'];
+var BMS_CHART_IDS=['bmsCapChart','bmsVoltChart','bmsCurChart','bmsPwrChart','bmsCellsChart','bmsSpreadChart','bmsTempChart'];
 function mkBmsDs(label,color,data){ return { label:label, data:data, borderColor:color, backgroundColor:color, pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false }; }
 function packVolt(p){ var s=0, c=p.cells_v||[]; for(var i=0;i<c.length;i++) s+=c[i]; return s; }
 function fmtDate(t){ var d=new Date(t); function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes()); }
@@ -2524,7 +2529,13 @@ function buildBmsCharts(points){
     })(i);
   }
   bmsRender('bmsCellsChart',cds,'V',true,false);
-  // 6. Температуры: батарея (T1/T2), силовые ключи (T3), плата (T4)
+  // 6. Разброс ячеек (max-min напряжения по снимку)
+  bmsRender('bmsSpreadChart',[mkBmsDs('Разброс','#9463b8',points.map(function(p){
+    var c=p.cells_v||[], mx=null, mn=null;
+    for(var i=0;i<c.length;i++){ var v=c[i]; if(!isFinite(v)) continue; if(mx===null||v>mx)mx=v; if(mn===null||v<mn)mn=v; }
+    return {x:new Date(p.ts), y:(mx!==null && mn!==null? mx-mn : null)};
+  }))],'V',false,false);
+  // 7. Температуры: батарея (T1/T2), силовые ключи (T3), плата (T4)
   var tnames=['T1 · Батарея 1','T2 · Батарея 2','T3 · Силовая плата','T4 · Плата управления'];
   var tcols=['#37b24d','#5cb85c','#f08c00','#9463b8'];
   var tds=[];
