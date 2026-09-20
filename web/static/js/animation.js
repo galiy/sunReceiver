@@ -223,7 +223,7 @@ function layoutHouse(data){
     // МАП (левый порт) → вниз к шине («Внутренняя сеть»). При выдаче (Σac>0)
     // энергия идёт от инверторов вверх к МАП, при потреблении — вниз к ним.
     edges.push({pts:[[mapPortL,mapBotY],[mapPortL,BUSY-40],[dropX,BUSY-40],[dropX,BUSY]],
-      rule:{greenSign:1,greenDir:'toEnd'},
+      rule:{greenSign:1,greenDir:'toStart'},
       label:{x:mapPortL-14, y:(mapBotY+BUSY-40)/2},
       getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }});
     // Шина («Внутренняя сеть») — проводник без подписи, ширина по числу устройств.
