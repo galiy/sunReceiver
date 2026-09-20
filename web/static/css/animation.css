@@ -7,6 +7,7 @@
 .anim-svg { display:block; width:100%; height:auto; }
 .anim-wire { stroke:#3a4752; stroke-width:2; fill:none; }
 .anim-sprite { opacity:1; }
+.anim-sprite-stale { opacity:.35; filter:grayscale(1); } /* молчащее устройство: спрайт приглушён */
 .anim-bus { fill:#d98a3d; stroke:#8a5a24; stroke-width:1.5; } /* шина-соединитель: медная полоса */
 .anim-bus-bolt { fill:#f2c98a; stroke:#8a5a24; stroke-width:1.5; } /* зажим-болт на шине */
 .anim-name { fill:#6b7785; font-size:12px; }

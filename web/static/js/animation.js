@@ -87,6 +87,7 @@ function spriteNode(svg, key, cx, cy, label, raise){
   img.setAttribute('y',cy-raise-spec.h/2);
   img.setAttribute('class','anim-sprite');
   g.appendChild(img);
+  var meterReads=null; // ссылки на текстовые узлы накладки счётчика (возврат наружу)
   if(key==='meter'){
     // Накладка накопленных показаний на ЖК счётчика: приход (импорт) и расход
     // (отдача) за всё время. Без слов-подписей — только значения, цветом
@@ -106,7 +107,7 @@ function spriteNode(svg, key, cx, cy, label, raise){
     n.setAttribute('x',cx+spec.w*0.44); n.setAttribute('y',cy-raise+spec.h*0.16); n.setAttribute('text-anchor','end');
     n.setAttribute('class','anim-meter-read anim-meter-export'); n.textContent='—';
     g.appendChild(n);
-    meterReadEls.push({day:d, night:n});
+    meterReads=[{day:d, night:n}];
   }
   if(label){
     var t=document.createElementNS(NS,'text');
@@ -117,6 +118,7 @@ function spriteNode(svg, key, cx, cy, label, raise){
     g.appendChild(t);
   }
   svg.appendChild(g);
+  return {img:img, meterReads:meterReads};
 }
 
 // ---------- Шина: широкая медная полоса с болтами в точках присоединения ----------
@@ -190,7 +192,7 @@ function updateEdge(e){
   var v=e.value, rule=e.rule;
   var isGreen = (rule.greenSign>0) ? (v>0) : (v<0);
   e.toEnd = rule.greenDir==='toEnd' ? isGreen : !isGreen;
-  e.active = Math.abs(v)>0.05;
+  e.active = Math.abs(v)>0.5; // ниже 0.5 Вт — связь неактивна (не рисуем «+0 Вт» с огоньками)
   var t=pwLerp(v);                 // 0 (100 Вт) .. 1 (20 кВт)
   e.tSpacing=spacingFor(t);        // цель для плавного перехода (px, не зависит от длины)
   e.tSpeed=speedFor(t);            // px/с
@@ -212,16 +214,20 @@ function animateEdge(e, dt){
   g.style.display='';
   var total=e.total;
   if(!(total>0) || !isFinite(total)){ g.style.display='none'; return; } // защита от NaN-геометрии
+  // Ограничиваем dt (после фона/троттлинга вкладки) и защищаемся от не-конечных значений.
+  if(!isFinite(dt) || dt<0) dt=0; else if(dt>0.1) dt=0.1;
   // Плавный переход к целевым значениям (показательная аппроксимация к цели).
-  var k=0.08;                     // ~постоянная времени ~0.3 с
+  // k — в 1/с: постоянная времени не зависит от частоты кадров (при 60 Гц даёт
+  // ту же скорость сглаживания, что и прежний шаг 0.08/кадр).
+  var k=5;
+  var a=1-Math.exp(-dt*k);
   var ts=(isFinite(e.tSpacing) && e.tSpacing>0)?e.tSpacing:SP_MAX;
   var tsd=(isFinite(e.tSpeed) && e.tSpeed>=0)?e.tSpeed:0;
   var sp=(isFinite(e.spacing) && e.spacing>0)?e.spacing:ts;
   var sd=isFinite(e.speed)?e.speed:tsd;
-  sp += (ts-sp)*k;
-  sd += (tsd-sd)*k;
+  sp += (ts-sp)*a;
+  sd += (tsd-sd)*a;
   e.spacing=sp; e.speed=sd;
-  if(!isFinite(dt) || dt<0) dt=0; else if(dt>0.1) dt=0.1;
   // Позицию храним в диапазоне [0,total), чтобы не росла бесконечно (теряется точность).
   e.pos=((e.pos + sd*dt*(e.toEnd?1:-1))%total+total)%total;
   // Число огоньков следует из текущего шага и длины линии: при фиксированном
@@ -243,18 +249,23 @@ function animateEdge(e, dt){
 function buildScheme(container, nodes, edges){
   var svg=document.getElementById(container);
   svg.innerHTML='';
-  var readings=[]; meterReadEls=readings;
+  var readings=[];
+  var sprites=[]; // спрайты со «stale» из данных: затемняются в refreshEdges
   var objs=[];
   for(var i=0;i<edges.length;i++){
     if(edges[i].bus){ drawBus(svg, edges[i].x1, edges[i].x2, edges[i].y, edges[i].bolts); continue; }
     objs.push(makeEdge(svg, edges[i]));
   }
-  for(var j=0;j<nodes.length;j++){ var n=nodes[j]; spriteNode(svg, n.key, n.cx, n.cy, n.label, n.raise); }
-  return {svg:svg, edges:objs, meterReads:readings};
+  for(var j=0;j<nodes.length;j++){
+    var n=nodes[j];
+    var spr=spriteNode(svg, n.key, n.cx, n.cy, n.label, n.raise);
+    if(spr.meterReads) readings.push(spr.meterReads[0]);
+    if(n.staleOf) sprites.push({img:spr.img, staleOf:n.staleOf});
+  }
+  return {svg:svg, edges:objs, meterReads:readings, sprites:sprites};
 }
 
 var BUILT={house:null, garage:null};
-var meterReadEls=[]; // элементы накладки показаний день/ночь на счётчике (схема Дома)
 
 function centers(center, n, step){
   var out=[];
@@ -331,7 +342,8 @@ function layoutHouse(data){
     edges.push({bus:true, x1:x1, x2:x2, y:BUSY, bolts:invXs});
     for(var i=0;i<n;i++){
       var ix=invXs[i], inv=invs[i];
-      nodes.push({key:inv.kind,cx:ix,cy:INVY,label:inv.name});
+      nodes.push({key:inv.kind,cx:ix,cy:INVY,label:inv.name,
+        staleOf:(function(idx){return function(d){return d.inverters[idx].stale;};})(i)});
       nodes.push({key:'panel',cx:ix,cy:PANY,label:''});
       // инвертор → шина (вверх)
       edges.push({pts:[[ix,INVY-sprH(inv.kind)/2],[ix,BUSY]], rule:{greenSign:1,greenDir:'toEnd'},
@@ -367,7 +379,8 @@ function layoutHouse(data){
     edges.push({bus:true, x1:kx1, x2:kx2, y:KESY-40, bolts:kesXs});
     for(var j=0;j<k;j++){
       var kx=kesXs[j], kes=kes[j];
-      nodes.push({key:'kes',cx:kx,cy:KESY,label:kes.name});
+      nodes.push({key:'kes',cx:kx,cy:KESY,label:kes.name,
+        staleOf:(function(idx){return function(d){return d.kes[idx].stale;};})(j)});
       nodes.push({key:'panel',cx:kx,cy:KPANY,label:''});
       edges.push({pts:[[kx,KESY-sprH('kes')/2],[kx,KESY-40]], rule:{greenSign:1,greenDir:'toEnd'},
         label:{x:kx+38,y:(KESY-37+KESY-40)/2}, stale:kes.stale,
@@ -421,7 +434,8 @@ function layoutGarage(data){
     edges.push({bus:true, x1:x1, x2:x2, y:BUSY, bolts:invXs});
     for(var i=0;i<n;i++){
       var ix=invXs[i], inv=invs[i];
-      nodes.push({key:inv.kind,cx:ix,cy:INVY,label:inv.name});
+      nodes.push({key:inv.kind,cx:ix,cy:INVY,label:inv.name,
+        staleOf:(function(idx){return function(d){return d.inverters[idx].stale;};})(i)});
       nodes.push({key:'panel',cx:ix,cy:PANY,label:''});
       edges.push({pts:[[ix,INVY-sprH(inv.kind)/2],[ix,BUSY]], rule:{greenSign:1,greenDir:'toEnd'},
         label:{x:ix+38,y:(INVY-39+BUSY)/2}, stale:inv.stale,
@@ -454,6 +468,12 @@ function refreshEdges(obj, data){
     var e=obj.edges[i];
     e.value=e.getValue(data);
     updateEdge(e);
+  }
+  // Спрайты stale-устройств (инверторы/КЭС): приглушаем, когда устройство молчит.
+  var sprites=obj.sprites||[];
+  for(var s=0;s<sprites.length;s++){
+    var stale=!!sprites[s].staleOf(data);
+    sprites[s].img.setAttribute('class', stale?'anim-sprite anim-sprite-stale':'anim-sprite');
   }
   // Показания счётчика (есть только в схеме Дома: meterReads на объекте).
   var reads=obj.meterReads||[];
