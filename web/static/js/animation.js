@@ -292,8 +292,9 @@ function layoutGarage(data){
   ];
 
   var edges=[
-    // Сеть → шина (магистраль).
-    {pts:[[gridX,MAI],[innerX,MAI]], rule:{greenSign:1,greenDir:'toEnd'},
+    // Сеть → шина (магистраль). При выдаче (Σac>0) энергия идёт в сеть (влево),
+    // при потреблении — из сети (вправо).
+    {pts:[[gridX,MAI],[innerX,MAI]], rule:{greenSign:1,greenDir:'toStart'},
      label:{x:(gridX+innerX)/2, y:MAI-12},
      getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }},
     // Шина → гараж.
