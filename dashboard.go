@@ -1271,6 +1271,27 @@ func apiBasicAuth(user, pass string) func(http.Handler) http.Handler {
 	}
 }
 
+// buildDashboardMux собирает всё HTTP-дерево дашборда: статику, страницы и `/api/*`
+// под HTTP Basic (если заданы учётные данные), оборачивая recoverMiddleware.
+// Вынесено из serveDashboard, чтобы роутинг был покрыт тестом на регрессию.
+// API-хендлеры монтируются по ПОЛНОМУ пути `/api/<pattern>` на главном mux, а не
+// через вложенный подмьютекс с http.StripPrefix: последний в связке с ServeMux
+// отдаёт 307-редирект на искажённый путь (остаточный RawPath) и ломает API.
+func buildDashboardMux(pages map[string]http.HandlerFunc, static http.Handler, api map[string]http.HandlerFunc, authUser, authPass string) http.Handler {
+	auth := apiBasicAuth(authUser, authPass)
+	mux := http.NewServeMux()
+	for pat, fn := range api {
+		// Ключи начинаются с '/': "/api/"+"/current" дало бы "/api//current"
+		// (двойной слэш — маршрут не совпадал и всё падало в catch-all "/").
+		mux.Handle("/api/"+strings.TrimPrefix(pat, "/"), auth(http.HandlerFunc(fn)))
+	}
+	mux.Handle("/static/", static)
+	for pat, fn := range pages {
+		mux.HandleFunc(pat, fn)
+	}
+	return recoverMiddleware(mux)
+}
+
 // serveDashboard — HTTP-сервер веб-дашборда. При закрытии stop аккуратно
 // завершает сервер (http.Server.Shutdown, бюджет 5 с), чтобы main мог закрыть
 // пулы Redis/PG после завершения всех фоновых горутин (bgWg).
@@ -1278,24 +1299,25 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayCon
 	h := &dashboardHandler{store: store, pg: pg, flags: flags, relay: relay}
 	// Внутренние страницы (индекс/графики) открыты; данные и управление —
 	// в `/api/*`, защищаются HTTP Basic (если заданы учётные данные).
-	api := http.NewServeMux()
-	api.HandleFunc("/current", h.apiCurrent)
-	api.HandleFunc("/series", h.apiSeries)
-	api.HandleFunc("/tariffs", h.apiTariffs)
-	api.HandleFunc("/bms", h.apiBMS)
-	api.HandleFunc("/bms/", h.apiBMSOne)
-	if relay != nil {
-		api.HandleFunc("/relay", h.apiRelay)
+	pages := map[string]http.HandlerFunc{
+		"/":       h.index,
+		"/charts": h.charts,
+		"/energy": h.energy,
+		"/bms/":   h.bmsDetail,
 	}
-	mux := http.NewServeMux()
-	mux.Handle("/api/", apiBasicAuth(authUser, authPass)(api))
-	mux.Handle("/static/", staticFiles())
-	mux.HandleFunc("/", h.index)
-	mux.HandleFunc("/charts", h.charts)
-	mux.HandleFunc("/energy", h.energy)
-	mux.HandleFunc("/bms/", h.bmsDetail)
+	api := map[string]http.HandlerFunc{
+		"/current": h.apiCurrent,
+		"/series":  h.apiSeries,
+		"/tariffs": h.apiTariffs,
+		"/bms":     h.apiBMS,
+		"/bms/":    h.apiBMSOne,
+	}
+	if relay != nil {
+		api["/relay"] = h.apiRelay
+	}
+	handler := buildDashboardMux(pages, staticFiles(), api, authUser, authPass)
 	srv := &http.Server{
-		Addr: addr, Handler: recoverMiddleware(mux),
+		Addr: addr, Handler: handler,
 		// Таймауты защищают от slowloris и «висящих» соединений, не ограничивая
 		// длинные ответы (/api/series за большой период идёт из PG — WriteTimeout=0):
 		// ReadHeaderTimeout отсекает медленные/зависшие клиенты при приёме заголовка,

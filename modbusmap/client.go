@@ -140,13 +140,13 @@ func (c *Client) ReadRegisters(ctx context.Context, start uint16, count uint16) 
 		return nil, fmt.Errorf("несовпадение unit id: ожидался %d, получен %d", c.Unit, hdr[6])
 	}
 	mbLen := int(binary.BigEndian.Uint16(hdr[4:6]))
-	// Полный ответ = unit(1) + func(1) + bytecount(1) + data(2*count) → 3+2*count.
-	// Нижняя граница +2*count защищает слайс rest[2:2+bc] от выхода за пределы
-	// (усечённый/повреждённый кадр с завышенным MBAP-length иначе дал бы панику
-	// в горутине пулера); верхняя — от чужого/мусорного кадра.
-	if mbLen < 3+2*int(count) || mbLen > 3+2*int(count) {
+	// Проверяем только минимум (нужно прочитать funcID и байт кода/bytecount):
+	// exception-кадр (func с 0x80) всегда имеет mbLen==3 и обрабатывается ниже,
+	// поэтому строгую проверку полной длины делаем ПОСЛЕ разбора исключения —
+	// иначе «Illegal data address» маскировался бы под «некорректный MBAP length».
+	if mbLen < 3 {
 		c.closeConn()
-		return nil, fmt.Errorf("некорректный MBAP length=%d, ждали %d", mbLen, 3+2*int(count))
+		return nil, fmt.Errorf("некорректный MBAP length=%d (минимум 3)", mbLen)
 	}
 	rest := make([]byte, mbLen-1) // минус unit id (уже в hdr[6])
 	if _, err := ReadFull(c.conn, rest); err != nil {
@@ -156,6 +156,13 @@ func (c *Client) ReadRegisters(ctx context.Context, start uint16, count uint16) 
 	funcID := rest[0]
 	if funcID&0x80 != 0 {
 		return nil, fmt.Errorf("modbus exception func=0x%02X code=0x%02X", funcID, rest[1])
+	}
+	// Данные: ровно unit+func+bytecount+data = 3+2*count. Строгая проверка, чтобы
+	// слайс rest[2:2+bc] не вышел за буфер (усечённый кадр с завышенным bytecount
+	// иначе дал бы панику в горутине пулера).
+	if mbLen != 3+2*int(count) {
+		c.closeConn()
+		return nil, fmt.Errorf("некорректный MBAP length=%d, ждали %d", mbLen, 3+2*int(count))
 	}
 	bc := int(rest[1])
 	if bc != 2*int(count) {
