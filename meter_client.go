@@ -118,14 +118,29 @@ func (c *meterClient) ReadHoldingRegisters(ctx context.Context, start, count uin
 		c.closeConn()
 		return nil, fmt.Errorf("meter read header: %w", err)
 	}
+	// Сверяем transaction id и unit id (как в modbusmap): поздний ответ СТАРОГО
+	// запроса на переиспользуемом сокете не должен приниматься за текущий — при
+	// расхождении закрываем соединение, следующий опрос идёт по чистому сокету.
+	txn := binary.BigEndian.Uint16(req[:2])
+	if got := binary.BigEndian.Uint16(hdr[0:2]); got != txn {
+		c.closeConn()
+		return nil, fmt.Errorf("meter: несовпадение transaction id: ожидался %d, получен %d", txn, got)
+	}
 	if binary.BigEndian.Uint16(hdr[2:4]) != 0 {
 		c.closeConn()
 		return nil, fmt.Errorf("meter: protocol != 0 в MBAP")
 	}
-	mbLen := int(binary.BigEndian.Uint16(hdr[4:6]))
-	if mbLen < 3 || mbLen > 2+1+1+2*int(count) {
+	if hdr[6] != c.Unit {
 		c.closeConn()
-		return nil, fmt.Errorf("meter: некорректный MBAP length=%d", mbLen)
+		return nil, fmt.Errorf("meter: несовпадение unit id: ожидался %d, получен %d", c.Unit, hdr[6])
+	}
+	mbLen := int(binary.BigEndian.Uint16(hdr[4:6]))
+	// Полный ответ = unit(1) + func(1) + bytecount(1) + data(2*count) → 3+2*count.
+	// Нижняя граница +2*count защищает слайс rest[2:2+bc] от выхода за пределы
+	// (усечённый кадр с завышенным MBAP-length иначе дал бы панику в пулере).
+	if mbLen < 3+2*int(count) || mbLen > 3+2*int(count) {
+		c.closeConn()
+		return nil, fmt.Errorf("meter: некорректный MBAP length=%d, ждали %d", mbLen, 3+2*int(count))
 	}
 	rest := make([]byte, mbLen-1) // минус unit id (уже в hdr[6])
 	if _, err := modbusmap.ReadFull(c.conn, rest); err != nil {

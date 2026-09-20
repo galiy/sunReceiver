@@ -286,48 +286,65 @@ func commandFor(relay int, st lampState) string {
 // SetLampByName переключает лампу по имени в заданное состояние.
 func (c *relayController) SetLampByName(name string, st lampState) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	slot := -1
 	for i, lamp := range c.cfg.Lamps {
 		if lamp.Name == name {
-			return c.setLampLocked(i, st)
+			slot = i
+			break
 		}
 	}
-	return fmt.Errorf("relay: неизвестная лампа %q (доступны: %s)", name, c.lampNamesLocked())
+	names := c.lampNamesLocked()
+	c.mu.Unlock()
+	if slot < 0 {
+		return fmt.Errorf("relay: неизвестная лампа %q (доступны: %s)", name, names)
+	}
+	return c.applyLamp(slot, st)
 }
 
 // SetLamp переключает лампу по индексу Lamps.
 func (c *relayController) SetLamp(slot int, st lampState) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if slot < 0 || slot >= len(c.cfg.Lamps) {
-		return fmt.Errorf("relay: некорректный индекс лампы %d (0..%d)", slot, len(c.cfg.Lamps)-1)
+		n := len(c.cfg.Lamps)
+		c.mu.Unlock()
+		return fmt.Errorf("relay: некорректный индекс лампы %d (0..%d)", slot, n-1)
 	}
-	return c.setLampLocked(slot, st)
+	c.mu.Unlock()
+	return c.applyLamp(slot, st)
 }
 
-// setLampLocked задаёт желаемое состояние и, для steady, сразу отправляет команду.
-// Требует удержанного c.mu.
-func (c *relayController) setLampLocked(slot int, st lampState) error {
+// applyLamp меняет желаемое состояние лампы [slot] и, для steady, сразу отправляет
+// команду. Сетевой вызов (send) и логирование выполняются БЕЗ удержания c.mu, чтобы
+// не блокировать tick/подписчиков на время UDP-записи; persist — под локом.
+func (c *relayController) applyLamp(slot int, st lampState) error {
+	c.mu.Lock()
 	if c.desired[slot] == st {
+		c.mu.Unlock()
 		return nil
 	}
 	prev := c.desired[slot]
 	c.desired[slot] = st
 	c.blinkOn[slot] = false
 	cmd := commandFor(c.cfg.Lamps[slot].Relay, st)
+	sendCmd := ""
 	if cmd != "" && cmd != c.lastCmd[slot] {
 		c.lastCmd[slot] = cmd
 		c.lastSent = c.clock()
-		c.mu.Unlock()
-		c.send(cmd)
-		c.mu.Lock()
+		sendCmd = cmd
 	}
+	name := c.cfg.Lamps[slot].Name
 	c.mu.Unlock()
+
+	if sendCmd != "" {
+		c.send(sendCmd)
+	}
 	// Логируем ТОЛЬКО смену желаемого состояния лампы; фоновые переключения/
 	// повторы (мигание, keepalive) не пишем.
-	log.Printf("relay: лампа %q → %s (было %s)", c.cfg.Lamps[slot].Name, st.String(), prev.String())
+	log.Printf("relay: лампа %q → %s (было %s)", name, st.String(), prev.String())
+
 	c.mu.Lock()
 	c.persistLocked()
+	c.mu.Unlock()
 	return nil
 }
 

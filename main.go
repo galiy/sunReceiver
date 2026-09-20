@@ -183,6 +183,10 @@ type configFile struct {
 	Notify        *notifySection   `json:"notify"`
 	Relay         *relaySection    `json:"relay"` // сетевое реле SR-201 (лампы), управление по UDP
 	DashboardPort int              `json:"dashboard_port"` // порт веб-дашборда; 0 — дефолт 8080
+	// Необязательные учётные данные HTTP Basic для `/api/*` веб-дашборда. Если оба
+	// пусты — API открыт (обратный прокси закрывает доступ снаружи сам).
+	DashboardUser     string `json:"dashboard_user,omitempty"`
+	DashboardPassword string `json:"dashboard_password,omitempty"`
 }
 
 // configPath — sunReceiver.json в каталоге исполняемого файла.
@@ -314,6 +318,10 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	if cf.DashboardPort == 0 {
 		return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: не задано обязательное поле dashboard_port (порт веб-дашборда)", path)
 	}
+	// Учётные данные HTTP Basic для `/api/*` дашборда (необязательны). Заданы обе —
+	// требовать авторизацию; иначе API открыт (доступ снаружи закрывает прокси).
+	dashboardAuthUser = cf.DashboardUser
+	dashboardAuthPass = cf.DashboardPassword
 	// Уведомления в MAX (раздел notify): токен обязателен. Адресат (user_id или
 	// chat_id) НЕ обязателен — если он пуст, бот регистрирует первого подписчика
 	// автоматически (bot_started/bot_added) и дописывает его в конфиг.
@@ -328,6 +336,11 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	}
 	return targets, cf.DB, cf.Meter, cf.Map, cf.Relay, cf.DashboardPort, nil
 }
+
+// dashboardAuthUser/dashboardAuthPass — учётные данные HTTP Basic для `/api/*`
+// дашборда (из конфига dashboard_user/dashboard_password). Пустые значения —
+// аутентификация не требуется. Заполняются в loadConfig.
+var dashboardAuthUser, dashboardAuthPass string
 
 // defaultDashboardAddr собирает адрес веб-дашборда из обязательного конфиг-порта.
 func defaultDashboardAddr(port int) string {
@@ -671,7 +684,10 @@ func faultNames(mask uint16) []string {
 // (commonContractTags). Единица зашита в суффикс имени: *_voltage — V, *_current — A,
 // ac_*_power — W (ac_reactive_power — var), grid_frequency — Hz, energy_* — kWh.
 // Числовые значения *voltage/*current/*power/energy*/temperature* округляются до
-// 1 знака (round1). Бренд-специфичные поля в values не попадают — они в raw_registers.
+// 1 знака (round1). Бренд-специфичные поля (диагностика Sofar: inverter_status,
+// fault_*, температуры модуля/инвертора, bus_voltage, country; температуры Deye)
+// в values НЕ попадают: они не входят в commonContractTags и отбрасываются при
+// сериализации снимка — контракт хранит только общие теги.
 
 // putSofarSimple пишет 16-битный регистр в контракт: int при ratio==1, иначе float.
 // Регистр трактуется как БЕЗЗНАКОВЫЙ (физические величины неотрицательны:
@@ -1622,7 +1638,7 @@ func main() {
 	var bgWg sync.WaitGroup
 	var pg *pgStore
 	if pgDSN != "" {
-		pg, err = openPG(pgDSN)
+		pg, err = openPG(stopCtx, pgDSN)
 		if err != nil {
 			log.Printf("pg: %v (persistent-хранилище отключено)", err)
 		} else {
@@ -1776,7 +1792,7 @@ func main() {
 	bgWg.Add(1)
 	go func() {
 		defer bgWg.Done()
-		serveDashboard(dashboardAddr, store, pg, relayCtl, stopCtx, dash)
+		serveDashboard(dashboardAddr, store, pg, relayCtl, stopCtx, dash, dashboardAuthUser, dashboardAuthPass)
 	}()
 
 	// Windows-сборка сворачивается в трей (меню «Закрыть»); на POSIX (Linux)

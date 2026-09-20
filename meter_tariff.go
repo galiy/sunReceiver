@@ -215,7 +215,7 @@ WHERE day = $1`, day).Scan(
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil // строки ещё нет — финализировать нечего
 		}
-		return nil
+		return fmt.Errorf("tariff: чтение границ дня %s: %w", day.Format("2006-01-02"), err)
 	}
 
 	// Неполные границы (часть показаний NULL — граница не захвачена): финализация
