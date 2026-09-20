@@ -2066,10 +2066,15 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#e
 .trow .tval { width:52px; text-align:right; font-variant-numeric:tabular-nums; }
 .trow .tname { flex:0 0 150px; width:150px; }
 .tnote { color:#6b7785; font-size:11px; margin:10px 0 0; line-height:1.4; }
-.bms-charts { display:flex; flex-wrap:wrap; gap:16px; margin-top:24px; }
+.bms-charts { display:flex; flex-direction:column; gap:16px; margin-top:24px; }
 .bms-charts-title { margin:28px 0 12px; font-size:16px; }
-.bms-charts .card { margin-bottom:0; overflow:hidden; }
+.bms-charts .card { margin-bottom:0; overflow:hidden; position:relative; }
 .bms-charts .chart-wrap { position:relative; height:300px; }
+.card-order { position:absolute; top:10px; right:12px; display:flex; gap:4px; z-index:2; }
+.card-order button { background:#ffffff; color:#2b3238; border:1px solid #d0d6de; border-radius:6px; width:30px; height:26px; cursor:pointer; font-size:12px; line-height:1; }
+.card-order button:hover { background:#f0f2f5; }
+.card-order button:disabled { opacity:.35; cursor:default; }
+.card-order button:disabled:hover { background:#ffffff; }
 .period-panel { display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px; font-size:13px; color:#6b7785; }
 .period-panel button { background:#ffffff; color:#2b3238; border:1px solid #d0d6de; border-radius:6px; padding:5px 12px; cursor:pointer; font-size:13px; }
 .period-panel button:hover { background:#f0f2f5; }
@@ -2148,37 +2153,44 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#e
 <div class="charts bms-charts">
   <div class="card">
     <h2>Заряд (SOC), %</h2>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button></div>
     <div class="chart-toolbar"><span id="bmsCapChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="chart-wrap"><canvas id="bmsCapChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Напряжение пакета, V</h2>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button></div>
     <div class="chart-toolbar"><span id="bmsVoltChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="chart-wrap"><canvas id="bmsVoltChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Ток, A</h2>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button></div>
     <div class="chart-toolbar"><span id="bmsCurChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="chart-wrap"><canvas id="bmsCurChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Мощность, W</h2>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button></div>
     <div class="chart-toolbar"><span id="bmsPwrChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="chart-wrap"><canvas id="bmsPwrChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Напряжения ячеек, V</h2>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button></div>
     <div class="chart-toolbar"><span id="bmsCellsChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="lg-chips" id="bmsCellsChartLg"></div>
     <div class="chart-wrap"><canvas id="bmsCellsChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Разброс ячеек (max&minus;min), V</h2>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button></div>
     <div class="chart-toolbar"><span id="bmsSpreadChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="chart-wrap"><canvas id="bmsSpreadChart"></canvas></div>
   </div>
   <div class="card">
     <h2>Температуры T1–T4 (батарея, силовые ключи, плата), &deg;C</h2>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button></div>
     <div class="chart-toolbar"><span id="bmsTempChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
     <div class="lg-chips" id="bmsTempChartLg"></div>
     <div class="chart-wrap"><canvas id="bmsTempChart"></canvas></div>
@@ -2618,6 +2630,58 @@ if(SR_COARSE){
 }
 
 load(); setInterval(load,1000);
+
+// ---------- Изменение порядка графиков BMS (одна колонка) ----------
+// Порядок карточек в .bms-charts можно менять стрелками вверх/вниз; порядок
+// сохраняется в localStorage (bmsChartOrder) и восстанавливается при загрузке.
+// Графики переживают перестроение (destroy/rebuild по canvas-элементу), поэтому
+// достаточно двигать DOM-карточки — инстансы Chart.js привязаны к кубику по id.
+function bmsRefreshOrderBtns(){
+  var cards=document.querySelectorAll('.bms-charts > .card');
+  for(var i=0;i<cards.length;i++){
+    var up=cards[i].querySelector('.ord-up'), down=cards[i].querySelector('.ord-down');
+    if(up) up.disabled=(i===0);
+    if(down) down.disabled=(i===cards.length-1);
+  }
+}
+function bmsSaveOrder(){
+  var ids=[];
+  document.querySelectorAll('.bms-charts > .card').forEach(function(c){
+    var cv=c.querySelector('.chart-wrap canvas');
+    if(cv) ids.push(cv.id);
+  });
+  try{ localStorage.setItem('bmsChartOrder', JSON.stringify(ids)); }catch(e){}
+}
+function bmsLoadOrder(){
+  var ids=null;
+  try{ ids=JSON.parse(localStorage.getItem('bmsChartOrder')||'null'); }catch(e){}
+  if(!Array.isArray(ids) || !ids.length) return;
+  var container=document.querySelector('.bms-charts');
+  if(!container) return;
+  var byId={};
+  container.querySelectorAll('.card').forEach(function(c){
+    var cv=c.querySelector('.chart-wrap canvas');
+    if(cv) byId[cv.id]=c;
+  });
+  ids.forEach(function(id){ var c=byId[id]; if(c) container.appendChild(c); });
+  container.querySelectorAll('.card').forEach(function(c){ container.appendChild(c); });
+}
+function bmsMoveCard(btn,dir){
+  var card=btn.closest('.card');
+  if(!card) return;
+  var cards=card.parentNode.querySelectorAll('.card');
+  var idx=Array.prototype.indexOf.call(cards,card);
+  var target=dir<0? cards[idx-1] : cards[idx+1];
+  if(!target) return;
+  if(dir<0) card.parentNode.insertBefore(card,target);
+  else card.parentNode.insertBefore(target,card);
+  bmsSaveOrder();
+  bmsRefreshOrderBtns();
+}
+document.querySelectorAll('.bms-charts .ord-up').forEach(function(b){ b.addEventListener('click',function(){ bmsMoveCard(this,-1); }); });
+document.querySelectorAll('.bms-charts .ord-down').forEach(function(b){ b.addEventListener('click',function(){ bmsMoveCard(this,1); }); });
+bmsLoadOrder();
+bmsRefreshOrderBtns();
 </script>
 {{template "mnav" .}}
 </body>
