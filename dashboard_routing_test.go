@@ -33,18 +33,20 @@ func TestDashboardAPIRouting(t *testing.T) {
 		}
 	}
 	pages := map[string]http.HandlerFunc{
-		"/":       hit("index"),
-		"/charts": hit("charts"),
-		"/energy": hit("energy"),
-		"/bms/":   hit("bmsDetail"),
+		"/":         hit("index"),
+		"/charts":   hit("charts"),
+		"/energy":   hit("energy"),
+		"/animation": hit("animation"),
+		"/bms/":     hit("bmsDetail"),
 	}
 	api := map[string]http.HandlerFunc{
-		"/current": hit("current"),
-		"/series":  hit("series"),
-		"/tariffs": hit("tariffs"),
-		"/bms":     hit("bms"),
-		"/bms/":    hit("bmsOne"),
-		"/relay":   hit("relay"),
+		"/current":   hit("current"),
+		"/series":    hit("series"),
+		"/tariffs":   hit("tariffs"),
+		"/animation": hit("animation"),
+		"/bms":       hit("bms"),
+		"/bms/":      hit("bmsOne"),
+		"/relay":     hit("relay"),
 	}
 
 	// Без учётных данных API закрыт (401), но роутинг существует (не 404).
@@ -66,6 +68,9 @@ func TestDashboardAPIRouting(t *testing.T) {
 	// С верными креденшелами хендлер вызывается (200): префикс /api/ срезан.
 	if code := authGet("/api/current"); code != http.StatusOK {
 		t.Fatalf("auth /api/current → %d, want 200 (StripPrefix сломан?)", code)
+	}
+	if code := authGet("/api/animation"); code != http.StatusOK {
+		t.Fatalf("auth /api/animation → %d, want 200", code)
 	}
 	if code := authGet("/api/series"); code != http.StatusOK {
 		t.Fatalf("auth /api/series → %d, want 200", code)
@@ -89,5 +94,8 @@ func TestDashboardAPIRouting(t *testing.T) {
 	// Страницы открыты без авторизации — требовать auth на "/" нельзя.
 	if code := authGet("/"); code != http.StatusOK {
 		t.Fatalf("GET / → %d, want 200 (страница не должна требовать auth)", code)
+	}
+	if code := authGet("/animation"); code != http.StatusOK {
+		t.Fatalf("GET /animation → %d, want 200 (страница не должна требовать auth)", code)
 	}
 }

@@ -140,6 +140,44 @@ type seriesPoint struct {
 	V float64 `json:"v"`
 }
 
+// animationResponse — данные страницы анимации (/api/animation): две схемы
+// (Дом и Гараж) с устройствами и мощностями на связях. Значения передаются
+// со знаком: клиент по знаку определяет направление потока и цвет огоньков
+// (подробнее о семантике знаков — docs/universal-contract.md и schemes/*.puml).
+type animationResponse struct {
+	GeneratedAt string     `json:"generated_at"`
+	House       animScheme `json:"house"`
+	Garage      animScheme `json:"garage"`
+}
+
+// animScheme — одна схема (Дом или Гараж).
+type animScheme struct {
+	// Inverters — сетевые инверторы (Deye/Sofar) размещения, отсортированные по
+	// порядку на дашборде. PV — мощность солнечных панелей (P_PV: у Deye
+	// dc_total_power, у Sofar pv1_power+pv2_power), AC — активная мощность.
+	Inverters []animInverter `json:"inverters"`
+	// KES — MPPT-контроллеры (КЭС) — только в схеме Дома (все КЭС под батареей).
+	KES []animInverter `json:"kes,omitempty"`
+	// Значения МАП (общие для схемы Дома): мощность сети и батареи.
+	MapGridPower   float64 `json:"map_grid_power"`
+	MapBatteryPower float64 `json:"map_battery_power"`
+	// Активная мощность электросчётчика (только в схеме Дома).
+	MeterActivePower float64 `json:"meter_active_power"`
+	// HousePower — мощность Дома (формула-разница), только в схеме Дома.
+	HousePower float64 `json:"house_power"`
+	// GaragePower — мощность Гаража («остаток»; пока нет нагрузки — 0).
+	GaragePower float64 `json:"garage_power"`
+}
+
+// animInverter — одно устройство схемы (инвертор или КЭС).
+type animInverter struct {
+	Name  string  `json:"name"`
+	Kind  string  `json:"kind"`  // "deye"|"sofar" (инвертор) или "kes" (КЭС) — выбор спрайта
+	PV    float64 `json:"pv"`    // активная мощность PV (P_PV)
+	AC    float64 `json:"ac"`    // активная мощность на выходе (ac_active_power)
+	Stale bool    `json:"stale"` // снимок старше окна (устройство молчит, напр. ночью)
+}
+
 // deviceSeries — временной ряд ac_active_power одного инвертора.
 type deviceSeries struct {
 	Name   string        `json:"name"`
@@ -336,6 +374,15 @@ func (h *dashboardHandler) energy(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if err := webTemplates.ExecuteTemplate(w, "energy.html", map[string]any{"active": "energy", "flags": h.flags, "CacheBust": webCacheBust}); err != nil {
 		log.Printf("dashboard: render /energy: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}
+}
+
+func (h *dashboardHandler) animation(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if err := webTemplates.ExecuteTemplate(w, "animation.html", map[string]any{"active": "animation", "flags": h.flags, "CacheBust": webCacheBust}); err != nil {
+		log.Printf("dashboard: render /animation: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
 }
@@ -803,6 +850,182 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 		MeterExportNightYear:  expNightY,
 		Devices:               devices,
 	})
+}
+
+// animPV возвращает P_PV устройства: у Deye — dc_total_power, у Sofar —
+// pv1_power+pv2_power; у КЭС (MPPT) — pv1_power (P_PV). Порядок проверки:
+// dc_total_power (Deye), затем сумма pv1+pv2 (Sofar/КЭС). Если ни одного тега
+// нет — 0.
+func animPV(v valuesContract) float64 {
+	if x, ok := snapFloat(v, "dc_total_power"); ok {
+		return x
+	}
+	var p float64
+	if x, ok := snapFloat(v, "pv1_power"); ok {
+		p += x
+	}
+	if x, ok := snapFloat(v, "pv2_power"); ok {
+		p += x
+	}
+	return p
+}
+
+// apiAnimation отдаёт данные страницы анимации (/api/animation): две схемы
+// (Дом и Гараж) с инверторами/КЭС и мощностями на связях. Устройства группируются
+// по размещению (placement; пустое → «Дом»), MPPT-контроллеры (КЭС) — только в
+// схеме Дома, МАП и счётчик — общие для Дома. Значения передаются со знаком;
+// устройства со снимком старше STALE (20 мин) помечаются Stale — клиент рисует
+// их мощность нулём и приглушает спрайт (ночью инверторы/КЭС не отдают данные).
+func (h *dashboardHandler) apiAnimation(w http.ResponseWriter, r *http.Request) {
+	devices, err := h.store.Current()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	res := buildAnimationResponse(devices, time.Now())
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(res)
+}
+
+// buildAnimationResponse собирает данные страницы анимации из снимков устройств:
+// сортирует их как apiCurrent (MPPT — последними), группирует инверторы по
+// размещению (пустое → «Дом»), MPPT-контроллеры (КЭС) — в схему Дома, из МАП и
+// счётчика берёт мощности сети/батареи/счётчика. Считает мощность Дома по
+// формуле-разнице. Устройства со снимком старше окна (20 мин) помечаются Stale —
+// клиент показывает их мощность нулём (ночью инверторы/КЭС не отдают данные).
+func buildAnimationResponse(devices []deviceSnapshot, now time.Time) animationResponse {
+	// Сортируем как apiCurrent: MPPT — последними, остальные по Order.
+	sort.SliceStable(devices, func(i, j int) bool {
+		mi, mj := isMPPTKey(devices[i].IP), isMPPTKey(devices[j].IP)
+		if mi != mj {
+			return !mi
+		}
+		oi, oj := devices[i].Order, devices[j].Order
+		if oi != oj {
+			return oi < oj
+		}
+		return devices[i].Name < devices[j].Name
+	})
+	staleCutoff := now.Add(-20 * time.Minute)
+	stale := func(d deviceSnapshot) bool {
+		ts, err := time.Parse(time.RFC3339, d.Timestamp)
+		return err != nil || !ts.After(staleCutoff)
+	}
+
+	// Схема Дома и Гаража: инверторы по размещению (пустое → «Дом»).
+	house := animScheme{}
+	garage := animScheme{}
+	// Мощности МАП (сеть/батарея) и счётчика — из устройства МАП (батарея/сеть)
+	// и электросчётчика; берём свежий снимок (аналог apiCurrent).
+	for _, d := range devices {
+		if isMAPDevice(d.Values) {
+			if stale(d) {
+				continue
+			}
+			if v, ok := snapFloat(d.Values, "grid_power"); ok {
+				house.MapGridPower = v
+			}
+			if v, ok := snapFloat(d.Values, "battery_power"); ok {
+				house.MapBatteryPower = v
+			}
+			continue
+		}
+		if isMeterDevice(d.Values) && !stale(d) {
+			if v, ok := snapFloat(d.Values, "meter_active_power"); ok {
+				house.MeterActivePower = v
+			}
+			continue
+		}
+		if isMPPTKey(d.IP) {
+			house.KES = append(house.KES, animInverter{
+				Name:  d.Name,
+				Kind:  "kes",
+				PV:    animPV(d.Values),
+				AC:    snapOrZero(d.Values, "ac_active_power"),
+				Stale: stale(d),
+			})
+			continue
+		}
+		inv := animInverter{
+			Name:  d.Name,
+			Kind:  inverterKind(d.Values),
+			PV:    animPV(d.Values),
+			AC:    snapOrZero(d.Values, "ac_active_power"),
+			Stale: stale(d),
+		}
+		switch d.Placement {
+		case "Гараж":
+			garage.Inverters = append(garage.Inverters, inv)
+		default: // «Дом» (в т.ч. пустое)
+			house.Inverters = append(house.Inverters, inv)
+		}
+	}
+
+	// Мощность Дома (формула-разница): P_дом = Σ(инверторы→МАП) + P(батарея→МАП) − P(МАП→сеть).
+	// Молчащие (stale) инверторы в сумму не входят — их устаревшее значение не
+	// должно «оживлять» мощность дома ночью.
+	var sumInvHome float64
+	for _, inv := range house.Inverters {
+		if !inv.Stale {
+			sumInvHome += inv.AC
+		}
+	}
+	house.HousePower = sumInvHome + house.MapBatteryPower - house.MapGridPower
+	// В гараже пока нет нагрузки — «остаток» нулевой.
+	garage.GaragePower = 0
+
+	res := animationResponse{
+		GeneratedAt: now.Format(time.RFC3339),
+		House:       house,
+		Garage:      garage,
+	}
+	// Округляем до 1 знака.
+	res.House.MapGridPower = animRound1(res.House.MapGridPower)
+	res.House.MapBatteryPower = animRound1(res.House.MapBatteryPower)
+	res.House.MeterActivePower = animRound1(res.House.MeterActivePower)
+	res.House.HousePower = animRound1(res.House.HousePower)
+	res.Garage.GaragePower = animRound1(res.Garage.GaragePower)
+	for i := range res.House.Inverters {
+		res.House.Inverters[i].PV = animRound1(res.House.Inverters[i].PV)
+		res.House.Inverters[i].AC = animRound1(res.House.Inverters[i].AC)
+	}
+	for i := range res.House.KES {
+		res.House.KES[i].PV = animRound1(res.House.KES[i].PV)
+		res.House.KES[i].AC = animRound1(res.House.KES[i].AC)
+	}
+	for i := range res.Garage.Inverters {
+		res.Garage.Inverters[i].PV = animRound1(res.Garage.Inverters[i].PV)
+		res.Garage.Inverters[i].AC = animRound1(res.Garage.Inverters[i].AC)
+	}
+	return res
+}
+
+// inverterKind определяет марку сетевого инвертора по его тегам: наличие
+// dc_total_power — признак Deye (тег есть только у Deye, main.go:923); иначе —
+// Sofar. Используется для выбора спрайта на странице анимации.
+func inverterKind(v valuesContract) string {
+	if _, ok := v["dc_total_power"]; ok {
+		return "deye"
+	}
+	return "sofar"
+}
+
+// snapOrZero извлекает числовое значение из универсального контракта по ключу,
+// возвращая 0 при отсутствии/нечисловом значении (для анимации: отсутствие тега
+// означает нулевую мощность).
+func snapOrZero(v valuesContract, key string) float64 {
+	if x, ok := snapFloat(v, key); ok {
+		return x
+	}
+	return 0
+}
+
+// animRound1 округляет float до 1 знака (значения схем анимации). Это отдельная
+// функция, т.к. round1 из main.go — для тегов универсального контракта (другая
+// сигнатура), а здесь значения уже извлечены в float.
+func animRound1(v float64) float64 {
+	return math.Round(v*10) / 10
 }
 
 // apiSeries отдаёт временные ряды ac_active_power по инверторам за период [from, to].
@@ -1358,15 +1581,17 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayCon
 	// Внутренние страницы (индекс/графики) открыты; данные и управление —
 	// в `/api/*`, защищаются HTTP Basic (если заданы учётные данные).
 	pages := map[string]http.HandlerFunc{
-		"/":       h.index,
-		"/charts": h.charts,
-		"/energy": h.energy,
-		"/bms/":   h.bmsDetail,
+		"/":         h.index,
+		"/charts":   h.charts,
+		"/energy":   h.energy,
+		"/animation": h.animation,
+		"/bms/":     h.bmsDetail,
 	}
 	api := map[string]http.HandlerFunc{
 		"/current": h.apiCurrent,
 		"/series":  h.apiSeries,
 		"/tariffs": h.apiTariffs,
+		"/animation": h.apiAnimation,
 		"/bms":     h.apiBMS,
 		"/bms/":    h.apiBMSOne,
 	}

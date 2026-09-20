@@ -66,6 +66,7 @@ var webTemplates = template.Must(template.ParseFS(webFS,
 	"web/templates/index.html",
 	"web/templates/charts.html",
 	"web/templates/energy.html",
+	"web/templates/animation.html",
 	"web/templates/bms.html",
 ))
 

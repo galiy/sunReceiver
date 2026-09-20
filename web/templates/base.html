@@ -5,6 +5,7 @@
 {{define "mnav"}}
 <div class="mnav">
   <a href="/" {{if eq .active "home"}}class="active"{{end}}>Главная</a>
+  <a href="/animation" {{if eq .active "animation"}}class="active"{{end}}>Анимация</a>
   <a href="/charts" {{if eq .active "charts"}}class="active"{{end}}>Графики</a>
   {{if .flags.ShowMeter}}<a href="/energy" {{if eq .active "energy"}}class="active"{{end}}>Электроэнергия</a>{{end}}
 </div>
