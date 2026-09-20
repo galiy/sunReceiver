@@ -168,6 +168,11 @@ type animScheme struct {
 	MapBatteryPower float64 `json:"map_battery_power"`
 	// Активная мощность электросчётчика (только в схеме Дома).
 	MeterActivePower float64 `json:"meter_active_power"`
+	// Текущие показания счётчика за сутки (потребление «День»/«Ночь», kWh),
+	// считаются из актуальных показаний (Redis) и границ PG — как тарифные плашки
+	// на главной. Только в схеме Дома.
+	MeterImportDay   float64 `json:"meter_import_day"`
+	MeterImportNight float64 `json:"meter_import_night"`
 	// HousePower — мощность Дома (формула-разница), только в схеме Дома.
 	HousePower float64 `json:"house_power"`
 	// GaragePower — мощность Гаража («остаток»; пока нет нагрузки — 0).
@@ -878,10 +883,47 @@ func (h *dashboardHandler) apiAnimation(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	res := buildAnimationResponse(devices, h.placeByIP, time.Now())
+	now := time.Now()
+	res := buildAnimationResponse(devices, h.placeByIP, now)
+	// Текущие показания счётчика за сутки (потребление «День»/«Ночь») — как на
+	// тарифных плашках главной: актуальные показания (Redis) + границы (PG).
+	res.House.MeterImportDay, res.House.MeterImportNight = h.meterDayNight(devices, now)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(res)
+}
+
+// meterDayNight возвращает потребление счётчика за текущие календарные сутки,
+// разбитое на «День» (07:00–23:00) и «Ночь» (23:00–07:00), в kWh. Источники —
+// актуальные показания счётчика из снимков (Redis) и границы текущего дня (PG,
+// кеш на tariffCacheTTL). При молчащем счётчике или отсутствии границ — 0.
+func (h *dashboardHandler) meterDayNight(devices []deviceSnapshot, now time.Time) (day, night float64) {
+	var impNow, expNow float64
+	hasImp, hasExp := false, false
+	staleCutoff := now.Add(-20 * time.Minute)
+	for _, d := range devices {
+		if isMeterDevice(d.Values) {
+			if ts, err := time.Parse(time.RFC3339, d.Timestamp); err != nil || !ts.After(staleCutoff) {
+				break
+			}
+			if v, ok := snapFloat(d.Values, "meter_import"); ok {
+				impNow, hasImp = v, true
+			}
+			if v, ok := snapFloat(d.Values, "meter_export"); ok {
+				expNow, hasExp = v, true
+			}
+			break
+		}
+	}
+	if !hasImp || !hasExp || h.pg == nil {
+		return 0, 0
+	}
+	b, _, _ := h.loadTariffData(now)
+	if b == nil {
+		return 0, 0
+	}
+	impDay, impNight, _, _ := meterTariffToday(now, impNow, expNow, b)
+	return math.Round(impDay*100) / 100, math.Round(impNight*100) / 100
 }
 
 // buildAnimationResponse собирает данные страницы анимации из снимков устройств:

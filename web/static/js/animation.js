@@ -15,7 +15,7 @@
 // ---------- Спрайты (PNG на прозрачном фоне) ----------
 var SPR = {
   grid:    {file:'power-line-pylon', w:64, h:135},
-  meter:   {file:'dds238-meter',     w:52, h:116},
+  meter:   {file:'dds238-meter',     w:70, h:126},
   map:     {file:'map-converter',    w:120,h:51},
   house:   {file:'country-house',    w:120,h:86},
   garage:  {file:'garage',           w:110,h:78},
@@ -67,6 +67,25 @@ function spriteNode(svg, key, cx, cy, label, raise){
   img.setAttribute('y',cy-raise-spec.h/2);
   img.setAttribute('class','anim-sprite');
   g.appendChild(img);
+  if(key==='meter'){
+    // Накладка показаний день/ночь на ЖК счётчика (значения обновляются tick-ом).
+    var box=document.createElementNS(NS,'rect');
+    box.setAttribute('x',cx-spec.w/2+spec.w*0.05);
+    box.setAttribute('y',cy-raise-spec.h*0.20);
+    box.setAttribute('width',spec.w*0.90);
+    box.setAttribute('height',spec.h*0.42);
+    box.setAttribute('rx',4); box.setAttribute('fill','#eef7f1'); box.setAttribute('class','anim-meter-box');
+    g.appendChild(box);
+    var d=document.createElementNS(NS,'text');
+    d.setAttribute('x',cx); d.setAttribute('y',cy-raise-spec.h*0.02); d.setAttribute('text-anchor','middle');
+    d.setAttribute('class','anim-meter-read'); d.textContent='День —';
+    g.appendChild(d);
+    var n=document.createElementNS(NS,'text');
+    n.setAttribute('x',cx); n.setAttribute('y',cy-raise+spec.h*0.16); n.setAttribute('text-anchor','middle');
+    n.setAttribute('class','anim-meter-read'); n.textContent='Ночь —';
+    g.appendChild(n);
+    meterReadEls.push({day:d, night:n});
+  }
   if(label){
     var t=document.createElementNS(NS,'text');
     t.setAttribute('x',cx); t.setAttribute('y',cy-raise+spec.h/2+14);
@@ -161,16 +180,18 @@ function animateEdge(e, t){
 function buildScheme(container, nodes, edges){
   var svg=document.getElementById(container);
   svg.innerHTML='';
+  var readings=[]; meterReadEls=readings;
   var objs=[];
   for(var i=0;i<edges.length;i++){
     if(edges[i].bus){ drawBus(svg, edges[i].x1, edges[i].x2, edges[i].y); continue; }
     objs.push(makeEdge(svg, edges[i]));
   }
   for(var j=0;j<nodes.length;j++){ var n=nodes[j]; spriteNode(svg, n.key, n.cx, n.cy, n.label, n.raise); }
-  return {svg:svg, edges:objs};
+  return {svg:svg, edges:objs, meterReads:readings};
 }
 
 var BUILT={house:null, garage:null};
+var meterReadEls=[]; // элементы накладки показаний день/ночь на счётчике (схема Дома)
 
 function centers(center, n, step){
   var out=[];
@@ -368,6 +389,17 @@ function refreshEdges(obj, data){
     e.value=e.getValue(data);
     updateEdge(e);
   }
+  // Показания счётчика день/ночь (есть только в схеме Дома: meterReads на объекте).
+  var reads=obj.meterReads||[];
+  for(var k=0;k<reads.length;k++){
+    reads[k].day.textContent='День '+fmtKWh(data.meter_import_day);
+    reads[k].night.textContent='Ночь '+fmtKWh(data.meter_import_night);
+  }
+}
+
+function fmtKWh(v){
+  v=Math.round((v||0)*100)/100;
+  return (v===0?'0':v)+' кВт·ч';
 }
 
 function fmtSec(t){
