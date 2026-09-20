@@ -208,20 +208,28 @@ function animateEdge(e, dt){
   var g=e.dotG;
   if(!e.active){ g.style.display='none'; return; }
   g.style.display='';
+  var total=e.total;
+  if(!(total>0) || !isFinite(total)){ g.style.display='none'; return; } // защита от NaN-геометрии
   // Плавный переход к целевым значениям (показательная аппроксимация к цели).
   var k=0.08;                     // ~постоянная времени ~0.3 с
-  e.spacing += (e.tSpacing-e.spacing)*k;
-  e.speed   += (e.tSpeed-e.speed)*k;
-  e.pos += e.speed*dt*(e.toEnd?1:-1);
-  var total=e.total;
-  if(total<=0){ return; }
+  var ts=(isFinite(e.tSpacing) && e.tSpacing>0)?e.tSpacing:total/DOTS_MIN;
+  var tsd=(isFinite(e.tSpeed) && e.tSpeed>=0)?e.tSpeed:0;
+  var sp=(isFinite(e.spacing) && e.spacing>0)?e.spacing:ts;
+  var sd=isFinite(e.speed)?e.speed:tsd;
+  sp += (ts-sp)*k;
+  sd += (tsd-sd)*k;
+  e.spacing=sp; e.speed=sd;
+  if(!isFinite(dt) || dt<0) dt=0; else if(dt>0.1) dt=0.1;
+  // Позицию храним в диапазоне [0,total), чтобы не росла бесконечно (теряется точность).
+  e.pos=((e.pos + sd*dt*(e.toEnd?1:-1))%total+total)%total;
   // Число огоньков следует из текущего шага (меняется по одному, без рывка).
-  var n=Math.max(DOTS_MIN, Math.min(e.capacity, Math.round(total/e.spacing)));
+  var n=Math.max(DOTS_MIN, Math.min(e.capacity, Math.round(total/sp)));
   for(var i=0;i<e.dots.length;i++){
     var el=e.dots[i].el;
     if(i>=n){ el.style.display='none'; continue; }
     el.style.display='';
-    var s=((e.pos + i*e.spacing)%total+total)%total;
+    var s=((e.pos + i*sp)%total+total)%total;
+    if(!isFinite(s)) continue;
     var pt=e.path.getPointAtLength(s);
     el.setAttribute('cx', pt.x);
     el.setAttribute('cy', pt.y);
