@@ -17,8 +17,3 @@
 .lg-dot.green { background:#37b24d; }
 .lg-dot.red { background:#f03e3e; }
 .anim-legend .lg-note { color:#a9b1bb; }
-/* Кнопка «На главную» — как на остальных дашбордах. */
-.nav-btn { background:#428bca; color:#fff; border:none; border-radius:8px; padding:9px 16px; font-size:14px; font-weight:600; cursor:pointer; text-decoration:none; white-space:nowrap; }
-.nav-btn:hover { background:#346fa1; }
-.nav-btn.secondary { background:#ffffff; border:1px solid #d0d6de; color:#2b3238; }
-.nav-btn.secondary:hover { background:#f0f2f5; }

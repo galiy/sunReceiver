@@ -1,3 +1,13 @@
+/* Общие стили навигации (единые на всех дашбордах). */
+.top-nav { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+.top-nav .ttl { margin:0; font-size:22px; }
+.top-nav .sub { color:#6b7785; margin:4px 0 0; font-size:13px; }
+.top-nav .nav-btn-inline { margin-left:auto; }
+.nav-btn { background:#428bca; color:#fff; border:none; border-radius:8px; padding:9px 16px; font-size:14px; font-weight:600; cursor:pointer; text-decoration:none; white-space:nowrap; }
+.nav-btn:hover { background:#346fa1; }
+.nav-btn.secondary { background:#ffffff; border:1px solid #d0d6de; color:#2b3238; }
+.nav-btn.secondary:hover { background:#f0f2f5; }
+
 @media (max-width: 900px) {
   html { -webkit-text-size-adjust: 100%; }
   body { padding:12px 12px calc(16px + 56px + env(safe-area-inset-bottom, 0px)); }
