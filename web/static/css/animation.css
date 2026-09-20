@@ -12,6 +12,8 @@
 .anim-name { fill:#6b7785; font-size:12px; }
 .anim-meter-box { stroke:#8a97a3; stroke-width:1; }
 .anim-meter-read { fill:#2b3238; font-size:10px; font-weight:700; }
+.anim-meter-import { fill:#f03e3e; } /* приход (импорт из сети) — красный */
+.anim-meter-export { fill:#37b24d; } /* расход (отдача в сеть) — зелёный */
 .anim-power { fill:#2b3238; font-size:12px; font-weight:900; paint-order:stroke; stroke:#ffffff; stroke-width:3px; }
 .anim-legend { display:flex; align-items:center; gap:18px; flex-wrap:wrap; color:#6b7785; font-size:13px; margin-bottom:16px; }
 .anim-legend span { display:inline-flex; align-items:center; gap:6px; }
