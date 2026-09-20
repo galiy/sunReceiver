@@ -78,7 +78,7 @@ func distinctVals(out []seriesPoint) []float64 {
 func TestPlacementTotals(t *testing.T) {
 	now := time.Now()
 	old := now.Add(-time.Hour)
-	order := []string{"Дом", "Гараж"}
+	order := []string{"Дом", "Гараж", "Склад"} // «Склад» — размещение без свежих устройств
 	device := func(name, ip, placement string, ts time.Time, power, pv float64) deviceSnapshot {
 		return deviceSnapshot{
 			Timestamp: ts.Format(time.RFC3339),
@@ -101,10 +101,10 @@ func TestPlacementTotals(t *testing.T) {
 		device("Deye Off", "10.0.0.4", "Дом", old, 500, 500),
 	}
 	got, total, totalPV := placementTotals(devices, order, now.Add(-20*time.Minute))
-	if len(got) != 2 {
-		t.Fatalf("want 2 placements, got %v", got)
+	if len(got) != 3 {
+		t.Fatalf("want 3 placements, got %v", got)
 	}
-	if got[0].Name != "Дом" || got[1].Name != "Гараж" {
+	if got[0].Name != "Дом" || got[1].Name != "Гараж" || got[2].Name != "Склад" {
 		t.Fatalf("placement order wrong: %v", got)
 	}
 	if got[0].Power != 107 || got[0].PV != 118 {
@@ -112,6 +112,9 @@ func TestPlacementTotals(t *testing.T) {
 	}
 	if got[1].Power != 50 || got[1].PV != 60 {
 		t.Fatalf("Гараж totals wrong: %v", got[1])
+	}
+	if got[2].Power != 0 || got[2].PV != 0 {
+		t.Fatalf("Склад (без свежих данных) должен быть с нулями: %v", got[2])
 	}
 	if total != 157 || totalPV != 178 {
 		t.Fatalf("overall totals wrong: %v / %v", total, totalPV)
