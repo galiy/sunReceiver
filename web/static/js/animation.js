@@ -42,9 +42,11 @@ function pwLerp(v){ // 0..1 по мощности, вне [P_MIN,P_MAX] — за
   var t=(Math.abs(v)-P_MIN)/(P_MAX-P_MIN);
   return t<0?0:(t>1?1:t);
 }
-function dotsFor(t, cap){ return Math.max(DOTS_MIN, Math.round(DOTS_MIN + (cap-DOTS_MIN)*t)); }
 function speedFor(t){ // px/с: 12 (100 Вт) .. 520 (20 кВт)
   return 12 + (520-12)*t;
+}
+function spacingFor(t,total,cap){ // px между огоньками: total/2 (100 Вт) .. total/cap (20 кВт)
+  return (total/DOTS_MIN) + ((total/cap)-(total/DOTS_MIN))*t;
 }
 
 // ---------- Путь с закруглениями в углах ----------
@@ -172,7 +174,8 @@ function makeEdge(svg, opts){
 
   return {path:path, total:total, dots:dots, dotG:dotG, txt:txt,
     rule:opts.rule, getValue:opts.getValue, value:0, active:false, toEnd:true,
-    capacity:capacity(total), nDots:0, speed:0};
+    capacity:capacity(total), pos:0,
+    spacing:total/capacity, speed:0, tSpacing:total/capacity, tSpeed:12};
 }
 
 function updateEdge(e){
@@ -187,8 +190,8 @@ function updateEdge(e){
   e.toEnd = rule.greenDir==='toEnd' ? isGreen : !isGreen;
   e.active = Math.abs(v)>0.05;
   var t=pwLerp(v);                 // 0 (100 Вт) .. 1 (20 кВт)
-  e.nDots=dotsFor(t, e.capacity);
-  e.speed=speedFor(t)/e.total;     // доля пути в секунду
+  e.tSpacing=spacingFor(t, e.total, e.capacity); // цель для плавного перехода
+  e.tSpeed=speedFor(t);            // px/с
   var col=isGreen?GREEN:RED;
   for(var i=0;i<e.dots.length;i++) e.dots[i].el.setAttribute('fill',col);
   if(e.txt){
@@ -201,18 +204,25 @@ function updateEdge(e){
   }
 }
 
-function animateEdge(e, t){
+function animateEdge(e, dt){
   var g=e.dotG;
   if(!e.active){ g.style.display='none'; return; }
   g.style.display='';
-  var N=e.nDots, sp=e.speed;
+  // Плавный переход к целевым значениям (показательная аппроксимация к цели).
+  var k=0.08;                     // ~постоянная времени ~0.3 с
+  e.spacing += (e.tSpacing-e.spacing)*k;
+  e.speed   += (e.tSpeed-e.speed)*k;
+  e.pos += e.speed*dt*(e.toEnd?1:-1);
+  var total=e.total;
+  if(total<=0){ return; }
+  // Число огоньков следует из текущего шага (меняется по одному, без рывка).
+  var n=Math.max(DOTS_MIN, Math.min(e.capacity, Math.round(total/e.spacing)));
   for(var i=0;i<e.dots.length;i++){
     var el=e.dots[i].el;
-    if(i>=N){ el.style.display='none'; continue; }
+    if(i>=n){ el.style.display='none'; continue; }
     el.style.display='';
-    var ph=(i/N + t*sp) % 1;
-    var f=e.toEnd ? ph : (1-ph);
-    var pt=e.path.getPointAtLength(f*e.total);
+    var s=((e.pos + i*e.spacing)%total+total)%total;
+    var pt=e.path.getPointAtLength(s);
     el.setAttribute('cx', pt.x);
     el.setAttribute('cy', pt.y);
   }
@@ -482,11 +492,11 @@ async function tick(){
   var tsG=document.getElementById('animGarageTs'); if(tsG) tsG.textContent=ts;
 }
 
-var animStart=performance.now();
+var lastNow=performance.now();
 function loop(now){
-  var t=(now-animStart)/1000;
-  if(BUILT.house) for(var i=0;i<BUILT.house.obj.edges.length;i++) animateEdge(BUILT.house.obj.edges[i], t);
-  if(BUILT.garage) for(var j=0;j<BUILT.garage.obj.edges.length;j++) animateEdge(BUILT.garage.obj.edges[j], t);
+  var dt=Math.min(0.1, (now-lastNow)/1000); lastNow=now; // с, без рывка после фона
+  if(BUILT.house) for(var i=0;i<BUILT.house.obj.edges.length;i++) animateEdge(BUILT.house.obj.edges[i], dt);
+  if(BUILT.garage) for(var j=0;j<BUILT.garage.obj.edges.length;j++) animateEdge(BUILT.garage.obj.edges[j], dt);
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
