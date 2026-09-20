@@ -32,21 +32,23 @@ var GREEN='#37b24d', RED='#f03e3e';
 var NS='http://www.w3.org/2000/svg';
 
 // Количество и скорость огоньков зависят от мощности: чем больше мощность, тем
-// их больше (вплотную, шаг ~9px) и тем быстрее они бегут. Диапазон: 100 Вт —
-// минимум (пара огоньков, еле ползут), 20 кВт — максимум (вплотную, очень быстро).
+// их больше (вплотную) и тем быстрее они бегут. Диапазон: 100 Вт — минимум
+// (редкие огоньки, еле ползут), 20 кВт — максимум (вплотную, очень быстро).
+// Шаг между огоньками фиксирован при данной мощности и НЕ зависит от длины
+// линии: на более длинной линии просто больше огоньков.
 var P_MIN=100, P_MAX=20000;     // Вт
-var DOTS_MIN=2, DOTS_SPACING=9; // предельная плотность: ~9px между огоньками
-var MAX_DOTS=26;                // пул кружков на одну связь
-function capacity(total){ return Math.max(DOTS_MIN, Math.min(MAX_DOTS, Math.round(total/DOTS_SPACING))); }
-function pwLerp(v){ // 0..1 по мощности, вне [P_MIN,P_MAX] — зажим
+var SP_MIN=9,  SP_MAX=64;       // px между огоньками: 9 (20 кВт, вплотную) .. 64 (100 Вт, редко)
+var DOTS_MIN=2;
+var MAX_DOTS=60;                // пул кружков на одну связь (запас для длинных линий)
+function pwLerp(v){ // 0..1 по мощности, |v|<=100 → 0, |v|>=20000 → 1
   var t=(Math.abs(v)-P_MIN)/(P_MAX-P_MIN);
   return t<0?0:(t>1?1:t);
 }
 function speedFor(t){ // px/с: 12 (100 Вт) .. 520 (20 кВт)
   return 12 + (520-12)*t;
 }
-function spacingFor(t,total,cap){ // px между огоньками: total/2 (100 Вт) .. total/cap (20 кВт)
-  return (total/DOTS_MIN) + ((total/cap)-(total/DOTS_MIN))*t;
+function spacingFor(t){ // px между огоньками (одинаково для любой длины линии)
+  return SP_MAX + (SP_MIN-SP_MAX)*t;
 }
 
 // ---------- Путь с закруглениями в углах ----------
@@ -174,8 +176,8 @@ function makeEdge(svg, opts){
 
   return {path:path, total:total, dots:dots, dotG:dotG, txt:txt,
     rule:opts.rule, getValue:opts.getValue, value:0, active:false, toEnd:true,
-    capacity:capacity(total), pos:0,
-    spacing:total/capacity, speed:0, tSpacing:total/capacity, tSpeed:12};
+    pos:0,
+    spacing:SP_MAX, speed:0, tSpacing:SP_MAX, tSpeed:12};
 }
 
 function updateEdge(e){
@@ -190,7 +192,7 @@ function updateEdge(e){
   e.toEnd = rule.greenDir==='toEnd' ? isGreen : !isGreen;
   e.active = Math.abs(v)>0.05;
   var t=pwLerp(v);                 // 0 (100 Вт) .. 1 (20 кВт)
-  e.tSpacing=spacingFor(t, e.total, e.capacity); // цель для плавного перехода
+  e.tSpacing=spacingFor(t);        // цель для плавного перехода (px, не зависит от длины)
   e.tSpeed=speedFor(t);            // px/с
   var col=isGreen?GREEN:RED;
   for(var i=0;i<e.dots.length;i++) e.dots[i].el.setAttribute('fill',col);
@@ -212,7 +214,7 @@ function animateEdge(e, dt){
   if(!(total>0) || !isFinite(total)){ g.style.display='none'; return; } // защита от NaN-геометрии
   // Плавный переход к целевым значениям (показательная аппроксимация к цели).
   var k=0.08;                     // ~постоянная времени ~0.3 с
-  var ts=(isFinite(e.tSpacing) && e.tSpacing>0)?e.tSpacing:total/DOTS_MIN;
+  var ts=(isFinite(e.tSpacing) && e.tSpacing>0)?e.tSpacing:SP_MAX;
   var tsd=(isFinite(e.tSpeed) && e.tSpeed>=0)?e.tSpeed:0;
   var sp=(isFinite(e.spacing) && e.spacing>0)?e.spacing:ts;
   var sd=isFinite(e.speed)?e.speed:tsd;
@@ -222,8 +224,9 @@ function animateEdge(e, dt){
   if(!isFinite(dt) || dt<0) dt=0; else if(dt>0.1) dt=0.1;
   // Позицию храним в диапазоне [0,total), чтобы не росла бесконечно (теряется точность).
   e.pos=((e.pos + sd*dt*(e.toEnd?1:-1))%total+total)%total;
-  // Число огоньков следует из текущего шага (меняется по одному, без рывка).
-  var n=Math.max(DOTS_MIN, Math.min(e.capacity, Math.round(total/sp)));
+  // Число огоньков следует из текущего шага и длины линии: при фиксированном
+  // шаге более длинная линия даёт больше огоньков (меняются по одному, без рывка).
+  var n=Math.max(DOTS_MIN, Math.min(MAX_DOTS, Math.round(total/sp)));
   for(var i=0;i<e.dots.length;i++){
     var el=e.dots[i].el;
     if(i>=n){ el.style.display='none'; continue; }
