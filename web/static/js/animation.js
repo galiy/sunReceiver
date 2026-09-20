@@ -68,7 +68,8 @@ function spriteNode(svg, key, cx, cy, label, raise){
   img.setAttribute('class','anim-sprite');
   g.appendChild(img);
   if(key==='meter'){
-    // Накладка показаний день/ночь на ЖК счётчика (значения обновляются tick-ом).
+    // Накладка накопленных показаний на ЖК счётчика: потребление и отдача за всё
+    // время (значения обновляются tick-ом).
     var box=document.createElementNS(NS,'rect');
     box.setAttribute('x',cx-spec.w/2+spec.w*0.05);
     box.setAttribute('y',cy-raise-spec.h*0.20);
@@ -78,11 +79,11 @@ function spriteNode(svg, key, cx, cy, label, raise){
     g.appendChild(box);
     var d=document.createElementNS(NS,'text');
     d.setAttribute('x',cx); d.setAttribute('y',cy-raise-spec.h*0.02); d.setAttribute('text-anchor','middle');
-    d.setAttribute('class','anim-meter-read'); d.textContent='День —';
+    d.setAttribute('class','anim-meter-read'); d.textContent='Приход —';
     g.appendChild(d);
     var n=document.createElementNS(NS,'text');
     n.setAttribute('x',cx); n.setAttribute('y',cy-raise+spec.h*0.16); n.setAttribute('text-anchor','middle');
-    n.setAttribute('class','anim-meter-read'); n.textContent='Ночь —';
+    n.setAttribute('class','anim-meter-read'); n.textContent='Отдача —';
     g.appendChild(n);
     meterReadEls.push({day:d, night:n});
   }
@@ -282,13 +283,15 @@ function layoutHouse(data){
   }
 
   // МАП (правый порт) → батарея: связь всегда (по UML map -- batt, battery_power),
-  // даже если КЭС нет (иначе батарея остаётся ни с чем не связанной).
-  edges.push({pts:[[mapPortR,mapBotY],[mapPortR,BATTY]], rule:{greenSign:1,greenDir:'toEnd'},
+  // даже если КЭС нет (иначе батарея остаётся ни с чем не связанной). Знак здесь
+  // «наоборот» (→ −battery_power) и направление развёрнуто (greenDir toStart), а
+  // цвет сохранён: заряд (—) красный, отдача (+) зелёный — как на дисплее МАП.
+  edges.push({pts:[[mapPortR,mapBotY],[mapPortR,BATTY]], rule:{greenSign:-1,greenDir:'toStart'},
     label:{x:mapPortR-14, y:(mapBotY+BATTY)/2},
-    getValue:function(d){return d.map_battery_power;}});
-  edges.push({pts:[[mapPortR,BATTY],[battX,BATTY]], rule:{greenSign:1,greenDir:'toEnd'},
+    getValue:function(d){return -d.map_battery_power;}});
+  edges.push({pts:[[mapPortR,BATTY],[battX,BATTY]], rule:{greenSign:-1,greenDir:'toStart'},
     label:{x:(mapPortR+battX)/2, y:BATTY-12},
-    getValue:function(d){return d.map_battery_power;}});
+    getValue:function(d){return -d.map_battery_power;}});
 
   // Ветвь батарея → КЭС → панели (справа) — только при наличии КЭС.
   if(k>0){
@@ -389,11 +392,11 @@ function refreshEdges(obj, data){
     e.value=e.getValue(data);
     updateEdge(e);
   }
-  // Показания счётчика день/ночь (есть только в схеме Дома: meterReads на объекте).
+  // Показания счётчика (есть только в схеме Дома: meterReads на объекте).
   var reads=obj.meterReads||[];
   for(var k=0;k<reads.length;k++){
-    reads[k].day.textContent='День '+fmtKWh(data.meter_import_day);
-    reads[k].night.textContent='Ночь '+fmtKWh(data.meter_import_night);
+    reads[k].day.textContent='Приход '+fmtKWh(data.meter_import_total);
+    reads[k].night.textContent='Отдача '+fmtKWh(data.meter_export_total);
   }
 }
 
