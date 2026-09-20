@@ -220,9 +220,10 @@ function layoutHouse(data){
   if(n>0){
     var x1=invXs[0], x2=invXs[n-1];
     var dropX=Math.round((invXs[0]+invXs[n-1])/2);
-    // МАП (левый порт) → вниз к шине («Внутренняя сеть»).
+    // МАП (левый порт) → вниз к шине («Внутренняя сеть»). При выдаче (Σac>0)
+    // энергия идёт от инверторов вверх к МАП, при потреблении — вниз к ним.
     edges.push({pts:[[mapPortL,mapBotY],[mapPortL,BUSY-40],[dropX,BUSY-40],[dropX,BUSY]],
-      rule:{greenSign:1,greenDir:'toEnd'},
+      rule:{greenSign:1,greenDir:'toStart'},
       label:{x:mapPortL-14, y:(mapBotY+BUSY-40)/2},
       getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }});
     // Шина («Внутренняя сеть») — проводник без подписи, ширина по числу устройств.
@@ -237,7 +238,8 @@ function layoutHouse(data){
         getValue:(function(idx){return function(d){return d.inverters[idx].ac;};})(i)});
       // панель → инвертор (вверх)
       var pvTop=INVY+sprH(inv.kind)/2, pvBot=PANY-31;
-      edges.push({pts:[[ix,pvTop],[ix,pvBot]], rule:{greenSign:1,greenDir:'toEnd'},
+      // выработка: от панели (низ) вверх к инвертору (toStart)
+      edges.push({pts:[[ix,pvTop],[ix,pvBot]], rule:{greenSign:1,greenDir:'toStart'},
         label:{x:ix+38,y:(pvTop+pvBot)/2},
         getValue:(function(idx){return function(d){return d.inverters[idx].pv;};})(i)});
     }
@@ -267,7 +269,8 @@ function layoutHouse(data){
         label:{x:kx+38,y:(KESY-37+KESY-40)/2},
         getValue:(function(idx){return function(d){return d.kes[idx].ac;};})(j)});
       var kPvTop=KESY+sprH('kes')/2, kPvBot=KPANY-31;
-      edges.push({pts:[[kx,kPvTop],[kx,kPvBot]], rule:{greenSign:1,greenDir:'toEnd'},
+      // выработка: от панели (низ) вверх к КЭС (toStart)
+      edges.push({pts:[[kx,kPvTop],[kx,kPvBot]], rule:{greenSign:1,greenDir:'toStart'},
         label:{x:kx+38,y:(kPvTop+kPvBot)/2},
         getValue:(function(idx){return function(d){return d.kes[idx].pv;};})(j)});
     }
@@ -306,9 +309,10 @@ function layoutGarage(data){
   if(n>0){
     var x1=invXs[0], x2=invXs[n-1];
     var dropX=Math.round((invXs[0]+invXs[n-1])/2);
-    // Шина → вниз к горизонтальной шине инверторов.
+    // Шина → вниз к горизонтальной шине инверторов. При выдаче (Σac>0) энергия
+    // идёт от инверторов вверх к магистрали (toStart), при потреблении — вниз.
     edges.push({pts:[[innerX,MAI],[innerX,BUSY-40],[dropX,BUSY-40],[dropX,BUSY]],
-      rule:{greenSign:1,greenDir:'toEnd'},
+      rule:{greenSign:1,greenDir:'toStart'},
       label:{x:innerX-14, y:(MAI+BUSY-40)/2},
       getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }});
     edges.push({bus:true, x1:x1, x2:x2, y:BUSY});
@@ -320,7 +324,8 @@ function layoutGarage(data){
         label:{x:ix+38,y:(INVY-39+BUSY)/2},
         getValue:(function(idx){return function(d){return d.inverters[idx].ac;};})(i)});
       var pvTop=INVY+sprH(inv.kind)/2, pvBot=PANY-31;
-      edges.push({pts:[[ix,pvTop],[ix,pvBot]], rule:{greenSign:1,greenDir:'toEnd'},
+      // выработка: от панели (низ) вверх к инвертору (toStart)
+      edges.push({pts:[[ix,pvTop],[ix,pvBot]], rule:{greenSign:1,greenDir:'toStart'},
         label:{x:ix+38,y:(pvTop+pvBot)/2},
         getValue:(function(idx){return function(d){return d.inverters[idx].pv;};})(i)});
     }
