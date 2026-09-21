@@ -15,7 +15,7 @@
 // ---------- Спрайты (PNG на прозрачном фоне) ----------
 var SPR = {
   grid:    {file:'power-line-pylon', w:64, h:135},
-  meter:   {file:'dds238-meter',     w:100,h:126,wScale:1.7}, // растянут в ширину, чтобы дисплей с показаниями влазил в него
+  meter:   {file:'dds238-meter',     w:100,h:126,wScale:1.9}, // растянут в ширину, чтобы показания влазили в корпус
   map:     {file:'map-converter',    w:120,h:51},
   house:   {file:'country-house',    w:120,h:86},
   garage:  {file:'garage',           w:110,h:78},
@@ -75,80 +75,59 @@ function pathWithRounds(pts, r){
 // ---------- Спрайт-узел ----------
 // raise — поднять спрайт вверх на N px (точка подключения магистрали тогда
 // приходится в нижнюю часть стены, а не в крышу, напр. у Дома/Гаража).
-// Счётчик (DDS238) рисуется целиком в SVG — широкий DIN-корпус с интегрированным
-// ЖК-дисплеем. Не используем PNG (в нём тело V-образно уже монтажных планок, и
-// накладка не совпадала с корпусом). Дисплей — часть корпуса: белое тело, сверху
-// марка «DDS238», внутри две строки показаний (приход красный / отдача зелёный).
-var METER={w:170,h:100,pad:8,lcd:26};
-function meterNode(cx, cy){
-  var g=document.createElementNS(NS,'g');
-  var W=METER.w, H=METER.h, x=cx-W/2, y=cy-H/2;
-  // Корпус (широкая DIN-панель).
-  var body=document.createElementNS(NS,'rect');
-  body.setAttribute('x',x); body.setAttribute('y',y);
-  body.setAttribute('width',W); body.setAttribute('height',H);
-  body.setAttribute('rx',8); body.setAttribute('fill','#ffffff');
-  body.setAttribute('class','anim-meter-box');
-  g.appendChild(body);
-  // ЖК-дисплей, интегрированный в корпус (по центру, во всю ширину с полями).
-  var lcdH=H-22-METER.pad;
-  var lcd=document.createElementNS(NS,'rect');
-  lcd.setAttribute('x',x+METER.pad); lcd.setAttribute('y',y+22);
-  lcd.setAttribute('width',W-2*METER.pad); lcd.setAttribute('height',lcdH);
-  lcd.setAttribute('rx',5); lcd.setAttribute('fill','#eef7f1');
-  lcd.setAttribute('class','anim-meter-lcd');
-  g.appendChild(lcd);
-  // Марка «DDS238» над дисплеем.
-  var brand=document.createElementNS(NS,'text');
-  brand.setAttribute('x',cx); brand.setAttribute('y',y+16);
-  brand.setAttribute('text-anchor','middle');
-  brand.setAttribute('class','anim-meter-brand'); brand.textContent='DDS238';
-  g.appendChild(brand);
-  // Значения внутри дисплея (правый край с полем).
-  var tx=x+W-METER.pad-6;
-  var d=document.createElementNS(NS,'text');
-  d.setAttribute('x',tx); d.setAttribute('y',y+22+lcdH*0.78);
-  d.setAttribute('text-anchor','end');
-  d.setAttribute('class','anim-meter-read anim-meter-import'); d.textContent='—';
-  g.appendChild(d);
-  var n=document.createElementNS(NS,'text');
-  n.setAttribute('x',tx); n.setAttribute('y',y+H-METER.pad-2);
-  n.setAttribute('text-anchor','end');
-  n.setAttribute('class','anim-meter-read anim-meter-export'); n.textContent='—';
-  g.appendChild(n);
-  return {g:g, meterReads:[{day:d, night:n}], labelY:y+H+14};
-}
-
+// Счётчик (DDS238) использует красивый PNG-корпус (монтажные планки, винты,
+// марка DDS238), растянутый по ширине; дисплей-накладка с показаниями ложится
+// на нижнюю часть белого корпуса и по ширине равна самому корпусу, поэтому
+// никогда не вылезает за него.
+// Доли в спрайте dds238-meter (измерены по пикселям 504×800):
+//   белый корпус — x от 50 до 453 (0.099..0.899 ширины), т.е. ширина тела 0.80.
+var METER={bodyXFrac:0.80};
 function spriteNode(svg, key, cx, cy, label, raise){
   raise=raise||0;
   var g=document.createElementNS(NS,'g');
   var spec=SPR[sprKey(key)]||SPR.grid;
   var wScale=spec.wScale||1, effW=spec.w*wScale; // эффективная ширина (растяжение в ширину)
+  var img=document.createElementNS(NS,'image');
+  img.setAttribute('href','/static/img/animation/'+spec.file+'.png?v='+CACHE_BUST);
+  img.setAttribute('width',effW);
+  img.setAttribute('height',spec.h);
+  img.setAttribute('x',cx-effW/2);
+  img.setAttribute('y',cy-raise-spec.h/2);
+  img.setAttribute('class','anim-sprite');
+  g.appendChild(img);
   var meterReads=null; // ссылки на текстовые узлы дисплея счётчика (возврат наружу)
-  var labelY=cy-raise+spec.h/2+14;
   if(key==='meter'){
-    var m=meterNode(cx, cy);
-    g=m.g; meterReads=m.meterReads; labelY=m.labelY;
-  } else {
-    var img=document.createElementNS(NS,'image');
-    img.setAttribute('href','/static/img/animation/'+spec.file+'.png?v='+CACHE_BUST);
-    img.setAttribute('width',effW);
-    img.setAttribute('height',spec.h);
-    img.setAttribute('x',cx-effW/2);
-    img.setAttribute('y',cy-raise-spec.h/2);
-    img.setAttribute('class','anim-sprite');
-    g.appendChild(img);
+    // Накладка показаний на нижнюю часть белого корпуса (под маркой DDS238).
+    // Ширина = белый корпус (0.80 растянутой картинки), по центру cx.
+    var bodyW=effW*METER.bodyXFrac;
+    var top=cy-raise+spec.h*0.06, lh=spec.h*0.30; // верх и высота накладки
+    var box=document.createElementNS(NS,'rect');
+    box.setAttribute('x',cx-bodyW/2); box.setAttribute('y',top);
+    box.setAttribute('width',bodyW); box.setAttribute('height',lh);
+    box.setAttribute('rx',5); box.setAttribute('fill','#eef7f1');
+    box.setAttribute('class','anim-meter-box');
+    g.appendChild(box);
+    var lx=cx+bodyW/2-8;
+    var d=document.createElementNS(NS,'text');
+    d.setAttribute('x',lx); d.setAttribute('y',top+lh*0.44); d.setAttribute('text-anchor','end');
+    d.setAttribute('class','anim-meter-read anim-meter-import'); d.textContent='—';
+    g.appendChild(d);
+    var n=document.createElementNS(NS,'text');
+    n.setAttribute('x',lx); n.setAttribute('y',top+lh*0.82); n.setAttribute('text-anchor','end');
+    n.setAttribute('class','anim-meter-read anim-meter-export'); n.textContent='—';
+    g.appendChild(n);
+    meterReads=[{day:d, night:n}];
   }
   if(label){
     var t=document.createElementNS(NS,'text');
-    t.setAttribute('x',cx); t.setAttribute('y',labelY);
+    t.setAttribute('x',cx); t.setAttribute('y',cy-raise+spec.h/2+14);
     t.setAttribute('text-anchor','middle');
     t.setAttribute('class','anim-name');
     t.textContent=label;
     g.appendChild(t);
   }
   svg.appendChild(g);
-  return {img:g.querySelector('image')||null, meterReads:meterReads};
+  return {img:img, meterReads:meterReads};
 }
 
 // ---------- Шина: широкая медная полоса с болтами в точках присоединения ----------
