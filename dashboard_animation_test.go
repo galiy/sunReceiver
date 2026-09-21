@@ -108,8 +108,8 @@ func TestBuildAnimationResponse(t *testing.T) {
 		t.Fatalf("kes: want 1 with pv 210, got %v", res.House.KES)
 	}
 
-	// P_дом = P(МАП→сеть) + P(батарея) = 300 + (−150) = 150.
-	if want := 150.0; res.House.HousePower != want {
+	// P_дом = Σac(инверторы дома) + P(сеть) + P(батарея) = (100+50) + 300 + (−150) = 300.
+	if want := 300.0; res.House.HousePower != want {
 		t.Fatalf("house power: want %v, got %v", want, res.House.HousePower)
 	}
 	if res.House.MapGridPower != 300 || res.House.MapBatteryPower != -150 {

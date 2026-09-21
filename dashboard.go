@@ -986,10 +986,18 @@ func buildAnimationResponse(devices []deviceSnapshot, placeByIP map[string]strin
 		}
 	}
 
-	// Мощность Дома: P_дом = P(МАП→сеть) + P(батарея). battery_power при заряде
-	// отрицательная, поэтому фактически это P(сеть) − |P(батарея)|: например, сеть
-	// 6 кВт и заряд батареи −8 кВт дают дом −2 кВт (потребление со знаком минус).
-	house.HousePower = house.MapGridPower + house.MapBatteryPower
+	// Мощность Дома = сумма всех источников, приходящих в МАП:
+	//   P_дом = Σac(инверторы дома) + P(сеть) + P(батарея)
+	// где ак.мощность сети grid_power положительная при потреблении из сети и
+	// отрицательная при отдаче в сеть; battery_power положительная при отдаче
+	// батареи (разряде) и отрицательная при заряде. Инверторы дома отдают
+	// положительную (выработка). Следовательно при отдаче в сеть она вычитается:
+	// напр. 392 + (−4551) + 7038 = 2879 Вт в дом.
+	houseAC := 0.0
+	for _, inv := range house.Inverters {
+		houseAC += inv.AC
+	}
+	house.HousePower = houseAC + house.MapGridPower + house.MapBatteryPower
 	// В гараже пока нет нагрузки — «остаток» нулевой.
 	garage.GaragePower = 0
 
