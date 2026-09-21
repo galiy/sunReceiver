@@ -191,6 +191,11 @@ function updateEdge(e){
   if(e.txt) e.txt.style.visibility='';
   var v=e.value, rule=e.rule;
   var isGreen = (rule.greenSign>0) ? (v>0) : (v<0);
+  // labelSign: дополнительный множитель ТОЛЬКО для подписи значения (цвет/направление/
+  // активность считаются по сырому value). Для веток выработки (панelи→инверторы/КЭС→МАП)
+  // он равен −1: правило «потребление +, выработка/отдача −» при сохранении верных
+  // цвета (зелёный=выработка/в сеть) и направления потока.
+  var ls=(rule.labelSign||1);
   e.toEnd = rule.greenDir==='toEnd' ? isGreen : !isGreen;
   e.active = Math.abs(v)>0.5; // ниже 0.5 Вт — связь неактивна (не рисуем «+0 Вт» с огоньками)
   var t=pwLerp(v);                 // 0 (100 Вт) .. 1 (20 кВт)
@@ -204,7 +209,7 @@ function updateEdge(e){
     e.txt.style.visibility='';
     // Цвет мощности: при движении огоньков — как у них, при 0 — нейтральный.
     e.txt.style.fill = e.active ? col : '#2b3238';
-    e.txt.textContent=fmtPower(v);
+    e.txt.textContent=fmtPower(v*ls);
   }
 }
 
@@ -335,7 +340,7 @@ function layoutHouse(data){
     // промежуточного горизонтального изгиба (иначе два близких поворота сливаются
     // в S-образную кривую). При выдаче (Σac>0) энергия идёт вверх к МАП.
     edges.push({pts:[[mapPortL,mapBotY],[mapPortL,BUSY]],
-      rule:{greenSign:1,greenDir:'toStart'},
+      rule:{greenSign:1,greenDir:'toStart',labelSign:-1},
       label:{x:mapPortL-14, y:(mapBotY+BUSY)/2},
       getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }});
     // Шина («Внутренняя сеть») — медная с болтами в точках присоединения инверторов.
@@ -346,13 +351,13 @@ function layoutHouse(data){
         staleOf:(function(idx){return function(d){return d.inverters[idx].stale;};})(i)});
       nodes.push({key:'panel',cx:ix,cy:PANY,label:''});
       // инвертор → шина (вверх)
-      edges.push({pts:[[ix,INVY-sprH(inv.kind)/2],[ix,BUSY]], rule:{greenSign:1,greenDir:'toEnd'},
+      edges.push({pts:[[ix,INVY-sprH(inv.kind)/2],[ix,BUSY]], rule:{greenSign:1,greenDir:'toEnd',labelSign:-1},
         label:{x:ix+38,y:(INVY-39+BUSY)/2}, stale:inv.stale,
         getValue:(function(idx){return function(d){return d.inverters[idx].ac;};})(i)});
       // панель → инвертор (вверх)
       var pvTop=INVY+sprH(inv.kind)/2, pvBot=PANY-31;
       // выработка: от панели (низ) вверх к инвертору (toStart)
-      edges.push({pts:[[ix,pvTop],[ix,pvBot]], rule:{greenSign:1,greenDir:'toStart'},
+      edges.push({pts:[[ix,pvTop],[ix,pvBot]], rule:{greenSign:1,greenDir:'toStart',labelSign:-1},
         label:{x:ix+38,y:(pvTop+pvBot)/2}, stale:inv.stale,
         getValue:(function(idx){return function(d){return d.inverters[idx].pv;};})(i)});
     }
@@ -373,7 +378,7 @@ function layoutHouse(data){
     // батарея → КЭС (через горизонтальную шину на уровне KESY-40).
     var kx1=kesXs[0], kx2=kesXs[k-1];
     edges.push({pts:[[battX,BATTY+sprH('battery')/2],[battX,KESY-40]],
-      rule:{greenSign:1,greenDir:'toEnd'},
+      rule:{greenSign:1,greenDir:'toEnd',labelSign:-1},
       label:{x:battX-14, y:(BATTY+30+KESY-40)/2},
       getValue:function(d){ var s=0; for(var i=0;i<d.kes.length;i++) s+=d.kes[i].ac; return s; }});
     edges.push({bus:true, x1:kx1, x2:kx2, y:KESY-40, bolts:kesXs});
@@ -382,12 +387,12 @@ function layoutHouse(data){
       nodes.push({key:'kes',cx:kx,cy:KESY,label:kes.name,
         staleOf:(function(idx){return function(d){return d.kes[idx].stale;};})(j)});
       nodes.push({key:'panel',cx:kx,cy:KPANY,label:''});
-      edges.push({pts:[[kx,KESY-sprH('kes')/2],[kx,KESY-40]], rule:{greenSign:1,greenDir:'toEnd'},
+      edges.push({pts:[[kx,KESY-sprH('kes')/2],[kx,KESY-40]], rule:{greenSign:1,greenDir:'toEnd',labelSign:-1},
         label:{x:kx+38,y:(KESY-37+KESY-40)/2}, stale:kes.stale,
         getValue:(function(idx){return function(d){return d.kes[idx].ac;};})(j)});
       var kPvTop=KESY+sprH('kes')/2, kPvBot=KPANY-31;
       // выработка: от панели (низ) вверх к КЭС (toStart)
-      edges.push({pts:[[kx,kPvTop],[kx,kPvBot]], rule:{greenSign:1,greenDir:'toStart'},
+      edges.push({pts:[[kx,kPvTop],[kx,kPvBot]], rule:{greenSign:1,greenDir:'toStart',labelSign:-1},
         label:{x:kx+38,y:(kPvTop+kPvBot)/2}, stale:kes.stale,
         getValue:(function(idx){return function(d){return d.kes[idx].pv;};})(j)});
     }
@@ -414,7 +419,7 @@ function layoutGarage(data){
   var edges=[
     // Сеть → шина (магистраль). При выдаче (Σac>0) энергия идёт в сеть (влево),
     // при потреблении — из сети (вправо).
-    {pts:[[gridX,MAI],[innerX,MAI]], rule:{greenSign:1,greenDir:'toStart'},
+    {pts:[[gridX,MAI],[innerX,MAI]], rule:{greenSign:1,greenDir:'toStart',labelSign:-1},
      label:{x:(gridX+innerX)/2, y:MAI-12},
      getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }},
     // Шина → гараж.
@@ -428,7 +433,7 @@ function layoutGarage(data){
     // Шина → вниз к горизонтальной шине инверторов — прямая вертикаль. При выдаче
     // (Σac>0) энергия идёт от инверторов вверх к магистрали (toStart).
     edges.push({pts:[[innerX,MAI],[innerX,BUSY]],
-      rule:{greenSign:1,greenDir:'toStart'},
+      rule:{greenSign:1,greenDir:'toStart',labelSign:-1},
       label:{x:innerX-14, y:(MAI+BUSY)/2},
       getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }});
     edges.push({bus:true, x1:x1, x2:x2, y:BUSY, bolts:invXs});
@@ -437,12 +442,12 @@ function layoutGarage(data){
       nodes.push({key:inv.kind,cx:ix,cy:INVY,label:inv.name,
         staleOf:(function(idx){return function(d){return d.inverters[idx].stale;};})(i)});
       nodes.push({key:'panel',cx:ix,cy:PANY,label:''});
-      edges.push({pts:[[ix,INVY-sprH(inv.kind)/2],[ix,BUSY]], rule:{greenSign:1,greenDir:'toEnd'},
+      edges.push({pts:[[ix,INVY-sprH(inv.kind)/2],[ix,BUSY]], rule:{greenSign:1,greenDir:'toEnd',labelSign:-1},
         label:{x:ix+38,y:(INVY-39+BUSY)/2}, stale:inv.stale,
         getValue:(function(idx){return function(d){return d.inverters[idx].ac;};})(i)});
       var pvTop=INVY+sprH(inv.kind)/2, pvBot=PANY-31;
       // выработка: от панели (низ) вверх к инвертору (toStart)
-      edges.push({pts:[[ix,pvTop],[ix,pvBot]], rule:{greenSign:1,greenDir:'toStart'},
+      edges.push({pts:[[ix,pvTop],[ix,pvBot]], rule:{greenSign:1,greenDir:'toStart',labelSign:-1},
         label:{x:ix+38,y:(pvTop+pvBot)/2}, stale:inv.stale,
         getValue:(function(idx){return function(d){return d.inverters[idx].pv;};})(i)});
     }
