@@ -261,11 +261,16 @@ function animateEdge(e, dt){
   // Число огоньков следует из текущего шага и длины линии: при фиксированном
   // шаге более длинная линия даёт больше огоньков (меняются по одному, без рывка).
   var n=Math.max(DOTS_MIN, Math.min(MAX_DOTS, Math.round(total/sp)));
+  // Распределяем огоньки РАВНОМЕРНО по кольцу шагом total/n (а не i*sp): иначе
+  // из-за округления n*sp != total и последний огонёк наматывается вплотную к
+  // первому, образуя слипшуюся пару. Шаг total/n ≈ sp, что сохраняет и плотность
+  // (зависит от мощности), и «больше огоньков на длинной линии».
+  var step=n>0 ? total/n : sp;
   for(var i=0;i<e.dots.length;i++){
     var el=e.dots[i].el;
     if(i>=n){ el.style.display='none'; continue; }
     el.style.display='';
-    var s=((e.pos + i*sp)%total+total)%total;
+    var s=((e.pos + i*step)%total+total)%total;
     if(!isFinite(s)) continue;
     var pt=e.path.getPointAtLength(s);
     el.setAttribute('cx', pt.x);
