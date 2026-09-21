@@ -83,7 +83,9 @@ function pathWithRounds(pts, r){
 // после растяжения PNG в 1.5 раза): корпус — 0.80 ширины, по центру.
 // Дисплей-накладка — 70% от прежней ширины (152px → 106px) при новой ширине
 // спрайта 150px: доля 0.71.
-var METER={bodyXFrac:0.80, dispXFrac:0.71};
+// Масштаб схемы: 1 см ≈ 16px в viewBox.
+var CM=16;
+var METER={bodyXFrac:0.80, dispXFrac:0.582};
 function spriteNode(svg, key, cx, cy, label, raise){
   raise=raise||0;
   var g=document.createElementNS(NS,'g');
@@ -102,7 +104,7 @@ function spriteNode(svg, key, cx, cy, label, raise){
     // Накладка показаний на белый корпус (под маркой DDS238). Ширина — 70% от
     // прежней ширины накладки (dispXFrac), выровнена по центру cx.
     var dispW=effW*METER.dispXFrac;
-    var top=cy-raise+spec.h*0.06, lh=spec.h*0.30; // верх и высота накладки
+    var top=cy-raise+spec.h*0.06-CM, lh=spec.h*0.30; // верх и высота накладки
     var box=document.createElementNS(NS,'rect');
     box.setAttribute('x',cx-dispW/2); box.setAttribute('y',top);
     box.setAttribute('width',dispW); box.setAttribute('height',lh);
@@ -311,7 +313,7 @@ function layoutHouse(data){
 
   var MAI=140, BUSY=300, INVY=420, PANY=555;
   var BATTY=230, KESY=430, KPANY=565;
-  var gridX=90, meterX=260, mapX=560, houseX=790;
+  var gridX=90, meterX=276, mapX=560, houseX=790;
   // Батарея: без КЭС — левее, под Домом; с КЭС — справа (ветвь КЭС под ней).
   var battX = k>0 ? 920 : 790;
   // Порты подключения к МАП снизу: слева — ветвь инверторов, справа — батарея.
