@@ -16,8 +16,8 @@
     <h1 class="ttl" id="bmsTitle">ANT BMS</h1>
     <p class="sub" id="bmsSub">Загрузка...</p>
   </div>
-  <a class="nav-btn secondary" href="/">&larr; На главную</a>
 </div>
+{{template "mnav" .}}
 
 <div class="kpi-row" id="kpiRow"><div class="missing">Загрузка...</div></div>
 
@@ -109,6 +109,5 @@
 
 <script src="/static/js/common.js?v={{.CacheBust}}"></script>
 <script src="/static/js/bms.js?v={{.CacheBust}}"></script>
-{{template "mnav" .}}
 </body>
 </html>

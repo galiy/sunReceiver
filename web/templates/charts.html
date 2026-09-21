@@ -16,8 +16,8 @@
     <h1 class="ttl">Графики</h1>
     <p class="sub">Временные ряды за выбранный период; статистика счётчика «день/ночь» за последние дни</p>
   </div>
-  <a class="nav-btn secondary" href="/">&larr; Назад</a>
 </div>
+{{template "mnav" .}}
 
 <div class="period-panel">
   <button id="btnToday">Сегодня</button>
@@ -80,6 +80,5 @@
 
 <script src="/static/js/common.js?v={{.CacheBust}}"></script>
 <script src="/static/js/charts.js?v={{.CacheBust}}"></script>
-{{template "mnav" .}}
 </body>
 </html>

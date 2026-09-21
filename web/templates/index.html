@@ -15,9 +15,8 @@
     <h1 class="ttl">SunReceiver</h1>
     <p class="sub">Текущие параметры инверторов и электросчётчика (из Redis, обновление каждую секунду)</p>
   </div>
-  <a class="nav-btn" href="/charts">Открыть графики</a>
-  {{if .flags.ShowMeter}}<a class="nav-btn" href="/energy">Электроэнергия</a>{{end}}
 </div>
+{{template "mnav" .}}
 
 {{if .flags.ShowBMS}}
 <div class="group group-top">
@@ -215,6 +214,5 @@
 <script src="/static/js/common.js?v={{.CacheBust}}"></script>
 <script src="/static/js/dashboard.js?v={{.CacheBust}}"></script>
 <script src="/static/js/animation.js?v={{.CacheBust}}"></script>
-{{template "mnav" .}}
 </body>
 </html>
