@@ -623,6 +623,10 @@ tick(); setInterval(tick, 1000);
 // не трогая viewBox, поэтому огоньки/подписи масштабируются вместе со схемой. Масштаб
 // ограничен [1, 6] (меньше 1 — схема как была, бессмысленно уменьшать), панорама
 // ограничена рамками увеличенной области, чтобы не увести схему за пределы экрана.
+// PINCH_MIN — минимальная база стартового «разлёта» пальцев: если пальцы пришли в
+// одну точку, относительный прирост иначе прыгает на максимум. PINCH_MAXSTEP —
+// максимальный прирост масштаба за один кадр жеста (плавность, без «телепорта»).
+var PINCH_MIN=60, PINCH_MAXSTEP=1.5;
 function attachSchemePanZoom(scheme){
   if(!scheme || scheme.__panzoom) return;
   scheme.__panzoom=true;
@@ -685,7 +689,12 @@ function attachSchemePanZoom(scheme){
     scheme.classList.add('anim-grabbing');
     var n=activeCount();
     if(n===2){
-      gs={mode:'pinch', startDist:dist(), startScale:scale, startTx:tx, startTy:ty,
+      // Пинч: фиксируем стартовое расстояние. Если пальцы пришли почти в одну
+      // точку (startDist ≈ 0), относительный прирост d/startDist сразу огромный и
+      // масштаб «прыгает» на максимум. Задаём минимальную базу разлёта, чтобы зум
+      // нарастал плавно от исходного масштаба.
+      var sd=dist();
+      gs={mode:'pinch', startDist:Math.max(PINCH_MIN, sd), startScale:scale, startTx:tx, startTy:ty,
           startMid:mid()};
     } else if(n===1){
       gs={mode:'pan', startX:e.clientX, startY:e.clientY, startTx:tx, startTy:ty};
@@ -699,7 +708,14 @@ function attachSchemePanZoom(scheme){
     var n=activeCount();
     if(gs){
       if(gs.mode==='pinch' && n>=2){
-        var d=dist(), m=mid(), o=svgOff(), newScale=Math.max(min,Math.min(max, gs.startScale*(d/(gs.startDist||1))));
+        var d=dist(), m=mid(), o=svgOff();
+        var ratio=d/(gs.startDist||1);
+        // Ограничиваем прирост за кадр, чтобы зум был плавным, а не «телепортом»
+        // на предельный масштаб при первом же движении пальцев.
+        if(ratio>PINCH_MAXSTEP) ratio=PINCH_MAXSTEP;
+        else if(ratio<1/PINCH_MAXSTEP) ratio=1/PINCH_MAXSTEP;
+        var newScale=gs.startScale*ratio;
+        newScale=Math.max(min,Math.min(max,newScale));
         var ux=(gs.startMid.x-o.left-gs.startTx)/gs.startScale;
         var uy=(gs.startMid.y-o.top-gs.startTy)/gs.startScale;
         scale=newScale;
