@@ -617,8 +617,9 @@ function fmtKWh(v){
 // Значения температур (°C) приходят из /api/animation: для МАП — панель над
 // спрайтом (подписи «Тор»/«Транзисторы» видны), для инверторов и батареи —
 // значения справа от спрайта без подписей, но с подсказкой при наведении.
-// Подсказка задаётся элементом <title> внутри <text> (атрибут title на SVG-узле
-// браузеры не показывают — работает только вложенный <title>).
+// Подсказка — собственный HTML-div (не <title>): нативный <title> в SVG браузер
+// показывает с задержкой ~1-2 с, которой нельзя управлять; свой div появляется
+// мгновенно по mouseenter.
 function fmtTemp(v){
   if(v===null || v===undefined || !isFinite(v)) return null; // нет датчика → не рисуем
   return Math.round(v)+'°C';
@@ -629,14 +630,40 @@ function tempValue(arr, label){
   for(var i=0;i<arr.length;i++) if(arr[i].label===label) return arr[i].value;
   return null;
 }
+// Быстрая подсказка: один общий div на страницу, позиционируется по курсору
+// (position:fixed), поэтому масштаб/панорама SVG на неё не влияют.
+var ANIM_TIP=null;
+function animTipEl(){
+  if(ANIM_TIP) return ANIM_TIP;
+  var d=document.createElement('div');
+  d.className='anim-tip';
+  document.body.appendChild(d);
+  ANIM_TIP=d;
+  return d;
+}
+function moveAnimTip(ev){
+  var d=ANIM_TIP; if(!d) return;
+  var w=d.offsetWidth, h=d.offsetHeight;
+  var x=ev.clientX+12, y=ev.clientY+14;
+  if(x+w>window.innerWidth-4) x=ev.clientX-w-12;   // не вылезать за правый край
+  if(y+h>window.innerHeight-4) y=ev.clientY-h-14;  // ... и за нижний
+  d.style.left=x+'px'; d.style.top=y+'px';
+}
+function bindTempTip(el, label){
+  el.addEventListener('mouseenter', function(ev){
+    var d=animTipEl(); d.textContent=label; d.style.display='block'; moveAnimTip(ev);
+  });
+  el.addEventListener('mousemove', moveAnimTip);
+  el.addEventListener('mouseleave', function(){ if(ANIM_TIP) ANIM_TIP.style.display='none'; });
+}
 // renderNodeTemps рисует температуры узла схемы (node.temps — [{label,get(data)}]).
 //   "above" — панель над спрайтом (подпись + значение, для МАП);
-//   "right" — значения справа от спрайта (без видимых подписей, <title> — подсказка;
-//             для инверторов и батареи).
+//   "right" — значения справа от спрайта (без видимых подписей, подсказка при
+//             наведении; для инверторов и батареи).
 // Возвращает массив функций-обновителей, вызываемых с данными схемы в refreshEdges.
 // Отсутствующее значение (нет датчика) прячет элемент целиком, а не рисует «—».
 // ВАЖНО: число выводится в <tspan>, а не через textContent, иначе при обновлении
-// затирается вложенный <title> — подсказка при наведении исчезает.
+// затираются дочерние элементы (подсказка перестаёт работать).
 var TEMP_ROW_H=16, TEMP_PAD_V=5, TEMP_PAD_H=8, TEMP_VAL_W=40;
 function renderNodeTemps(svg, n){
   var upds=[];
@@ -702,9 +729,8 @@ function renderNodeTemps(svg, n){
       val.setAttribute('x',rx); val.setAttribute('y',vy);
       val.setAttribute('text-anchor',anchor);
       val.setAttribute('class','anim-temp-side');
-      // Подсказка — вложенный <title> (атрибут title на SVG не отображается).
-      var tip=document.createElementNS(NS,'title'); tip.textContent=t.label;
-      val.appendChild(tip);
+      // Мгновенная подсказка (см. bindTempTip); нативный <title> не используем.
+      bindTempTip(val, t.label);
       var tsp=document.createElementNS(NS,'tspan'); tsp.textContent='';
       val.appendChild(tsp);
       g.appendChild(val);
