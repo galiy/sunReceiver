@@ -291,6 +291,7 @@ function buildScheme(container, nodes, edges, height){
   svg.innerHTML='';
   var readings=[];
   var sprites=[]; // спрайты со «stale» из данных: затемняются в refreshEdges
+  var tempUpds=[]; // обновители температур (renderNodeTemps)
   var objs=[];
 
   // --- Сбор осей всех связей (не шины) ---
@@ -344,8 +345,9 @@ function buildScheme(container, nodes, edges, height){
     var spr=spriteNode(svg, n.key, n.cx, n.cy, n.label, n.raise);
     if(spr.meterReads) readings.push(spr.meterReads[0]);
     if(n.staleOf) sprites.push({img:spr.img, staleOf:n.staleOf});
+    if(n.temps && n.temps.length) tempUpds=tempUpds.concat(renderNodeTemps(svg, n));
   }
-  return {svg:svg, edges:objs, meterReads:readings, sprites:sprites};
+  return {svg:svg, edges:objs, meterReads:readings, sprites:sprites, tempUpds:tempUpds};
 }
 
 var BUILT={house:null, garage:null};
@@ -365,6 +367,15 @@ function spread(left, right, n){
   var step=(right-left)/(n-1), out=[];
   for(var i=0;i<n;i++) out.push(left+i*step);
   return out;
+}
+
+// inverterTempsSpec возвращает temps-спеку (Корпус/Транзисторы) для инвертора
+// с индексом idx в массиве d.inverters: значения читаются из data.inverters[idx].temps.
+function inverterTempsSpec(idx){
+  return [
+    {label:'Корпус', get:function(d){ return tempValue((d.inverters[idx]&&d.inverters[idx].temps)||[], 'Корпус'); }},
+    {label:'Транзисторы', get:function(d){ return tempValue((d.inverters[idx]&&d.inverters[idx].temps)||[], 'Транзисторы'); }}
+  ];
 }
 
 // ---------- Схема Дома ----------
@@ -393,9 +404,16 @@ function layoutHouse(data){
   var nodes=[
     {key:'grid', cx:gridX, cy:MAI, label:'Сеть'},
     {key:'meter',cx:meterX,cy:MAI, label:'Счётчик'},
-    {key:'map',  cx:mapX,  cy:MAI, label:'МАП'},
+    {key:'map',  cx:mapX,  cy:MAI, label:'МАП',
+      tempPos:'above',
+      temps:[
+        {label:'Тор', get:function(d){ return tempValue(d.map_temps, 'Тор'); }},
+        {label:'Транзисторы', get:function(d){ return tempValue(d.map_temps, 'Транзисторы'); }}
+      ]},
     {key:'house',cx:houseX,cy:MAI, label:'Дом', raise:26},
-    {key:'battery',cx:battX,cy:BATTY, label:'Батарея'}
+    {key:'battery',cx:battX,cy:BATTY, label:'Батарея',
+      tempPos:'right',
+      temps:[{label:'Батарея', get:function(d){ return (d.battery_temp===undefined?null:d.battery_temp); }}]}
   ];
 
   var edges=[
@@ -426,7 +444,8 @@ function layoutHouse(data){
     for(var i=0;i<n;i++){
       var ix=invXs[i], inv=invs[i];
       nodes.push({key:inv.kind,cx:ix,cy:INVY,label:inv.name,
-        staleOf:(function(idx){return function(d){return d.inverters[idx].stale;};})(i)});
+        staleOf:(function(idx){return function(d){return d.inverters[idx].stale;};})(i),
+        temps:inverterTempsSpec(i), tempPos:'right'});
       nodes.push({key:'panel',cx:ix,cy:PANY,label:''});
       // инвертор → шина (вверх)
       edges.push({pts:[[ix,INVY-sprH(inv.kind)/2],[ix,BUSY]], rule:{greenSign:1,greenDir:'toEnd',labelSign:-1},
@@ -519,7 +538,8 @@ function layoutGarage(data){
     for(var i=0;i<n;i++){
       var ix=invXs[i], inv=invs[i];
       nodes.push({key:inv.kind,cx:ix,cy:INVY,label:inv.name,
-        staleOf:(function(idx){return function(d){return d.inverters[idx].stale;};})(i)});
+        staleOf:(function(idx){return function(d){return d.inverters[idx].stale;};})(i),
+        temps:inverterTempsSpec(i), tempPos:'right'});
       nodes.push({key:'panel',cx:ix,cy:PANY,label:''});
       edges.push({pts:[[ix,INVY-sprH(inv.kind)/2],[ix,BUSY]], rule:{greenSign:1,greenDir:'toEnd',labelSign:-1},
         label:{x:ix+38,y:(INVY-39+BUSY)/2}, stale:inv.stale,
@@ -565,6 +585,9 @@ function refreshEdges(obj, data){
     reads[k].day.textContent=fmtKWh(data.meter_import_total);
     reads[k].night.textContent=fmtKWh(data.meter_export_total);
   }
+  // Температуры (МАП-панель, инверторы, батарея): обновляем из данных схемы.
+  var tupds=obj.tempUpds||[];
+  for(var tu=0;tu<tupds.length;tu++) tupds[tu](data);
 }
 
 function fmtPower(v){
@@ -584,6 +607,73 @@ function fmtKWh(v){
   while(int.length>3){ out=' '+int.slice(-3)+out; int=int.slice(0,-3); }
   out=int+out+(dec?'.'+dec:'');
   return (neg?'-':'')+out+' кВт·ч';
+}
+
+// ---------- Температуры на схеме ----------
+// Значения температур (°C) приходят из /api/animation: для МАП — панель над
+// спрайтом (подписи «Тор»/«Транзисторы» видны), для инверторов и батареи —
+// значения справа от спрайта без подписей, но с подсказкой при наведении (title).
+function fmtTemp(v){
+  if(v===null || v===undefined || !isFinite(v)) return '—';
+  return Math.round(v)+'°C';
+}
+// tempValue извлекает значение температуры из списка []{label,value} по подписи.
+function tempValue(arr, label){
+  if(!arr) return null;
+  for(var i=0;i<arr.length;i++) if(arr[i].label===label) return arr[i].value;
+  return null;
+}
+// renderNodeTemps рисует температуры узла схемы (node.temps — [{label,get(data)}]).
+//   "above" — панель над спрайтом (подпись + значение, для МАП);
+//   "right" — значения справа от спрайта (без видимых подписей, title — подсказка;
+//             для инверторов и батареи).
+// Возвращает массив функций-обновителей, вызываемых с данными схемы в refreshEdges.
+var TEMP_ROW_H=16, TEMP_PAD_V=5, TEMP_PAD_H=8;
+function renderNodeTemps(svg, n){
+  var upds=[];
+  var key=n.key, cx=n.cx, cy=n.cy, raise=n.raise||0;
+  var spec=SPR[sprKey(key)]||SPR.grid;
+  var effW=spec.w*(spec.wScale||1);
+  var g=document.createElementNS(NS,'g');
+  if(n.tempPos==='above'){
+    var rows=n.temps.length;
+    var hgt=rows*TEMP_ROW_H+TEMP_PAD_V*2, w=88;
+    var x=cx-w/2, y=(cy-raise-spec.h/2-6)-hgt;
+    var box=document.createElementNS(NS,'rect');
+    box.setAttribute('x',x); box.setAttribute('y',y);
+    box.setAttribute('width',w); box.setAttribute('height',hgt);
+    box.setAttribute('rx',5);
+    box.setAttribute('class','anim-temp-panel');
+    g.appendChild(box);
+    for(var j=0;j<rows;j++){(function(t){
+      var ly=y+TEMP_PAD_V+j*TEMP_ROW_H+TEMP_ROW_H*0.72;
+      var lab=document.createElementNS(NS,'text');
+      lab.setAttribute('x',x+TEMP_PAD_H); lab.setAttribute('y',ly);
+      lab.setAttribute('class','anim-temp-label'); lab.textContent=t.label;
+      g.appendChild(lab);
+      var val=document.createElementNS(NS,'text');
+      val.setAttribute('x',x+w-TEMP_PAD_H); val.setAttribute('y',ly);
+      val.setAttribute('text-anchor','end');
+      val.setAttribute('class','anim-temp-val'); val.textContent='—';
+      g.appendChild(val);
+      upds.push(function(d){ val.textContent=fmtTemp(t.get(d)); });
+    })(n.temps[j]);}
+  } else { // "right"
+    var rx=cx+effW/2+8;
+    var off=(n.temps.length-1)*7.5;
+    for(var m=0;m<n.temps.length;m++){(function(t, idx){
+      var vy=cy-off+idx*15;
+      var val=document.createElementNS(NS,'text');
+      val.setAttribute('x',rx); val.setAttribute('y',vy);
+      val.setAttribute('class','anim-temp-side');
+      val.setAttribute('title',t.label);
+      val.textContent='—';
+      g.appendChild(val);
+      upds.push(function(d){ val.textContent=fmtTemp(t.get(d)); });
+    })(n.temps[m], m);}
+  }
+  svg.appendChild(g);
+  return upds;
 }
 
 function fmtSec(t){

@@ -71,6 +71,19 @@ var accumulatorTags = map[string]bool{
 	"meter_total":  true,
 }
 
+// accumulatorSkipTags — теги, которые НЕ попадают в усреднённые точки PostgreSQL.
+// Это брендовые температуры (temperatureTags): они актуальны только для живого
+// снимка (current) и не имеют смысла как 5-минутное среднее (датчик один, значение
+// почти постоянно, а история температур в PG не нужна — рынок держит 2 суток в
+// Redis, дальше курить незачем).
+var accumulatorSkipTags = func() map[string]bool {
+	m := map[string]bool{}
+	for _, t := range temperatureTags {
+		m[t] = true
+	}
+	return m
+}()
+
 // averageValues усредняет все числовые теги набора снимков одного инвертора и
 // одного 5-минутного промежутка в одну точку для записи в PostgreSQL.
 // Так как values содержит только числовые теги общего контракта, усредняется
@@ -90,6 +103,9 @@ func averageValues(snaps []deviceSnapshot) valuesContract {
 		for k, raw := range sn.Values {
 			f, ok := toFloat(raw)
 			if !ok {
+				continue
+			}
+			if accumulatorSkipTags[k] {
 				continue
 			}
 			if accumulatorTags[k] {

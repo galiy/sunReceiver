@@ -177,6 +177,21 @@ type animScheme struct {
 	HousePower float64 `json:"house_power"`
 	// GaragePower — мощность Гаража («остаток»; пока нет нагрузки — 0).
 	GaragePower float64 `json:"garage_power"`
+	// MapTemps — температуры МАП для панели над изображением МАП: Тор и Транзисторы
+	// (map_temp_tor / map_temp_transistor). Только в схеме Дома.
+	MapTemps []animTemp `json:"map_temps,omitempty"`
+	// BatteryTemp — температура батареи по данным МАП (map_temp_battery), °C.
+	// Показывается справа от спрайта батареи. Только в схеме Дома.
+	BatteryTemp *float64 `json:"battery_temp,omitempty"`
+}
+
+// animTemp — одна температура на схеме анимации. Label — русская подпись («Тор»,
+// «Транзисторы», «Корпус», «Батарея»): на панели над МАП подпись видна, а справа
+// от инверторов/батареи она показывается только как подсказка (title) при наведении.
+// Value — температура в °C.
+type animTemp struct {
+	Label string  `json:"label"`
+	Value float64 `json:"value"`
 }
 
 // animInverter — одно устройство схемы (инвертор или КЭС).
@@ -186,6 +201,9 @@ type animInverter struct {
 	PV    float64 `json:"pv"`    // активная мощность PV (P_PV)
 	AC    float64 `json:"ac"`    // активная мощность на выходе (ac_active_power)
 	Stale bool    `json:"stale"` // снимок старше окна (устройство молчит, напр. ночью)
+	// Temps — температуры инвертора (°C): Корпус и Транзисторы. Подписи не
+	// отображаются, только подсказка при наведении (см. animTemp.Label).
+	Temps []animTemp `json:"temps,omitempty"`
 }
 
 // deviceSeries — временной ряд ac_active_power одного инвертора.
@@ -933,6 +951,13 @@ func buildAnimationResponse(devices []deviceSnapshot, placeByIP map[string]strin
 			if v, ok := snapFloat(d.Values, "battery_power"); ok {
 				house.MapBatteryPower = v
 			}
+			// Температуры МАП: панель над изображением (Тор/Транзисторы) и
+			// температура батареи (справа от спрайта батареи).
+			house.MapTemps = mapSchemeTemps(d.Values)
+			if v, ok := snapFloat(d.Values, "map_temp_battery"); ok {
+				bt := v
+				house.BatteryTemp = &bt
+			}
 			continue
 		}
 		if isMeterDevice(d.Values) && !stale(d) {
@@ -968,6 +993,7 @@ func buildAnimationResponse(devices []deviceSnapshot, placeByIP map[string]strin
 			AC:    snapOrZero(d.Values, "ac_active_power"),
 			Stale: stale(d),
 		}
+		inv.Temps = inverterTemps(inv.Kind, d.Values)
 		if inv.Stale { // молчащее устройство: мощности считаем нулевыми
 			inv.PV, inv.AC = 0, 0
 		}
@@ -1063,6 +1089,43 @@ func snapOrZero(v valuesContract, key string) float64 {
 // сигнатура), а здесь значения уже извлечены в float.
 func animRound1(v float64) float64 {
 	return math.Round(v*10) / 10
+}
+
+// inverterTemps возвращает температуры инвертора по его марке: Корпус и Транзисторы.
+// У Deye — temperature_radiator (Корпус) и temperature_igbt (Транзисторы); у Sofar —
+// temperature_inner (Корпус) и temperature_module (Транзисторы). Отсутствующий
+// датчик не добавляется. Для КЭС (MPPT, kind "kes") температуры не выводятся.
+func inverterTemps(kind string, v valuesContract) []animTemp {
+	var temps []animTemp
+	add := func(tag, label string) {
+		if x, ok := snapFloat(v, tag); ok {
+			temps = append(temps, animTemp{Label: label, Value: animRound1(x)})
+		}
+	}
+	switch kind {
+	case "deye":
+		add("temperature_radiator", "Корпус")
+		add("temperature_igbt", "Транзисторы")
+	case "sofar":
+		add("temperature_inner", "Корпус")
+		add("temperature_module", "Транзисторы")
+	}
+	return temps
+}
+
+// mapSchemeTemps собирает температуры МАП для панели над изображением МАП:
+// Тор (map_temp_tor) и Транзисторы (map_temp_transistor). Отсутствующий датчик
+// (гейтится по Temp_off на стороне пулера) не добавляется.
+func mapSchemeTemps(v valuesContract) []animTemp {
+	var temps []animTemp
+	add := func(tag, label string) {
+		if x, ok := snapFloat(v, tag); ok {
+			temps = append(temps, animTemp{Label: label, Value: animRound1(x)})
+		}
+	}
+	add("map_temp_tor", "Тор")
+	add("map_temp_transistor", "Транзисторы")
+	return temps
 }
 
 // apiSeries отдаёт временные ряды ac_active_power по инверторам за период [from, to].

@@ -132,6 +132,35 @@ func TestAverageValues(t *testing.T) {
 	}
 }
 
+// TestAverageValuesSkipsTemperatures: брендовые температуры (temperatureTags) не
+// попадают в усреднённую точку PostgreSQL — они актуальны только для живого снимка
+// (current), история температур в PG не хранится.
+func TestAverageValuesSkipsTemperatures(t *testing.T) {
+	snaps := []deviceSnapshot{
+		{Timestamp: "2026-09-15T10:00:10Z", Values: valuesContract{
+			"ac_active_power":  100.0,
+			"temperature_igbt": 55.6,
+			"map_temp_tor":     44,
+		}},
+		{Timestamp: "2026-09-15T10:00:30Z", Values: valuesContract{
+			"ac_active_power":  200.0,
+			"temperature_igbt": 60.0,
+			"map_temp_tor":     46,
+		}},
+	}
+	got := averageValues(snaps)
+	if got["ac_active_power"] != 150.0 {
+		t.Fatalf("ac_active_power=%v, want 150.0 (среднее)", got["ac_active_power"])
+	}
+	// Температуры исключены из усреднения.
+	if _, ok := got["temperature_igbt"]; ok {
+		t.Fatalf("temperature_igbt попал в усреднённую точку (не должен)")
+	}
+	if _, ok := got["map_temp_tor"]; ok {
+		t.Fatalf("map_temp_tor попал в усреднённую точку (не должен)")
+	}
+}
+
 func TestAverageValuesAccumulatorOutOfOrder(t *testing.T) {
 	// Снимки в срезе НЕ по возрастанию ts: побеждает значение с наибольшим
 	// timestamp, а не последнее в срезе.
