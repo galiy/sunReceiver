@@ -703,6 +703,9 @@ function attachSchemePanZoom(scheme){
       var sd=dist();
       gs={mode:'pinch', startDist:Math.max(PINCH_MIN, sd), startScale:scale, startTx:tx, startTy:ty,
           startMid:mid()};
+      apply._dl=false; // свежая детализация для каждого нового жёста
+      var __s='stash sm='+(gs.startMid?(gs.startMid.x.toFixed(1)+','+gs.startMid.y.toFixed(1)):'null')+' sScale='+gs.startScale.toFixed(2)+' sTx='+gs.startTx.toFixed(1)+' sTy='+gs.startTy.toFixed(1)+' sDist='+gs.startDist.toFixed(1);
+      fetch('/api/pzlog?m='+encodeURIComponent(__s));
     } else if(n===1){
       gs={mode:'pan', startX:e.clientX, startY:e.clientY, startTx:tx, startTy:ty};
     }
