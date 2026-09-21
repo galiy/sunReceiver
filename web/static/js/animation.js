@@ -158,14 +158,58 @@ function drawBus(svg, x1, x2, y, bolts){
   svg.appendChild(grp);
 }
 
+// ---------- Параллельные линии (rail) ----------
+// Связь рисуется как ДВЕ тонкие параллельные линии (rail) с зазором между ними;
+// огоньки бегут по оси (геометрия) внутри зазора и не накладываются на линии.
+// Смещение ломаной вдоль нормали (строго верт./гориз. сегменты). «Левая» сторона
+// движения (o>0) и «правая» (o<0) дают две параллельные линии по бокам оси с
+// зазором 2*o. В углах (90°) точка = пересечение двух смещённых отрезков:
+// x — от вертикального, y — от горизонтального. Концы смещаются вдоль нормали
+// единственного сегмента, чтобы линии приходили в те же точки подключения.
+function offsetEdge(pts, o){
+  var n=pts.length, out=[];
+  if(n==1){ out.push([pts[0][0], pts[0][1]]); return out; }
+  for(var i=0;i<n;i++){
+    var p=pts[i], ox=p[0], oy=p[1];
+    if(i===0){
+      var dx=pts[1][0]-p[0], dy=pts[1][1]-p[1];
+      if(dx===0){ ox=p[0]+(dy>0?-o:o); } else { oy=p[1]+(dx>0?-o:o); }
+    } else if(i===n-1){
+      var dx2=p[0]-pts[i-1][0], dy2=p[1]-pts[i-1][1];
+      if(dx2===0){ ox=p[0]+(dy2>0?-o:o); } else { oy=p[1]+(dx2>0?-o:o); }
+    } else {
+      var adx=p[0]-pts[i-1][0], ady=p[1]-pts[i-1][1];
+      var bdx=pts[i+1][0]-p[0], bdy=pts[i+1][1]-p[1];
+      // x берём от вертикального сегмента, y — от горизонтального (пересечение).
+      if(adx===0) ox=p[0]+(ady>0?-o:o); else if(bdx===0) ox=p[0]+(bdy>0?-o:o);
+      if(ady===0) oy=p[1]+(adx>0?-o:o); else if(bdy===0) oy=p[1]+(bdx>0?-o:o);
+    }
+    out.push([ox, oy]);
+  }
+  return out;
+}
+
 // ---------- Связь ----------
 function makeEdge(svg, opts){
-  var path=document.createElementNS(NS,'path');
-  path.setAttribute('d', pathWithRounds(opts.pts));
-  path.setAttribute('fill','none');
-  path.setAttribute('class','anim-wire');
-  svg.appendChild(path);
-  var total=path.getTotalLength();
+  // Геометрическая ось — невидимая, по ней считаем длину и ведём огоньки.
+  var trace=document.createElementNS(NS,'path');
+  trace.setAttribute('d', pathWithRounds(opts.pts));
+  trace.setAttribute('fill','none');
+  trace.setAttribute('class','anim-wire-trace');
+  svg.appendChild(trace);
+  var total=trace.getTotalLength();
+  // Две тонкие параллельные линии по бокам оси (rail), с зазором под огоньки.
+  var gap=6; // расстояние от оси до линии (полузазор)
+  var offs=[-gap, gap];
+  var rails=[];
+  for(var r=0;r<offs.length;r++){
+    var line=document.createElementNS(NS,'path');
+    line.setAttribute('d', pathWithRounds(offsetEdge(opts.pts, offs[r]), 12));
+    line.setAttribute('fill','none');
+    line.setAttribute('class','anim-wire');
+    svg.appendChild(line);
+    rails.push(line);
+  }
 
   var txt=null;
   if(opts.label){
@@ -182,14 +226,14 @@ function makeEdge(svg, opts){
   var dots=[], MAX=MAX_DOTS;
   for(var i=0;i<MAX;i++){
     var c=document.createElementNS(NS,'circle');
-    c.setAttribute('r',4);
+    c.setAttribute('r',2.2);
     c.setAttribute('fill',GREEN);
     dotG.appendChild(c);
     dots.push({el:c});
   }
   svg.appendChild(dotG);
 
-  return {path:path, total:total, dots:dots, dotG:dotG, txt:txt,
+  return {path:trace, trace:trace, total:total, dots:dots, dotG:dotG, txt:txt,
     rule:opts.rule, getValue:opts.getValue, value:0, active:false, toEnd:true,
     pos:0,
     spacing:SP_MAX, speed:0, tSpacing:SP_MAX, tSpeed:12};
