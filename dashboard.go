@@ -55,7 +55,6 @@ type dashFlags struct {
 	ShowMeter bool
 	ShowBMS   bool
 	ShowRelay bool
-	PZLog     bool // временный: диагностика pinch-зума (/api/pzlog в журнал)
 }
 
 // dashboardHandler — веб-дашборд: отдаёт три HTML-страницы и JSON API.
@@ -1030,20 +1029,6 @@ func buildAnimationResponse(devices []deviceSnapshot, placeByIP map[string]strin
 	return res
 }
 
-// apiPZLog — временный диагностический эндпоинт: принимает GET /api/pzlog?m=<текст>
-// и пишет в журнал сервиса (journald). Используется для отладки pinch-зума на
-// реальном Android, где console.log не попадает в logcat без включённого logging.
-// Включается флагом flags.PZLog (только в диагностических сборках).
-func (h *dashboardHandler) apiPZLog(w http.ResponseWriter, r *http.Request) {
-	msg := r.URL.Query().Get("m")
-	if msg == "" {
-		msg = r.URL.RawQuery
-	}
-	log.Printf("PZLOG: %s", msg)
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
-}
-
 // inverterKind определяет марку сетевого инвертора по снимку: поле Kind задаётся
 // пулером из конфига (invTarget.Kind) и содержит "deye"/"sofar"/"kes". Для
 // старых снимков без Kind — эвристика по тегам: наличие dc_total_power (тег только
@@ -1765,9 +1750,6 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayCon
 	}
 	if relay != nil {
 		api["/relay"] = h.apiRelay
-	}
-	if h.flags.PZLog {
-		api["/pzlog"] = h.apiPZLog
 	}
 	handler := buildDashboardMux(pages, staticFiles(), api, authUser, authPass)
 	srv := &http.Server{

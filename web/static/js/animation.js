@@ -633,24 +633,19 @@ function attachSchemePanZoom(scheme){
   if(!svg) return;
   var min=1, max=6, scale=min, tx=0, ty=0;
 
-  // Смещение SVG относительно контейнера (независимо от трансформа): у SVG
-  // transform-origin:0 0, поэтому при translate+scale его локальная точка u
-  // (в своём боксе) отображается в контейнере как  S.left + tx + u*scale.
-  // scheme имеет position:relative, значит offsetLeft/offsetTop — честный сдвиг.
-  var svgOff=function(){ return {left:svg.offsetLeft, top:svg.offsetTop}; };
+  // Смещение SVG относительно контейнера (независимо от трансформа). У SVG-элемента
+  // offsetLeft/offsetTop не стандартизированы (возвращают undefined на Android),
+  // поэтому берём разность getBoundingClientRect(): sr.left-cr.left — позиция SVG
+  // внутри scheme (scheme имеет position:relative). При translate+scale локальная
+  // точка u (в своём боксе) отображается в контейнере как  S.left + tx + u*scale.
+  var svgOff=function(){
+    var sr=svg.getBoundingClientRect(), cr=scheme.getBoundingClientRect();
+    return {left:sr.left-cr.left, top:sr.top-cr.top};
+  };
   var box=function(){ return scheme.getBoundingClientRect(); }; // контейнер в клиентских
 
   function apply(){
     svg.style.transform='translate('+tx.toFixed(2)+'px,'+ty.toFixed(2)+'px) scale('+scale.toFixed(3)+')';
-    // Разовая диагностика: при первом заметном зуме фиксируем фактический
-    // style.transform и видимые размеры элемента (применяется ли CSS transform).
-    if(!apply._logged && scale>1.3){
-      apply._logged=true;
-      var r=svg.getBoundingClientRect();
-      var oo=svgOff(), mm=mid();
-      var f='apply tf="'+svg.style.transform+'" rectIW='+Math.round(r.width)+' styleTW='+Math.round(svg.clientWidth)+' scale='+scale.toFixed(2)+' tx='+tx.toFixed(1)+' ty='+ty.toFixed(1)+' oL='+String(oo.left)+' oT='+String(oo.top)+' mL='+(mm?(mm.x.toFixed(1)+','+mm.y.toFixed(1)):'null');
-      fetch('/api/pzlog?m='+encodeURIComponent(f));
-    }
   }
   function clampPan(){
     var b=box(), w=b.width, h=b.height;
@@ -704,13 +699,9 @@ function attachSchemePanZoom(scheme){
       var sd=dist();
       gs={mode:'pinch', startDist:Math.max(PINCH_MIN, sd), startScale:scale, startTx:tx, startTy:ty,
           startMid:mid()};
-      apply._dl=false; // свежая детализация для каждого нового жёста
-      var __s='stash sm='+(gs.startMid?(gs.startMid.x.toFixed(1)+','+gs.startMid.y.toFixed(1)):'null')+' sScale='+gs.startScale.toFixed(2)+' sTx='+gs.startTx.toFixed(1)+' sTy='+gs.startTy.toFixed(1)+' sDist='+gs.startDist.toFixed(1);
-      fetch('/api/pzlog?m='+encodeURIComponent(__s));
     } else if(n===1){
       gs={mode:'pan', startX:e.clientX, startY:e.clientY, startTx:tx, startTy:ty};
     }
-    var __d='pid='+e.pointerId+' type='+e.pointerType+' n='+n+' mode='+(gs?gs.mode:'-');fetch('/api/pzlog?m='+encodeURIComponent(__d));
     if(e.cancelable && e.pointerType!=='mouse') e.preventDefault();
   });
   scheme.addEventListener('pointermove', function(e){
@@ -731,10 +722,6 @@ function attachSchemePanZoom(scheme){
         var uy=(gs.startMid.y-o.top-gs.startTy)/gs.startScale;
         tx=m.x-o.left-ux*scale;
         ty=m.y-o.top-uy*scale;
-        if(!apply._dl){ apply._dl=true;
-          var __c='d='+d.toFixed(1)+' startDist='+(gs.startDist||0).toFixed(1)+' ratio='+ratio.toFixed(2)+' scale='+scale.toFixed(2)+' m='+(m?m.x.toFixed(1)+','+m.y.toFixed(1):'null')+' o='+o.left.toFixed(1)+','+o.top.toFixed(1)+' ux='+ux.toFixed(2)+' tx='+tx.toFixed(1)+' sm='+(gs.startMid?(gs.startMid.x.toFixed(1)+','+gs.startMid.y.toFixed(1)):'null')+' sS='+gs.startScale.toFixed(2);
-          fetch('/api/pzlog?m='+encodeURIComponent(__c));
-        }
         clampPan(); apply();
       } else if(gs.mode==='pan' && n===1){
         var p=ptsList()[0];
@@ -744,14 +731,12 @@ function attachSchemePanZoom(scheme){
         clampPan(); apply();
       }
     }
-    if(n>=2 && gs && gs.mode==='pinch'){var __m='move pinch n='+n+' scale='+scale.toFixed(2);fetch('/api/pzlog?m='+encodeURIComponent(__m));}
     if(e.cancelable && e.pointerType!=='mouse') e.preventDefault();
   });
   function endPointer(e){
     if(!pts[e.pointerId]) return;
     delete pts[e.pointerId];
     var n=activeCount();
-    var __u='up pid='+e.pointerId+' n='+n;fetch('/api/pzlog?m='+encodeURIComponent(__u));
     if(n===0){ gs=null; scheme.classList.remove('anim-grabbing'); }
     else if(n===1){ // остался один палец — продолжаем панораму от него
       var p=ptsList()[0];
