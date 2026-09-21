@@ -327,6 +327,7 @@ function shiftPeriod(delta){
 	setPeriod(newFrom,newTo,periodMode,null);
 }
 async function loadAll(){
+	if(window.srRefresh && !window.srRefresh.isEnabled()) return;
 	await Promise.all([loadTotalChart(), loadChart(), loadGridVChart(), loadGridPChart()]);
 }
 
@@ -476,7 +477,13 @@ document.getElementById('btnRefresh').addEventListener('click',function(){
 document.getElementById('fromPick').value=toInputDateTime(selRange.from);
 document.getElementById('toPick').value=toInputDateTime(selRange.to);
 document.getElementById('datePick').value=toInputDate(selRange.from);
-loadAll(); setInterval(function(){ preserveZoom=userZoomed; loadAll(); },60000);
+// Периодическое обновление графиков (раз в минуту) управляется глобальным
+// выключателем обновления: enable — немедленный опрос + интервал, disable — остановка.
+var chartsTimer=null;
+function chartsStart(){ if(chartsTimer) return; loadAll(); chartsTimer=setInterval(function(){ preserveZoom=userZoomed; loadAll(); },60000); }
+function chartsStop(){ if(chartsTimer){ clearInterval(chartsTimer); chartsTimer=null; } }
+if(window.srRefresh){ window.srRefresh.register(chartsStart, chartsStop); }
+chartsStart();
 // Мобильная версия: touch-жесты по графикам (щипок — зум по X, свайп —
 // панорама, двойной тап — сброс зума; хинт со значениями на мобильной
 // отключён — он мешал зуму).

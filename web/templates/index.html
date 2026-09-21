@@ -16,6 +16,7 @@
     <p class="sub">Текущие параметры инверторов и электросчётчика (из Redis, обновление каждую секунду)</p>
   </div>
   {{template "mnav" .}}
+  {{template "refreshToggle" .}}
 </div>
 
 {{if .flags.ShowBMS}}

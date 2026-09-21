@@ -17,6 +17,13 @@
 .mnav a.active { background:#428bca; border-color:#428bca; color:#ffffff; }
 .mnav a.active:hover { background:#346fa1; }
 
+/* Выключатель «Отключить обновление» (правый верхний угол всех страниц). */
+.refresh-toggle { display:inline-flex; align-items:center; gap:6px; cursor:pointer; user-select:none; padding:8px 12px; border-radius:8px; border:1px solid #c9d6e3; background:#ffffff; color:#6b7785; font-size:13px; font-weight:600; white-space:nowrap; -webkit-tap-highlight-color:transparent; }
+.refresh-toggle:hover { background:#eef4fb; border-color:#428bca; color:#346fa1; }
+.refresh-toggle input { width:16px; height:16px; margin:0; cursor:pointer; }
+.refresh-toggle.off { background:#f6f7f8; border-color:#d0d6de; color:#2b3238; }
+.refresh-toggle.off:hover { border-color:#428bca; }
+
 @media (max-width: 900px) {
   html { -webkit-text-size-adjust: 100%; }
   body { padding:12px 12px calc(16px + 56px + env(safe-area-inset-bottom, 0px)); }
