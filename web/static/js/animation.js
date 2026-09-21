@@ -15,7 +15,7 @@
 // ---------- Спрайты (PNG на прозрачном фоне) ----------
 var SPR = {
   grid:    {file:'power-line-pylon', w:64, h:135},
-  meter:   {file:'dds238-meter',     w:100,h:126,wScale:1.9}, // растянут в ширину, чтобы показания влазили в корпус
+  meter:   {file:'dds238-meter',     w:150,h:126}, // растянут в ширину (PNG 756×800)
   map:     {file:'map-converter',    w:120,h:51},
   house:   {file:'country-house',    w:120,h:86},
   garage:  {file:'garage',           w:110,h:78},
@@ -79,9 +79,11 @@ function pathWithRounds(pts, r){
 // марка DDS238), растянутый по ширине; дисплей-накладка с показаниями ложится
 // на нижнюю часть белого корпуса и по ширине равна самому корпусу, поэтому
 // никогда не вылезает за него.
-// Доли в спрайте dds238-meter (измерены по пикселям 504×800):
-//   белый корпус — x от 50 до 453 (0.099..0.899 ширины), т.е. ширина тела 0.80.
-var METER={bodyXFrac:0.80};
+// Доля белого корпуса в спрайте dds238-meter (измерена по пикселям 756×800
+// после растяжения PNG в 1.5 раза): корпус — 0.80 ширины, по центру.
+// Дисплей-накладка — 70% от прежней ширины (152px → 106px) при новой ширине
+// спрайта 150px: доля 0.71.
+var METER={bodyXFrac:0.80, dispXFrac:0.71};
 function spriteNode(svg, key, cx, cy, label, raise){
   raise=raise||0;
   var g=document.createElementNS(NS,'g');
@@ -97,17 +99,17 @@ function spriteNode(svg, key, cx, cy, label, raise){
   g.appendChild(img);
   var meterReads=null; // ссылки на текстовые узлы дисплея счётчика (возврат наружу)
   if(key==='meter'){
-    // Накладка показаний на нижнюю часть белого корпуса (под маркой DDS238).
-    // Ширина = белый корпус (0.80 растянутой картинки), по центру cx.
-    var bodyW=effW*METER.bodyXFrac;
+    // Накладка показаний на белый корпус (под маркой DDS238). Ширина — 70% от
+    // прежней ширины накладки (dispXFrac), выровнена по центру cx.
+    var dispW=effW*METER.dispXFrac;
     var top=cy-raise+spec.h*0.06, lh=spec.h*0.30; // верх и высота накладки
     var box=document.createElementNS(NS,'rect');
-    box.setAttribute('x',cx-bodyW/2); box.setAttribute('y',top);
-    box.setAttribute('width',bodyW); box.setAttribute('height',lh);
+    box.setAttribute('x',cx-dispW/2); box.setAttribute('y',top);
+    box.setAttribute('width',dispW); box.setAttribute('height',lh);
     box.setAttribute('rx',5); box.setAttribute('fill','#eef7f1');
     box.setAttribute('class','anim-meter-box');
     g.appendChild(box);
-    var lx=cx+bodyW/2-8;
+    var lx=cx+dispW/2-8;
     var d=document.createElementNS(NS,'text');
     d.setAttribute('x',lx); d.setAttribute('y',top+lh*0.44); d.setAttribute('text-anchor','end');
     d.setAttribute('class','anim-meter-read anim-meter-import'); d.textContent='—';
