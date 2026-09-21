@@ -169,3 +169,86 @@ func TestBuildAnimationPlacementFromConfig(t *testing.T) {
 		t.Fatalf("не должно быть инверторов в доме: %v", res.House.Inverters)
 	}
 }
+
+// tempByLabel возвращает значение температуры из списка по подписи.
+func tempByLabel(t *testing.T, temps []animTemp, label string) (float64, bool) {
+	t.Helper()
+	for _, tp := range temps {
+		if tp.Label == label {
+			return tp.Value, true
+		}
+	}
+	return 0, false
+}
+
+// TestBuildAnimationTemperatures проверяет извлечение температур на страницу
+// анимации: панель над МАП (Тор/Транзисторы), температура батареи (по данным МАП)
+// и температуры инверторов (Deye: Корпус/Транзисторы; Sofar: Корпус/Транзисторы).
+func TestBuildAnimationTemperatures(t *testing.T) {
+	now := time.Now()
+	devices := []deviceSnapshot{
+		// МАП: температуры тора/транзисторов/батареи.
+		animSnap("МАП", "10.0.0.8", "", now, map[string]float64{
+			"battery_voltage":     52,
+			"map_temp_tor":        44,
+			"map_temp_transistor": 35,
+			"map_temp_battery":    23,
+		}),
+		// Deye: radiator (Корпус) и igbt (Транзисторы).
+		animSnapKind("Deye", "10.0.0.1", "Дом", now, map[string]float64{
+			"ac_active_power":    100,
+			"temperature_radiator": 41.2,
+			"temperature_igbt":     55.6,
+		}, "deye"),
+		// Sofar: inner (Корпус) и module (Транзисторы).
+		animSnapKind("Sofar", "10.0.0.2", "Дом", now, map[string]float64{
+			"ac_active_power":  50,
+			"temperature_inner": 38,
+			"temperature_module": 47,
+		}, "sofar"),
+	}
+
+	res := buildAnimationResponse(devices, nil, now)
+
+	// Панель над МАП: Тор и Транзисторы.
+	if len(res.House.MapTemps) != 2 {
+		t.Fatalf("map temps: want 2, got %v", res.House.MapTemps)
+	}
+	if v, ok := tempByLabel(t, res.House.MapTemps, "Тор"); !ok || v != 44 {
+		t.Fatalf("map Тор: want 44, got %v (ok=%v)", v, ok)
+	}
+	if v, ok := tempByLabel(t, res.House.MapTemps, "Транзисторы"); !ok || v != 35 {
+		t.Fatalf("map Транзисторы: want 35, got %v (ok=%v)", v, ok)
+	}
+	// Температура батареи (справа от спрайта).
+	if res.House.BatteryTemp == nil || *res.House.BatteryTemp != 23 {
+		t.Fatalf("battery temp: want 23, got %v", res.House.BatteryTemp)
+	}
+
+	byName := map[string]animInverter{}
+	for _, inv := range res.House.Inverters {
+		byName[inv.Name] = inv
+	}
+	// Deye: radiator → Корпус, igbt → Транзисторы.
+	deye, ok := byName["Deye"]
+	if !ok {
+		t.Fatal("нет Deye в схеме")
+	}
+	if v, ok := tempByLabel(t, deye.Temps, "Корпус"); !ok || v != 41.2 {
+		t.Fatalf("deye Корпус (radiator): want 41.2, got %v (ok=%v)", v, ok)
+	}
+	if v, ok := tempByLabel(t, deye.Temps, "Транзисторы"); !ok || v != 55.6 {
+		t.Fatalf("deye Транзисторы (igbt): want 55.6, got %v (ok=%v)", v, ok)
+	}
+	// Sofar: inner → Корпус, module → Транзисторы.
+	sofar, ok := byName["Sofar"]
+	if !ok {
+		t.Fatal("нет Sofar в схеме")
+	}
+	if v, ok := tempByLabel(t, sofar.Temps, "Корпус"); !ok || v != 38 {
+		t.Fatalf("sofar Корпус (inner): want 38, got %v (ok=%v)", v, ok)
+	}
+	if v, ok := tempByLabel(t, sofar.Temps, "Транзисторы"); !ok || v != 47 {
+		t.Fatalf("sofar Транзисторы (module): want 47, got %v (ok=%v)", v, ok)
+	}
+}
