@@ -166,18 +166,22 @@ function drawBus(svg, x1, x2, y, bolts){
 // (без «вырезания» белым штрихом, как при двойном штрихе). Огоньки бегут по оси.
 var RAIL_GAP=6;   // расстояние от оси до кромки
 var RAIL_W=1.5;   // толщина кромки
-// Полилиния кромки: смещённая по нормали копия оси (numpy-эквивалент не нужен).
+// Полилиния кромки: смещённая по нормали копия оси. Нормаль — центральная
+// разность (t−ε и t+ε), поэтому на скруглении угла она плавно поворачивается
+// и кромка повторяет дугу без «шеврона». Частая дискретизация (1 точка/px).
 function offsetTrack(trace, off){
   var total=trace.getTotalLength();
-  var n=Math.max(12, Math.ceil(total/3));
+  var n=Math.max(16, Math.floor(total));
   var d='';
+  var eps=0.4;
   for(var i=0;i<=n;i++){
     var t=total*i/n;
-    var p=trace.getPointAtLength(t);
-    var p2=trace.getPointAtLength(Math.min(total, t+0.6));
-    var dx=p2.x-p.x, dy=p2.y-p.y;
+    var a=trace.getPointAtLength(Math.max(0, t-eps));
+    var b=trace.getPointAtLength(Math.min(total, t+eps));
+    var dx=b.x-a.x, dy=b.y-a.y;
     var len=Math.sqrt(dx*dx+dy*dy)||1;
     var nx=-dy/len, ny=dx/len; // левая нормаль
+    var p=trace.getPointAtLength(t);
     var x=p.x+nx*off, y=p.y+ny*off;
     d += (i===0?'M':'L')+(+x.toFixed(2))+' '+(+y.toFixed(2))+' ';
   }
