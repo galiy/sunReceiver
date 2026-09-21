@@ -1647,6 +1647,7 @@ func main() {
 		ShowMeter:  meterCfg != nil,
 		ShowBMS:    bmsSite != nil,
 		ShowRelay:  relaySec != nil && (relaySec.Disabled == nil || !*relaySec.Disabled),
+		PZLog:      true, // временно: диагностика pinch-зума (удалить после отладки)
 	}
 
 	// Сетевое реле SR-201 (лампы): управление по UDP, состояние поддерживает
