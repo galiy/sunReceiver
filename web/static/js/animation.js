@@ -654,23 +654,12 @@ function attachSchemePanZoom(scheme){
     tx=Math.max(w-sw-pad, Math.min(pad, tx));
     ty=Math.max(h-sh-pad, Math.min(pad, ty));
   }
-  // Зум так, чтобы точка c (в координатах контейнера) осталась неподвижной:
-  // u = (c - off - t)/scale (до), фиксируем u. (используется wheel/двойным жестом)
-  function setScale(newScale, cx, cy){
-    newScale=Math.max(min, Math.min(max, newScale));
-    var o=svgOff();
-    var ux=(cx-o.left-tx)/scale, uy=(cy-o.top-ty)/scale; // исправлено
-    scale=newScale;
-    tx=cx-o.left-ux*scale;
-    ty=cy-o.top-uy*scale;
-    clampPan(); apply();
-  }
-
-  // ---------- Жесты (единый контроллер через Pointer Events) ----------
-  // Pointer Events покрывают и мышь, и тач (Android/iOS), и перо. Держим карту
-  // активных указателей (pointerId → позиция), поэтому мультитач-пинч работает.
-  // setPointerCapture НЕ используем: он на некоторых Android ломает второй палец.
-  // touch-action:none (см. CSS) запрещает браузеру забирать жест в скролл/зум.
+  // ---------- Жесты (тач-контроллер через Pointer Events) ----------
+  // Pointer Events покрывают тач и перо. Мус-события игнорируются, чтобы на
+  // десктопе колесо/клики не перехватывались (зум/панорама только на сенсорных).
+  // Держим карту активных указателей (pointerId → позиция), поэтому мультитач-пинч
+  // работает. setPointerCapture НЕ используем: он на некоторых Android ломает
+  // второй палец. touch-action:none (см. CSS) запрещает браузеру забирать жест.
   var pts={};                             // pointerId -> {x,y} (clientX/Y)
   var gs=null;                            // состояние жеста
   function ptsList(){ return Object.keys(pts).map(function(k){return pts[k];}); }
@@ -687,9 +676,9 @@ function attachSchemePanZoom(scheme){
     return Math.hypot(ls[0].x-ls[1].x, ls[0].y-ls[1].y);
   }
   scheme.addEventListener('pointerdown', function(e){
+    if(e.pointerType==='mouse') return; // на десктопе зум/панорама отключены
     if(e.target.closest('a,button,input')) return;
     pts[e.pointerId]={x:e.clientX, y:e.clientY};
-    scheme.classList.add('anim-grabbing');
     var n=activeCount();
     if(n===2){
       // Пинч: фиксируем стартовое расстояние. Если пальцы пришли почти в одну
@@ -705,6 +694,7 @@ function attachSchemePanZoom(scheme){
     if(e.cancelable && e.pointerType!=='mouse') e.preventDefault();
   });
   scheme.addEventListener('pointermove', function(e){
+    if(e.pointerType==='mouse') return;
     if(!pts[e.pointerId]) return;
     pts[e.pointerId]={x:e.clientX, y:e.clientY};
     var n=activeCount();
@@ -737,7 +727,7 @@ function attachSchemePanZoom(scheme){
     if(!pts[e.pointerId]) return;
     delete pts[e.pointerId];
     var n=activeCount();
-    if(n===0){ gs=null; scheme.classList.remove('anim-grabbing'); }
+    if(n===0){ gs=null; }
     else if(n===1){ // остался один палец — продолжаем панораму от него
       var p=ptsList()[0];
       gs={mode:'pan', startX:p.x, startY:p.y, startTx:tx, startTy:ty};
@@ -746,19 +736,6 @@ function attachSchemePanZoom(scheme){
   }
   scheme.addEventListener('pointerup', endPointer);
   scheme.addEventListener('pointercancel', endPointer);
-
-  // Колесо мыши — зум вокруг курсора.
-  scheme.addEventListener('wheel', function(e){
-    if(e.ctrlKey) e.preventDefault();
-    var r=box();
-    var factor=Math.exp(-e.deltaY*0.0015);
-    setScale(scale*factor, e.clientX-r.left, e.clientY-r.top);
-  }, {passive:false});
-
-  // Двойной клик/тап — сброс к исходному масштабу.
-  scheme.addEventListener('dblclick', function(){
-    scale=min; tx=0; ty=0; apply();
-  });
 
   return {
     reset:function(){ scale=min; tx=0; ty=0; apply(); },
