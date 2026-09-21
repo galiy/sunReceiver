@@ -587,10 +587,10 @@ var countries = map[uint16]string{
 	26: "Philippines", 27: "New Zealand",
 }
 
-// valuesContract — универсальный контракт значений. В файл выводит ТОЛЬКО общие
-// для обеих марок теги (commonContractTags) в фиксированном порядке; числовые значения
-// тегов *voltage / *current / temperature* / energy* / *power округляются до 1 знака
-// после запятой.
+// valuesContract — универсальный контракт значений. В файл выводит общие для обеих
+// марок теги (commonContractTags) плюс брендовые температуры (temperatureTags) в
+// фиксированном порядке; числовые значения тегов *voltage / *current / temperature* /
+// energy* / *power округляются до 1 знака после запятой.
 type valuesContract map[string]any
 
 // commonContractTags — теги, которые обе марки (Deye и Sofar) отдают в одинаковых
@@ -626,6 +626,27 @@ var commonContractTags = []string{
 	"meter_export",
 	"meter_total",
 }
+
+// temperatureTags — дополнительные температурные теги, которые выводятся в
+// values/current ПОМИМО общих (commonContractTags). Они бренд-специфичны (разные
+// имена и масштабы у Sofar/Deye/МАП), поэтому в commonContractTags не входят, но их
+// полезно отдавать на дашборд. Пустые/отсутствующие пропускаются при сериализации.
+var temperatureTags = []string{
+	// МАП Титанатор (агрегат батарея/сеть): внешний датчик АКБ, тора, транзисторов.
+	"map_temp_battery",
+	"map_temp_tor",
+	"map_temp_transistor",
+	// Sofar K-TLX.
+	"temperature_module",
+	"temperature_inner",
+	// Deye string.
+	"temperature_radiator",
+	"temperature_igbt",
+}
+
+// contractTags — полный упорядоченный список тегов, сериализуемых в values/current:
+// общие теги, затем температуры.
+var contractTags = append(append([]string{}, commonContractTags...), temperatureTags...)
 
 // needsRounding — true, если тэг относится к величинам, которые округляются до
 // 1 знака после запятой (напряжение, ток, мощность, энергия, температура).
@@ -676,7 +697,7 @@ func (v valuesContract) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	buf.WriteByte('{')
 	first := true
-	for _, key := range commonContractTags {
+	for _, key := range contractTags {
 		raw, ok := v[key]
 		if !ok {
 			continue
@@ -754,10 +775,11 @@ func faultNames(mask uint16) []string {
 // (commonContractTags). Единица зашита в суффикс имени: *_voltage — V, *_current — A,
 // ac_*_power — W (ac_reactive_power — var), grid_frequency — Hz, energy_* — kWh.
 // Числовые значения *voltage/*current/*power/energy*/temperature* округляются до
-// 1 знака (round1). Бренд-специфичные поля (диагностика Sofar: inverter_status,
-// fault_*, температуры модуля/инвертора, bus_voltage, country; температуры Deye)
-// в values НЕ попадают: они не входят в commonContractTags и отбрасываются при
-// сериализации снимка — контракт хранит только общие теги.
+// 1 знака (round1). Бренд-специфичные диагностические поля (inverter_status, fault_*,
+// bus_voltage, country и пр.) в values НЕ попадают — они не входят ни в
+// commonContractTags, ни в temperatureTags и отбрасываются при сериализации снимка.
+// Температуры (МАП: map_temp_*, Sofar: temperature_module/inner, Deye:
+// temperature_radiator/igbt) выводятся через temperatureTags.
 
 // putSofarSimple пишет 16-битный регистр в контракт: int при ratio==1, иначе float.
 // Регистр трактуется как БЕЗЗНАКОВЫЙ (физические величины неотрицательны:
@@ -1165,6 +1187,30 @@ func mapMAPRegisters(cells map[uint16]byte) valuesContract {
 	// батарейная (при заряде завышена: 8100 Вт против I×U 5685 Вт).
 	batP := uAcc * iAcc
 	out["battery_power"] = batP
+
+	// ---- Температуры МАП (тор, радиатор транзисторов, внешний датчик АКБ) ----
+	// Ячейки (сырые, T = raw − 50): _Temp_Grad0=0x42E (внешний датчик АКБ),
+	// _Temp_Grad1=0x42F (тор), _Temp_Grad2=0x430 (транзисторы). Признаки отсутствия
+	// датчиков — _Temp_off=0x43C: бит0 — внешний (АКБ) нет, бит1 — тора нет,
+	// бит2 — транзисторов нет. При отсутствии датчика температуру не выставляем.
+	// Ячейки 0x42E-0x430 и 0x43C входят в блок 0x400 (0x400..0x43F), читаемый в
+	// pollDevice (см. kindMAP): не требуется отдельного чтения.
+	tempOff := byte(0)
+	if o, okO := cells[0x43C]; okO {
+		tempOff = o
+	}
+	putTemp := func(addr uint16, bit byte, tag string) {
+		if tempOff&(1<<bit) != 0 {
+			return // датчик отсутствует
+		}
+		if v, okB := cells[addr]; okB {
+			out[tag] = float64(v) - 50
+		}
+	}
+	putTemp(0x42E, 0, "map_temp_battery")
+	putTemp(0x42F, 1, "map_temp_tor")
+	putTemp(0x430, 2, "map_temp_transistor")
+
 	return out
 }
 
