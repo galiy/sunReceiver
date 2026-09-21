@@ -159,13 +159,30 @@ function drawBus(svg, x1, x2, y, bolts){
 }
 
 // ---------- Связь (rail) ----------
-// Rail — «полая» линия: две тонкие параллельные кромки вокруг оси. Рисуется как
-// двойной штрих одной исходной (скруглённой) траектории: снизу широкий тёмный
-// штрих, поверх — узкий штрих цвета фона. Кромки всегда концентричны и повторяют
-// скругление углов, поэтому угол идеально ровный. Огоньки бегут по невидимой оси
-// (trace) внутри зазора и не накладываются на кромки.
-var RAIL_GAP=6;   // расстояние от оси до середины кромки
+// Rail — «полая» линия: две тонкие параллельные кромки вокруг гладкой оси.
+// Кромки строятся сэмплированием оси (trace) и смещением каждой точки по нормали
+// на ±gap: так они повторяют скругления углов (концентричны) и остаются строго
+// параллельными, а на стыках/пересечениях просто накладываются целыми линиями
+// (без «вырезания» белым штрихом, как при двойном штрихе). Огоньки бегут по оси.
+var RAIL_GAP=6;   // расстояние от оси до кромки
 var RAIL_W=1.5;   // толщина кромки
+// Полилиния кромки: смещённая по нормали копия оси (numpy-эквивалент не нужен).
+function offsetTrack(trace, off){
+  var total=trace.getTotalLength();
+  var n=Math.max(12, Math.ceil(total/3));
+  var d='';
+  for(var i=0;i<=n;i++){
+    var t=total*i/n;
+    var p=trace.getPointAtLength(t);
+    var p2=trace.getPointAtLength(Math.min(total, t+0.6));
+    var dx=p2.x-p.x, dy=p2.y-p.y;
+    var len=Math.sqrt(dx*dx+dy*dy)||1;
+    var nx=-dy/len, ny=dx/len; // левая нормаль
+    var x=p.x+nx*off, y=p.y+ny*off;
+    d += (i===0?'M':'L')+(+x.toFixed(2))+' '+(+y.toFixed(2))+' ';
+  }
+  return d;
+}
 function makeEdge(svg, opts){
   // Геометрическая ось — невидимая, по ней считаем длину и ведём огоньки.
   var trace=document.createElementNS(NS,'path');
@@ -174,24 +191,15 @@ function makeEdge(svg, opts){
   trace.setAttribute('class','anim-wire-trace');
   svg.appendChild(trace);
   var total=trace.getTotalLength();
-  // Широкий тёмный штрих (даёт обе кромки).
-  var outer=document.createElementNS(NS,'path');
-  outer.setAttribute('d', trace.getAttribute('d'));
-  outer.setAttribute('fill','none');
-  outer.setAttribute('stroke','#3a4752');
-  outer.setAttribute('stroke-width', 2*RAIL_GAP+RAIL_W);
-  outer.setAttribute('stroke-linejoin','round');
-  outer.setAttribute('stroke-linecap','butt');
-  svg.appendChild(outer);
-  // Узкий штрих в цвет фона (вырезает середину, оставляя две кромки).
-  var inner=document.createElementNS(NS,'path');
-  inner.setAttribute('d', trace.getAttribute('d'));
-  inner.setAttribute('fill','none');
-  inner.setAttribute('stroke','#ffffff');
-  inner.setAttribute('stroke-width', 2*RAIL_GAP-RAIL_W);
-  inner.setAttribute('stroke-linejoin','round');
-  inner.setAttribute('stroke-linecap','butt');
-  svg.appendChild(inner);
+  // Две кромки — тонкие линии, смещённые по нормали на ±gap.
+  var offs=[-RAIL_GAP, RAIL_GAP];
+  for(var r=0;r<offs.length;r++){
+    var edge=document.createElementNS(NS,'path');
+    edge.setAttribute('d', offsetTrack(trace, offs[r]));
+    edge.setAttribute('fill','none');
+    edge.setAttribute('class','anim-rail');
+    svg.appendChild(edge);
+  }
 
   var txt=null;
   if(opts.label){
