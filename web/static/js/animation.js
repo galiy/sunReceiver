@@ -618,4 +618,135 @@ requestAnimationFrame(loop);
 
 tick(); setInterval(tick, 1000);
 
+// ---------- Панорамирование и зум анимированных схем (pinch/колесо/перетаскивание) ----------
+// Работает на контейнере .anim-scheme: трансформирует сам SVG (transform: translate+scale),
+// не трогая viewBox, поэтому огоньки/подписи масштабируются вместе со схемой. Масштаб
+// ограничен [1, 6] (меньше 1 — схема как была, бессмысленно уменьшать), панорама
+// ограничена рамками увеличенной области, чтобы не увести схему за пределы экрана.
+function attachSchemePanZoom(scheme){
+  if(!scheme || scheme.__panzoom) return;
+  scheme.__panzoom=true;
+  var svg=scheme.querySelector('.anim-svg');
+  if(!svg) return;
+  var min=1, max=6, scale=min, tx=0, ty=0;
+  var pointers={};               // activePointerId -> {x,y} (клиентские)
+  var startScale=0, startTx=0, startTy=0, startDist=0, startMidX=0, startMidY=0, hasMid=false;
+  var grabStartX=0, grabStartY=0;
+
+  // Смещение SVG относительно контейнера (независимо от трансформа): у SVG
+  // transform-origin:0 0, поэтому при translate+scale его локальная точка u
+  // (в своём боксе) отображается в контейнере как  S.left + tx + u*scale.
+  // scheme имеет position:relative, значит offsetLeft/offsetTop — честный сдвиг.
+  var svgOff=function(){ return {left:svg.offsetLeft, top:svg.offsetTop}; };
+  var box=function(){ return scheme.getBoundingClientRect(); }; // контейнер в клиентских
+
+  function apply(){
+    svg.style.transform='translate('+tx.toFixed(2)+'px,'+ty.toFixed(2)+'px) scale('+scale.toFixed(3)+')';
+  }
+  function clampPan(){
+    var b=box(), w=b.width, h=b.height;
+    var sw=w*scale, sh=h*scale;   // экранная площадь содержимого ≈ контейнер*scale
+    var pad=w*0.05;
+    tx=Math.max(w-sw-pad, Math.min(pad, tx));
+    ty=Math.max(h-sh-pad, Math.min(pad, ty));
+  }
+  // Зум так, чтобы точка c (в координатах контейнера) осталась неподвижной:
+  // u = (c - off - t)/scale (до), фиксируем u. (используется wheel/двойным жестом)
+  function setScale(newScale, cx, cy){
+    newScale=Math.max(min, Math.min(max, newScale));
+    var o=svgOff();
+    var ux=(cx-o.left-tx)/scale, uy=(cy-o.top-ty)/scale; // исправлено
+    scale=newScale;
+    tx=cx-o.left-ux*scale;
+    ty=cy-o.top-uy*scale;
+    clampPan(); apply();
+  }
+  function midX(){ // центр двух активных пальцев в координатах контейнера
+    var ks=Object.keys(pointers);
+    if(ks.length<2) return null;
+    var a=pointers[ks[0]], b=pointers[ks[1]], r=box();
+    return {x:(a.x+b.x)/2-r.left, y:(a.y+b.y)/2-r.top};
+  }
+  function dist(){
+    var ks=Object.keys(pointers);
+    if(ks.length<2) return 0;
+    var a=pointers[ks[0]], b=pointers[ks[1]];
+    return Math.hypot(a.x-b.x, a.y-b.y);
+  }
+
+  scheme.addEventListener('pointerdown', function(e){
+    if(e.target.closest('a,button,input')) return; // не мешаем интерактивным элементам
+    scheme.setPointerCapture(e.pointerId);
+    pointers[e.pointerId]={x:e.clientX, y:e.clientY};
+    scheme.classList.add('anim-grabbing');
+    var ks=Object.keys(pointers);
+    if(ks.length===2){
+      startScale=scale; startTx=tx; startTy=ty;
+      startDist=dist(); var m=midX(); startMidX=m?m.x:0; startMidY=m?m.y:0; hasMid=!!m;
+    } else {
+      startTx=tx; startTy=ty; grabStartX=e.clientX; grabStartY=e.clientY;
+    }
+    e.preventDefault();
+  });
+  scheme.addEventListener('pointermove', function(e){
+    if(!pointers[e.pointerId]) return;
+    pointers[e.pointerId]={x:e.clientX, y:e.clientY};
+    var ks=Object.keys(pointers);
+    if(ks.length>=2){
+      if(!hasMid) return;
+      var d=dist(), m=midX(); if(!m) return;
+      var newScale=Math.max(min, Math.min(max, startScale*(d/(startDist||1))));
+      var o=svgOff();
+      // Локальная точка u фиксирована от начальной середины, панорама — от её сдвига.
+      var ux=(startMidX-o.left-startTx)/startScale, uy=(startMidY-o.top-startTy)/startScale;
+      scale=newScale;
+      tx=m.x-o.left-ux*scale;
+      ty=m.y-o.top-uy*scale;
+      clampPan(); apply();
+    } else {
+      var p=pointers[ks[0]];
+      tx=startTx+(e.clientX-grabStartX);
+      ty=startTy+(e.clientY-grabStartY);
+      if(scale<=1.001){ tx=0; ty=0; } // при min-масштабе панорама бессмысленна
+      clampPan(); apply();
+    }
+    e.preventDefault();
+  });
+  function endPointer(e){
+    if(!pointers[e.pointerId]) return;
+    delete pointers[e.pointerId];
+    var ks=Object.keys(pointers);
+    if(ks.length<2){ hasMid=false; }
+    if(ks.length===1){
+      // Остался один палец — продолжаем панораму от него.
+      var p=pointers[ks[0]];
+      startTx=tx; startTy=ty; grabStartX=p.x; grabStartY=p.y;
+    }
+    if(ks.length===0) scheme.classList.remove('anim-grabbing');
+  }
+  scheme.addEventListener('pointerup', endPointer);
+  scheme.addEventListener('pointercancel', endPointer);
+  scheme.addEventListener('lostpointercapture', endPointer);
+
+  // Колесо мыши — зум вокруг курсора.
+  scheme.addEventListener('wheel', function(e){
+    if(e.ctrlKey) e.preventDefault();
+    var r=box();
+    var factor=Math.exp(-e.deltaY*0.0015);
+    setScale(scale*factor, e.clientX-r.left, e.clientY-r.top);
+  }, {passive:false});
+
+  // Двойной клик/тап — сброс к исходному масштабу.
+  scheme.addEventListener('dblclick', function(){
+    scale=min; tx=0; ty=0; apply();
+  });
+
+  return {
+    reset:function(){ scale=min; tx=0; ty=0; apply(); },
+    isActive:function(){ return scale>min || tx!==0 || ty!==0; }
+  };
+}
+
+document.querySelectorAll('.anim-scheme').forEach(attachSchemePanZoom);
+
 })();
