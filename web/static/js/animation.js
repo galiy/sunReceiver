@@ -647,7 +647,8 @@ function attachSchemePanZoom(scheme){
     if(!apply._logged && scale>1.3){
       apply._logged=true;
       var r=svg.getBoundingClientRect();
-      var f='apply tf="'+svg.style.transform+'" rectIW='+Math.round(r.width)+' styleTW='+Math.round(svg.clientWidth)+' scale='+scale.toFixed(2)+' tx='+tx.toFixed(1)+' ty='+ty.toFixed(1);
+      var oo=svgOff(), mm=mid();
+      var f='apply tf="'+svg.style.transform+'" rectIW='+Math.round(r.width)+' styleTW='+Math.round(svg.clientWidth)+' scale='+scale.toFixed(2)+' tx='+tx.toFixed(1)+' ty='+ty.toFixed(1)+' oL='+String(oo.left)+' oT='+String(oo.top)+' mL='+(mm?(mm.x.toFixed(1)+','+mm.y.toFixed(1)):'null');
       fetch('/api/pzlog?m='+encodeURIComponent(f));
     }
   }
