@@ -403,18 +403,23 @@ async function loadGridVChart(){
 	}catch(e){}
 }
 
-// Мощности (МАП + счётчик). Активная мощность счётчика белой линией на левой оси.
+// Мощности (МАП + счётчик), знаки — по правилу «Мощности дома» (как на странице
+// анимации Дома): потребление +, выработка/отдача в сеть −. Мощность батареи
+// инвертирована (−battery_power: отдача/разряд = минус, заряд = плюс), как в
+// анимации Дома («батарея→МАП»). Активная мощность счётчика — белой линией.
 function buildGridPChart(data){
 	var grid=(data.map_grid_power||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
-	var bat=(data.map_battery_power||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
-	var cons=(data.map_consumption||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
+	// Знак «Мощности батареи» — как в анимации Дома (−battery_power).
+	var bat=(data.map_battery_power||[]).map(function(p){ return {x:new Date(p.t), y:-p.v}; });
+	// «Мощность дома» — по формуле анимации Дома: Σac(инверторы Дома)+grid+battery.
+	var house=(data.house_power||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
 	var meter=(data.meter_active_power||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
 	var datasets=[
 		{ label:'Мощность сети', data:grid, borderColor:'#428bca', backgroundColor:'#428bca',
 		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false },
 		{ label:'Мощность батареи', data:bat, borderColor:'#37b24d', backgroundColor:'#37b24d',
 		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false },
-		{ label:'Мощность потребления', data:cons, borderColor:'#f08c00', backgroundColor:'#f08c00',
+		{ label:'Мощность дома', data:house, borderColor:'#f08c00', backgroundColor:'#f08c00',
 		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false },
 		{ label:'Мощность счётчика (активная)', data:meter, borderColor:'#6b7785', backgroundColor:'#6b7785',
 		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.2, cubicInterpolationMode:'monotone', fill:false }
