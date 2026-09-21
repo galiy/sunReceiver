@@ -38,6 +38,19 @@ function devValue(dev, tag){
 	}
 	return (v === undefined || v === null) ? null : v;
 }
+// devTempValue возвращает температуру инвертора по подписи («Корпус»/«Транзисторы»)
+// в °C с учётом марки (как inverterTemps на сервере): у Deye — temperature_radiator
+// (Корпус) и temperature_igbt (Транзисторы); у Sofar — temperature_inner (Корпус) и
+// temperature_module (Транзисторы). Отсутствующий датчик у Deye маппится сентелом
+// −100 (raw 0 → −100), поэтому значения ≤ −100 пропускаются.
+function devTempValue(dev, which){
+	var tags;
+	if((dev&&dev.kind)==='deye') tags={'Корпус':'temperature_radiator','Транзисторы':'temperature_igbt'};
+	else if((dev&&dev.kind)==='sofar') tags={'Корпус':'temperature_inner','Транзисторы':'temperature_module'};
+	else return null;
+	var v = (dev && dev.values) ? dev.values[tags[which]] : undefined;
+	return (v===undefined || v===null || Number(v)<=-100) ? null : Number(v);
+}
 var GRID_COLOR='#428bca', MPPT_COLOR='#5cb85c';
 function renderPivot(devices){
 	if(!devices || !devices.length) return '<div class="missing">No data in Redis</div>';
@@ -78,6 +91,11 @@ function renderPivot(devices){
 	h+='<tr class="p-power"><td class="p-label">Реактивная мощность (var)</td>'+rowCells(grid,mpts,function(d){return isStaleDev(d)?null:devValue(d,'ac_reactive_power');})+'</tr>';
 	for(var p=0;p<PARAMS.length;p++){
 		var tag=PARAMS[p][0], label=PARAMS[p][1], unit=PARAMS[p][2];
+		// Температуры инвертора (Корпус/Транзисторы) — перед строками «Выработка ...».
+		if(tag==='energy_today'){
+			h+='<tr><td class="p-label">t корпус (°C)</td>'+rowCells(grid,mpts,function(d){return isStaleDev(d)?null:devTempValue(d,'Корпус');})+'</tr>';
+			h+='<tr><td class="p-label">t транзисторы (°C)</td>'+rowCells(grid,mpts,function(d){return isStaleDev(d)?null:devTempValue(d,'Транзисторы');})+'</tr>';
+		}
 		// Накопительная выработка у offline-инвертора — последнее зарегистрированное
 		// значение (сколько выработал за день/всего до остановки) — оставляем,
 		// но серым (td.stale-keep).
