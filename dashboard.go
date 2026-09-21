@@ -209,6 +209,7 @@ type seriesResponse struct {
 	MapBatPower      []seriesPoint  `json:"map_battery_power,omitempty"`
 	MapCons          []seriesPoint  `json:"map_consumption,omitempty"`
 	HousePower       []seriesPoint  `json:"house_power,omitempty"`
+	HouseInverterPower []seriesPoint `json:"house_inverter_power,omitempty"`
 	MeterVoltage     []seriesPoint  `json:"meter_voltage,omitempty"`
 	MeterActivePower []seriesPoint  `json:"meter_active_power,omitempty"`
 }
@@ -1172,8 +1173,9 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 
 	// Ряд «Мощность дома» — по формуле анимации Дома: Σac инверторов Дома (по
 	// размещению из конфига, пустое → «Дом») + grid_power + battery_power. Знаки
-	// как в контракте (как на странице анимации Дома).
-	res.HousePower = housePowerSeries(snaps, h.placeByIP)
+	// как в контракте (как на странице анимации Дома). Второй возвращаемый ряд —
+	// только Σac инверторов Дома (вклад Дома в формулу, отдельная линия).
+	res.HousePower, res.HouseInverterPower = housePowerSeries(snaps, h.placeByIP)
 
 	// Ряды электросчётчика DDS238: напряжение и активная мощность для наложения
 	// на графики напряжений и мощностей (белые линии счётчика). Маркер устройства —
@@ -1194,6 +1196,7 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	res.MapBatPower = downsampleSeries(res.MapBatPower, from, to)
 	res.MapCons = downsampleSeries(res.MapCons, from, to)
 	res.HousePower = downsampleSeries(res.HousePower, from, to)
+	res.HouseInverterPower = downsampleSeries(res.HouseInverterPower, from, to)
 	res.MeterVoltage = downsampleSeries(res.MeterVoltage, from, to)
 	res.MeterActivePower = downsampleSeries(res.MeterActivePower, from, to)
 
@@ -1299,7 +1302,11 @@ func sumSeries(a, b []seriesPoint) []seriesPoint {
 // Дома на этот момент, с окном актуальности inverterStaleWindow). Размещение
 // берётся из конфига (placeByIP), пустое → «Дом», MPPT-контроллеры (КЭС) и
 // счётчик в сумму не входят (как в buildAnimationResponse).
-func housePowerSeries(snaps []deviceSnapshot, placeByIP map[string]string) []seriesPoint {
+//
+// Возвращает два ряда на общей сетке МАП: house (полная мощность Дома) и ac
+// (суммарная активная мощность инверторов Дома — отдельная линия на графике
+// «Мощности», чтобы был виден вклад Дома в формулу).
+func housePowerSeries(snaps []deviceSnapshot, placeByIP map[string]string) (house, ac []seriesPoint) {
 	const staleWindow = 20 * time.Minute
 	type invRec struct {
 		ts time.Time
@@ -1363,6 +1370,7 @@ func housePowerSeries(snaps []deviceSnapshot, placeByIP map[string]string) []ser
 	current := map[string]float64{}
 	lastSeen := map[string]time.Time{}
 	out := make([]seriesPoint, 0, len(mapRecs))
+	acOut := make([]seriesPoint, 0, len(mapRecs))
 	ii := 0
 	for _, mr := range mapRecs {
 		for ii < len(invRecs) && !invRecs[ii].ts.After(mr.ts) {
@@ -1379,14 +1387,18 @@ func housePowerSeries(snaps []deviceSnapshot, placeByIP map[string]string) []ser
 			}
 			ac += v
 		}
+		acR := math.Round(ac*10) / 10
 		house := math.Round((ac+mr.grid+mr.bat)*10) / 10
 		if n := len(out); n > 0 && out[n-1].T == mr.ts.Format(time.RFC3339) {
 			out[n-1].V = house
+			acOut[n-1].V = acR
 		} else {
-			out = append(out, seriesPoint{T: mr.ts.Format(time.RFC3339), V: house})
+			ts := mr.ts.Format(time.RFC3339)
+			out = append(out, seriesPoint{T: ts, V: house})
+			acOut = append(acOut, seriesPoint{T: ts, V: acR})
 		}
 	}
-	return out
+	return out, acOut
 }
 
 // singleMetricSeries собирает временной ряд одного тега по снимкам устройства
