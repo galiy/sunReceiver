@@ -208,6 +208,7 @@ type seriesResponse struct {
 	MapBatVoltage    []seriesPoint  `json:"map_battery_voltage,omitempty"`
 	MapBatPower      []seriesPoint  `json:"map_battery_power,omitempty"`
 	MapCons          []seriesPoint  `json:"map_consumption,omitempty"`
+	HousePower       []seriesPoint  `json:"house_power,omitempty"`
 	MeterVoltage     []seriesPoint  `json:"meter_voltage,omitempty"`
 	MeterActivePower []seriesPoint  `json:"meter_active_power,omitempty"`
 }
@@ -1169,6 +1170,11 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	res.MapBatPower = singleMetricSeries(snaps, "battery_power")
 	res.MapCons = sumSeries(res.MapGridPower, res.MapBatPower)
 
+	// Ряд «Мощность дома» — по формуле анимации Дома: Σac инверторов Дома (по
+	// размещению из конфига, пустое → «Дом») + grid_power + battery_power. Знаки
+	// как в контракте (как на странице анимации Дома).
+	res.HousePower = housePowerSeries(snaps, h.placeByIP)
+
 	// Ряды электросчётчика DDS238: напряжение и активная мощность для наложения
 	// на графики напряжений и мощностей (белые линии счётчика). Маркер устройства —
 	// наличие meter_voltage, которого нет ни у инверторов, ни у МАП/MPPT.
@@ -1187,6 +1193,7 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	res.MapBatVoltage = downsampleSeries(res.MapBatVoltage, from, to)
 	res.MapBatPower = downsampleSeries(res.MapBatPower, from, to)
 	res.MapCons = downsampleSeries(res.MapCons, from, to)
+	res.HousePower = downsampleSeries(res.HousePower, from, to)
 	res.MeterVoltage = downsampleSeries(res.MeterVoltage, from, to)
 	res.MeterActivePower = downsampleSeries(res.MeterActivePower, from, to)
 
@@ -1277,6 +1284,106 @@ func sumSeries(a, b []seriesPoint) []seriesPoint {
 			i++
 		default:
 			j++
+		}
+	}
+	return out
+}
+
+// housePowerSeries собирает временной ряд мощности Дома по формуле анимации Дома:
+//   P_дом(t) = Σac(инверторы Дома, carry-forward) + grid_power(t) + battery_power(t)
+//
+// Сетка времени — снимки МАП (как у map_grid_power/map_battery_power): на каждую
+// точку МАП берётся суммарная активная мощность инверторов Дома (breaking описан
+// в sumActive: инверторы опрашиваются параллельно и присылают снимки с разным
+// сдвигом, поэтому складывается последнее известное значение каждого инвертора
+// Дома на этот момент, с окном актуальности inverterStaleWindow). Размещение
+// берётся из конфига (placeByIP), пустое → «Дом», MPPT-контроллеры (КЭС) и
+// счётчик в сумму не входят (как в buildAnimationResponse).
+func housePowerSeries(snaps []deviceSnapshot, placeByIP map[string]string) []seriesPoint {
+	const staleWindow = 20 * time.Minute
+	type invRec struct {
+		ts time.Time
+		v  float64
+		ip string
+	}
+	// Инверторы Дома: отбираем по размещению, исключая МАП/счётчик/КЭС (КЭС — это
+	// MPPT-контроллеры, их мощность уходит к батарее, а не в формулу Дома).
+	invRecs := make([]invRec, 0, len(snaps))
+	for _, sn := range snaps {
+		if isMAPDevice(sn.Values) || isMeterDevice(sn.Values) || isMPPTKey(sn.IP) {
+			continue
+		}
+		v, ok := snapFloat(sn.Values, "ac_active_power")
+		if !ok {
+			continue
+		}
+		pl := sn.Placement
+		if m, ok := placeByIP[sn.IP]; ok {
+			pl = m
+		}
+		if pl == "" {
+			pl = "Дом"
+		}
+		if pl != "Дом" {
+			continue
+		}
+		ts, err := time.Parse(time.RFC3339, sn.Timestamp)
+		if err != nil {
+			continue
+		}
+		invRecs = append(invRecs, invRec{ts: ts, v: v, ip: sn.IP})
+	}
+	sort.Slice(invRecs, func(i, j int) bool { return invRecs[i].ts.Before(invRecs[j].ts) })
+
+	// Сетка времени — точки МАП (места, где есть grid_power и battery_power).
+	type mapRec struct {
+		ts  time.Time
+		grid float64
+		bat  float64
+	}
+	var mapRecs []mapRec
+	for _, sn := range snaps {
+		if !isMAPDevice(sn.Values) {
+			continue
+		}
+		g, okG := snapFloat(sn.Values, "grid_power")
+		b, okB := snapFloat(sn.Values, "battery_power")
+		if !okG || !okB {
+			continue
+		}
+		ts, err := time.Parse(time.RFC3339, sn.Timestamp)
+		if err != nil {
+			continue
+		}
+		mapRecs = append(mapRecs, mapRec{ts: ts, grid: g, bat: b})
+	}
+	sort.Slice(mapRecs, func(i, j int) bool { return mapRecs[i].ts.Before(mapRecs[j].ts) })
+
+	// Carry-forward суммы инверторов Дома по точкам МАП.
+	current := map[string]float64{}
+	lastSeen := map[string]time.Time{}
+	out := make([]seriesPoint, 0, len(mapRecs))
+	ii := 0
+	for _, mr := range mapRecs {
+		for ii < len(invRecs) && !invRecs[ii].ts.After(mr.ts) {
+			current[invRecs[ii].ip] = invRecs[ii].v
+			lastSeen[invRecs[ii].ip] = invRecs[ii].ts
+			ii++
+		}
+		var ac float64
+		for ip, v := range current {
+			if mr.ts.Sub(lastSeen[ip]) > staleWindow {
+				delete(current, ip)
+				delete(lastSeen, ip)
+				continue
+			}
+			ac += v
+		}
+		house := math.Round((ac+mr.grid+mr.bat)*10) / 10
+		if n := len(out); n > 0 && out[n-1].T == mr.ts.Format(time.RFC3339) {
+			out[n-1].V = house
+		} else {
+			out = append(out, seriesPoint{T: mr.ts.Format(time.RFC3339), V: house})
 		}
 	}
 	return out
