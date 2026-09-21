@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="504" height="800" viewBox="0 0 504 800">
+  <!-- Счётчик DDS238 — стилизованный (без мелких надписей):
+       прозрачные клеммные крышки с винтами, белый корпус, ЖК, кнопка, логотип. -->
+  <defs>
+    <style>
+      .body  { fill:#f5f6f7; stroke:#c8ccd1; stroke-width:3; }
+      .case  { fill:#e6eaee; opacity:.75; stroke:#b7bec6; stroke-width:2.5; }
+      .vin   { fill:#5f6b76; }
+      .term  { fill:#3aa24c; stroke:#2c7a3a; stroke-width:2; }
+      .tex   { fill:#2c2f33; font-family:Arial,Helvetica,sans-serif; }
+      .lcdbk { fill:#dfeee5; }
+      .btn   { fill:#eef1f4; stroke:#9aa3ac; stroke-width:2.5; }
+      .led   { fill:#3f7ce0; }
+    </style>
+  </defs>
+
+  <!-- Счётчик расширен по горизонтали (scale 1.4), чтобы на ЖК влазили
+       накопленные показания (накладка в animation.js). -->
+  <g transform="scale(1.4,1)">
+
+  <!-- === ВЕРХНЯЯ КЛЕММНАЯ КРЫШКА (прозрачная) === -->
+  <rect class="case" x="34" y="14" width="292" height="150" rx="10"/>
+  <circle class="vin" cx="118" cy="62" r="22"/>
+  <circle class="vin" cx="118" cy="62" r="12" fill="#454f58"/>
+  <circle class="vin" cx="252" cy="62" r="22"/>
+  <circle class="vin" cx="252" cy="62" r="12" fill="#454f58"/>
+  <circle class="vin" cx="294" cy="140" r="12"/>
+  <rect class="term" x="178" y="150" width="96" height="40" rx="4"/>
+  <circle class="vin" cx="204" cy="170" r="8"/>
+  <circle class="vin" cx="252" cy="170" r="8"/>
+
+  <!-- === БЕЛЫЙ КОРПУС === -->
+  <rect class="body" x="34" y="176" width="292" height="408" rx="10"/>
+
+  <!-- логотип -->
+  <text class="tex" x="180" y="236" font-size="34" font-weight="bold" text-anchor="middle">DDS238</text>
+
+  <!-- === ЖК-ДИСПЛЕЙ === -->
+  <rect class="lcdbk" x="74" y="254" width="212" height="140" rx="8"/>
+  <text x="92" y="288" font-family="monospace" font-size="24" fill="#1f2b25" font-weight="bold">T 00</text>
+  <text x="268" y="288" font-family="monospace" font-size="16" fill="#1f2b25" text-anchor="end">kWh</text>
+  <text x="86" y="366" font-family="monospace" font-size="46" fill="#1f2b25" font-weight="bold">00001.1</text>
+  <path d="M262 366 l6 -8 l6 8 Z" fill="#1f2b25"/>
+
+  <!-- светодиод + кнопка -->
+  <circle class="led" cx="110" cy="508" r="7"/>
+  <rect class="btn" x="262" y="486" width="50" height="44" rx="8"/>
+  <circle class="btn" cx="287" cy="508" r="13"/>
+
+  <!-- === НИЖНЯЯ КЛЕММНАЯ КРЫШКА (прозрачная) === -->
+  <rect class="case" x="34" y="610" width="292" height="180" rx="10"/>
+  <circle class="vin" cx="150" cy="656" r="20"/>
+  <circle class="vin" cx="150" cy="656" r="11" fill="#454f58"/>
+  <circle class="vin" cx="252" cy="656" r="20"/>
+  <circle class="vin" cx="252" cy="656" r="11" fill="#454f58"/>
+  <circle class="vin" cx="180" cy="748" r="16"/>
+  <circle class="vin" cx="180" cy="748" r="9" fill="#454f58"/>
+  </g>
+</svg>

@@ -1,0 +1,80 @@
+@startuml
+'
+' Общая схема №1: Сеть → Счётчик → МАП → «Внутренняя сеть» → инверторы;
+' Дом подключён напрямую к МАП (не к внутренней сети).
+' Ветви вниз:
+'   - «Внутренняя сеть» соединяет МАП и все инверторы (в доме),
+'     к каждому инвертору — солнечная панель;
+'   - под МАП — батарея, к батарее — все КЭС, к каждому КЭС — панель.
+'
+' Связи — ЛИНИИ (не стрелки): мощность может идти в обе стороны.
+' Каждая связь = анимированная линия с бегущим током и подписью мощности (1/с).
+'
+top to bottom direction
+
+skinparam rectangle {
+  BackgroundColor #f2f4f6
+  BorderColor #2c2f33
+  RoundCorner 8
+}
+skinparam arrow {
+  Color #3a4752
+  Thickness 2
+}
+skinparam shadowing false
+
+rectangle "Сеть" as grid
+rectangle "Счётчик DDS238" as meter
+rectangle "МАП" as map
+rectangle "Дом" as house
+
+grid -- meter : "P сети (счётчик) = meter_active_power"
+meter -- map : "P сети (МАП) = grid_power(МАП)"
+
+' Дом ↔ МАП: формула-разница (см. legend)
+map -- house : "P дома = P(ин→МАП) + P(бат→МАП) − P(МАП→сеть)"
+
+rectangle "Внутренняя сеть" as inner
+map -- inner : "Σ P инверторов = Σ ac_active_power"
+
+rectangle "Инвертор Deye" as inv1
+rectangle "Инвертор Sofar" as inv2
+rectangle "Инвертор Deye" as inv3
+
+rectangle "Солнечная панель" as pv1
+rectangle "Солнечная панель" as pv2
+rectangle "Солнечная панель" as pv3
+
+inner -- inv1 : "P инвертора = ac_active_power"
+inner -- inv2 : "P инвертора = ac_active_power"
+inner -- inv3 : "P инвертора = ac_active_power"
+pv1 -- inv1 : "P_PV инвертора"
+pv2 -- inv2 : "P_PV инвертора"
+pv3 -- inv3 : "P_PV инвертора"
+
+rectangle "Батарея LiFePO4" as batt
+rectangle "КЭС (MPPT)" as kes1
+rectangle "КЭС (MPPT)" as kes2
+rectangle "Солнечная панель" as kpv1
+rectangle "Солнечная панель" as kpv2
+
+map -- batt : "P батареи (МАП) = battery_power"
+batt -- kes1 : "P КЭС = ac_active_power(P_Out)"
+batt -- kes2 : "P КЭС = ac_active_power(P_Out)"
+kpv1 -- kes1 : "P_PV КЭС = pv1_power"
+kpv2 -- kes2 : "P_PV КЭС = pv1_power"
+
+legend right
+  === Формула мощности Дома (разница) ===
+  P_дом = P(инверторы→МАП) + P(батарея→МАП) − P(МАП→сеть)
+
+  где:
+    P(инверторы→МАП) = Σ ac_active_power (всех инверторов, из внутр. сети)
+    P(батарея→МАП)   = battery_power (по данным МАП)
+    P(МАП→сеть)      = grid_power (по данным МАП)
+
+  Все остальные связи подписаны на линиях.
+  Направление потока — по знаку мощности (±), линия двунаправленная.
+endlegend
+
+@enduml

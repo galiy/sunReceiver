@@ -1,0 +1,44 @@
+@startuml
+'
+' Общая схема №2: Сеть → «Внутренняя сеть» → Гараж + инверторы.
+' «Внутренняя сеть» соединяет Сеть, Гараж и все инверторы (в гараже).
+'
+' Связи — ЛИНИИ (не стрелки): мощность может идти в обе стороны.
+' Каждая связь = анимированная линия с бегущим током и подписью мощности (1/с).
+'
+top to bottom direction
+
+skinparam rectangle {
+  BackgroundColor #f2f4f6
+  BorderColor #2c2f33
+  RoundCorner 8
+}
+skinparam arrow {
+  Color #3a4752
+  Thickness 2
+}
+skinparam shadowing false
+
+rectangle "Сеть" as grid
+rectangle "Внутренняя сеть" as inner
+rectangle "Гараж" as garage
+
+grid -- inner : "Σ P инверторов = Σ ac_active_power"
+inner -- garage : "P гаража (остаток)"
+
+rectangle "Инвертор Sofar" as inv1
+rectangle "Инвертор Deye" as inv2
+rectangle "Инвертор Deye" as inv3
+
+rectangle "Солнечная панель" as pv1
+rectangle "Солнечная панель" as pv2
+rectangle "Солнечная панель" as pv3
+
+inner -- inv1 : "P инвертора = ac_active_power"
+inner -- inv2 : "P инвертора = ac_active_power"
+inner -- inv3 : "P инвертора = ac_active_power"
+pv1 -- inv1 : "P_PV инвертора"
+pv2 -- inv2 : "P_PV инвертора"
+pv3 -- inv3 : "P_PV инвертора"
+
+@enduml

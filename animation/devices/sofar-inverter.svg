@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="520" height="560" viewBox="0 0 520 560">
+  <!-- Инвертор Sofar в анфас: светлый (белый/серый) скруглённый корпус,
+       чёрная панель с индикаторами RUN(зелёный)/FAULT(красный), LCD и круглой
+       кнопкой, чёрные разъёмы/кабели снизу. Стилизованно, без мелких деталей. -->
+  <defs>
+    <style>
+      .body  { fill:#e4e6e8; stroke:#c9ccd0; stroke-width:2; }
+      .panel { fill:#1c1f24; stroke:#101318; stroke-width:2; }
+      .lcdSc { fill:#c7cdc7; stroke:#99a199; stroke-width:1.5; }
+      .btnZ  { fill:none; stroke:#e6e8ea; stroke-width:2; }
+      .lbl   { fill:#8b9096; }
+      .run   { fill:#35d073; }
+      .faul  { fill:#e14b4b; }
+      .rc    { fill:#17191c; stroke:#0c0e10; stroke-width:2; }
+      .tl    { fill:#2a2d30; }
+    </style>
+  </defs>
+
+  <!-- корпус (скруглённый прямоугольник) -->
+  <rect class="body" x="40" y="30" width="440" height="450" rx="40"/>
+
+  <!-- марка справа вверху -->
+  <text x="470" y="108" font-family="Arial" font-size="24" font-weight="bold" fill="#26364b" text-anchor="end" letter-spacing="4">SOFAR</text>
+  <text x="470" y="128" font-family="Arial" font-size="12" fill="#26364b" text-anchor="end" letter-spacing="6">SOLAR</text>
+
+  <!-- чёрная панель внизу корпуса -->
+  <rect class="panel" x="120" y="300" width="280" height="90" rx="14"/>
+
+  <!-- индикаторы RUN / FAULT -->
+  <g>
+    <rect class="lbl" x="136" y="326" width="24" height="4" rx="2"/>
+    <rect class="lbl" x="136" y="360" width="24" height="4" rx="2"/>
+    <circle class="run" cx="188" cy="328" r="6"/>
+    <circle class="faul" cx="188" cy="362" r="6"/>
+  </g>
+
+  <!-- LCD экран -->
+  <rect class="lcdSc" x="212" y="330" width="140" height="30" rx="3"/>
+
+  <!-- круглая кнопка справа -->
+  <circle class="btnZ" cx="372" cy="345" r="16"/>
+  <circle class="btnZ" cx="372" cy="345" r="5"/>
+
+  <!-- разъёмы и кабели снизу -->
+  <g>
+    <!-- левый разъём-тройник -->
+    <rect class="rc" x="96" y="482" width="60" height="40" rx="6"/>
+    <rect class="rc" x="110" y="516" width="40" height="34" rx="4"/>
+    <!-- центральный кабель-разъём -->
+    <rect class="rc" x="228" y="488" width="40" height="54" rx="6"/>
+    <rect class="rc" x="238" y="536" width="24" height="20" rx="3"/>
+    <!-- правая группа: разъём + кабель -->
+    <rect class="rc" x="330" y="488" width="80" height="24" rx="4"/>
+    <rect class="rc" x="372" y="510" width="44" height="40" rx="4"/>
+    <!-- хвостик кабеля -->
+    <path d="M416 540 L436 566" stroke="#33363a" stroke-width="5" stroke-linecap="round"/>
+  </g>
+</svg>
