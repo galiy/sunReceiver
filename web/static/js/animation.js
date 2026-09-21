@@ -612,9 +612,11 @@ function fmtKWh(v){
 // ---------- Температуры на схеме ----------
 // Значения температур (°C) приходят из /api/animation: для МАП — панель над
 // спрайтом (подписи «Тор»/«Транзисторы» видны), для инверторов и батареи —
-// значения справа от спрайта без подписей, но с подсказкой при наведении (title).
+// значения справа от спрайта без подписей, но с подсказкой при наведении.
+// Подсказка задаётся элементом <title> внутри <text> (атрибут title на SVG-узле
+// браузеры не показывают — работает только вложенный <title>).
 function fmtTemp(v){
-  if(v===null || v===undefined || !isFinite(v)) return '—';
+  if(v===null || v===undefined || !isFinite(v)) return null; // нет датчика → не рисуем
   return Math.round(v)+'°C';
 }
 // tempValue извлекает значение температуры из списка []{label,value} по подписи.
@@ -625,10 +627,11 @@ function tempValue(arr, label){
 }
 // renderNodeTemps рисует температуры узла схемы (node.temps — [{label,get(data)}]).
 //   "above" — панель над спрайтом (подпись + значение, для МАП);
-//   "right" — значения справа от спрайта (без видимых подписей, title — подсказка;
+//   "right" — значения справа от спрайта (без видимых подписей, <title> — подсказка;
 //             для инверторов и батареи).
 // Возвращает массив функций-обновителей, вызываемых с данными схемы в refreshEdges.
-var TEMP_ROW_H=16, TEMP_PAD_V=5, TEMP_PAD_H=8;
+// Отсутствующее значение (нет датчика) прячет элемент целиком, а не рисует «—».
+var TEMP_ROW_H=16, TEMP_PAD_V=5, TEMP_PAD_H=8, TEMP_VAL_W=40;
 function renderNodeTemps(svg, n){
   var upds=[];
   var key=n.key, cx=n.cx, cy=n.cy, raise=n.raise||0;
@@ -636,8 +639,18 @@ function renderNodeTemps(svg, n){
   var effW=spec.w*(spec.wScale||1);
   var g=document.createElementNS(NS,'g');
   if(n.tempPos==='above'){
+    // Ширина панели — под самую длинную надпись + значение, чтобы значение не
+    // наезжало на подпись: labelPx + gap + valPx + 2*pad.
     var rows=n.temps.length;
-    var hgt=rows*TEMP_ROW_H+TEMP_PAD_V*2, w=88;
+    var hgt=rows*TEMP_ROW_H+TEMP_PAD_V*2;
+    // Ширина панели — под самую длинную надпись плюс место под значение:
+    // maxLabelPx + gap + valPx + 2*pad, но не уже минимума.
+    var labelMax=0;
+    for(var jw=0;jw<rows;jw++){
+      var lp=(''+n.temps[jw].label).length*6.2; // грубая ширина подписи (10px шрифт)
+      if(lp>labelMax) labelMax=lp;
+    }
+    var w=Math.max(labelMax+8+TEMP_VAL_W+TEMP_PAD_H*2, 96);
     var x=cx-w/2, y=(cy-raise-spec.h/2-6)-hgt;
     var box=document.createElementNS(NS,'rect');
     box.setAttribute('x',x); box.setAttribute('y',y);
@@ -654,22 +667,33 @@ function renderNodeTemps(svg, n){
       var val=document.createElementNS(NS,'text');
       val.setAttribute('x',x+w-TEMP_PAD_H); val.setAttribute('y',ly);
       val.setAttribute('text-anchor','end');
-      val.setAttribute('class','anim-temp-val'); val.textContent='—';
+      val.setAttribute('class','anim-temp-val'); val.textContent='';
       g.appendChild(val);
-      upds.push(function(d){ val.textContent=fmtTemp(t.get(d)); });
+      upds.push(function(d){ var s=fmtTemp(t.get(d)); if(!s){val.style.visibility='hidden';} else {val.style.visibility=''; val.textContent=s;} });
     })(n.temps[j]);}
   } else { // "right"
-    var rx=cx+effW/2+8;
+    var gap=5;
+    var rightX=cx+effW/2+gap;
+    // Если справа места нет (батарея — правый крайний элемент схемы, viewBox 1000),
+    // значение ставим слева от спрайта (rightX вылезает за правое поле). Батарея
+    // с ветвью КЭС стоит у правого края (battX≈920), поэтому температура батареи
+    // отображается слева — вплотную к спрайту.
+    var onLeft = (rightX+22) > 996;
+    var rx = onLeft ? cx-effW/2-gap : rightX;
+    var anchor = onLeft ? 'end' : 'start';
     var off=(n.temps.length-1)*7.5;
     for(var m=0;m<n.temps.length;m++){(function(t, idx){
       var vy=cy-off+idx*15;
       var val=document.createElementNS(NS,'text');
       val.setAttribute('x',rx); val.setAttribute('y',vy);
+      val.setAttribute('text-anchor',anchor);
       val.setAttribute('class','anim-temp-side');
-      val.setAttribute('title',t.label);
-      val.textContent='—';
+      // Подсказка — вложенный <title> (атрибут title на SVG не отображается).
+      var tip=document.createElementNS(NS,'title'); tip.textContent=t.label;
+      val.appendChild(tip);
+      val.textContent='';
       g.appendChild(val);
-      upds.push(function(d){ val.textContent=fmtTemp(t.get(d)); });
+      upds.push(function(d){ var s=fmtTemp(t.get(d)); if(!s){val.style.visibility='hidden';} else {val.style.visibility=''; val.textContent=s;} });
     })(n.temps[m], m);}
   }
   svg.appendChild(g);
