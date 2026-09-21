@@ -9,3 +9,9 @@
   {{if .flags.ShowMeter}}<a href="/energy" {{if eq .active "energy"}}class="active"{{end}}>Электроэнергия</a>{{end}}
 </div>
 {{end}}
+{{define "refreshToggle"}}
+<label class="refresh-toggle" title="Выключить опрос API и обновление данных по таймеру">
+  <input type="checkbox" id="refreshToggle">
+  <span>Отключить обновление</span>
+</label>
+{{end}}

@@ -593,6 +593,7 @@ function fmtSec(t){
 }
 
 async function tick(){
+  if(window.srRefresh && !window.srRefresh.isEnabled()) return;
   var r=await fetch('/api/animation');
   if(!r.ok) return;
   var data=await r.json();
@@ -617,7 +618,8 @@ function spoilerOpen(key){ return !!(window.srSpoilers && window.srSpoilers.isOp
 function animAnyOpen(){ return spoilerOpen('house') || spoilerOpen('garage'); }
 var ANIM_POLL_MS=1000, animRunning=false, animTimer=null;
 function animStart(){
-  if(animRunning) return;
+  // При выключенном обновлении опрос не запускается (даже если спойлер открыт).
+  if(animRunning || (window.srRefresh && !window.srRefresh.isEnabled())) return;
   animRunning=true;
   tick(); animTimer=setInterval(tick, ANIM_POLL_MS);
 }
@@ -631,6 +633,9 @@ if(window.srSpoilers){
   window.srSpoilers.listen('house', animSync);
   window.srSpoilers.listen('garage', animSync);
 }
+// Выключатель обновления: при включении — перезапуск по видимости спойлеров
+// (немедленный опрос), при выключении — остановка опроса /api/animation.
+if(window.srRefresh){ window.srRefresh.register(animSync, animStop); }
 animSync(); // старт/стоп по текущему состоянию спойлеров при загрузке
 
 var lastNow=performance.now();

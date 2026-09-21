@@ -234,6 +234,7 @@ function renderInvPlates(placements){
 }
 
 async function tick(){
+	if(window.srRefresh && !window.srRefresh.isEnabled()) return;
 	try{
 		var r=await fetch('/api/current');
 		if(!r.ok) return;
@@ -319,7 +320,7 @@ function setKpi2(id, v){
 // 1-секундного tick главной страницы).
 function bmsSocColor(soc){ return soc<20?'#ff6b6b':(soc<50?'#ff9f43':(soc<80?'#f9ca24':'#00b894')); }
 async function tickBMS(){
-  if(!showBMS) return;
+  if(!showBMS || (window.srRefresh && !window.srRefresh.isEnabled())) return;
   try{
     var r=await fetch('/api/bms');
     if(!r.ok) return;
@@ -343,7 +344,14 @@ async function tickBMS(){
     el.innerHTML=h;
   }catch(e){}
 }
-tickBMS(); setInterval(tickBMS,60000);
+// Периодический опрос BMS управляется глобальным выключателем обновления:
+// enable — немедленный опрос + интервал, disable — остановка. Стартовый вызов
+// bmsStart() выполняет первый опрос сразу (обновление при загрузке включено).
+var bmsTimer=null;
+function bmsStart(){ if(bmsTimer || !showBMS) return; tickBMS(); bmsTimer=setInterval(tickBMS,60000); }
+function bmsStop(){ if(bmsTimer){ clearInterval(bmsTimer); bmsTimer=null; } }
+if(window.srRefresh){ window.srRefresh.register(bmsStart, bmsStop); }
+bmsStart();
 
 // ---------- Спойлеры и опрос данных ----------
 // Спойлеры (Дом / Гараж / Детальные данные): открытость храним на клиенте
@@ -362,13 +370,19 @@ var srSpoilers=(function(){
     return !!(el && el.classList.contains('open'));
   }
   // Применить состояние спойлера к его поллеру: открыт → немедленный опрос + интервал,
-  // закрыт → остановить.
+  // закрыт → остановить. При выключенном обновлении (srRefresh) опрос не запускается,
+  // уже запущенный — останавливается.
   function apply(key){
     var p=polls[key];
     if(!p) return;
     var open=isOpen(key);
-    if(open && !p.running){ p.running=true; p.fn(); p.timer=setInterval(p.fn,p.interval); }
-    else if(!open && p.running){ p.running=false; clearInterval(p.timer); p.timer=null; }
+    var ok=open && (window.srRefresh ? window.srRefresh.isEnabled() : true);
+    if(ok && !p.running){ p.running=true; p.fn(); p.timer=setInterval(p.fn,p.interval); }
+    else if(!ok && p.running){ p.running=false; clearInterval(p.timer); p.timer=null; }
+  }
+  // Применить все поллеры (при переключении глобального выключателя обновления).
+  function applyAll(){
+    for(var k in polls) apply(k);
   }
   function toggle(key){
     var open=isOpen(key);
@@ -376,6 +390,9 @@ var srSpoilers=(function(){
     for(var i=0;i<ls.length;i++) ls[i](open);
     apply(key);
   }
+  // Выключатель обновления: при включении — перезапустить все поллеры (немедленный
+  // опрос открытых спойлеров), при выключении — остановить.
+  if(window.srRefresh) window.srRefresh.register(applyAll, applyAll);
   return {
     isOpen:isOpen,
     // Подписать поллер на спойлер: вызывается немедленно (если спойлер уже открыт)

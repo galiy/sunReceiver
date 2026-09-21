@@ -71,6 +71,7 @@ function renderMos(d){
 }
 
 async function load(){
+  if(window.srRefresh && !window.srRefresh.isEnabled()) return;
   if(!NAME){ document.getElementById('bmsTitle').textContent='BMS не выбрана'; return; }
   try{
     var r=await fetch('/api/bms/'+encodeURIComponent(NAME));
@@ -405,6 +406,7 @@ function destroyBmsCharts(){
   });
 }
 async function loadBmsCharts(){
+  if(window.srRefresh && !window.srRefresh.isEnabled()) return;
   try{
     var from=selRange.from, to=selRange.to;
     var url='/api/bms/'+encodeURIComponent(NAME)+'/series?from='+encodeURIComponent(from.toISOString())+'&to='+encodeURIComponent(to.toISOString());
@@ -453,8 +455,20 @@ document.getElementById('fromPick').value=toInputDateTime(selRange.from);
 document.getElementById('toPick').value=toInputDateTime(selRange.to);
 document.getElementById('datePick').value=toInputDate(selRange.from);
 setActiveBtn('btnToday');
-loadBmsCharts();
-setInterval(function(){ preserveZoom=userZoomed; loadBmsCharts(); },60000);
+// Периодическое обновление (графики — раз в минуту, параметры — раз в секунду)
+// управляется глобальным выключателем обновления: enable — немедленный опрос +
+// интервал, disable — остановка.
+var bmsChartsTimer=null, bmsParamTimer=null;
+function bmsChartsStart(){ if(bmsChartsTimer) return; loadBmsCharts(); bmsChartsTimer=setInterval(function(){ preserveZoom=userZoomed; loadBmsCharts(); },60000); }
+function bmsChartsStop(){ if(bmsChartsTimer){ clearInterval(bmsChartsTimer); bmsChartsTimer=null; } }
+function bmsParamStart(){ if(bmsParamTimer) return; load(); bmsParamTimer=setInterval(load,1000); }
+function bmsParamStop(){ if(bmsParamTimer){ clearInterval(bmsParamTimer); bmsParamTimer=null; } }
+if(window.srRefresh){
+  window.srRefresh.register(bmsChartsStart, bmsChartsStop);
+  window.srRefresh.register(bmsParamStart, bmsParamStop);
+}
+bmsChartsStart();
+bmsParamStart();
 
 // Мобильная версия: touch-жесты по графикам BMS (щипок — зум по X, свайп —
 // панорама, двойной тап — сброс зума; tooltip на тап отключён — мешал зуму).
@@ -463,8 +477,6 @@ if(SR_COARSE){
     srTouchChart(function(){ return BMS_CHARTS[id]; }, id, 5*60*1000, null, function(isReset){ bmsWindowChanged(id, isReset); });
   });
 }
-
-load(); setInterval(load,1000);
 
 // ---------- Изменение порядка графиков BMS (реактивная сетка 2 колонки) ----------
 // Порядок карточек в .bms-charts можно менять стрелками вверх/вниз/влево/вправо.

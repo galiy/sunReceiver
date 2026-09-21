@@ -1,5 +1,57 @@
 (function(){
 'use strict';
+
+// ---------- Глобальный выключатель обновления данных ----------
+// Чекбокс «Отключить обновление» в правом верхнем углу каждой страницы.
+// Включён — опрос API и обновление данных по таймеру полностью останавливаются;
+// выключен — все таймерные события срабатывают немедленно по одному разу, далее —
+// обычное обновление по таймеру. Каждый периодический поллер страницы
+// регистрирует hook (enable/disable): srRefresh вызывает disable при выключении
+// и enable при включении (enable обязан один раз сработать сразу — «однократное
+// срабатывание»). gate()/isEnabled() страхуют точечные запросы (кнопки/периоды),
+// чтобы при выключенном обновлении данные вообще не опрашивались. Состояние не
+// сохраняется: после загрузки/перезагрузки страницы выключатель всегда выключен
+// (= обновление включено).
+window.srRefresh = (function(){
+  var enabled=true, hooks=[], checkbox=null;
+  function runEnable(h){ try{ h.enable(); }catch(e){} }
+  function runDisable(h){ try{ h.disable(); }catch(e){} }
+  function refreshUI(){
+    if(!checkbox) return;
+    checkbox.checked = !enabled; // checked ⇒ обновление отключено
+    var lbl = checkbox.closest ? checkbox.closest('label') : null;
+    if(lbl) lbl.classList.toggle('off', !enabled);
+  }
+  function set(v){
+    v=!!v;
+    if(v===enabled) return;
+    enabled=v;
+    for(var i=0;i<hooks.length;i++){ if(v) runEnable(hooks[i]); else runDisable(hooks[i]); }
+    refreshUI();
+  }
+  function bind(){
+    checkbox=document.getElementById('refreshToggle');
+    if(!checkbox) return;
+    checkbox.addEventListener('change', function(){ set(!checkbox.checked); });
+    refreshUI();
+  }
+  if(document.readyState==='loading'){ document.addEventListener('DOMContentLoaded', bind); }
+  else { bind(); }
+  return {
+    // Обновление разрешено?
+    isEnabled: function(){ return enabled; },
+    // Выполнить fn только при включённом обновлении; иначе — no-op. Возвращает
+    // true, если fn сработала (для кнопок, которые при отключённом обновлении
+    // должны оставаться «молчаливыми»).
+    gate: function(fn){ if(enabled){ try{ return !!fn(); }catch(e){} } return false; },
+    // Зарегистрировать периодический поллер. enable вызывается при включении
+    // обновления, disable — при выключении. Ни один не вызывается при регистрации:
+    // стартовый запуск делает сама страница (аналог «однократного срабатывания»).
+    register: function(enable, disable){ hooks.push({enable:enable, disable:disable}); },
+    set: set
+  };
+})();
+
 // Факт реального касания — глушит хинт со значениями (onHover) даже если
 // SR_COARSE не сработал (надёжнее, чем pointer:coarse один).
 document.addEventListener('touchstart', function(){ window.__srTouched = true; }, {passive:true, once:true});

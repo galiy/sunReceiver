@@ -171,6 +171,7 @@ function initEnergyPanel(cfg){
 		return load();
 	}
 	async function load(){
+		if(window.srRefresh && !window.srRefresh.isEnabled()) return;
 		var url='/api/tariffs?from='+encodeURIComponent(p.selFrom.toISOString())+'&to='+encodeURIComponent(p.selTo.toISOString());
 		var r=await fetch(url); if(!r.ok) return;
 		var data=await r.json();
@@ -253,4 +254,14 @@ if(SR_COARSE){
 	['dailyTariffChart','monthlyTariffChart'].forEach(function(id){
 		srTouchChart(function(){ return window[id]; }, id, 3*86400000, null, function(){ energyWindowChanged(id); });
 	});
+}
+
+// Выключатель обновления. У страницы энергии нет собственного таймера (данные
+// обновляются по действиям пользователя), поэтому при включении обновления
+// перезагружаем оба диапазона один раз — «однократное срабатывание».
+if(window.srRefresh){
+	window.srRefresh.register(function(){
+		var ids=Object.keys(ENERGY_PANELS);
+		for(var i=0;i<ids.length;i++) ENERGY_PANELS[ids[i]].p.load();
+	}, function(){});
 }
