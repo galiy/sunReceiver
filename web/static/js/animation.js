@@ -23,7 +23,11 @@ var SPR = {
   deye:    {file:'deye-inverter',    w:72, h:78},
   sofar:   {file:'sofar-inverter',   w:72, h:78},
   kes:     {file:'kes-dominator',    w:66, h:74},
-  battery: {file:'battery-lifepo4',  w:104,h:64}
+  // visX0/visX1 — доля ширины PNG, занятая видимыми пикселями (по alpha-каналу).
+  // У батареи спрайт содержит широкое прозрачное поле справа (контент только
+  // x=37..432 из 620), поэтому метку температуры нужно ставить к видимому краю,
+  // а не к краю бокса.
+  battery: {file:'battery-lifepo4',  w:104,h:64, visX0:0.060, visX1:0.697}
 };
 function sprKey(kind){ return (kind==='deye'||kind==='sofar'||kind==='kes') ? kind : (kind||'grid'); }
 function sprH(key){ var s=SPR[sprKey(key)]||SPR.grid; return s.h; }
@@ -631,6 +635,8 @@ function tempValue(arr, label){
 //             для инверторов и батареи).
 // Возвращает массив функций-обновителей, вызываемых с данными схемы в refreshEdges.
 // Отсутствующее значение (нет датчика) прячет элемент целиком, а не рисует «—».
+// ВАЖНО: число выводится в <tspan>, а не через textContent, иначе при обновлении
+// затирается вложенный <title> — подсказка при наведении исчезает.
 var TEMP_ROW_H=16, TEMP_PAD_V=5, TEMP_PAD_H=8, TEMP_VAL_W=40;
 function renderNodeTemps(svg, n){
   var upds=[];
@@ -639,18 +645,17 @@ function renderNodeTemps(svg, n){
   var effW=spec.w*(spec.wScale||1);
   var g=document.createElementNS(NS,'g');
   if(n.tempPos==='above'){
-    // Ширина панели — под самую длинную надпись + значение, чтобы значение не
-    // наезжало на подпись: labelPx + gap + valPx + 2*pad.
+    // Ширина панели — под самую длинную надпись + место под значение:
+    // maxLabelPx + gap + valPx + 2*pad, но не уже минимума.
     var rows=n.temps.length;
     var hgt=rows*TEMP_ROW_H+TEMP_PAD_V*2;
-    // Ширина панели — под самую длинную надпись плюс место под значение:
-    // maxLabelPx + gap + valPx + 2*pad, но не уже минимума.
     var labelMax=0;
     for(var jw=0;jw<rows;jw++){
       var lp=(''+n.temps[jw].label).length*6.2; // грубая ширина подписи (10px шрифт)
       if(lp>labelMax) labelMax=lp;
     }
-    var w=Math.max(labelMax+8+TEMP_VAL_W+TEMP_PAD_H*2, 96);
+    // Немного уже минимума (подписи стали мельче) — панель не выглядит громоздкой.
+    var w=Math.max(labelMax+8+TEMP_VAL_W+TEMP_PAD_H*2, 92);
     var x=cx-w/2, y=(cy-raise-spec.h/2-6)-hgt;
     var box=document.createElementNS(NS,'rect');
     box.setAttribute('x',x); box.setAttribute('y',y);
@@ -667,19 +672,28 @@ function renderNodeTemps(svg, n){
       var val=document.createElementNS(NS,'text');
       val.setAttribute('x',x+w-TEMP_PAD_H); val.setAttribute('y',ly);
       val.setAttribute('text-anchor','end');
-      val.setAttribute('class','anim-temp-val'); val.textContent='';
+      val.setAttribute('class','anim-temp-val');
+      var tsp=document.createElementNS(NS,'tspan'); tsp.textContent='';
+      val.appendChild(tsp);
       g.appendChild(val);
-      upds.push(function(d){ var s=fmtTemp(t.get(d)); if(!s){val.style.visibility='hidden';} else {val.style.visibility=''; val.textContent=s;} });
+      upds.push(function(d){ var s=fmtTemp(t.get(d)); if(!s){val.style.visibility='hidden';} else {val.style.visibility=''; tsp.textContent=s;} });
     })(n.temps[j]);}
   } else { // "right"
     var gap=5;
-    var rightX=cx+effW/2+gap;
+    // Границы видимого контента внутри спрайта (visX0/visX1); по умолчанию — весь
+    // бокс. Так метка ставится к самому спрайту, а не к его прозрачным полям
+    // (у батареи справа ~30% прозрачного поля).
+    var visX0=(spec.visX0===undefined?0:spec.visX0);
+    var visX1=(spec.visX1===undefined?1:spec.visX1);
+    var contentL=cx-effW/2+effW*visX0;
+    var contentR=cx-effW/2+effW*visX1;
+    var rightX=contentR+gap;
     // Если справа места нет (батарея — правый крайний элемент схемы, viewBox 1000),
     // значение ставим слева от спрайта (rightX вылезает за правое поле). Батарея
     // с ветвью КЭС стоит у правого края (battX≈920), поэтому температура батареи
     // отображается слева — вплотную к спрайту.
     var onLeft = (rightX+22) > 996;
-    var rx = onLeft ? cx-effW/2-gap : rightX;
+    var rx = onLeft ? contentL-gap : rightX;
     var anchor = onLeft ? 'end' : 'start';
     var off=(n.temps.length-1)*7.5;
     for(var m=0;m<n.temps.length;m++){(function(t, idx){
@@ -691,9 +705,10 @@ function renderNodeTemps(svg, n){
       // Подсказка — вложенный <title> (атрибут title на SVG не отображается).
       var tip=document.createElementNS(NS,'title'); tip.textContent=t.label;
       val.appendChild(tip);
-      val.textContent='';
+      var tsp=document.createElementNS(NS,'tspan'); tsp.textContent='';
+      val.appendChild(tsp);
       g.appendChild(val);
-      upds.push(function(d){ var s=fmtTemp(t.get(d)); if(!s){val.style.visibility='hidden';} else {val.style.visibility=''; val.textContent=s;} });
+      upds.push(function(d){ var s=fmtTemp(t.get(d)); if(!s){val.style.visibility='hidden';} else {val.style.visibility=''; tsp.textContent=s;} });
     })(n.temps[m], m);}
   }
   svg.appendChild(g);
