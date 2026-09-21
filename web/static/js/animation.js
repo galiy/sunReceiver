@@ -104,7 +104,7 @@ function spriteNode(svg, key, cx, cy, label, raise){
     // Накладка показаний на белый корпус (под маркой DDS238). Ширина — 70% от
     // прежней ширины накладки (dispXFrac), выровнена по центру cx.
     var dispW=effW*METER.dispXFrac;
-    var top=cy-raise+spec.h*0.06-2*CM, lh=spec.h*0.30; // верх и высота накладки
+    var top=cy-raise+spec.h*0.06-2*CM, lh=spec.h*0.30-0.3*CM; // верх и высота накладки (−3 мм)
     var box=document.createElementNS(NS,'rect');
     box.setAttribute('x',cx-dispW/2); box.setAttribute('y',top);
     box.setAttribute('width',dispW); box.setAttribute('height',lh);
