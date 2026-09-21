@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="554" height="620" viewBox="0 0 554 620">
+  <!-- КЭС — SEC Dominator (MPPT-контроллер) в анфас: тёмно-зелёная панель,
+       по бокам широкие чёрные радиаторы (заканчиваются выше низа зелёного
+       корпуса), светло-зелёный экран в середине, полоса MPPT сверху,
+       индикаторы SOURCE/CHARGE/BATTERY, три круглые кнопки, порты слева,
+       выключатель справа. Стилизованно, без мелких деталей. -->
+  <defs>
+    <style>
+      .panel { fill:#2b4a42; stroke:#1c332d; stroke-width:2; }
+      .rad   { fill:#0d0f11; }
+      .bar   { fill:#d6d8d9; }
+      .dotY  { fill:#f2c22e; }
+      .dotG  { fill:#35d073; }
+      .dotB  { fill:#4aa3e8; }
+      .lcd   { fill:#101c14; stroke:#0a120c; stroke-width:2; }
+      .lcdSc { fill:#9fd63a; }
+      .btn   { fill:#20272b; stroke:#3b4348; stroke-width:2; }
+      .port  { fill:#2c3338; stroke:#0f1316; stroke-width:2; }
+      .usb   { fill:#c9ccd0; stroke:#8b9096; stroke-width:2; }
+      .sw    { fill:#131619; stroke:#0a0c0e; stroke-width:2; }
+      .swOn  { fill:#4aa3e8; }
+    </style>
+  </defs>
+
+  <!-- чёрные радиаторы по бокам (уже на 25%, прилегают к краям панели) -->
+  <rect class="rad" x="31" y="16" width="95" height="496" rx="4"/>
+  <rect class="rad" x="428" y="16" width="95" height="496" rx="4"/>
+
+  <!-- тёмно-зелёная лицевая панель (шире радиаторов нет, по центру) -->
+  <rect class="panel" x="126" y="16" width="302" height="566" rx="6"/>
+
+  <!-- полоса MPPT сверху -->
+  <rect class="bar" x="177" y="62" width="200" height="22" rx="4"/>
+  <text x="277" y="78" font-family="Arial" font-size="15" font-weight="bold" fill="#5a4a32" text-anchor="middle" letter-spacing="3">MPPT</text>
+
+  <!-- индикаторы SOURCE / CHARGE / BATTERY -->
+  <g>
+    <circle class="dotY" cx="207" cy="134" r="9"/>
+    <circle class="dotG" cx="277" cy="134" r="9"/>
+    <circle class="dotB" cx="347" cy="134" r="9"/>
+    <rect fill="#16201b" x="177" y="154" width="60" height="5" rx="2"/>
+    <rect fill="#16201b" x="247" y="154" width="60" height="5" rx="2"/>
+    <rect fill="#16201b" x="317" y="154" width="60" height="5" rx="2"/>
+  </g>
+
+  <!-- зелёный LCD дисплей (светло-зелёный экран уже на 25%) -->
+  <rect class="lcd" x="189" y="180" width="176" height="70" rx="10"/>
+  <rect class="lcdSc" x="201" y="196" width="152" height="38" rx="4"/>
+
+  <!-- три круглые кнопки -->
+  <g>
+    <circle class="btn" cx="207" cy="300" r="26"/>
+    <circle class="btn" cx="277" cy="300" r="26"/>
+    <circle class="btn" cx="347" cy="300" r="26"/>
+  </g>
+
+  <!-- порты слева: RS-232, X1, X2, USB -->
+  <g>
+    <rect class="port" x="162" y="360" width="40" height="26" rx="4"/>
+    <rect class="port" x="162" y="400" width="34" height="26" rx="4"/>
+    <rect class="port" x="162" y="440" width="34" height="26" rx="4"/>
+    <rect class="usb" x="162" y="480" width="40" height="26" rx="4"/>
+  </g>
+
+  <!-- выключатель ON/OFF справа -->
+  <rect class="sw" x="330" y="360" width="60" height="70" rx="6"/>
+  <rect class="swOn" x="342" y="372" width="36" height="22" rx="3"/>
+
+  <!-- нижний блок-лого -->
+  <rect fill="#16201b" x="188" y="536" width="200" height="36" rx="4"/>
+  <rect fill="#8b9096" x="188" y="536" width="36" height="36"/>
+
+  <!-- разъёмы снизу -->
+  <g fill="#12181d">
+    <rect x="180" y="584" width="60" height="16" rx="3"/>
+    <rect x="260" y="584" width="40" height="16" rx="3"/>
+    <rect x="340" y="584" width="50" height="16" rx="3"/>
+  </g>
+</svg>

@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="620" height="380" viewBox="0 0 620 380">
+  <!-- Батарея (LiFePO4 ячейки) в анфас: синий призматический банк из
+       4 вплотную стоящих ячеек, лёгкий 3/4 ракурс (видны передняя грань
+       и белая верхняя крышка). У каждой ячейки пара клемм: + (синяя),
+       − (чёрная). Стилизованно, без мелких деталей. -->
+  <defs>
+    <style>
+      .cellF { fill:#2b5fd0; stroke:#1f46a0; stroke-width:3; }
+      .cellR { fill:#24418f; stroke:#1f46a0; stroke-width:3; }
+      .top   { fill:#eef0f2; stroke:#c9cdd1; stroke-width:2; }
+      .plus  { fill:#3b8fe0; stroke:#2a6ab0; stroke-width:2; }
+      .minus { fill:#2a2e33; stroke:#191c20; stroke-width:2; }
+    </style>
+  </defs>
+
+  <!-- передние грани 4 ячеек, стоящих вплотную -->
+  <g>
+    <rect class="cellF" x="40" y="120" width="90" height="220"/>
+    <rect class="cellF" x="130" y="120" width="90" height="220"/>
+    <rect class="cellF" x="220" y="120" width="90" height="220"/>
+    <rect class="cellF" x="310" y="120" width="90" height="220"/>
+  </g>
+
+  <!-- правая грань (перспектива) -->
+  <path class="cellR" d="M400 120 L430 104 L430 324 L400 340 Z"/>
+
+  <!-- верхняя белая крышка (сплошной параллелограмм, выше на ~50%) -->
+  <path class="top" d="M40 120 L400 120 L430 87 L70 87 Z"/>
+
+  <!-- перемычки: 3 шт между выводами СОСЕДНИХ батарей (правый − → левый +) -->
+  <g fill="#9aa2ab" stroke="#6c737a" stroke-width="1.5">
+    <path d="M104 108 L160 108 L160 102 L104 102 Z"/>
+    <path d="M194 108 L250 108 L250 102 L194 106 Z"/>
+    <path d="M284 108 L340 108 L340 102 L284 102 Z"/>
+  </g>
+
+  <!-- клеммы: + (синяя) слева и − (чёрная) справа на каждой ячейке -->
+  <g>
+    <ellipse class="plus" cx="70" cy="108" rx="9" ry="6"/>
+    <ellipse class="minus" cx="104" cy="105" rx="9" ry="6"/>
+
+    <ellipse class="plus" cx="160" cy="108" rx="9" ry="6"/>
+    <ellipse class="minus" cx="194" cy="105" rx="9" ry="6"/>
+
+    <ellipse class="plus" cx="250" cy="108" rx="9" ry="6"/>
+    <ellipse class="minus" cx="284" cy="105" rx="9" ry="6"/>
+
+    <ellipse class="plus" cx="340" cy="108" rx="9" ry="6"/>
+    <ellipse class="minus" cx="374" cy="105" rx="9" ry="6"/>
+  </g>
+
+  <!-- провода к крайним выводам: красный (левый +) и синий (правый −) -->
+  <g fill="none" stroke-width="12" stroke-linecap="round">
+    <path d="M64 120 L50 190 L82 240 L60 300" stroke="#d24a4a"/>
+    <path d="M380 118 L396 190 L372 250 L404 306" stroke="#3b8fe0"/>
+  </g>
+</svg>

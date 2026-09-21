@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="620" height="440" viewBox="0 0 620 440">
+  <!-- Гараж в анфас: та же палитра, что у дома (тёмно-бежевые стены,
+       крыша RAL6005), большие воротные створки с петлями, маленькое окно,
+       дверь-калитка, фундамент, трава. Стилизованно, без мелких деталей. -->
+  <defs>
+    <style>
+      .wall { fill:#b9a884; stroke:#9d8d6c; stroke-width:2; }
+      .roof { fill:#114232; stroke:#0c2a20; stroke-width:2; }
+      .roofSh{ fill:#0d332a; stroke:#0c2a20; stroke-width:2; }
+      .gdoor{ fill:#8f7a54; stroke:#6f5e40; stroke-width:3; }
+      .gmv  { fill:#6f5e40; }
+      .win  { fill:#9fd0dc; stroke:#e6ddc8; stroke-width:5; }
+      .door { fill:#9c6a3c; stroke:#7c5330; stroke-width:2; }
+      .doorD{ fill:#7c5330; }
+      .porch{ fill:#b1aa9c; stroke:#8f8a80; stroke-width:2; }
+      .base { fill:#a9a49a; stroke:#8f8a80; stroke-width:2; }
+    </style>
+  </defs>
+
+  <!-- фундамент (под стену) -->
+  <rect class="base" x="130" y="372" width="360" height="24" rx="4"/>
+
+  <!-- стены (тёмно-бежевые) -->
+  <rect class="wall" x="130" y="210" width="360" height="162"/>
+
+  <!-- двускатная крыша RAL6005 -->
+  <path class="roof" d="M96 210 L310 118 L524 210 Z"/>
+  <path class="roofSh" d="M310 118 L524 210 L490 210 L310 136 Z"/>
+
+  <!-- ворота (двустворчатые, уже) -->
+  <g>
+    <rect class="gdoor" x="150" y="240" width="116" height="132"/>
+    <rect class="gdoor" x="266" y="240" width="116" height="132"/>
+    <!-- центральный стык и петли -->
+    <rect class="gmv" x="262" y="240" width="8" height="132"/>
+    <rect class="gmv" x="150" y="250" width="10" height="26"/>
+    <rect class="gmv" x="372" y="250" width="10" height="26"/>
+  </g>
+
+  <!-- дверь (такого же размера, как у дома: 73×102), стоит на полу -->
+  <g>
+    <rect class="door" x="402" y="270" width="73" height="102" rx="3"/>
+    <circle class="doorD" cx="462" cy="326" r="4"/>
+  </g>
+
+  <!-- трава -->
+  <rect fill="#8fb36a" x="96" y="396" width="428" height="22" rx="6"/>
+</svg>

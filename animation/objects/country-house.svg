@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="700" height="500" viewBox="0 0 700 500">
+  <!-- Обычный деревенский дом в анфас: тёмно-бежевые стены, крыша RAL6005
+       (тёмно-зелёная), труба, окна с наличниками пошире, дверь (та же ширина,
+       но в 3 раза выше), крыльцо, фундамент, трава.
+       Стилизованно, без мелких деталей. -->
+  <defs>
+    <style>
+      .wall { fill:#b9a884; stroke:#9d8d6c; stroke-width:2; }
+      .roof { fill:#114232; stroke:#0c2a20; stroke-width:2; }
+      .roofSh{ fill:#0d332a; stroke:#0c2a20; stroke-width:2; }
+      .chim { fill:#9d8d6c; stroke:#7c6c50; stroke-width:2; }
+      .winF { fill:#9fd0dc; stroke:#e6ddc8; stroke-width:6; }
+      .door { fill:#9c6a3c; stroke:#7c5330; stroke-width:2; }
+      .doorD{ fill:#7c5330; }
+      .base { fill:#a9a49a; stroke:#8f8a80; stroke-width:2; }
+      .porch{ fill:#b1aa9c; stroke:#8f8a80; stroke-width:2; }
+    </style>
+  </defs>
+
+  <!-- фундамент (под стену, без выступа) -->
+  <rect class="base" x="140" y="416" width="420" height="26" rx="4"/>
+
+  <!-- стены (тёмно-бежевые) -->
+  <rect class="wall" x="140" y="260" width="420" height="156"/>
+
+  <!-- двускатная крыша RAL6005 -->
+  <path class="roof" d="M100 260 L350 140 L600 260 Z"/>
+  <path class="roofSh" d="M350 140 L600 260 L560 260 L350 160 Z"/>
+
+  <!-- труба -->
+  <rect class="chim" x="450" y="164" width="36" height="62" rx="3"/>
+
+  <!-- окна расставлены пошире -->
+  <g>
+    <rect class="winF" x="176" y="290" width="72" height="72" rx="4"/>
+    <rect class="winF" x="452" y="290" width="72" height="72" rx="4"/>
+    <!-- переплёт -->
+    <path d="M212 292 L212 360 M176 326 L248 326" stroke="#e6ddc8" stroke-width="5"/>
+    <path d="M488 292 L488 360 M452 326 L524 326" stroke="#e6ddc8" stroke-width="5"/>
+  </g>
+
+  <!-- дверь (шире на 30%, выше на 50%) -->
+  <g>
+    <rect class="porch" x="294" y="330" width="112" height="16" rx="3"/>
+    <rect class="door" x="314" y="314" width="73" height="102" rx="3"/>
+    <circle class="doorD" cx="374" cy="368" r="4"/>
+  </g>
+
+  <!-- трава -->
+  <rect fill="#8fb36a" x="100" y="442" width="500" height="24" rx="6"/>
+</svg>

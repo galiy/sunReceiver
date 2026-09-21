@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420" viewBox="0 0 640 420">
+  <!-- Солнечная панель в АНФАС: ровный прямоугольник, алюминиевая рама,
+       тёмно-синие ячейки в прямой сетке, белые прожилки, блик.
+       Стилизованно, без мелких деталей. -->
+  <defs>
+    <style>
+      .frame{ fill:#9aa1a8; stroke:#737a82; stroke-width:3; }
+      .glass{ fill:#2b4aa0; stroke:#1c3468; stroke-width:2; }
+      .bus  { fill:#dfe3e6; }
+      .rac  { fill:#8a9198; stroke:#6b727a; stroke-width:2; }
+    </style>
+  </defs>
+
+  <!-- задняя рама (чуть шире, для объёма) -->
+  <rect class="rac" x="90" y="10" width="460" height="360" rx="6"/>
+
+  <!-- лицевая рама со стеклом -->
+  <rect class="frame" x="100" y="20" width="440" height="340" rx="6"/>
+  <rect class="glass" x="112" y="32" width="416" height="316" rx="3"/>
+
+  <!-- центральные вертикальные прожилки -->
+  <g class="bus" opacity="0.55">
+    <rect x="112" y="32" width="4" height="316"/>
+    <rect x="212" y="32" width="4" height="316"/>
+    <rect x="312" y="32" width="4" height="316"/>
+    <rect x="412" y="32" width="4" height="316"/>
+  </g>
+  <!-- горизонтальные прожилки -->
+  <g class="bus" opacity="0.55">
+    <rect x="112" y="122" width="416" height="4"/>
+    <rect x="112" y="212" width="416" height="4"/>
+    <rect x="112" y="302" width="416" height="4"/>
+  </g>
+
+  <!-- тонкие линии ячеек -->
+  <g fill="none" stroke="#7d84a8" stroke-width="1.5" opacity="0.5">
+    <path d="M162 32 L162 348 M262 32 L262 348 M362 32 L362 348 M462 32 L462 348"/>
+    <path d="M112 77 L528 77 M112 167 L528 167 M112 257 L528 257 M112 320 L528 320"/>
+  </g>
+
+  <!-- блик -->
+  <path fill="#ffffff" opacity="0.08" d="M112 32 L240 32 L240 348 L112 348 Z"/>
+</svg>
