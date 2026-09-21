@@ -8,6 +8,14 @@
 .nav-btn.secondary { background:#ffffff; border:1px solid #d0d6de; color:#2b3238; }
 .nav-btn.secondary:hover { background:#f0f2f5; }
 
+/* Нижняя навигация (mnav): на десктопе — ряд синих кнопок-«пагинатор», на
+   мобильной (см. media) — фиксированный нижний таб-бар. */
+.mnav { display:flex; justify-content:center; align-items:center; gap:10px; flex-wrap:wrap; margin:28px auto 0; }
+.mnav a { display:inline-flex; align-items:center; justify-content:center; padding:10px 22px; border-radius:8px; border:1px solid #c9d6e3; background:#ffffff; color:#346fa1; font-size:14px; font-weight:600; text-decoration:none; white-space:nowrap; transition:background .15s ease, color .15s ease, border-color .15s ease; }
+.mnav a:hover { background:#eef4fb; border-color:#428bca; }
+.mnav a.active { background:#428bca; border-color:#428bca; color:#ffffff; }
+.mnav a.active:hover { background:#346fa1; }
+
 @media (max-width: 900px) {
   html { -webkit-text-size-adjust: 100%; }
   body { padding:12px 12px calc(16px + 56px + env(safe-area-inset-bottom, 0px)); }
