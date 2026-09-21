@@ -2,9 +2,6 @@
 .anim-scheme { background:#ffffff; border:1px solid #d0d6de; border-radius:10px; padding:14px 16px; margin-bottom:20px; max-width:100%; position:relative; overflow:hidden; touch-action:none; -webkit-user-select:none; user-select:none; }
 .anim-scheme * { touch-action:none; -webkit-user-select:none; user-select:none; }
 .anim-scheme .anim-svg { transform-origin:0 0; transform:translate(0,0) scale(1); will-change:transform; }
-.anim-scheme.anim-grabbing { cursor:grabbing; }
-.anim-scheme.anim-grabbing .anim-svg { cursor:grabbing; }
-.anim-scheme:not(.anim-grabbing):not(:active) .anim-svg { cursor:grab; }
 
 .anim-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:8px; }
 .anim-title { font-size:16px; font-weight:600; color:#2b3238; }
