@@ -343,11 +343,54 @@ async function tickBMS(){
     el.innerHTML=h;
   }catch(e){}
 }
-tick(); setInterval(tick,1000);
 tickBMS(); setInterval(tickBMS,60000);
 
-// Спойлеры (<details> на главной). Открытость храним на клиенте (localStorage) и
-// восстанавливаем при загрузке. Ключ — data-spoil элемента.
+// ---------- Спойлеры и опрос данных ----------
+// Спойлеры (Дом / Гараж / Детальные данные): открытость храним на клиенте
+// (localStorage) и восстанавливаем при загрузке. Ключ — data-spoil элемента.
+// Помимо видимости, состояние спойлера управляет опросом API: замкнутый спойлер НЕ
+// опрашивает свои данные (не дёргает API); при открытии выполняется один немедленный
+// опрос, далее — по собственному графику (интервалу), и только пока спойлер открыт.
+// Единый менеджер на window.srSpoilers, чтобы им пользовались и dashboard.js
+// (спойлер «Детальные данные» → /api/current), и animation.js (спойлеры «Дом»/«Гараж»
+// → /api/animation). BMS-группа вне спойлеров, поэтому опрашивается всегда.
+var srSpoilers=(function(){
+  var listeners={}; // key -> [fn(open)] — независимые наблюдатели (обычно один на скрипт)
+  var polls={};     // key -> {fn, interval, timer, running}
+  function isOpen(key){
+    var el=document.querySelector('.spoiler[data-spoil="'+key+'"]');
+    return !!(el && el.classList.contains('open'));
+  }
+  // Применить состояние спойлера к его поллеру: открыт → немедленный опрос + интервал,
+  // закрыт → остановить.
+  function apply(key){
+    var p=polls[key];
+    if(!p) return;
+    var open=isOpen(key);
+    if(open && !p.running){ p.running=true; p.fn(); p.timer=setInterval(p.fn,p.interval); }
+    else if(!open && p.running){ p.running=false; clearInterval(p.timer); p.timer=null; }
+  }
+  function toggle(key){
+    var open=isOpen(key);
+    var ls=listeners[key]||[];
+    for(var i=0;i<ls.length;i++) ls[i](open);
+    apply(key);
+  }
+  return {
+    isOpen:isOpen,
+    // Подписать поллер на спойлер: вызывается немедленно (если спойлер уже открыт)
+    // и далее по interval, только пока спойлер открыт.
+    poll:function(key, fn, interval){ polls[key]={fn:fn, interval:interval, timer:null, running:false}; apply(key); },
+    listen:function(key, fn){ (listeners[key]=listeners[key]||[]).push(fn); },
+    toggle:toggle
+  };
+})();
+window.srSpoilers=srSpoilers;
+
+// Спойлер «Детальные данные» → /api/current (сводная таблица, МАП, счётчик, тарифы).
+// Спойлер закрыт — опрос не выполняется; открыт — один раз сразу и далее раз в секунду.
+srSpoilers.poll('details', tick, 1000);
+
 function initSpoilers(){
   var heads=document.querySelectorAll('.spoiler-head');
   for(var i=0;i<heads.length;i++){
@@ -355,10 +398,14 @@ function initSpoilers(){
       var spoiler=head.parentElement;
       var key=spoiler.getAttribute('data-spoil');
       if(!key) return;
-      if(localStorage.getItem('sunr.spoil.'+key)==='1') spoiler.classList.add('open');
+      if(localStorage.getItem('sunr.spoil.'+key)==='1'){
+        spoiler.classList.add('open');
+        srSpoilers.toggle(key); // восстановленный открытым спойлер сразу опрашивается
+      }
       head.addEventListener('click', function(){
         spoiler.classList.toggle('open');
         localStorage.setItem('sunr.spoil.'+key, spoiler.classList.contains('open')?'1':'0');
+        srSpoilers.toggle(key);
       });
     })(heads[i]);
   }

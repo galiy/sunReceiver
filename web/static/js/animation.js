@@ -607,16 +607,41 @@ async function tick(){
   var tsG=document.getElementById('animGarageTs'); if(tsG) tsG.textContent=ts;
 }
 
+// ---------- Опрос /api/animation по видимости спойлеров Дом/Гараж ----------
+// Один запрос /api/animation отдаёт обе схемы (и Дом, и Гараж), и единый tick()
+// пересобирает обе. Поэтому поллер включаем, когда открыт хотя бы один из двух
+// спойлеров (не дублируем запрос на каждый спойлер); при открытии — немедленный
+// опрос + интервал 1 с; при закрытии последнего открытого — останавливаем, чтобы
+// закрытый спойлер не дёргал API.
+function spoilerOpen(key){ return !!(window.srSpoilers && window.srSpoilers.isOpen(key)); }
+function animAnyOpen(){ return spoilerOpen('house') || spoilerOpen('garage'); }
+var ANIM_POLL_MS=1000, animRunning=false, animTimer=null;
+function animStart(){
+  if(animRunning) return;
+  animRunning=true;
+  tick(); animTimer=setInterval(tick, ANIM_POLL_MS);
+}
+function animStop(){
+  if(!animRunning) return;
+  animRunning=false;
+  clearInterval(animTimer); animTimer=null;
+}
+function animSync(){ if(animAnyOpen()) animStart(); else animStop(); }
+if(window.srSpoilers){
+  window.srSpoilers.listen('house', animSync);
+  window.srSpoilers.listen('garage', animSync);
+}
+animSync(); // старт/стоп по текущему состоянию спойлеров при загрузке
+
 var lastNow=performance.now();
 function loop(now){
   var dt=Math.min(0.1, (now-lastNow)/1000); lastNow=now; // с, без рывка после фона
-  if(BUILT.house) for(var i=0;i<BUILT.house.obj.edges.length;i++) animateEdge(BUILT.house.obj.edges[i], dt);
-  if(BUILT.garage) for(var j=0;j<BUILT.garage.obj.edges.length;j++) animateEdge(BUILT.garage.obj.edges[j], dt);
+  // Анимируем только видимые (открытые) схемы: закрытый спойлер не тратит кадры.
+  if(spoilerOpen('house') && BUILT.house) for(var i=0;i<BUILT.house.obj.edges.length;i++) animateEdge(BUILT.house.obj.edges[i], dt);
+  if(spoilerOpen('garage') && BUILT.garage) for(var j=0;j<BUILT.garage.obj.edges.length;j++) animateEdge(BUILT.garage.obj.edges[j], dt);
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
-
-tick(); setInterval(tick, 1000);
 
 // ---------- Панорамирование и зум анимированных схем (pinch/колесо/перетаскивание) ----------
 // Работает на контейнере .anim-scheme: трансформирует сам SVG (transform: translate+scale),
