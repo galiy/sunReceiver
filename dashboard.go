@@ -1094,11 +1094,13 @@ func animRound1(v float64) float64 {
 // inverterTemps возвращает температуры инвертора по его марке: Корпус и Транзисторы.
 // У Deye — temperature_radiator (Корпус) и temperature_igbt (Транзисторы); у Sofar —
 // temperature_inner (Корпус) и temperature_module (Транзисторы). Отсутствующий
-// датчик не добавляется. Для КЭС (MPPT, kind "kes") температуры не выводятся.
+// датчик не добавляется: у Deye отсутствие маппится сентелом offset −100
+// (raw 0 → −100), поэтому значения ≤ −100 пропускаются. Для КЭС (MPPT, kind "kes")
+// температуры не выводятся.
 func inverterTemps(kind string, v valuesContract) []animTemp {
 	var temps []animTemp
 	add := func(tag, label string) {
-		if x, ok := snapFloat(v, tag); ok {
+		if x, ok := snapFloat(v, tag); ok && x > -100 {
 			temps = append(temps, animTemp{Label: label, Value: animRound1(x)})
 		}
 	}
