@@ -641,6 +641,9 @@ animSync(); // старт/стоп по текущему состоянию сп
 var lastNow=performance.now();
 function loop(now){
   var dt=Math.min(0.1, (now-lastNow)/1000); lastNow=now; // с, без рывка после фона
+  // При выключенном обновлении огоньки замораживаются (dt=0 — анимация не движется,
+  // но цикл продолжает работать и размораживается сразу после включения).
+  if(window.srRefresh && !window.srRefresh.isEnabled()) dt=0;
   // Анимируем только видимые (открытые) схемы: закрытый спойлер не тратит кадры.
   if(spoilerOpen('house') && BUILT.house) for(var i=0;i<BUILT.house.obj.edges.length;i++) animateEdge(BUILT.house.obj.edges[i], dt);
   if(spoilerOpen('garage') && BUILT.garage) for(var j=0;j<BUILT.garage.obj.edges.length;j++) animateEdge(BUILT.garage.obj.edges[j], dt);
