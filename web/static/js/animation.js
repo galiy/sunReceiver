@@ -44,8 +44,8 @@ function pwLerp(v){ // 0..1 по мощности, |v|<=100 → 0, |v|>=20000 �
   var t=(Math.abs(v)-P_MIN)/(P_MAX-P_MIN);
   return t<0?0:(t>1?1:t);
 }
-function speedFor(t){ // px/с: 12 (100 Вт) .. 520 (20 кВт)
-  return 12 + (520-12)*t;
+function speedFor(t){ // px/с: 6 (100 Вт) .. 260 (20 кВт) — скорость уменьшена в 2 раза
+  return 6 + (260-6)*t;
 }
 function spacingFor(t){ // px между огоньками (одинаково для любой длины линии)
   return SP_MAX + (SP_MIN-SP_MAX)*t;
