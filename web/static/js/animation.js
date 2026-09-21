@@ -624,9 +624,8 @@ tick(); setInterval(tick, 1000);
 // ограничен [1, 6] (меньше 1 — схема как была, бессмысленно уменьшать), панорама
 // ограничена рамками увеличенной области, чтобы не увести схему за пределы экрана.
 // PINCH_MIN — минимальная база стартового «разлёта» пальцев: если пальцы пришли в
-// одну точку, относительный прирост иначе прыгает на максимум. PINCH_MAXSTEP —
-// максимальный прирост масштаба за один кадр жеста (плавность, без «телепорта»).
-var PINCH_MIN=60, PINCH_MAXSTEP=1.5;
+// одну точку, относительный прирост иначе прыгает на максимум.
+var PINCH_MIN=60;
 function attachSchemePanZoom(scheme){
   if(!scheme || scheme.__panzoom) return;
   scheme.__panzoom=true;
@@ -710,15 +709,14 @@ function attachSchemePanZoom(scheme){
       if(gs.mode==='pinch' && n>=2){
         var d=dist(), m=mid(), o=svgOff();
         var ratio=d/(gs.startDist||1);
-        // Ограничиваем прирост за кадр, чтобы зум был плавным, а не «телепортом»
-        // на предельный масштаб при первом же движении пальцев.
-        if(ratio>PINCH_MAXSTEP) ratio=PINCH_MAXSTEP;
-        else if(ratio<1/PINCH_MAXSTEP) ratio=1/PINCH_MAXSTEP;
-        var newScale=gs.startScale*ratio;
-        newScale=Math.max(min,Math.min(max,newScale));
+        // Целевой масштаб от разведения пальцев (база PINCH_MIN уже защищает от
+        // скачка при почти нулевом старте). Реальный масштаб плавно стремится к
+        // цели, поэтому жёсткого клэмпа прироста нет — иначе зум «застревает» на
+        // малом значении и движение пальцев не ощущается.
+        var target=Math.max(min,Math.min(max, gs.startScale*ratio));
+        scale += (target-scale)*0.25;
         var ux=(gs.startMid.x-o.left-gs.startTx)/gs.startScale;
         var uy=(gs.startMid.y-o.top-gs.startTy)/gs.startScale;
-        scale=newScale;
         tx=m.x-o.left-ux*scale;
         ty=m.y-o.top-uy*scale;
         clampPan(); apply();
