@@ -166,28 +166,7 @@ function drawBus(svg, x1, x2, y, bolts){
 // (без «вырезания» белым штрихом, как при двойном штрихе). Огоньки бегут по оси.
 var RAIL_GAP=6;   // расстояние от оси до кромки
 var RAIL_W=1.5;   // толщина кромки
-// Полилиния кромки: смещённая по нормали копия оси. Нормаль — центральная
-// разность (t−ε и t+ε), поэтому на скруглении угла она плавно поворачивается
-// и кромка повторяет дугу без «шеврона». Частая дискретизация (1 точка/px).
-function offsetTrack(trace, off){
-  var total=trace.getTotalLength();
-  var n=Math.max(16, Math.floor(total));
-  var d='';
-  var eps=0.4;
-  for(var i=0;i<=n;i++){
-    var t=total*i/n;
-    var a=trace.getPointAtLength(Math.max(0, t-eps));
-    var b=trace.getPointAtLength(Math.min(total, t+eps));
-    var dx=b.x-a.x, dy=b.y-a.y;
-    var len=Math.sqrt(dx*dx+dy*dy)||1;
-    var nx=-dy/len, ny=dx/len; // левая нормаль
-    var p=trace.getPointAtLength(t);
-    var x=p.x+nx*off, y=p.y+ny*off;
-    d += (i===0?'M':'L')+(+x.toFixed(2))+' '+(+y.toFixed(2))+' ';
-  }
-  return d;
-}
-function makeEdge(svg, opts){
+function makeEdge(svg, opts, skipRail){
   // Геометрическая ось — невидимая, по ней считаем длину и ведём огоньки.
   var trace=document.createElementNS(NS,'path');
   trace.setAttribute('d', pathWithRounds(opts.pts));
@@ -195,15 +174,8 @@ function makeEdge(svg, opts){
   trace.setAttribute('class','anim-wire-trace');
   svg.appendChild(trace);
   var total=trace.getTotalLength();
-  // Две кромки — тонкие линии, смещённые по нормали на ±gap.
-  var offs=[-RAIL_GAP, RAIL_GAP];
-  for(var r=0;r<offs.length;r++){
-    var edge=document.createElementNS(NS,'path');
-    edge.setAttribute('d', offsetTrack(trace, offs[r]));
-    edge.setAttribute('fill','none');
-    edge.setAttribute('class','anim-rail');
-    svg.appendChild(edge);
-  }
+  // Кромки рисуются НЕ здесь, а единой SVG-маской в buildScheme (skipRail=true),
+  // чтобы на Т-стыках все связи объединялись в один силуэт труб без пересечений.
 
   var txt=null;
   if(opts.label){
@@ -302,16 +274,66 @@ function animateEdge(e, dt){
 }
 
 // ---------- Сборка ----------
-function buildScheme(container, nodes, edges){
+// Все связи рисуются ЕДИНЫМ «силуэтом труб» через SVG-маску. Маска строится так:
+//  1) БЕЛЫМ рисуются наружные контуры всех труб (широкий штрих по каждой оси);
+//  2) поверх ЧЁРНЫМ — внутренняя полость каждой трубы (узкий штрих по той же оси).
+// В итоге тёмным остаются только кромки шириной RAIL_W, причём на стыках/поворотах
+// все трубы объединяются в единый силуэт: ветвь корректно примыкает к магистрали,
+// а границы магистрали прерываются ровно там, где входит ветвь. Огоньки и подписи
+// рисуются поверх (поверх маскируемого тёмного слоя) в makeEdge.
+function buildScheme(container, nodes, edges, height){
   var svg=document.getElementById(container);
   svg.innerHTML='';
   var readings=[];
   var sprites=[]; // спрайты со «stale» из данных: затемняются в refreshEdges
   var objs=[];
+
+  // --- Сбор осей всех связей (не шины) ---
+  var railD=[];
   for(var i=0;i<edges.length;i++){
-    if(edges[i].bus){ drawBus(svg, edges[i].x1, edges[i].x2, edges[i].y, edges[i].bolts); continue; }
-    objs.push(makeEdge(svg, edges[i]));
+    if(edges[i].bus) continue;
+    railD.push(pathWithRounds(edges[i].pts));
   }
+
+  // --- Маска: наружный белый контур + чёрная внутренняя полость ---
+  var maskId=container+'_rail';
+  var mask=document.createElementNS(NS,'mask');
+  mask.setAttribute('id', maskId);
+  mask.setAttribute('maskUnits','userSpaceOnUse');
+  mask.setAttribute('x','0'); mask.setAttribute('y','0');
+  mask.setAttribute('width','1000'); mask.setAttribute('height', String(height));
+  var outer=document.createElementNS(NS,'g');
+  outer.setAttribute('fill','none'); outer.setAttribute('stroke','#ffffff');
+  outer.setAttribute('stroke-width', 2*RAIL_GAP+RAIL_W);
+  outer.setAttribute('stroke-linejoin','round'); outer.setAttribute('stroke-linecap','butt');
+  var inner=document.createElementNS(NS,'g');
+  inner.setAttribute('fill','none'); inner.setAttribute('stroke','#000000');
+  inner.setAttribute('stroke-width', 2*RAIL_GAP-RAIL_W);
+  inner.setAttribute('stroke-linejoin','round'); inner.setAttribute('stroke-linecap','butt');
+  for(var rd=0;rd<railD.length;rd++){
+    var p1=document.createElementNS(NS,'path'); p1.setAttribute('d', railD[rd]); outer.appendChild(p1);
+    var p2=document.createElementNS(NS,'path'); p2.setAttribute('d', railD[rd]); inner.appendChild(p2);
+  }
+  mask.appendChild(outer); mask.appendChild(inner);
+  var defs=document.createElementNS(NS,'defs'); defs.appendChild(mask);
+  svg.appendChild(defs);
+
+  // --- Тёмный слой труб, ограниченный маской (видно только кромки) ---
+  var railLayer=document.createElementNS(NS,'rect');
+  railLayer.setAttribute('x','0'); railLayer.setAttribute('y','0');
+  railLayer.setAttribute('width','1000'); railLayer.setAttribute('height', String(height));
+  railLayer.setAttribute('fill','#3a4752');
+  railLayer.setAttribute('mask','url(#'+maskId+')');
+  svg.appendChild(railLayer);
+  // Слой подписей мощности, чтобы был ПОД связями на стыках? Оставим поверх в makeEdge.
+
+  // --- Связи: оси/огоньки/подписи поверх слоя труб ---
+  for(var e=0;e<edges.length;e++){
+    if(edges[e].bus){ drawBus(svg, edges[e].x1, edges[e].x2, edges[e].y, edges[e].bolts); continue; }
+    objs.push(makeEdge(svg, edges[e], true));
+  }
+
+  // --- Узлы (спрайты) поверх всего ---
   for(var j=0;j<nodes.length;j++){
     var n=nodes[j];
     var spr=spriteNode(svg, n.key, n.cx, n.cy, n.label, n.raise);
@@ -512,7 +534,7 @@ function layoutGarage(data){
 function ensureScheme(which, layoutData, container){
   var sig=layoutData.nodes.map(function(n){return n.label;}).join('|')+'#'+layoutData.height;
   if(BUILT[which] && BUILT[which].sig===sig) return BUILT[which].obj;
-  var obj=buildScheme(container, layoutData.nodes, layoutData.edges);
+  var obj=buildScheme(container, layoutData.nodes, layoutData.edges, layoutData.height);
   BUILT[which]={sig:sig, obj:obj};
   var svg=obj.svg;
   svg.setAttribute('viewBox','0 0 1000 '+layoutData.height);
