@@ -413,11 +413,15 @@ function buildGridPChart(data){
 	var bat=(data.map_battery_power||[]).map(function(p){ return {x:new Date(p.t), y:-p.v}; });
 	// «Мощность дома» — по формуле анимации Дома: Σac(инверторы Дома)+grid+battery.
 	var house=(data.house_power||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
+	// Вклад Дома в формулу: суммарная активная мощность сетевых инверторов Дома.
+	var houseAc=(data.house_inverter_power||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
 	var meter=(data.meter_active_power||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
 	var datasets=[
 		{ label:'Мощность сети', data:grid, borderColor:'#428bca', backgroundColor:'#428bca',
 		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false },
 		{ label:'Мощность батареи', data:bat, borderColor:'#37b24d', backgroundColor:'#37b24d',
+		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false },
+		{ label:'Инверторы Дома (Σ)', data:houseAc, borderColor:'#9463b8', backgroundColor:'#9463b8',
 		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false },
 		{ label:'Мощность дома', data:house, borderColor:'#f08c00', backgroundColor:'#f08c00',
 		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false },
