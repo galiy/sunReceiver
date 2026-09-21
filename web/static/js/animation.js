@@ -690,6 +690,7 @@ function attachSchemePanZoom(scheme){
     } else if(n===1){
       gs={mode:'pan', startX:e.clientX, startY:e.clientY, startTx:tx, startTy:ty};
     }
+    console.log('[pz] down pid='+e.pointerId+' type='+e.pointerType+' n='+n+' mode='+(gs?gs.mode:'-'));
     if(e.cancelable && e.pointerType!=='mouse') e.preventDefault();
   });
   scheme.addEventListener('pointermove', function(e){
@@ -713,12 +714,14 @@ function attachSchemePanZoom(scheme){
         clampPan(); apply();
       }
     }
+    if(n>=2 && gs && gs.mode==='pinch') console.log('[pz] move pinch n='+n+' scale='+scale.toFixed(2));
     if(e.cancelable && e.pointerType!=='mouse') e.preventDefault();
   });
   function endPointer(e){
     if(!pts[e.pointerId]) return;
     delete pts[e.pointerId];
     var n=activeCount();
+    console.log('[pz] up pid='+e.pointerId+' n='+n);
     if(n===0){ gs=null; scheme.classList.remove('anim-grabbing'); }
     else if(n===1){ // остался один палец — продолжаем панораму от него
       var p=ptsList()[0];
