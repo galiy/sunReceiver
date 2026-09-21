@@ -8,9 +8,10 @@
 .nav-btn.secondary { background:#ffffff; border:1px solid #d0d6de; color:#2b3238; }
 .nav-btn.secondary:hover { background:#f0f2f5; }
 
-/* Нижняя навигация (mnav): сверху — ряд синих кнопок-«пагинатор», на мобильной
-   (см. media) — фиксированный нижний таб-бар. */
-.mnav { display:flex; justify-content:flex-start; align-items:center; gap:10px; flex-wrap:wrap; margin:0 0 16px; }
+/* Пагинация (mnav): справа в top-nav — ряд синих кнопок, на мобильной (см.
+   media) — фиксированный нижний таб-бар. */
+.mnav { display:flex; justify-content:flex-start; align-items:center; gap:10px; flex-wrap:wrap; margin:0; }
+.top-nav .mnav { margin-left:auto; justify-content:flex-end; }
 .mnav a { display:inline-flex; align-items:center; justify-content:center; padding:10px 22px; border-radius:8px; border:1px solid #c9d6e3; background:#ffffff; color:#346fa1; font-size:14px; font-weight:600; text-decoration:none; white-space:nowrap; transition:background .15s ease, color .15s ease, border-color .15s ease; }
 .mnav a:hover { background:#eef4fb; border-color:#428bca; }
 .mnav a.active { background:#428bca; border-color:#428bca; color:#ffffff; }

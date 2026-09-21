@@ -15,8 +15,8 @@
     <h1 class="ttl">SunReceiver</h1>
     <p class="sub">Текущие параметры инверторов и электросчётчика (из Redis, обновление каждую секунду)</p>
   </div>
+  {{template "mnav" .}}
 </div>
-{{template "mnav" .}}
 
 {{if .flags.ShowBMS}}
 <div class="group group-top">
