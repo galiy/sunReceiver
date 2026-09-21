@@ -208,7 +208,7 @@ function makeEdge(svg, opts){
   var dots=[], MAX=MAX_DOTS;
   for(var i=0;i<MAX;i++){
     var c=document.createElementNS(NS,'circle');
-    c.setAttribute('r',2.2);
+    c.setAttribute('r',4);
     c.setAttribute('fill',GREEN);
     dotG.appendChild(c);
     dots.push({el:c});
