@@ -15,7 +15,7 @@
 // ---------- Спрайты (PNG на прозрачном фоне) ----------
 var SPR = {
   grid:    {file:'power-line-pylon', w:64, h:135},
-  meter:   {file:'dds238-meter',     w:100,h:126},
+  meter:   {file:'dds238-meter',     w:100,h:126,wScale:1.7}, // растянут в ширину, чтобы дисплей с показаниями влазил в него
   map:     {file:'map-converter',    w:120,h:51},
   house:   {file:'country-house',    w:120,h:86},
   garage:  {file:'garage',           w:110,h:78},
@@ -79,11 +79,12 @@ function spriteNode(svg, key, cx, cy, label, raise){
   raise=raise||0;
   var g=document.createElementNS(NS,'g');
   var spec=SPR[sprKey(key)]||SPR.grid;
+  var wScale=spec.wScale||1, effW=spec.w*wScale; // эффективная ширина (растяжение в ширину)
   var img=document.createElementNS(NS,'image');
   img.setAttribute('href','/static/img/animation/'+spec.file+'.png?v='+CACHE_BUST);
-  img.setAttribute('width',spec.w);
+  img.setAttribute('width',effW);
   img.setAttribute('height',spec.h);
-  img.setAttribute('x',cx-spec.w/2);
+  img.setAttribute('x',cx-effW/2);
   img.setAttribute('y',cy-raise-spec.h/2);
   img.setAttribute('class','anim-sprite');
   g.appendChild(img);
@@ -93,18 +94,18 @@ function spriteNode(svg, key, cx, cy, label, raise){
     // (отдача) за всё время. Без слов-подписей — только значения, цветом
     // (приход красный, расход зелёный); значения обновляются tick-ом.
     var box=document.createElementNS(NS,'rect');
-    box.setAttribute('x',cx-spec.w/2+spec.w*0.02);
+    box.setAttribute('x',cx-effW/2+effW*0.02);
     box.setAttribute('y',cy-raise-spec.h*0.20);
-    box.setAttribute('width',spec.w*0.96);
+    box.setAttribute('width',effW*0.96);
     box.setAttribute('height',spec.h*0.42);
     box.setAttribute('rx',4); box.setAttribute('fill','#eef7f1'); box.setAttribute('class','anim-meter-box');
     g.appendChild(box);
     var d=document.createElementNS(NS,'text');
-    d.setAttribute('x',cx+spec.w*0.44); d.setAttribute('y',cy-raise-spec.h*0.02); d.setAttribute('text-anchor','end');
+    d.setAttribute('x',cx+effW*0.44); d.setAttribute('y',cy-raise-spec.h*0.02); d.setAttribute('text-anchor','end');
     d.setAttribute('class','anim-meter-read anim-meter-import'); d.textContent='—';
     g.appendChild(d);
     var n=document.createElementNS(NS,'text');
-    n.setAttribute('x',cx+spec.w*0.44); n.setAttribute('y',cy-raise+spec.h*0.16); n.setAttribute('text-anchor','end');
+    n.setAttribute('x',cx+effW*0.44); n.setAttribute('y',cy-raise+spec.h*0.16); n.setAttribute('text-anchor','end');
     n.setAttribute('class','anim-meter-read anim-meter-export'); n.textContent='—';
     g.appendChild(n);
     meterReads=[{day:d, night:n}];
@@ -300,7 +301,7 @@ function layoutHouse(data){
 
   var MAI=140, BUSY=300, INVY=420, PANY=555;
   var BATTY=230, KESY=430, KPANY=565;
-  var gridX=90, meterX=260, mapX=470, houseX=790;
+  var gridX=90, meterX=260, mapX=560, houseX=790;
   // Батарея: без КЭС — левее, под Домом; с КЭС — справа (ветвь КЭС под ней).
   var battX = k>0 ? 920 : 790;
   // Порты подключения к МАП снизу: слева — ветвь инверторов, справа — батарея.
