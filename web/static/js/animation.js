@@ -642,6 +642,14 @@ function attachSchemePanZoom(scheme){
 
   function apply(){
     svg.style.transform='translate('+tx.toFixed(2)+'px,'+ty.toFixed(2)+'px) scale('+scale.toFixed(3)+')';
+    // Разовая диагностика: при первом заметном зуме фиксируем фактический
+    // style.transform и видимые размеры элемента (применяется ли CSS transform).
+    if(!apply._logged && scale>1.3){
+      apply._logged=true;
+      var r=svg.getBoundingClientRect();
+      var f='apply tf="'+svg.style.transform+'" rectIW='+Math.round(r.width)+' styleTW='+Math.round(svg.clientWidth)+' scale='+scale.toFixed(2)+' tx='+tx.toFixed(1)+' ty='+ty.toFixed(1);
+      fetch('/api/pzlog?m='+encodeURIComponent(f));
+    }
   }
   function clampPan(){
     var b=box(), w=b.width, h=b.height;
