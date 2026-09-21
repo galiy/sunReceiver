@@ -26,6 +26,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -291,6 +292,11 @@ type mapRaw struct {
 	PLoad     string // Мощность нагрузки по АКБ, Вт (_PLoad) — НЕ батарейная (нагрузка потребителя)
 	PLoadCalc string // Расчётная мощность батареи, Вт (_PLoad_calc = _Uacc × _Iacc) — ДОСТОВЕРНАЯ
 	TFNet     string // Частота сети, Гц (_TFNET)
+	// Температуры, °C (API уже в градусах; сырые Modbus-ячейки требуют сдвига −50):
+	TempGrad0 string // Внешний датчик температуры АКБ (_Temp_Grad0, 0x42E)
+	TempGrad1 string // Датчик температуры тора/трансформатора (_Temp_Grad1, 0x42F)
+	TempGrad2 string // Датчик температуры транзисторов (_Temp_Grad2, 0x430)
+	TempOff   string // Признаки отсутствия датчиков (Temp_off: bit0 АКБ, bit1 тор, bit2 транз.)
 }
 
 // UnmarshalJSON разбирает объект device=map: числовые поля приходят строками,
@@ -315,6 +321,10 @@ func (r *mapRaw) UnmarshalJSON(data []byte) error {
 	str("_PLoad", &r.PLoad)
 	str("_PLoad_calc", &r.PLoadCalc)
 	str("_TFNET", &r.TFNet)
+	str("_Temp_Grad0", &r.TempGrad0)
+	str("_Temp_Grad1", &r.TempGrad1)
+	str("_Temp_Grad2", &r.TempGrad2)
+	str("Temp_off", &r.TempOff)
 	if v, ok := raw["timestamp"]; ok {
 		var n int64
 		if json.Unmarshal(v, &n) == nil {
@@ -412,6 +422,26 @@ func mapMAPAPI(r mapRaw) (valuesContract, time.Time, bool) {
 		// иначе battery_power не выставляем (заведомо недостоверный _PLoad не берём).
 		out["battery_power"] = -(uacc * iacc)
 	}
+
+	// Температуры МАП (тор, радиатор транзисторов, внешний датчик АКБ). API отдаёт
+	// их уже в градусах Цельсия. При отсутствии датчика соответствующее поле либо
+	// отсутствует, либо отмечено в Temp_off (биты: 0 — АКБ, 1 — тор, 2 — транзисторы);
+	// в обоих случаях температуру в контракт не выставляем (неправдоподобные значения).
+	tempOff := 0
+	if n, err := strconv.Atoi(r.TempOff); err == nil {
+		tempOff = n
+	}
+	putMapTemp := func(field string, bit int, tag string) {
+		if bit >= 0 && tempOff&(1<<bit) != 0 {
+			return // датчик отсутствует
+		}
+		if v, ok2 := parseFloat(field); ok2 {
+			out[tag] = v
+		}
+	}
+	putMapTemp(r.TempGrad0, 0, "map_temp_battery")
+	putMapTemp(r.TempGrad1, 1, "map_temp_tor")
+	putMapTemp(r.TempGrad2, 2, "map_temp_transistor")
 
 	if len(out) == 0 {
 		return nil, ts, false

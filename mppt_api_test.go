@@ -119,6 +119,99 @@ func TestMapMAPAPINoUacc(t *testing.T) {
 	}
 }
 
+func TestMapMAPAPITemperatures(t *testing.T) {
+	// Температуры МАП из device=map: _Temp_Grad0 (АКБ), _Temp_Grad1 (тор),
+	// _Temp_Grad2 (транзисторы) — API отдаёт уже в градусах. Temp_off — признаки
+	// отсутствия датчиков.
+	body := `{"timestamp":"1","_Uacc":"52.0","_Iacc":"1","_UNET":"220","_PNET_calc":"1141.2","_PLoad_calc":"208","_TFNET":"50.0","_Temp_Grad0":"23","_Temp_Grad1":"44","_Temp_Grad2":"35","Temp_off":"0"}`
+	var r mapRaw
+	if err := json.Unmarshal([]byte(body), &r); err != nil {
+		t.Fatalf("unmarshal mapRaw: %v", err)
+	}
+	vals, _, ok := mapMAPAPI(r)
+	if !ok {
+		t.Fatal("mapMAPAPI: ok=false, want true")
+	}
+	exp := map[string]float64{
+		"map_temp_battery":    23,
+		"map_temp_tor":        44,
+		"map_temp_transistor": 35,
+	}
+	for k, want := range exp {
+		if v, ok := vals[k].(float64); !ok || v != want {
+			t.Errorf("%s = %v, want %v", k, vals[k], want)
+		}
+	}
+}
+
+func TestMapMAPAPITempOffMask(t *testing.T) {
+	// Temp_off=0x04 (датчик транзисторов отсутствует) → map_temp_transistor
+	// НЕ выставляется, остальные температуры остаются.
+	body := `{"timestamp":"1","_Uacc":"52.0","_Iacc":"1","_UNET":"220","_PNET_calc":"1141.2","_PLoad_calc":"208","_TFNET":"50.0","_Temp_Grad0":"23","_Temp_Grad1":"44","_Temp_Grad2":"35","Temp_off":"4"}`
+	var r mapRaw
+	if err := json.Unmarshal([]byte(body), &r); err != nil {
+		t.Fatalf("unmarshal mapRaw: %v", err)
+	}
+	vals, _, ok := mapMAPAPI(r)
+	if !ok {
+		t.Fatal("mapMAPAPI: ok=false, want true")
+	}
+	if _, present := vals["map_temp_transistor"]; present {
+		t.Errorf("map_temp_transistor присутствует при Temp_off&0x04, want отсутствует")
+	}
+	if v, ok := vals["map_temp_battery"].(float64); !ok || v != 23 {
+		t.Errorf("map_temp_battery = %v, want 23", vals["map_temp_battery"])
+	}
+	if v, ok := vals["map_temp_tor"].(float64); !ok || v != 44 {
+		t.Errorf("map_temp_tor = %v, want 44", vals["map_temp_tor"])
+	}
+}
+
+func TestMapMAPRegistersTemperatures(t *testing.T) {
+	// Modbus-ветка: ячейки температуры _Temp_Grad0/1/2 = 0x42E/0x42F/0x430 (raw,
+	// T = raw − 50), _Temp_off = 0x43C (биты отсутствия датчиков). Блок 0x400
+	// уже включает эти ячейки, отдельного чтения не требуется.
+	cells := map[uint16]byte{
+		0x405: 0x8, 0x406: 0x6, // UAcc = 0x0608 = 1544 → 154.4 В (не важно для теста)
+		0x432: 0, 0x433: 0,      // IAcc = 0
+		0x400: 0,                // MODE (не заряд)
+		0x42E: 73,               // АКБ: 73−50 = 23
+		0x42F: 94,               // тор: 94−50 = 44
+		0x430: 85,               // транз.: 85−50 = 35
+	}
+	v := mapMAPRegisters(cells)
+	exp := map[string]float64{
+		"map_temp_battery":    23,
+		"map_temp_tor":        44,
+		"map_temp_transistor": 35,
+	}
+	for k, want := range exp {
+		if got, ok := v[k].(float64); !ok || got != want {
+			t.Errorf("%s = %v, want %v", k, v[k], want)
+		}
+	}
+}
+
+func TestMapMAPRegistersTempOffMask(t *testing.T) {
+	// _Temp_off=0x04 (датчик транзисторов отсутствует) → map_temp_transistor нет.
+	cells := map[uint16]byte{
+		0x405: 0x8, 0x406: 0x6,
+		0x432: 0, 0x433: 0,
+		0x400: 0,
+		0x42E: 73,
+		0x42F: 94,
+		0x430: 85,
+		0x43C: 0x04,
+	}
+	v := mapMAPRegisters(cells)
+	if _, present := v["map_temp_transistor"]; present {
+		t.Errorf("map_temp_transistor присутствует при _Temp_off&0x04, want отсутствует")
+	}
+	if got, ok := v["map_temp_battery"].(float64); !ok || got != 23 {
+		t.Errorf("map_temp_battery = %v, want 23", v["map_temp_battery"])
+	}
+}
+
 func TestMpptSiteAPIURL(t *testing.T) {
 	s := &mpptSite{BaseURL: "http://192.168.0.60", MPPTPath: "/read_json.php?device=mppt"}
 	if got := s.apiURL("map"); got != "http://192.168.0.60/read_json.php?device=map" {
