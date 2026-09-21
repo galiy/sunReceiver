@@ -375,10 +375,12 @@ function spread(left, right, n){
 
 // inverterTempsSpec возвращает temps-спеку (Корпус/Транзисторы) для инвертора
 // с индексом idx в массиве d.inverters: значения читаются из data.inverters[idx].temps.
+// stale — предикат «инвертор молчит»: при нём температуры гасятся (не показываем).
 function inverterTempsSpec(idx){
+  var stale=function(d){ return !!(d.inverters[idx]&&d.inverters[idx].stale); };
   return [
-    {label:'Корпус', get:function(d){ return tempValue((d.inverters[idx]&&d.inverters[idx].temps)||[], 'Корпус'); }},
-    {label:'Транзисторы', get:function(d){ return tempValue((d.inverters[idx]&&d.inverters[idx].temps)||[], 'Транзисторы'); }}
+    {label:'Корпус', get:function(d){ return tempValue((d.inverters[idx]&&d.inverters[idx].temps)||[], 'Корпус'); }, stale:stale},
+    {label:'Транзисторы', get:function(d){ return tempValue((d.inverters[idx]&&d.inverters[idx].temps)||[], 'Транзисторы'); }, stale:stale}
   ];
 }
 
@@ -703,7 +705,7 @@ function renderNodeTemps(svg, n){
       var tsp=document.createElementNS(NS,'tspan'); tsp.textContent='';
       val.appendChild(tsp);
       g.appendChild(val);
-      upds.push(function(d){ var s=fmtTemp(t.get(d)); if(!s){val.style.visibility='hidden';} else {val.style.visibility=''; tsp.textContent=s;} });
+      upds.push(function(d){ var s=(t.stale&&t.stale(d))?null:fmtTemp(t.get(d)); if(!s){val.style.visibility='hidden';} else {val.style.visibility=''; tsp.textContent=s;} });
     })(n.temps[j]);}
   } else { // "right"
     var gap=5;
@@ -734,7 +736,7 @@ function renderNodeTemps(svg, n){
       var tsp=document.createElementNS(NS,'tspan'); tsp.textContent='';
       val.appendChild(tsp);
       g.appendChild(val);
-      upds.push(function(d){ var s=fmtTemp(t.get(d)); if(!s){val.style.visibility='hidden';} else {val.style.visibility=''; tsp.textContent=s;} });
+      upds.push(function(d){ var s=(t.stale&&t.stale(d))?null:fmtTemp(t.get(d)); if(!s){val.style.visibility='hidden';} else {val.style.visibility=''; tsp.textContent=s;} });
     })(n.temps[m], m);}
   }
   svg.appendChild(g);
