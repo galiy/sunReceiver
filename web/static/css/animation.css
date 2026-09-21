@@ -22,8 +22,8 @@
 .anim-power { fill:#2b3238; font-size:12px; font-weight:900; paint-order:stroke; stroke:#ffffff; stroke-width:3px; }
 /* Температуры: панель над МАП (подпись + значение) и значения справа от спрайтов. */
 .anim-temp-panel { fill:#f4f7fa; stroke:#c3ccd5; stroke-width:1; }
-.anim-temp-label { fill:#6b7785; font-size:11px; }
-.anim-temp-val { fill:#2b3238; font-size:11px; font-weight:700; }
+.anim-temp-label { fill:#6b7785; font-size:10px; }
+.anim-temp-val { fill:#2b3238; font-size:10.5px; font-weight:700; }
 .anim-temp-side { fill:#2b3238; font-size:11px; font-weight:700; }
 .anim-legend { display:flex; align-items:center; gap:18px; flex-wrap:wrap; color:#6b7785; font-size:13px; margin-bottom:16px; }
 .anim-legend span { display:inline-flex; align-items:center; gap:6px; }
