@@ -727,6 +727,10 @@ function attachSchemePanZoom(scheme){
         var uy=(gs.startMid.y-o.top-gs.startTy)/gs.startScale;
         tx=m.x-o.left-ux*scale;
         ty=m.y-o.top-uy*scale;
+        if(!apply._dl){ apply._dl=true;
+          var __c='d='+d.toFixed(1)+' startDist='+(gs.startDist||0).toFixed(1)+' ratio='+ratio.toFixed(2)+' scale='+scale.toFixed(2)+' m='+(m?m.x.toFixed(1)+','+m.y.toFixed(1):'null')+' o='+o.left.toFixed(1)+','+o.top.toFixed(1)+' ux='+ux.toFixed(2)+' tx='+tx.toFixed(1)+' sm='+(gs.startMid?(gs.startMid.x.toFixed(1)+','+gs.startMid.y.toFixed(1)):'null')+' sS='+gs.startScale.toFixed(2);
+          fetch('/api/pzlog?m='+encodeURIComponent(__c));
+        }
         clampPan(); apply();
       } else if(gs.mode==='pan' && n===1){
         var p=ptsList()[0];
