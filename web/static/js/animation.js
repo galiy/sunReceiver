@@ -376,13 +376,14 @@ function layoutHouse(data){
     }
   }
 
-  // МАП (правый порт) → батарея: связь всегда (по UML map -- batt, battery_power),
+  // МАП (правый порт) ↓ вниз → батарея — ОДНА связь с закруглённым углом 90°
+  // (путь из трёх точек: МАП вниз, поворот, вправо к батарее). Огоньки бегут по
+  // всему пути непрерывно. Связь всегда (по UML map -- batt, battery_power),
   // даже если КЭС нет (иначе батарея остаётся ни с чем не связанной). Знак здесь
   // «наоборот» (→ −battery_power) и направление развёрнуто (greenDir toStart), а
   // цвет сохранён: заряд (—) красный, отдача (+) зелёный — как на дисплее МАП.
-  edges.push({pts:[[mapPortR,mapBotY],[mapPortR,BATTY]], rule:{greenSign:-1,greenDir:'toStart'},
-    getValue:function(d){return -d.map_battery_power;}});
-  edges.push({pts:[[mapPortR,BATTY],[battX,BATTY]], rule:{greenSign:-1,greenDir:'toStart'},
+  edges.push({pts:[[mapPortR,mapBotY],[mapPortR,BATTY],[battX,BATTY]],
+    rule:{greenSign:-1,greenDir:'toStart'},
     label:{x:(mapPortR+battX)/2, y:BATTY-12},
     getValue:function(d){return -d.map_battery_power;}});
 
