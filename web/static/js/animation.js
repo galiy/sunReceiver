@@ -93,19 +93,20 @@ function spriteNode(svg, key, cx, cy, label, raise){
     // Накладка накопленных показаний на ЖК счётчика: приход (импорт) и расход
     // (отдача) за всё время. Без слов-подписей — только значения, цветом
     // (приход красный, расход зелёный); значения обновляются tick-ом.
+    // Дисплей (накладка) — прежней ширины, по базовому spec.w; растянут только корпус.
     var box=document.createElementNS(NS,'rect');
-    box.setAttribute('x',cx-effW/2+effW*0.02);
+    box.setAttribute('x',cx-spec.w/2+spec.w*0.02);
     box.setAttribute('y',cy-raise-spec.h*0.20);
-    box.setAttribute('width',effW*0.96);
+    box.setAttribute('width',spec.w*0.96);
     box.setAttribute('height',spec.h*0.42);
     box.setAttribute('rx',4); box.setAttribute('fill','#eef7f1'); box.setAttribute('class','anim-meter-box');
     g.appendChild(box);
     var d=document.createElementNS(NS,'text');
-    d.setAttribute('x',cx+effW*0.44); d.setAttribute('y',cy-raise-spec.h*0.02); d.setAttribute('text-anchor','end');
+    d.setAttribute('x',cx+spec.w*0.44); d.setAttribute('y',cy-raise-spec.h*0.02); d.setAttribute('text-anchor','end');
     d.setAttribute('class','anim-meter-read anim-meter-import'); d.textContent='—';
     g.appendChild(d);
     var n=document.createElementNS(NS,'text');
-    n.setAttribute('x',cx+effW*0.44); n.setAttribute('y',cy-raise+spec.h*0.16); n.setAttribute('text-anchor','end');
+    n.setAttribute('x',cx+spec.w*0.44); n.setAttribute('y',cy-raise+spec.h*0.16); n.setAttribute('text-anchor','end');
     n.setAttribute('class','anim-meter-read anim-meter-export'); n.textContent='—';
     g.appendChild(n);
     meterReads=[{day:d, night:n}];
