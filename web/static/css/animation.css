@@ -1,5 +1,6 @@
 /* Страница анимации: схемы дома и гаража с бегущим током. */
-.anim-scheme { background:#ffffff; border:1px solid #d0d6de; border-radius:10px; padding:14px 16px; margin-bottom:20px; max-width:100%; position:relative; overflow:hidden; touch-action:none; }
+.anim-scheme { background:#ffffff; border:1px solid #d0d6de; border-radius:10px; padding:14px 16px; margin-bottom:20px; max-width:100%; position:relative; overflow:hidden; touch-action:none; -webkit-user-select:none; user-select:none; }
+.anim-scheme * { touch-action:none; -webkit-user-select:none; user-select:none; }
 .anim-scheme .anim-svg { transform-origin:0 0; transform:translate(0,0) scale(1); will-change:transform; }
 .anim-scheme.anim-grabbing { cursor:grabbing; }
 .anim-scheme.anim-grabbing .anim-svg { cursor:grabbing; }

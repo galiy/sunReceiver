@@ -659,99 +659,75 @@ function attachSchemePanZoom(scheme){
     clampPan(); apply();
   }
 
-  // ---------- Тач (мобильный): нативные touch-события дают надёжный мультитач
-  // (pointer events на тач-устройствах часто отдают только один палец / теряют
-  // второй из-за того, что браузер резервирует жест, несмотря на touch-action).
-  var touch={startDist:0,startScale:0,startTx:0,startTy:0,startMidX:0,startMidY:0,hasPinch:false,hasPan:false,startX:0,startY:0};
-  function singleTouch(e){
-    // Точки контакта в координатах контейнера.
-    return {x:e.touches[0].clientX-box().left, y:e.touches[0].clientY-box().top};
+  // ---------- Жесты (единый контроллер через Pointer Events) ----------
+  // Pointer Events покрывают и мышь, и тач (Android/iOS), и перо. Держим карту
+  // активных указателей (pointerId → позиция), поэтому мультитач-пинч работает.
+  // setPointerCapture НЕ используем: он на некоторых Android ломает второй палец.
+  // touch-action:none (см. CSS) запрещает браузеру забирать жест в скролл/зум.
+  var pts={};                             // pointerId -> {x,y} (clientX/Y)
+  var gs=null;                            // состояние жеста
+  function ptsList(){ return Object.keys(pts).map(function(k){return pts[k];}); }
+  function activeCount(){ return Object.keys(pts).length; }
+  function mid(){ // центр всех активных указателей в координатах контейнера
+    var ls=ptsList(), n=ls.length, r=box(), sx=0, sy=0;
+    if(n===0) return null;
+    for(var i=0;i<n;i++){ sx+=ls[i].x; sy+=ls[i].y; }
+    return {x:sx/n-r.left, y:sy/n-r.top};
   }
-  function touchMid(e){
-    var a=e.touches[0], b=e.touches[1], r=box();
-    return {x:(a.clientX+b.clientX)/2-r.left, y:(a.clientY+b.clientY)/2-r.top};
+  function dist(){ // расстояние между первыми двумя указателями
+    var ls=ptsList(), n=ls.length;
+    if(n<2) return 0;
+    return Math.hypot(ls[0].x-ls[1].x, ls[0].y-ls[1].y);
   }
-  function touchDist(e){
-    var a=e.touches[0], b=e.touches[1];
-    return Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY);
-  }
-  scheme.addEventListener('touchstart', function(e){
-    if(e.target.closest('a,button,input')) return;
-    scheme.classList.add('anim-grabbing');
-    if(e.touches.length===2){
-      // Начало пинча.
-      touch._pc=2;
-      touch.startDist=touchDist(e); touch.startScale=scale;
-      touch.startTx=tx; touch.startTy=ty;
-      var m=touchMid(e); touch.startMidX=m.x; touch.startMidY=m.y; touch.hasPinch=true;
-    } else if(e.touches.length===1){
-      // Начало панорамы.
-      touch._pc=1;
-      var p=singleTouch(e); touch.startX=p.x; touch.startY=p.y;
-      touch.startTx=tx; touch.startTy=ty; touch.hasPan=true;
-    }
-    e.preventDefault(); // запрещаем браузерный скролл/зум страницы
-  }, {passive:false});
-  scheme.addEventListener('touchmove', function(e){
-    if(e.touches.length>=2 && touch.hasPinch){
-      var d=touchDist(e), m=touchMid(e), o=svgOff();
-      var newScale=Math.max(min, Math.min(max, touch.startScale*(d/(touch.startDist||1))));
-      // Локальная точка u от начальной середины; панорама — от её сдвига.
-      var ux=(touch.startMidX-o.left-touch.startTx)/touch.startScale;
-      var uy=(touch.startMidY-o.top-touch.startTy)/touch.startScale;
-      scale=newScale;
-      tx=m.x-o.left-ux*scale;
-      ty=m.y-o.top-uy*scale;
-      clampPan(); apply();
-      e.preventDefault();
-    } else if(e.touches.length===1 && touch.hasPan && !touch.hasPinch){
-      var p=singleTouch(e);
-      tx=touch.startTx+(p.x-touch.startX);
-      ty=touch.startTy+(p.y-touch.startY);
-      if(scale<=1.001){ tx=0; ty=0; }
-      clampPan(); apply();
-      e.preventDefault();
-    }
-  }, {passive:false});
-  function touchEnd(e){
-    var remain=e.touches.length;
-    if(remain===0){
-      touch.hasPinch=false; touch.hasPan=false;
-      scheme.classList.remove('anim-grabbing');
-    } else if(remain===1 && touch.hasPinch){
-      // Остался один палец после пинча — продолжаем панораму от него.
-      var p=singleTouch(e);
-      touch.hasPinch=false; touch.hasPan=true;
-      touch.startX=p.x; touch.startY=p.y; touch.startTx=tx; touch.startTy=ty;
-    }
-    if(remain<2) touch.hasPinch=false;
-  }
-  scheme.addEventListener('touchend', touchEnd);
-  scheme.addEventListener('touchcancel', touchEnd);
-
-  // ---------- Мышь (десктоп): pointer-события только для мыши ----------
-  var mouse={down:false,startX:0,startY:0,startTx:0,startTy:0};
   scheme.addEventListener('pointerdown', function(e){
-    if(e.pointerType!=='mouse') return; // касания обрабатываются touch-событиями выше
     if(e.target.closest('a,button,input')) return;
-    mouse.down=true; mouse.startX=e.clientX; mouse.startY=e.clientY;
-    mouse.startTx=tx; mouse.startTy=ty;
+    pts[e.pointerId]={x:e.clientX, y:e.clientY};
     scheme.classList.add('anim-grabbing');
+    var n=activeCount();
+    if(n===2){
+      gs={mode:'pinch', startDist:dist(), startScale:scale, startTx:tx, startTy:ty,
+          startMid:mid()};
+    } else if(n===1){
+      gs={mode:'pan', startX:e.clientX, startY:e.clientY, startTx:tx, startTy:ty};
+    }
+    if(e.cancelable && e.pointerType!=='mouse') e.preventDefault();
   });
   scheme.addEventListener('pointermove', function(e){
-    if(e.pointerType!=='mouse' || !mouse.down) return;
-    tx=mouse.startTx+(e.clientX-mouse.startX);
-    ty=mouse.startTy+(e.clientY-mouse.startY);
-    if(scale<=1.001){ tx=0; ty=0; }
-    clampPan(); apply();
-    e.preventDefault();
+    if(!pts[e.pointerId]) return;
+    pts[e.pointerId]={x:e.clientX, y:e.clientY};
+    var n=activeCount();
+    if(gs){
+      if(gs.mode==='pinch' && n>=2){
+        var d=dist(), m=mid(), o=svgOff(), newScale=Math.max(min,Math.min(max, gs.startScale*(d/(gs.startDist||1))));
+        var ux=(gs.startMid.x-o.left-gs.startTx)/gs.startScale;
+        var uy=(gs.startMid.y-o.top-gs.startTy)/gs.startScale;
+        scale=newScale;
+        tx=m.x-o.left-ux*scale;
+        ty=m.y-o.top-uy*scale;
+        clampPan(); apply();
+      } else if(gs.mode==='pan' && n===1){
+        var p=ptsList()[0];
+        tx=gs.startTx+(p.x-gs.startX);
+        ty=gs.startTy+(p.y-gs.startY);
+        if(scale<=1.001){ tx=0; ty=0; }
+        clampPan(); apply();
+      }
+    }
+    if(e.cancelable && e.pointerType!=='mouse') e.preventDefault();
   });
-  function mouseUp(e){
-    if(e.pointerType!=='mouse') return;
-    mouse.down=false; scheme.classList.remove('anim-grabbing');
+  function endPointer(e){
+    if(!pts[e.pointerId]) return;
+    delete pts[e.pointerId];
+    var n=activeCount();
+    if(n===0){ gs=null; scheme.classList.remove('anim-grabbing'); }
+    else if(n===1){ // остался один палец — продолжаем панораму от него
+      var p=ptsList()[0];
+      gs={mode:'pan', startX:p.x, startY:p.y, startTx:tx, startTy:ty};
+    }
+    if(n<2 && gs && gs.mode==='pinch'){ gs=null; }
   }
-  scheme.addEventListener('pointerup', mouseUp);
-  scheme.addEventListener('pointercancel', mouseUp);
+  scheme.addEventListener('pointerup', endPointer);
+  scheme.addEventListener('pointercancel', endPointer);
 
   // Колесо мыши — зум вокруг курсора.
   scheme.addEventListener('wheel', function(e){
