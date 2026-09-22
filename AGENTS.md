@@ -33,6 +33,13 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 | API ПАК «Малина» | [`docs/read_json.md`](docs/read_json.md), [`docs/malina-web-api.md`](docs/malina-web-api.md) |
 | Универсальный контракт `values` | [`docs/universal-contract.md`](docs/universal-contract.md) |
 
+**Справочник ячеек/регистров МАП** (протокол «SVEN POWER MANAGER II», RAM/EEPROM,
+модели Pro/Hybrid/Dominator/Титанатор и КЭС(MPPT)): актуальная версия —
+`docs/map/map/protocol_MAP_cells_2026_07_15.doc` (предыдущая
+`docs/map/map/protocol_MAP_cells_2023_06_27.doc` устарела). При работе с ячейками МАП
+использовать **только версию 2026_07_15**. Каталог `docs/map/` локальный (в
+`.gitignore`, в git не выгружается).
+
 ## Устройство: даталоггеры, адреса, модели
 
 Реальные IP/серийные номера даталоггеров и топология — **приватные**, см.
