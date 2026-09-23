@@ -263,8 +263,8 @@ function setCe308Cell(id, v, signed){
 	if(!el) return;
 	var n=ce308Num(v);
 	if(n===null){ el.textContent='—'; el.className='ce-num'; return; }
-	el.textContent=n.toLocaleString('ru-RU',{maximumFractionDigits:1});
-	// Знаковые величины (мощности) окрашиваем по знаку: потребление/отдача.
+	// 2 знака после запятой + разделители разрядов; знаковые (мощности) — по знаку.
+	el.textContent=n.toLocaleString('ru-RU',{minimumFractionDigits:2, maximumFractionDigits:2});
 	if(signed){ el.className='ce-num '+(n<0 ? 'ce-neg' : 'ce-pos'); }
 	else{ el.className='ce-num'; }
 }
@@ -281,10 +281,12 @@ function renderCE308Current(cur){
 	setCe308Cell('ce308Isum', (i1!==null&&i2!==null&&i3!==null) ? (i1+i2+i3) : null);
 	var p1=ce308Num(v&&v.ce308_l1_active_power), p2=ce308Num(v&&v.ce308_l2_active_power), p3=ce308Num(v&&v.ce308_l3_active_power);
 	setCe308Cell('ce308P1', p1, true); setCe308Cell('ce308P2', p2, true); setCe308Cell('ce308P3', p3, true);
-	setCe308Cell('ce308Psum', ce308Num(v&&v.ce308_active_power), true);
+	// Сумма по фазам — с учётом знака (L1+L2+L3), а не Σ от датчика (дам появляться
+	// взаимоисключающие фазы: одна отдаёт в сеть, другая потребляет).
+	setCe308Cell('ce308Psum', (p1!==null&&p2!==null&&p3!==null) ? (p1+p2+p3) : null, true);
 	var q1=ce308Num(v&&v.ce308_l1_reactive_power), q2=ce308Num(v&&v.ce308_l2_reactive_power), q3=ce308Num(v&&v.ce308_l3_reactive_power);
 	setCe308Cell('ce308Q1', q1, true); setCe308Cell('ce308Q2', q2, true); setCe308Cell('ce308Q3', q3, true);
-	setCe308Cell('ce308Qsum', ce308Num(v&&v.ce308_reactive_power), true);
+	setCe308Cell('ce308Qsum', (q1!==null&&q2!==null&&q3!==null) ? (q1+q2+q3) : null, true);
 }
 function renderCE308Energy(snap){
 	var ts=document.getElementById('ce308EnTs');

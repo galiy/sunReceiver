@@ -57,7 +57,9 @@ h1 { font-size:22px; margin:0 0 4px; }
 .meter-note { font-size:11px; color:#6b7785; margin-top:8px; }
 /* Текущие данные и показания Электросчётчика CE308: таблица по фазам и по разрезам энергии */
 .ce308-table { margin-top:8px; }
-.ce308-table td.ce-num { font-variant-numeric:tabular-nums; font-weight:600; }
+.ce308-table th, .ce308-table td { text-align:center; }
+.ce308-table td.p-label { text-align:left; }
+.ce308-table td.ce-num { text-align:right; font-family:"SF Mono",Menlo,Consolas,"Liberation Mono",ui-monospace,monospace; font-size:16px; font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; }
 .ce308-table td.ce-pos { color:#37b24d; }
 .ce308-table td.ce-neg { color:#C8385A; }
 .ce308-head-right { display:inline-flex; align-items:center; gap:12px; }
