@@ -114,6 +114,20 @@ CREATE TABLE IF NOT EXISTS sunreceiver.bms_averages (
 );`); err != nil {
 		return fmt.Errorf("pg bms_averages schema: %w", err)
 	}
+	// Таблица 10-секундных усреднённых точек счётчика Энергомера CE308.
+	// PK (name, ts) — эффективная выборка «CE308 за диапазон времени» (узкий
+	// индексный range-scan по первичному ключу); опциональный индекс по ts для
+	// выборок по времени без фильтра по устройству.
+	if _, err := s.pool.Exec(s.ctx, `
+CREATE TABLE IF NOT EXISTS sunreceiver.ce308_averages (
+	name   text        NOT NULL,
+	ts     timestamptz NOT NULL,
+	values jsonb       NOT NULL DEFAULT '{}'::jsonb,
+	PRIMARY KEY (name, ts)
+);
+CREATE INDEX IF NOT EXISTS ce308_averages_ts_idx ON sunreceiver.ce308_averages (ts);`); err != nil {
+		return fmt.Errorf("pg ce308_averages schema: %w", err)
+	}
 	return nil
 }
 
@@ -197,6 +211,63 @@ ON CONFLICT (ip, ts) DO UPDATE
 		return fmt.Errorf("pg insert avg %s: %w", ip, err)
 	}
 	return nil
+}
+
+// InsertCe308Average сохраняет одну усреднённую за 10 секунд точку CE308
+// (ts — начало промежутка). Идемпотентна по (name, ts), повторная запись
+// ОБНОВЛЯЕТ строку (last-write-wins), как в InsertAveraged.
+func (s *pgStore) InsertCe308Average(name string, ts time.Time, vc valuesContract) error {
+	vals, err := json.Marshal(vc)
+	if err != nil {
+		return fmt.Errorf("pg marshal ce308 values %s: %w", name, err)
+	}
+	_, err = s.pool.Exec(s.ctx, `
+INSERT INTO sunreceiver.ce308_averages (name, ts, values)
+VALUES ($1, $2, $3)
+ON CONFLICT (name, ts) DO UPDATE
+  SET values = EXCLUDED.values`,
+		name, ts.UTC(), vals)
+	if err != nil {
+		return fmt.Errorf("pg insert ce308 avg %s: %w", name, err)
+	}
+	return nil
+}
+
+// ce308PGPoint — усреднённая точка CE308 из PostgreSQL (ts — начало 10-сек
+// промежутка, Values — усреднённый контракт мгновенных значений).
+type ce308PGPoint struct {
+	Name   string
+	TS     time.Time
+	Values valuesContract
+}
+
+// QueryCE308Averages возвращает усреднённые 10-сек точки CE308 за период
+// [start, end] включительно. PK (name, ts) даёт эффективный range-scan
+// «устройство за период времени».
+func (s *pgStore) QueryCE308Averages(name string, start, end time.Time) ([]ce308PGPoint, error) {
+	rows, err := s.pool.Query(s.ctx, `
+SELECT ts, values FROM sunreceiver.ce308_averages
+WHERE name = $1 AND ts BETWEEN $2 AND $3
+ORDER BY ts`,
+		name, start.UTC(), end.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("pg query ce308 %s: %w", name, err)
+	}
+	defer rows.Close()
+	var out []ce308PGPoint
+	for rows.Next() {
+		var ts time.Time
+		var raw []byte
+		if err := rows.Scan(&ts, &raw); err != nil {
+			return nil, err
+		}
+		var vc valuesContract
+		if err := json.Unmarshal(raw, &vc); err != nil {
+			return nil, err
+		}
+		out = append(out, ce308PGPoint{Name: name, TS: ts, Values: vc})
+	}
+	return out, rows.Err()
 }
 
 // Averages возвращает усреднённые точки за период [start, end] включительно.

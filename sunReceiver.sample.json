@@ -43,6 +43,12 @@
     "first_reg": 0,
     "register_count": 27
   },
+  "ce308": {
+    "disabled": false,
+    "name": "CE308 #194232482",
+    "mac": "6C:B2:FD:70:BD:FF",
+    "pin": "CHANGE_ME_PIN"
+  },
   "notify": {
     "token": "CHANGE_ME",
     "user_id": "",
