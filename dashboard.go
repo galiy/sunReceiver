@@ -191,8 +191,13 @@ type animScheme struct {
 	MeterExportTotal float64 `json:"meter_export_total"`
 	// HousePower — мощность Дома (формула-разница), только в схеме Дома.
 	HousePower float64 `json:"house_power"`
-	// GaragePower — мощность Гаража («остаток»; пока нет нагрузки — 0).
+	// GaragePower — мощность Гаража, считаемая на развилке: P(счётчик CE308) −
+	// Σac(инверторы гаража). Положительная — потребление гаража, отрицательная —
+	// отдача в сеть. Только в схеме Гаража.
 	GaragePower float64 `json:"garage_power"`
+	// Ce308Power — активная мощность электросчётчика CE308 (гараж): знак как у
+	// счётчика (потребление +, отдача в сеть −). Только в схеме Гаража.
+	Ce308Power float64 `json:"ce308_power"`
 	// MapTemps — температуры МАП для панели над изображением МАП: Тор и Транзисторы
 	// (map_temp_tor / map_temp_transistor). Только в схеме Дома.
 	MapTemps []animTemp `json:"map_temps,omitempty"`
@@ -927,7 +932,12 @@ func (h *dashboardHandler) apiAnimation(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	now := time.Now()
-	res := buildAnimationResponse(devices, h.placeByIP, now)
+	ce308, err := h.store.CE308Current()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	res := buildAnimationResponse(devices, ce308, h.placeByIP, now)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(res)
@@ -937,9 +947,11 @@ func (h *dashboardHandler) apiAnimation(w http.ResponseWriter, r *http.Request) 
 // сортирует их как apiCurrent (MPPT — последними), группирует инверторы по
 // размещению (пустое → «Дом»), MPPT-контроллеры (КЭС) — в схему Дома, из МАП и
 // счётчика берёт мощности сети/батареи/счётчика. Считает мощность Дома по
-// формуле-разнице. Устройства со снимком старше окна (20 мин) помечаются Stale —
-// клиент показывает их мощность нулём (ночью инверторы/КЭС не отдают данные).
-func buildAnimationResponse(devices []deviceSnapshot, placeByIP map[string]string, now time.Time) animationResponse {
+// формуле-разнице. Для Гаража берёт активную мощность электросчётчика CE308
+// (ce308) и считает мощность Гаража на развилке (см. GaragePower). Устройства со
+// снимком старше окна (20 мин) помечаются Stale — клиент показывает их мощность
+// нулём (ночью инверторы/КЭС не отдают данные).
+func buildAnimationResponse(devices []deviceSnapshot, ce308 map[string]ce308Snapshot, placeByIP map[string]string, now time.Time) animationResponse {
 	// Сортируем как apiCurrent: MPPT — последними, остальные по Order.
 	sort.SliceStable(devices, func(i, j int) bool {
 		mi, mj := isMPPTKey(devices[i].IP), isMPPTKey(devices[j].IP)
@@ -1049,8 +1061,24 @@ func buildAnimationResponse(devices []deviceSnapshot, placeByIP map[string]strin
 		houseAC += inv.AC
 	}
 	house.HousePower = houseAC + house.MapGridPower + house.MapBatteryPower
-	// В гараже пока нет нагрузки — «остаток» нулевой.
-	garage.GaragePower = 0
+	// Мощность Гаража на развилке (счётчик CE308 — соединитель сети и гаража):
+	//   P_гараж = P(счётчик CE308) − Σac(инверторы гаража)
+	// где P(счётчик CE308) положительная при потреблении из сети, отрицательная
+	// при отдаче; инверторы гаража отдают положительную (выработка), поэтому при
+	// выработке она вычитается из потребления счётчика. Пример постановки:
+	// сеть +120 Вт, инверторы −1 Вт → в гараж +119 Вт.
+	// Если свежего снимка CE308 нет — мощности гаража не считаем (узел статичен).
+	garageAC := 0.0
+	for _, inv := range garage.Inverters {
+		garageAC += inv.AC
+	}
+	if ce308Power, ok := freshCE308Power(ce308, now); ok {
+		garage.Ce308Power = ce308Power
+		garage.GaragePower = ce308Power - garageAC
+	} else {
+		garage.Ce308Power = 0
+		garage.GaragePower = 0
+	}
 
 	res := animationResponse{
 		GeneratedAt: now.Format(time.RFC3339),
@@ -1062,6 +1090,7 @@ func buildAnimationResponse(devices []deviceSnapshot, placeByIP map[string]strin
 	res.House.MapBatteryPower = animRound1(res.House.MapBatteryPower)
 	res.House.MeterActivePower = animRound1(res.House.MeterActivePower)
 	res.House.HousePower = animRound1(res.House.HousePower)
+	res.Garage.Ce308Power = animRound1(res.Garage.Ce308Power)
 	res.Garage.GaragePower = animRound1(res.Garage.GaragePower)
 	for i := range res.House.Inverters {
 		res.House.Inverters[i].PV = animRound1(res.House.Inverters[i].PV)
@@ -1076,6 +1105,24 @@ func buildAnimationResponse(devices []deviceSnapshot, placeByIP map[string]strin
 		res.Garage.Inverters[i].AC = animRound1(res.Garage.Inverters[i].AC)
 	}
 	return res
+}
+
+// freshCE308Power возвращает суммарную активную мощность электросчётчика CE308
+// из свежего снимка (не старше окна staleCutoff, аналог stale в
+// buildAnimationResponse). ok=false, если CE308 не настроен/не опрошен или снимок
+// устарел — тогда мощность гаража на схеме не считаем.
+func freshCE308Power(ce308 map[string]ce308Snapshot, now time.Time) (float64, bool) {
+	staleCutoff := now.Add(-20 * time.Minute)
+	for _, sn := range ce308 {
+		ts, err := time.Parse(time.RFC3339, sn.Timestamp)
+		if err != nil || !ts.After(staleCutoff) {
+			continue
+		}
+		if v, ok := sn.Values[ce308ActiveP]; ok {
+			return v, true
+		}
+	}
+	return 0, false
 }
 
 // inverterKind определяет марку сетевого инвертора по снимку: поле Kind задаётся

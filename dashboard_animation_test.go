@@ -47,7 +47,7 @@ func TestBuildAnimationKindFromConfig(t *testing.T) {
 		// старый снимок Deye без телега dc_total_power → Kind из конфига "deye".
 		animSnapKind("Deye Off", "10.0.0.1", "Дом", old, map[string]float64{"ac_active_power": 0}, "deye"),
 	}
-	res := buildAnimationResponse(devices, nil, now)
+	res := buildAnimationResponse(devices, nil, nil, now)
 	if len(res.House.Inverters) != 1 {
 		t.Fatalf("want 1 inverter, got %d", len(res.House.Inverters))
 	}
@@ -80,7 +80,7 @@ func TestBuildAnimationResponse(t *testing.T) {
 		animSnapKind("Deye Off", "10.0.0.5", "Дом", old, map[string]float64{"ac_active_power": 500, "dc_total_power": 500}, "deye"),
 	}
 
-	res := buildAnimationResponse(devices, nil, now)
+	res := buildAnimationResponse(devices, nil, nil, now)
 
 	if len(res.House.Inverters) != 3 {
 		t.Fatalf("house inverters: want 3 (2 fresh + 1 stale), got %d (%v)", len(res.House.Inverters), res.House.Inverters)
@@ -123,6 +123,45 @@ func TestBuildAnimationResponse(t *testing.T) {
 	}
 }
 
+// TestBuildAnimationGarageMeter проверяет мощность Гаража на развилке со счётчиком
+// CE308: P_гараж = P(CE308) − Σac(инверторы гаража). Без свежего снимка CE308 —
+// мощность гаража нулевая (узел статичен).
+func TestBuildAnimationGarageMeter(t *testing.T) {
+	now := time.Now()
+	devices := []deviceSnapshot{
+		// Гараж: два инвертора — 30 Вт (Deye) и 20 Вт (Sofar). Σac = 50 Вт.
+		animSnapKind("Deye Гараж", "10.0.0.3", "Гараж", now, map[string]float64{"ac_active_power": 30, "dc_total_power": 35}, "deye"),
+		animSnapKind("Sofar Гараж", "10.0.0.4", "Гараж", now, map[string]float64{"ac_active_power": 20, "pv1_power": 25}, "sofar"),
+	}
+	// Свежий снимок CE308: потребление из сети 120 Вт.
+	ce308 := map[string]ce308Snapshot{
+		"CE308": {Name: "CE308", IP: "10.0.0.20", Timestamp: now.Format(time.RFC3339),
+			Values: map[string]float64{ce308ActiveP: 120}},
+	}
+	res := buildAnimationResponse(devices, ce308, nil, now)
+	if want := 120.0; res.Garage.Ce308Power != want {
+		t.Fatalf("ce308 power: want %v, got %v", want, res.Garage.Ce308Power)
+	}
+	// 120 − (30+20) = 70 Вт в гараж.
+	if want := 70.0; res.Garage.GaragePower != want {
+		t.Fatalf("garage power: want %v, got %v", want, res.Garage.GaragePower)
+	}
+	// Без свежего снимка CE308 — мощности гаража не считаем (0).
+	res2 := buildAnimationResponse(devices, nil, nil, now)
+	if res2.Garage.Ce308Power != 0 || res2.Garage.GaragePower != 0 {
+		t.Fatalf("без CE308: ce308=%v garage=%v, want 0/0", res2.Garage.Ce308Power, res2.Garage.GaragePower)
+	}
+	// Устаревший снимок CE308 — тоже не считаем.
+	staleCE := map[string]ce308Snapshot{
+		"CE308": {Name: "CE308", IP: "10.0.0.20", Timestamp: now.Add(-time.Hour).Format(time.RFC3339),
+			Values: map[string]float64{ce308ActiveP: 120}},
+	}
+	res3 := buildAnimationResponse(devices, staleCE, nil, now)
+	if res3.Garage.GaragePower != 0 {
+		t.Fatalf("stale ce308: garage=%v, want 0", res3.Garage.GaragePower)
+	}
+}
+
 // TestBuildAnimationStaleMark проверяет, что «молчащие» (снимок старше окна)
 // устройства помечаются Stale=true и их мощность не влияет на формулу Дома.
 func TestBuildAnimationStaleMark(t *testing.T) {
@@ -134,7 +173,7 @@ func TestBuildAnimationStaleMark(t *testing.T) {
 	}
 	// Молчащий инвертор (снимок > 20 мин) в формуле Дома не участвует: его
 	// устаревшая мощность (700 Вт) не «оживляет» дом ночью.
-	res := buildAnimationResponse(devices, nil, now)
+	res := buildAnimationResponse(devices, nil, nil, now)
 	if len(res.House.Inverters) != 1 || !res.House.Inverters[0].Stale {
 		t.Fatalf("inverter должен быть Stale=true: %v", res.House.Inverters)
 	}
@@ -160,7 +199,7 @@ func TestBuildAnimationPlacementFromConfig(t *testing.T) {
 		animSnap("Stale Left", "10.0.0.70", "", now, map[string]float64{"ac_active_power": 700}),
 	}
 	placeByIP := map[string]string{"10.0.0.70": "Гараж"}
-	res := buildAnimationResponse(devices, placeByIP, now)
+	res := buildAnimationResponse(devices, nil, placeByIP, now)
 	if len(res.Garage.Inverters) != 1 || res.Garage.Inverters[0].Name != "Stale Left" {
 		t.Fatalf("инвертор из по конфигу должен быть в гараже: house=%v garage=%v",
 			res.House.Inverters, res.Garage.Inverters)
@@ -208,7 +247,7 @@ func TestBuildAnimationTemperatures(t *testing.T) {
 		}, "sofar"),
 	}
 
-	res := buildAnimationResponse(devices, nil, now)
+	res := buildAnimationResponse(devices, nil, nil, now)
 
 	// Панель над МАП: Тор и Транзисторы.
 	if len(res.House.MapTemps) != 2 {

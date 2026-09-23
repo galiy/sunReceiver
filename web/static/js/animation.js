@@ -16,6 +16,7 @@
 var SPR = {
   grid:    {file:'power-line-pylon', w:64, h:135},
   meter:   {file:'dds238-meter',     w:150,h:126}, // растянут в ширину (PNG 756×800)
+  ce308:   {file:'ce308-meter',      w:64, h:76},
   map:     {file:'map-converter',    w:120,h:51},
   house:   {file:'country-house',    w:120,h:86},
   garage:  {file:'garage',           w:110,h:78},
@@ -506,39 +507,40 @@ function layoutHouse(data){
 }
 
 // ---------- Схема Гаража ----------
-// Магистраль сверху (сеть слева → «Внутренняя сеть» → гараж справа); от шины вниз
-// ветвь инверторов → панели.
+// Магистраль сверху: Сеть → Счётчик CE308(развилка) → Гараж. От счётчика (развилки)
+// вниз ветвь инверторов → панели. Мощность счётчик↔сеть — по данным CE308; мощность
+// в гараж (справа от развилки) = P(CE308) − Σac(инверторы гаража).
 function layoutGarage(data){
   var invs=data.inverters||[];
   var n=invs.length;
   var MAI=150, BUSY=320, INVY=430, PANY=560;
-  var gridX=110, innerX=710, garageX=810;
+  var gridX=110, meterX=460, garageX=810; // meterX — центр шины (развилка счётчика)
   var invXs=spread(140, 780, n);
 
   var nodes=[
-    {key:'grid', cx:gridX, cy:MAI, label:'Сеть'},
+    {key:'grid',  cx:gridX,  cy:MAI, label:'Сеть'},
+    {key:'ce308', cx:meterX, cy:MAI, label:'Счётчик'},
     {key:'garage',cx:garageX,cy:MAI,label:'Гараж', raise:24}
   ];
 
   var edges=[
-    // Сеть → шина (магистраль). При выдаче (Σac>0) энергия идёт в сеть (влево),
-    // при потреблении — из сети (вправо).
-    {pts:[[gridX,MAI],[innerX,MAI]], rule:{greenSign:1,greenDir:'toStart',labelSign:-1},
-     label:{x:(gridX+innerX)/2, y:MAI-12},
-     getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }},
-    // Шина → гараж.
-    {pts:[[innerX,MAI],[garageX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
-     label:{x:(innerX+garageX)/2, y:MAI-12},
+    // Сеть → счётчик CE308. Потребление из сети (CE308>0) — красный, отдача — зелёный.
+    {pts:[[gridX,MAI],[meterX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
+     label:{x:(gridX+meterX)/2, y:MAI-12},
+     getValue:function(d){return d.ce308_power;}},
+    // Счётчик(развилка) → гараж (справа). P_гараж = P(CE308) − Σac(инверторы).
+    {pts:[[meterX,MAI],[garageX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
+     label:{x:(meterX+garageX)/2, y:MAI-12},
      getValue:function(d){return d.garage_power;}}
   ];
 
   if(n>0){
     var x1=invXs[0], x2=invXs[n-1];
-    // Шина → вниз к горизонтальной шине инверторов — прямая вертикаль. При выдаче
-    // (Σac>0) энергия идёт от инверторов вверх к магистрали (toStart).
-    edges.push({pts:[[innerX,MAI],[innerX,BUSY]],
+    // Развилка (от счётчика) → вниз к горизонтальной шине инверторов. При выдаче
+    // (Σac>0) энергия идёт от инверторов вверх к счётчику (toStart).
+    edges.push({pts:[[meterX,MAI],[meterX,BUSY]],
       rule:{greenSign:1,greenDir:'toStart',labelSign:-1},
-      label:{x:innerX-14, y:(MAI+BUSY)/2},
+      label:{x:meterX-14, y:(MAI+BUSY)/2},
       getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }});
     edges.push({bus:true, x1:x1, x2:x2, y:BUSY, bolts:invXs});
     for(var i=0;i<n;i++){
