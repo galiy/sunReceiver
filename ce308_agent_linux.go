@@ -145,12 +145,34 @@ func (a *ce308BlueZAgent) AuthorizeService(device dbus.ObjectPath, uuid string) 
 
 func (a *ce308BlueZAgent) Cancel() error { return nil }
 
+// ce308DeviceKnown — true, если BlueZ «знает» объект устройства по MAC (объект
+// /org/bluez/<hci>/dev_* существует: устройство спарено/обнаружено ранее). Только
+// чтение, без discovery. Определяет, нужен ли fallback-discovery перед Connect.
+func ce308DeviceKnown(mac string) bool {
+	bus, err := dbus.SystemBus()
+	if err != nil {
+		return false
+	}
+	id, err := ce308AdapterID()
+	if err != nil {
+		return false
+	}
+	devPath := dbus.ObjectPath("/org/bluez/" + id + "/dev_" + strings.Replace(strings.ToUpper(mac), ":", "_", -1))
+	var v bool
+	e := bus.Object("org.bluez", devPath).
+		Call("org.freedesktop.DBus.Properties.Get", 0, "org.bluez.Device1", "Connected").Store(&v)
+	return e == nil
+}
+
 // ensureCE308Known (Linux) гарантирует, что BlueZ «знает» объект устройства по
 // MAC: без предварительного discovery tinygo Connect падает — объект
 // /org/bluez/hci0/dev_* отсутствует, и Properties.Get даёт UnknownMethod.
 // Если объект уже известен (устройство спарено ранее) — return nil. Иначе
 // запускаем короткий discovery и ждём появления устройства.
 func ensureCE308Known(mac string) error {
+	if ce308DeviceKnown(mac) {
+		return nil
+	}
 	bus, err := dbus.SystemBus()
 	if err != nil {
 		return fmt.Errorf("system bus: %w", err)
