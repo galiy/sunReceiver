@@ -82,7 +82,7 @@ func runCe308Poll(store *redisStore, pg *pgStore, cfg *ce308Config, ctx context.
 	var lastFailLog time.Time
 	reconnect := ce308ReconnectDelay
 	for {
-		m, err := openCE308(cfg.MAC, cfg.PIN)
+		m, err := openCE308(cfg.MAC, cfg.PIN, ctx)
 		if err != nil {
 			if time.Since(lastFailLog) >= ce308ConnFailLogInterval {
 				logCE308("подключение к %s не удалось: %v", cfg.MAC, err)
@@ -99,7 +99,11 @@ func runCe308Poll(store *redisStore, pg *pgStore, cfg *ce308Config, ctx context.
 		reconnect = ce308ReconnectDelay
 		logCE308("подключено к %s", cfg.MAC)
 		err = ce308PollConnected(store, cfg, m, trig, ctx)
-		m.Close()
+		// Закрытие соединения: фиксируем результат (неуспешный Disconnect при
+		// остановке оставляет полу-открытую связь на адаптере — см. Close).
+		if cerr := m.Close(); cerr != nil {
+			logCE308("закрытие соединения с %s: %v", cfg.MAC, cerr)
+		}
 		if ctx.Err() != nil {
 			return
 		}
@@ -138,6 +142,10 @@ func ce308PollConnected(store *redisStore, cfg *ce308Config, m *ce308Meter, trig
 		select {
 		case <-ticker.C:
 			if err := ce308PollOnce(store, cfg, m); err != nil {
+				if isCE308Closed(err) {
+					// Остановка сервиса: чтение прервано — выходим и закрываем соединение.
+					return err
+				}
 				consecFails++
 				if consecFails >= ce308ConsecutiveFailLimit {
 					// Счётчик подряд молчит / чтения не проходят — соединение считаем
@@ -158,6 +166,9 @@ func ce308PollConnected(store *redisStore, cfg *ce308Config, m *ce308Meter, trig
 			}
 		case <-energyT.C:
 			if err := ce308CaptureEnergy(store, cfg, m); err != nil {
+				if isCE308Closed(err) {
+					return err
+				}
 				// Ошибка чтения энергии не рвёт постоянное соединение — просто
 				// логируем; следующий опрос мгновенных значений продолжится.
 				logCE308("автоснимок энергии не удался: %v", err)
@@ -165,6 +176,9 @@ func ce308PollConnected(store *redisStore, cfg *ce308Config, m *ce308Meter, trig
 			energyT.Reset(ce308EnergyInterval)
 		case <-trig:
 			if err := ce308CaptureEnergy(store, cfg, m); err != nil {
+				if isCE308Closed(err) {
+					return err
+				}
 				// Ошибка чтения энергии не рвёт постоянное соединение — просто
 				// логируем; следующий опрос мгновенных значений продолжится.
 				logCE308("снимок энергии не удался: %v", err)
