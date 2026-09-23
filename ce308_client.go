@@ -85,6 +85,10 @@ func openCE308(mac string, pin string) (*ce308Meter, error) {
 	if err := a.Enable(); err != nil {
 		return nil, fmt.Errorf("включение BLE-адаптера: %w", err)
 	}
+	// BlueZ должен «знать» объект устройства, иначе tinygo Connect падает.
+	if err := ensureCE308Known(mac); err != nil {
+		return nil, err
+	}
 	mac6, err := bluetooth.ParseMAC(mac)
 	if err != nil {
 		return nil, fmt.Errorf("неверный MAC %q: %w", mac, err)
