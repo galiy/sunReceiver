@@ -26,7 +26,71 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"tinygo.org/x/bluetooth"
 )
+
+// Штатный id контроллера, на который зашит tinygo DefaultAdapter.
+const ce308DefaultAdapterID = "hci0"
+
+// ce308AdapterID — фактический id BLE-адаптера BlueZ, на котором работаем.
+// tinygo жёстко использует DefaultAdapter = hci0, но USB-адаптер может после
+// реинициализации получить другой номер (hci1, hci2, …), и тогда tinygo не
+// находит устройство. Здесь детектируем реально существующий контроллер.
+func ce308AdapterID() (string, error) {
+	ce308AdMu.Lock()
+	defer ce308AdMu.Unlock()
+	if ce308AdapterIDCached != "" {
+		return ce308AdapterIDCached, nil
+	}
+	bus, err := dbus.SystemBus()
+	if err != nil {
+		return "", fmt.Errorf("system bus: %w", err)
+	}
+	for i := 0; i < 10; i++ {
+		id := fmt.Sprintf("hci%d", i)
+		var addr string
+		e := bus.Object("org.bluez", dbus.ObjectPath("/org/bluez/"+id)).
+			Call("org.freedesktop.DBus.Properties.Get", 0, "org.bluez.Adapter1", "Address").Store(&addr)
+		if e == nil && addr != "" && addr != "00:00:00:00:00:00" {
+			ce308AdapterIDCached = id
+			return id, nil
+		}
+	}
+	return "", fmt.Errorf("BLE-адаптер BlueZ не найден (нет hci0..hci9)")
+}
+
+// ce308EnsurePowered проверяет, что BLE-адаптер включён (Powered=true), и,
+// если нет, включает его через BlueZ (Properties.Set). Заодно перенацеливает
+// tinygo DefaultAdapter на реальный контроллер, если тот не hci0 (из-за
+// перенумерации USB). Не фатально: при недоступном агенте подключение всё равно
+// пойдёт на DefaultAdapter, а ошибка уйдёт в штатный отчёт подключения.
+func ce308EnsurePowered() error {
+	id, err := ce308AdapterID()
+	if err != nil {
+		return err
+	}
+	if id != ce308DefaultAdapterID {
+		bluetooth.DefaultAdapter = bluetooth.NewAdapter(id)
+		logCE308("BLE-адаптер обнаружен как %s (tinygo перенацелен с hci0)", id)
+	}
+	bus, err := dbus.SystemBus()
+	if err != nil {
+		return fmt.Errorf("system bus: %w", err)
+	}
+	adapter := bus.Object("org.bluez", dbus.ObjectPath("/org/bluez/"+id))
+	var powered bool
+	if err := adapter.Call("org.freedesktop.DBus.Properties.Get", 0, "org.bluez.Adapter1", "Powered").Store(&powered); err != nil {
+		return fmt.Errorf("чтение Powered адптера %s: %w", id, err)
+	}
+	if powered {
+		return nil
+	}
+	if err := adapter.Call("org.freedesktop.DBus.Properties.Set", 0, "org.bluez.Adapter1", "Powered", dbus.MakeVariant(true)).Err; err != nil {
+		return fmt.Errorf("включение Powered адптера %s: %w", id, err)
+	}
+	logCE308("адаптер %s был выключен — включён программно", id)
+	return nil
+}
 
 // Счётчик Энергомера при первом спаривании запрашивает passkey (BLE-PIN) через
 // BlueZ-агента. tinygo.org/x/bluetooth сам агента не регистрирует, поэтому
@@ -36,6 +100,9 @@ import (
 var (
 	ce308RegMu  sync.Mutex
 	ce308RegPin string
+	// ce308AdapterIDCached — кэш id контроллера (сбрасывать редко: переинициализация).
+	ce308AdapterIDCached string
+	ce308AdMu            sync.Mutex
 )
 
 // ce308BlueZAgent — реализация org.bluez.Agent1; всегда подтверждает/отвечает
@@ -82,7 +149,11 @@ func ensureCE308Known(mac string) error {
 	if err != nil {
 		return fmt.Errorf("system bus: %w", err)
 	}
-	devPath := dbus.ObjectPath("/org/bluez/hci0/dev_" + strings.Replace(strings.ToUpper(mac), ":", "_", -1))
+	id, err := ce308AdapterID()
+	if err != nil {
+		return err
+	}
+	devPath := dbus.ObjectPath("/org/bluez/" + id + "/dev_" + strings.Replace(strings.ToUpper(mac), ":", "_", -1))
 	known := func() bool {
 		var v bool
 		e := bus.Object("org.bluez", devPath).
@@ -92,7 +163,7 @@ func ensureCE308Known(mac string) error {
 	if known() {
 		return nil
 	}
-	adapter := bus.Object("org.bluez", dbus.ObjectPath("/org/bluez/hci0"))
+	adapter := bus.Object("org.bluez", dbus.ObjectPath("/org/bluez/"+id))
 	// Сбрасываем возможное зависшее discovery и запускаем новое.
 	_ = adapter.Call("org.bluez.Adapter1.StopDiscovery", 0).Err
 	if err := adapter.Call("org.bluez.Adapter1.StartDiscovery", 0).Err; err != nil {

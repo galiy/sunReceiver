@@ -29,3 +29,9 @@ func registerCE308Agent(pin string) error {
 func ensureCE308Known(mac string) error {
 	return nil
 }
+
+// ce308EnsurePowered — no-op вне Linux: питание адаптера управляется ОС
+// (Windows) или стеком Bluetooth (macOS). Возвращает nil.
+func ce308EnsurePowered() error {
+	return nil
+}
