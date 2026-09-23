@@ -127,7 +127,7 @@ func openCE308(mac string, pin string, ctx context.Context) (*ce308Meter, error)
 	}
 
 	// Попытка 1: прямой Connect (быстрый путь при известном/спаренном устройстве).
-	m, err := connectCE308(mac, ctx)
+	m, err := connectCE308Bounded(mac, ctx)
 	if err == nil {
 		return m, nil
 	}
@@ -141,7 +141,47 @@ func openCE308(mac string, pin string, ctx context.Context) (*ce308Meter, error)
 	if e := ensureCE308Known(mac); e != nil {
 		return nil, fmt.Errorf("подключение к %s: %v; устройство не обнаружено по BLE: %w", mac, err, e)
 	}
-	return connectCE308(mac, ctx)
+	return connectCE308Bounded(mac, ctx)
+}
+
+// ce308ConnectTimeout — лимит на одну попытку подключения к счётчику.
+// tinygo Connect (D-Bus org.bluez.Device1.Connect через godbus) на «зависшем»
+// контроллере может блокироваться бесконечно (вызов без дедлайна). Таймаут
+// гарантирует, что пулер вернётся в reconnect-цикл и сможет переподключиться
+// после переинициализации адаптера (watchdog перезагружает btusb) без рестарта
+// сервиса.
+const ce308ConnectTimeout = 20 * time.Second
+
+// connectCE308Bounded выполняет connectCE308 с ограничением по времени (см.
+// ce308ConnectTimeout), чтобы зависший Connect не блокировал пулер навсегда.
+// Если Connect успел завершиться после таймаута — незатребованное соединение
+// закрывается (если результат уже готов), иначе горутина остаётся висеть до
+// ответа BlueZ (редко, при устойчиво зависшем радио).
+func connectCE308Bounded(mac string, ctx context.Context) (*ce308Meter, error) {
+	type res struct {
+		m   *ce308Meter
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		m, err := connectCE308(mac, ctx)
+		ch <- res{m, err}
+	}()
+	select {
+	case r := <-ch:
+		return r.m, r.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(ce308ConnectTimeout):
+		select {
+		case r := <-ch:
+			if r.m != nil {
+				_ = r.m.Close()
+			}
+		default:
+		}
+		return nil, fmt.Errorf("подключение к %s: превышено %s", mac, ce308ConnectTimeout)
+	}
 }
 
 // connectCE308 выполняет подключение по MAC и открывает нужные GATT-характеристики.

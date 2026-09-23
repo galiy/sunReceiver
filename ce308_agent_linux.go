@@ -67,18 +67,21 @@ func ce308AdapterID() (string, error) {
 
 // ce308EnsurePowered проверяет, что BLE-адаптер включён (Powered=true), и,
 // если нет, включает его через BlueZ (Properties.Set). Заодно перенацеливает
-// tinygo DefaultAdapter на реальный контроллер, если тот не hci0 (из-за
-// перенумерации USB). Не фатально: при недоступном агенте подключение всё равно
-// пойдёт на DefaultAdapter, а ошибка уйдёт в штатный отчёт подключения.
+// tinygo DefaultAdapter на реальный контроллер (см. ce308AdapterID) — причём
+// всегда, а не только при смене номера (hci0→hci1): это позволяет пулеру
+// переподключиться без рестарта сервиса после внешней переинициализации
+// USB-адаптера (watchdog перезагружает драйвер btusb). Не фатально: при
+// недоступном агенте подключение всё равно пойдёт на DefaultAdapter, а ошибка
+// уйдёт в штатный отчёт подключения.
 func ce308EnsurePowered() error {
 	id, err := ce308AdapterID()
 	if err != nil {
 		return err
 	}
 	if id != ce308DefaultAdapterID {
-		bluetooth.DefaultAdapter = bluetooth.NewAdapter(id)
-		logCE308("BLE-адаптер обнаружен как %s (tinygo перенацелен с hci0)", id)
+		logCE308("BLE-адаптер обнаружен как %s (tinygo перенацелен с %s)", id, ce308DefaultAdapterID)
 	}
+	bluetooth.DefaultAdapter = bluetooth.NewAdapter(id)
 	bus, err := dbus.SystemBus()
 	if err != nil {
 		return fmt.Errorf("system bus: %w", err)
@@ -96,6 +99,17 @@ func ce308EnsurePowered() error {
 	}
 	logCE308("адаптер %s был выключен — включён программно", id)
 	return nil
+}
+
+// ce308AdapterIDReset сбрасывает кэш id контроллера, чтобы следующий вызов
+// ce308AdapterID заново обнаружил реальный BLE-адаптер. Нужно после внешней
+// переинициализации USB-адаптера (watchdog перезагружает драйвер btusb): иначе
+// закэшированный id держал бы пулер на мёртвом контроллере, и повторное
+// подключение не прошло бы без рестарта сервиса.
+func ce308AdapterIDReset() {
+	ce308AdMu.Lock()
+	ce308AdapterIDCached = ""
+	ce308AdMu.Unlock()
 }
 
 // Счётчик Энергомера при первом спаривании запрашивает passkey (BLE-PIN) через

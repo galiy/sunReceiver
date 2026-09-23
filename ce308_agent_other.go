@@ -41,3 +41,6 @@ func ce308DeviceKnown(mac string) bool {
 func ce308EnsurePowered() error {
 	return nil
 }
+
+// ce308AdapterIDReset — no-op вне Linux (нет смены номера контроллера BlueZ).
+func ce308AdapterIDReset() {}
