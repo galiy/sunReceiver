@@ -507,14 +507,15 @@ function layoutHouse(data){
 }
 
 // ---------- Схема Гаража ----------
-// Магистраль сверху: Сеть → Счётчик CE308(развилка) → Гараж. От счётчика (развилки)
-// вниз ветвь инверторов → панели. Мощность счётчик↔сеть — по данным CE308; мощность
+// Магистраль сверху: Сеть → Счётчик CE308(развилка) → Гараж. От точки (стыка труб)
+// вправо от счётчика — вниз ветвь инверторов → панели; счётчик стоит левее стыка,
+// чтобы не находиться над ним. Мощность счётчик↔сеть — по данным CE308; мощность
 // в гараж (справа от развилки) = P(CE308) − Σac(инверторы гаража).
 function layoutGarage(data){
   var invs=data.inverters||[];
   var n=invs.length;
   var MAI=150, BUSY=320, INVY=430, PANY=560;
-  var gridX=110, meterX=460, garageX=810; // meterX — центр шины (развилка счётчика)
+  var gridX=110, meterX=330, dropX=620, garageX=810; // meterX — счётчик (слева), dropX — стык труб (справа)
   var invXs=spread(140, 780, n);
 
   var nodes=[
@@ -528,7 +529,7 @@ function layoutGarage(data){
     {pts:[[gridX,MAI],[meterX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
      label:{x:(gridX+meterX)/2, y:MAI-12},
      getValue:function(d){return d.ce308_power;}},
-    // Счётчик(развилка) → гараж (справа). P_гараж = P(CE308) − Σac(инверторы).
+    // Счётчик → гараж (справа). P_гараж = P(CE308) − Σac(инверторы).
     {pts:[[meterX,MAI],[garageX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
      label:{x:(meterX+garageX)/2, y:MAI-12},
      getValue:function(d){return d.garage_power;}}
@@ -536,11 +537,11 @@ function layoutGarage(data){
 
   if(n>0){
     var x1=invXs[0], x2=invXs[n-1];
-    // Развилка (от счётчика) → вниз к горизонтальной шине инверторов. При выдаче
-    // (Σac>0) энергия идёт от инверторов вверх к счётчику (toStart).
-    edges.push({pts:[[meterX,MAI],[meterX,BUSY]],
+    // Стык труб: от магистрали (вправо от счётчика) — вниз к горизонтальной шине
+    // инверторов. При выдаче (Σac>0) энергия идёт от инверторов вверх к магистрали.
+    edges.push({pts:[[dropX,MAI],[dropX,BUSY]],
       rule:{greenSign:1,greenDir:'toStart',labelSign:-1},
-      label:{x:meterX-14, y:(MAI+BUSY)/2},
+      label:{x:dropX-14, y:(MAI+BUSY)/2},
       getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }});
     edges.push({bus:true, x1:x1, x2:x2, y:BUSY, bolts:invXs});
     for(var i=0;i<n;i++){
