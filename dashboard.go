@@ -44,6 +44,13 @@ const rangeCacheTTL = 15 * time.Second
 // 3 запроса к PG/сек (7200/мин) до ~1 раза в минуту без заметной задержки.
 const tariffCacheTTL = 60 * time.Second
 
+// ce308EnergyMinInterval — минимальный период между ручными снимками энергии CE308:
+// кнопка «Обновить» на дашборде не чаще раза в 5 минут. Защита от частых нажатий:
+// чтение END01..END04 занимает ~1.5-2 мин и на это время блокирует опрос мгновенных
+// значений (единственный последовательный BLE-канал). Повторный запрос раньше срока
+// отклоняется (429 + retry_after), без повторного снятия снимка.
+const ce308EnergyMinInterval = 5 * time.Minute
+
 // dashFlags — флаги видимости блоков на дашборде, вычисленные из sunReceiver.json.
 // Nonzero-поля управляют рендерингом рамок/плашек и кнопки «Электроэнергия»:
 //   - ShowMap — показывать блок «Данные МАП» (map.disabled != true);
@@ -99,6 +106,13 @@ type dashboardHandler struct {
 	tariffB  *meterBoundaryRow // границы текущего дня (00:00/07:00/23:00)
 	tariffM  [4]float64        // месяц: [importDay, importNight, exportDay, exportNight]
 	tariffY  [4]float64        // год:  [importDay, importNight, exportDay, exportNight]
+
+	// Ограничение частоты ручного снимка энергии CE308 (кнопка «Обновить», POST
+	// /api/ce308/energy): не чаще раза в ce308EnergyMinInterval. Хранится время
+	// последнего принятого (не отклонённого) сигнала. Шифруется мьютексом, т.к.
+	// /api/ce308/energy может вызываться конкурентно с разных вкладок.
+	ce308EnergyMu sync.Mutex
+	ce308EnergyAt time.Time
 }
 
 // cachedRange — кешированный результат loadRange.
@@ -1811,9 +1825,28 @@ func (h *dashboardHandler) apiCE308Current(w http.ResponseWriter, r *http.Reques
 }
 
 // apiCE308Energy отвечает на GET /api/ce308/energy?from&to: история мгновенных значений CE308.
-// Обрабатывает также POST-сигнал снятия показаний энергии.
+// Обрабатывает также POST-сигнал снятия показаний энергии (не чаще раза в 5 минут).
 func (h *dashboardHandler) apiCE308Energy(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
+		// Ручной снимок энергии ограничен по частоте (не чаще ce308EnergyMinInterval):
+		// иначе частые клики «Обновить» заставляют пулер подолгу читать END01..END04 и
+		// блокируют опрос мгновенных значений. Повторный запрос — 429 + retry_after.
+		h.ce308EnergyMu.Lock()
+		if !h.ce308EnergyAt.IsZero() {
+			if d := time.Since(h.ce308EnergyAt); d < ce308EnergyMinInterval {
+				delay := ce308EnergyMinInterval - d
+				h.ce308EnergyMu.Unlock()
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"accepted":    false,
+					"retry_after": delay.Seconds(),
+				})
+				return
+			}
+		}
+		h.ce308EnergyAt = time.Now()
+		h.ce308EnergyMu.Unlock()
 		ok := triggerCE308EnergySnapshot()
 		writeJSONResponse(w, map[string]bool{"accepted": ok})
 		return
