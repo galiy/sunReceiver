@@ -360,10 +360,16 @@ async function tickCE308(){
 		if(window.srRefresh && !window.srRefresh.isEnabled()) return;
 		// Фронтовая защита: не чаще раза в 5 минут (не дёргаем API при активном локе).
 		if((Date.now()-ce308RefreshAt) < 5*60*1000) return;
-		ce308RefreshReserve();
-		fetch('/api/ce308/energy',{method:'POST'}).catch(function(){}).finally(function(){
-			// Снимок уже зарезервирован на 5 мин — кнопка остаётся заблокированной.
-		});
+		btn.disabled=true; btn.textContent='…';
+		// Лок 5 мин ставим ТОЛЬКО если пулер принял сигнал (accepted:true).
+		// Иначе (очередь занята/пулер не запущен) кнопку сразу возвращаем.
+		fetch('/api/ce308/energy',{method:'POST'})
+			.then(function(r){ return r.ok ? r.json() : null; })
+			.then(function(j){
+				if(j && j.accepted){ ce308RefreshReserve(); }
+				else { btn.disabled=false; btn.textContent='Обновить'; }
+			})
+			.catch(function(){ btn.disabled=false; btn.textContent='Обновить'; });
 	});
 })();
 

@@ -232,9 +232,7 @@ func registerCE308Agent(pin string) error {
 	defer ce308RegMu.Unlock()
 	if ce308RegPin == pin && ce308RegPin != "" {
 		return nil
-
 	}
-	ce308RegPin = pin
 	n, err := strconv.ParseUint(pin, 10, 32)
 	if err != nil || n == 0 {
 		return fmt.Errorf("некорректный pin %q", pin)
@@ -244,18 +242,25 @@ func registerCE308Agent(pin string) error {
 		return fmt.Errorf("system bus: %w", err)
 	}
 	path := dbus.ObjectPath("/org/bluez/agentCE308")
+	manager := conn.Object("org.bluez", dbus.ObjectPath("/org/bluez"))
+	// Смена PIN: снимаем ранее зарегистрированного агента, иначе в BlueZ остался
+	// бы висеть старый обработчик со старым PIN.
+	if ce308RegPin != "" {
+		_ = manager.Call("org.bluez.AgentManager1.UnregisterAgent", 0, path).Err
+		ce308RegPin = ""
+	}
 	agent := &ce308BlueZAgent{pin: uint32(n)}
 	if err := conn.Export(agent, path, "org.bluez.Agent1"); err != nil {
 		return fmt.Errorf("export agent: %w", err)
 	}
-	manager := conn.Object("org.bluez", dbus.ObjectPath("/org/bluez"))
-	call := manager.Call("org.bluez.AgentManager1.RegisterAgent", 0, path, "KeyboardDisplay")
-	if call.Err != nil {
+	if call := manager.Call("org.bluez.AgentManager1.RegisterAgent", 0, path, "KeyboardDisplay"); call.Err != nil {
 		return fmt.Errorf("register agent: %w", call.Err)
 	}
-	call = manager.Call("org.bluez.AgentManager1.RequestDefaultAgent", 0, path)
-	if call.Err != nil {
+	if call := manager.Call("org.bluez.AgentManager1.RequestDefaultAgent", 0, path); call.Err != nil {
 		return fmt.Errorf("request default agent: %w", call.Err)
 	}
+	// Кэшируем PIN только после ПОЛНОГО успеха: иначе сбой на RegisterAgent/
+	// RequestDefaultAgent залипал бы как «уже зарегистрирован» до рестарта.
+	ce308RegPin = pin
 	return nil
 }

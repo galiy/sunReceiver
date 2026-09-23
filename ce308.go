@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -33,7 +35,7 @@ func logCE308(f string, a ...any) {
 // Энергомера СЕ308 (опрос по BLE). Disabled — ОБЯЗАТЕЛЬНОЕ поле: false —
 // счётчик опрашивается; true — опрос CE308 отключён.
 type ce308Section struct {
-	// Name — имя Bluetooth-устройства (BT-имя, напр. "CE308 #194232482"),
+	// Name — имя Bluetooth-устройства (BT-имя, напр. "CE308 #000000000"),
 	// используется для отображения и как ключ идентификатора в Redis/PG.
 	Name string `json:"name"`
 	// MAC — BD_ADDR счётчика (адрес для BLE-подключения).
@@ -193,34 +195,35 @@ func ce308ReadsValid(r ce308Reads) bool {
 	return true
 }
 
-// valuesCE308 строит map значений из показаний (напряжения/токи в исходных
-// единицах, мощности уже в Вт/вар, округлены до 1 знака). Используется обычная
+// valuesCE308 строит map значений из показаний (напряжения/токи/мощности в
+// исходных единицах, округление до 1 знака). Используется обычная
 // map[string]float64, а НЕ valuesContract: у последней MarshalJSON выводит только
 // общие теги контракта (commonContractTags), в которые теги ce308_* не входят —
 // иначе значения терялись бы при сериализации снимка.
+//
+// Σ мощности (ce308_active_power / ce308_reactive_power) — алгебраическая сумма
+// трёх фаз по знаку, а НЕ значение Σ из ответа счётчика (POWEP/POWEQ). Фазы могут
+// быть взаимоисключающими (одна отдаёт в сеть, другая потребляет), и знаковая
+// сумма фаз — физически корректный итог; это же значение выводит таблица дашборда,
+// поэтому графики и анимация считают по этому тегу, а не по полю счётчика.
 func valuesCE308(r ce308Reads) map[string]float64 {
 	out := map[string]float64{}
-	set := func(key string, vals []float64, i int) {
-		if i < len(vals) {
-			out[key] = ce308Round1(vals[i])
+	// putPhases кладёт округлённые значения фаз и возвращает их знаковую сумму.
+	putPhases := func(keys []string, vals []float64) float64 {
+		sum := 0.0
+		for i, key := range keys {
+			if i < len(vals) {
+				v := ce308Round1(vals[i])
+				out[key] = v
+				sum += v
+			}
 		}
+		return ce308Round1(sum)
 	}
-	setVolta := []string{ce308L1Voltage, ce308L2Voltage, ce308L3Voltage}
-	setCurre := []string{ce308L1Current, ce308L2Current, ce308L3Current}
-	setActive := []string{ce308L1ActiveP, ce308L2ActiveP, ce308L3ActiveP, ce308ActiveP}
-	setReact := []string{ce308L1ReactP, ce308L2ReactP, ce308L3ReactP, ce308ReactP}
-	for i, key := range setVolta {
-		set(key, r.Volta, i)
-	}
-	for i, key := range setCurre {
-		set(key, r.Curre, i)
-	}
-	for i, key := range setActive {
-		set(key, r.ActiveP, i)
-	}
-	for i, key := range setReact {
-		set(key, r.ReactiveP, i)
-	}
+	putPhases([]string{ce308L1Voltage, ce308L2Voltage, ce308L3Voltage}, r.Volta)
+	putPhases([]string{ce308L1Current, ce308L2Current, ce308L3Current}, r.Curre)
+	out[ce308ActiveP] = putPhases([]string{ce308L1ActiveP, ce308L2ActiveP, ce308L3ActiveP}, r.ActiveP)
+	out[ce308ReactP] = putPhases([]string{ce308L1ReactP, ce308L2ReactP, ce308L3ReactP}, r.ReactiveP)
 	return out
 }
 
@@ -288,14 +291,26 @@ func readCE308Energy(m *ce308Meter) (*ce308EnergySnapshot, error) {
 }
 
 // parseCE308End разбирает ответ ENDzz(): ENDzz(дата,сумма)(T1)(T2)(T3…).
-// Возвращает день (T1), ночь (T2) и сумму (T1+T2). Тарифы: T1 — день, T2 — ночь.
+// Возвращает день (T1), ночь (T2) и сумму по ВСЕМ тарифным группам (T1+T2+T3…).
+// Тарифы: T1 — день, T2 — ночь. Нечисловая тарифная группа (искажённый кадр на
+// нестабильном BLE) — ошибка, а не молчаливый 0.
 func parseCE308End(cmd, resp string) (day, night, total float64, err error) {
 	g := ce308Groups(resp)
 	if len(g) < 3 {
 		return 0, 0, 0, fmt.Errorf("%s: неожиданный ответ %q", cmd, resp)
 	}
-	v := ce308Floats([]string{g[1], g[2]})
-	return v[0], v[1], v[0] + v[1], nil
+	tariffs := make([]float64, 0, len(g)-1)
+	for _, x := range g[1:] {
+		v, perr := strconv.ParseFloat(strings.TrimSpace(x), 64)
+		if perr != nil {
+			return 0, 0, 0, fmt.Errorf("%s: нечисловой тариф %q в ответе %q", cmd, x, resp)
+		}
+		tariffs = append(tariffs, v)
+	}
+	for _, v := range tariffs {
+		total += v
+	}
+	return tariffs[0], tariffs[1], total, nil
 }
 
 // triggerCE308 — межгорутинный канал запроса снимка энергии. Устанавливается

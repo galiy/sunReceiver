@@ -1125,6 +1125,19 @@ func freshCE308Power(ce308 map[string]ce308Snapshot, now time.Time) (float64, bo
 	return 0, false
 }
 
+// ce308Name возвращает имя устройства CE308 детерминированно (лексикографически
+// минимальный ключ): map обходится в случайном порядке, а имя нужно как ключ
+// выборки PG/Redis. "" — если текущих снимков CE308 нет.
+func ce308Name(cur map[string]ce308Snapshot) string {
+	name := ""
+	for k := range cur {
+		if name == "" || k < name {
+			name = k
+		}
+	}
+	return name
+}
+
 // inverterKind определяет марку сетевого инвертора по снимку: поле Kind задаётся
 // пулером из конфига (invTarget.Kind) и содержит "deye"/"sofar"/"kes". Для
 // старых снимков без Kind — эвристика по тегам: наличие dc_total_power (тег только
@@ -1895,8 +1908,9 @@ func (h *dashboardHandler) apiCE308Current(w http.ResponseWriter, r *http.Reques
 	writeJSONResponse(w, cur)
 }
 
-// apiCE308Energy отвечает на GET /api/ce308/energy?from&to: история мгновенных значений CE308.
-// Обрабатывает также POST-сигнал снятия показаний энергии (не чаще раза в 5 минут).
+// apiCE308Energy обрабатывает GET и POST /api/ce308/energy. GET отдаёт последний
+// разовый снимок накопленной энергии CE308; POST — сигнал пулеру снять свежий
+// снимок (не чаще раза в ce308EnergyMinInterval, иначе 429).
 func (h *dashboardHandler) apiCE308Energy(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		// Ручной снимок энергии ограничен по частоте (не чаще ce308EnergyMinInterval):
@@ -1964,11 +1978,7 @@ func (h *dashboardHandler) apiCE308Series(w http.ResponseWriter, r *http.Request
 		return
 	}
 	cur, _ := h.store.CE308Current()
-	name := ""
-	for _, snap := range cur {
-		name = snap.Name
-		break
-	}
+	name := ce308Name(cur)
 	if name == "" {
 		http.Error(w, "нет данных CE308", http.StatusNotFound)
 		return
@@ -2038,11 +2048,7 @@ func (h *dashboardHandler) ce308SeriesRange(from, to time.Time, now time.Time) (
 	if err != nil {
 		return nil, err
 	}
-	name := ""
-	for _, snap := range cur {
-		name = snap.Name
-		break
-	}
+	name := ce308Name(cur)
 	if name == "" {
 		return nil, nil
 	}
