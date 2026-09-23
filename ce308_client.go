@@ -18,6 +18,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -45,9 +46,21 @@ const (
 // постоянное соединение (см. readCE308WithRetries).
 var errCE308ReadTimeout = errors.New("нет ответа счётчика по BLE (таймаут)")
 
+// errCE308Closed — признак, что чтение прервано намеренно из-за отмены контекста
+// (остановка сервиса): пулер должен немедленно выйти и корректно закрыть BLE-соединение,
+// а не дожидаться исчерпания таймаута чтения (END-команды до 45 с) и попасть под
+// SIGKILL с полу-открытой связью.
+var errCE308Closed = errors.New("чтение прервано (остановка сервиса)")
+
 // isCE308ReadTimeout — true, если ошибка является таймаутом чтения.
 func isCE308ReadTimeout(err error) bool {
 	return errors.Is(err, errCE308ReadTimeout)
+}
+
+// isCE308Closed — true, если ошибка — намеренное прерывание чтения при остановке
+// (проходит сквозь %w-обёртки buildCE308Reads/readCE308Energy).
+func isCE308Closed(err error) bool {
+	return errors.Is(err, errCE308Closed)
 }
 
 var ce308RxUUIDs = []string{
@@ -78,6 +91,11 @@ type ce308Meter struct {
 	rx      []bluetooth.DeviceCharacteristic
 	mtu     int
 
+	// ctx — контекст пулера (отменяется при остановке сервиса). Позволяет
+	// прервать in-flight чтение (см. Read), чтобы shutdown не блокировался на
+	// долгом BLE-чтении и успел корректно закрыть соединение.
+	ctx context.Context
+
 	mu     sync.Mutex
 	notify chan struct{}
 	frags  int
@@ -91,7 +109,7 @@ type ce308Meter struct {
 // оно спарено, объект /org/bluez/<hci>/dev_* существует). Только если прямой Connect
 // не удался И устройства нет в BlueZ — как fallback запускаем короткий discovery и
 // повторяем Connect. Discovery больше не является обязательным предусловием.
-func openCE308(mac string, pin string) (*ce308Meter, error) {
+func openCE308(mac string, pin string, ctx context.Context) (*ce308Meter, error) {
 	if err := registerCE308Agent(pin); err != nil {
 		// Не фатально: если устройство уже спарено с хостом, агент не нужен.
 		// Логируем и продолжаем — лишний вывод раз в подключение приемлем.
@@ -109,7 +127,7 @@ func openCE308(mac string, pin string) (*ce308Meter, error) {
 	}
 
 	// Попытка 1: прямой Connect (быстрый путь при известном/спаренном устройстве).
-	m, err := connectCE308(mac)
+	m, err := connectCE308(mac, ctx)
 	if err == nil {
 		return m, nil
 	}
@@ -123,13 +141,18 @@ func openCE308(mac string, pin string) (*ce308Meter, error) {
 	if e := ensureCE308Known(mac); e != nil {
 		return nil, fmt.Errorf("подключение к %s: %v; устройство не обнаружено по BLE: %w", mac, err, e)
 	}
-	return connectCE308(mac)
+	return connectCE308(mac, ctx)
 }
 
 // connectCE308 выполняет подключение по MAC и открывает нужные GATT-характеристики.
 // Общая часть для прямого подключения и повтора после discovery. При ошибке
 // гарантированно разрывает уже установленное соединение.
-func connectCE308(mac string) (m *ce308Meter, err error) {
+func connectCE308(mac string, ctx context.Context) (m *ce308Meter, err error) {
+	// Ниль-контекст отключает прерывание чтений (Done() возвращает nil-канал —
+	// ветка в select не сработает), но не даёт паники на m.ctx.Done().
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	a := bluetooth.DefaultAdapter
 	mac6, err := bluetooth.ParseMAC(mac)
 	if err != nil {
@@ -171,7 +194,7 @@ func connectCE308(mac string) (m *ce308Meter, err error) {
 		return nil, fmt.Errorf("поиск характеристик: %w", err)
 	}
 
-	m = &ce308Meter{adapter: a, dev: dev, tx: chars[0], rx: chars[1:], mtu: 23, notify: make(chan struct{}, 1)}
+	m = &ce308Meter{adapter: a, dev: dev, tx: chars[0], rx: chars[1:], mtu: 23, ctx: ctx, notify: make(chan struct{}, 1)}
 	if mtu, err2 := m.tx.GetMTU(); err2 == nil && mtu > 23 {
 		m.mtu = int(mtu)
 	}
@@ -194,12 +217,13 @@ func (m *ce308Meter) onNotify(buf []byte) {
 	}
 }
 
-// Close разрывает соединение (при обрыве/завершении).
-func (m *ce308Meter) Close() {
+// Close разрывает соединение и возвращает ошибку (для диагностики при остановке
+// сервиса: неуспешный Disconnect оставляет полу-открытую связь на адаптере).
+func (m *ce308Meter) Close() error {
 	if m == nil {
-		return
+		return nil
 	}
-	_ = m.dev.Disconnect()
+	return m.dev.Disconnect()
 }
 
 // reset сбрасывает состояние приёма перед чтением: обнуляет число ожидаемых
@@ -215,11 +239,21 @@ func (m *ce308Meter) reset() {
 }
 
 // Read отправляет команду и возвращает ответ строкой (без служебных байт).
+// Чтение прерывается при отмене контекста (errCE308Closed), чтобы при остановке
+// сервиса не ждать исчерпания таймаута (END-команды до 45 с) и успеть корректно
+// закрыть соединение (см. Close).
 func (m *ce308Meter) Read(cmd string) (string, error) {
 	// Сброс состояния перед каждым чтением: после таймаута счётчик может задержать
 	// нотификацию, которая «всплывёт» позже и подставится под следующую команду
 	// (неверный frags/ответ). Дренируем канал и обнуляем счётчик фрагментов.
 	m.reset()
+	if m.ctx != nil {
+		select {
+		case <-m.ctx.Done():
+			return "", errCE308Closed
+		default:
+		}
+	}
 	frame := buildCE308Frame(cmd)
 	for _, pkt := range ce308Fragments(frame, m.mtu) {
 		if _, err := m.tx.WriteWithoutResponse(pkt); err != nil {
@@ -230,6 +264,8 @@ func (m *ce308Meter) Read(cmd string) (string, error) {
 	case <-m.notify:
 	case <-time.After(ce308TimeoutFor(cmd)):
 		return "", fmt.Errorf("%s: %w", cmd, errCE308ReadTimeout)
+	case <-m.ctx.Done():
+		return "", errCE308Closed
 	}
 
 	m.mu.Lock()
