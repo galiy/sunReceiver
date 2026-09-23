@@ -116,7 +116,13 @@ func ce308PollOnce(store *redisStore, cfg *ce308Config, m *ce308Meter) error {
 	if err != nil {
 		return fmt.Errorf("опрос %s: %w", cfg.MAC, err)
 	}
-	snap := deviceSnapshot{
+	if !ce308ReadsValid(reads) {
+		// Нестабильный BLE-канал: кадр искажён (NaN/Inf или нереальные значения) —
+		// снимок отбрасываем, но постоянное соединение не разрываем.
+		logCE308("опрос %s: невалидные показания — снимок отброшен", cfg.MAC)
+		return nil
+	}
+	snap := ce308Snapshot{
 		Name:      cfg.Name,
 		IP:        cfg.MAC,
 		Timestamp: ce308Timestamp(now),
