@@ -86,6 +86,11 @@ type ce308Meter struct {
 // openCE308 подключается к счётчику по MAC и открывает нужные характеристики.
 // Перед подключением регистрируется BlueZ-агент для ответа на запрос PIN при
 // первом спаривании (см. ce308_agent_linux.go / ce308_agent_other.go).
+//
+// Сначала пробуем ПРЯМОЙ Connect (скан не нужен, если BlueZ уже «знает» устройство —
+// оно спарено, объект /org/bluez/<hci>/dev_* существует). Только если прямой Connect
+// не удался И устройства нет в BlueZ — как fallback запускаем короткий discovery и
+// повторяем Connect. Discovery больше не является обязательным предусловием.
 func openCE308(mac string, pin string) (*ce308Meter, error) {
 	if err := registerCE308Agent(pin); err != nil {
 		// Не фатально: если устройство уже спарено с хостом, агент не нужен.
@@ -102,10 +107,30 @@ func openCE308(mac string, pin string) (*ce308Meter, error) {
 	if err := a.Enable(); err != nil {
 		return nil, fmt.Errorf("включение BLE-адаптера: %w", err)
 	}
-	// BlueZ должен «знать» объект устройства, иначе tinygo Connect падает.
-	if err := ensureCE308Known(mac); err != nil {
+
+	// Попытка 1: прямой Connect (быстрый путь при известном/спаренном устройстве).
+	m, err := connectCE308(mac)
+	if err == nil {
+		return m, nil
+	}
+	// Устройство уже известно BlueZ — повторный Connect бессмыслен (именно эта
+	// ошибка и есть причина, напр. зависший радиоадаптер), возвращаем её.
+	if ce308DeviceKnown(mac) {
 		return nil, err
 	}
+	// Fallback: устройства нет в BlueZ (нет объекта) — прямой Connect не проходит.
+	// Запускаем короткий discovery, чтобы BlueZ узнал устройство, и пробуем снова.
+	if e := ensureCE308Known(mac); e != nil {
+		return nil, fmt.Errorf("подключение к %s: %v; устройство не обнаружено по BLE: %w", mac, err, e)
+	}
+	return connectCE308(mac)
+}
+
+// connectCE308 выполняет подключение по MAC и открывает нужные GATT-характеристики.
+// Общая часть для прямого подключения и повтора после discovery. При ошибке
+// гарантированно разрывает уже установленное соединение.
+func connectCE308(mac string) (m *ce308Meter, err error) {
+	a := bluetooth.DefaultAdapter
 	mac6, err := bluetooth.ParseMAC(mac)
 	if err != nil {
 		return nil, fmt.Errorf("неверный MAC %q: %w", mac, err)
@@ -115,6 +140,11 @@ func openCE308(mac string, pin string) (*ce308Meter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("подключение к %s: %w", mac, err)
 	}
+	defer func() {
+		if err != nil {
+			_ = dev.Disconnect()
+		}
+	}()
 
 	svcU, err := bluetooth.ParseUUID(ce308SvcUUID)
 	if err != nil {
@@ -141,8 +171,8 @@ func openCE308(mac string, pin string) (*ce308Meter, error) {
 		return nil, fmt.Errorf("поиск характеристик: %w", err)
 	}
 
-	m := &ce308Meter{adapter: a, dev: dev, tx: chars[0], rx: chars[1:], mtu: 23, notify: make(chan struct{}, 1)}
-	if mtu, err := m.tx.GetMTU(); err == nil && mtu > 23 {
+	m = &ce308Meter{adapter: a, dev: dev, tx: chars[0], rx: chars[1:], mtu: 23, notify: make(chan struct{}, 1)}
+	if mtu, err2 := m.tx.GetMTU(); err2 == nil && mtu > 23 {
 		m.mtu = int(mtu)
 	}
 	if err := (&m.tx).EnableNotifications(m.onNotify); err != nil {

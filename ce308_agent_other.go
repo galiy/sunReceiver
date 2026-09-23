@@ -30,6 +30,12 @@ func ensureCE308Known(mac string) error {
 	return nil
 }
 
+// ce308DeviceKnown — вне Linux считаем устройство известным (нет discovery; ОС-стек
+// Bluetooth подключается напрямую по MAC). Возвращает true.
+func ce308DeviceKnown(mac string) bool {
+	return true
+}
+
 // ce308EnsurePowered — no-op вне Linux: питание адаптера управляется ОС
 // (Windows) или стеком Bluetooth (macOS). Возвращает nil.
 func ce308EnsurePowered() error {
