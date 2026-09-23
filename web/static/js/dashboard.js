@@ -172,6 +172,11 @@ function agoStr(t){
 // 20 с молчания означают, что данных нет. Отличается от «просто нулей»: ноль —
 // это реальное значение счётчика, «—» — данных оперативных нет.
 var MTR_STALE_MS=20*1000;
+// CE308_STALE_MS — окно «молчания» электросчётчика CE308: опрашивается раз в ~2 с,
+// поэтому уже 20 с без обновления снимка означают, что данные зависли (счётчик не
+// отвечает / радиоканал потерян). При устаревании метка «Актуально» окрашивается
+// в красный и рядом показывается возраст снимка (аналогично offline-инверторам).
+var CE308_STALE_MS=20*1000;
 // METER_PARAMS — параметры счётчика для плашки: [тег, подпись, единица, знаковый,
 // накопленный]. Знаковые (активная/реактивная мощность) окрашиваются: отрицательная —
 // отдача. Последние три (накопленные) продолжают отображаться даже при устаревшем
@@ -277,7 +282,21 @@ function renderCE308Current(cur){
 	var ts=document.getElementById('ce308CurTs');
 	var name=Object.keys(cur||{})[0];
 	var snap=name ? cur[name] : null;
-	if(ts) ts.textContent = (snap && snap.timestamp) ? ('Актуально: '+fmtSec(snap.timestamp)) : 'Актуально: —';
+	if(ts){
+		if(snap && snap.timestamp){
+			ts.textContent='Актуально: '+fmtSec(snap.timestamp);
+			var t=new Date(snap.timestamp).getTime();
+			// Свежесть снимка: при зависании (> CE308_STALE_MS) метка краснеет и
+			// рядом показывается возраст — «данные заморожены» видно сразу.
+			var stale=!isFinite(t) || (Date.now()-t)>CE308_STALE_MS;
+			ts.classList.toggle('stale-time', stale);
+			ts.title=stale ? ('Данные не обновляются: '+(Math.round((Date.now()-t)/1000))+' с назад') : '';
+		}else{
+			ts.textContent='Актуально: —';
+			ts.classList.remove('stale-time');
+			ts.title='';
+		}
+	}
 	var v=(snap && snap.values) ? snap.values : null;
 	var v1=ce308Num(v&&v.ce308_l1_voltage), v2=ce308Num(v&&v.ce308_l2_voltage), v3=ce308Num(v&&v.ce308_l3_voltage);
 	setCe308Cell('ce308V1', v1); setCe308Cell('ce308V2', v2); setCe308Cell('ce308V3', v3);

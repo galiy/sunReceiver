@@ -32,6 +32,12 @@ import (
 // Штатный id контроллера, на который зашит tinygo DefaultAdapter.
 const ce308DefaultAdapterID = "hci0"
 
+// ce308DiscoveryTimeout — окно поиска устройства по BLE, когда BlueZ его ещё «не
+// знает» (объект /org/bluez/<hci>/dev_* отсутствует — напр. после переинициализации
+// адаптера или первого запуска). Короткое, т.к. переподключение — частый путь: уже
+// известное устройство discovery пропускает сразу (ensureCE308Known → known()).
+const ce308DiscoveryTimeout = 8 * time.Second
+
 // ce308AdapterID — фактический id BLE-адаптера BlueZ, на котором работаем.
 // tinygo жёстко использует DefaultAdapter = hci0, но USB-адаптер может после
 // реинициализации получить другой номер (hci1, hci2, …), и тогда tinygo не
@@ -170,7 +176,7 @@ func ensureCE308Known(mac string) error {
 		// InProgress (discovery уже запущен) — не ошибка, ждём устройство.
 		logCE308("discovery: %v", err)
 	}
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(ce308DiscoveryTimeout)
 	for time.Now().Before(deadline) {
 		if known() {
 			_ = adapter.Call("org.bluez.Adapter1.StopDiscovery", 0).Err
