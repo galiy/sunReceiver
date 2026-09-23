@@ -49,12 +49,14 @@ const tariffCacheTTL = 60 * time.Second
 //   - ShowMap — показывать блок «Данные МАП» (map.disabled != true);
 //   - ShowMeter — показывать блок счётчика и тарифов, кнопку «Электроэнергия»
 //     (счётчик опрашивается, meter.disabled != true);
-//   - ShowBMS — показывать блок BMS-батареек (пулер ANT BMS запущен).
+//   - ShowBMS — показывать блок BMS-батареек (пулер ANT BMS запущен);
+//   - ShowCE308 — показывать рамки «Электросчётчик CE308» (раздел ce308 настроен).
 type dashFlags struct {
 	ShowMap   bool
 	ShowMeter bool
 	ShowBMS   bool
 	ShowRelay bool
+	ShowCE308 bool
 }
 
 // dashboardHandler — веб-дашборд: отдаёт три HTML-страницы и JSON API.

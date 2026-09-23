@@ -1711,6 +1711,7 @@ func main() {
 		ShowMeter: meterCfg != nil,
 		ShowBMS:   bmsSite != nil,
 		ShowRelay: relaySec != nil && (relaySec.Disabled == nil || !*relaySec.Disabled),
+		ShowCE308: ce308Cfg != nil,
 	}
 
 	// Сетевое реле SR-201 (лампы): управление по UDP, состояние поддерживает
