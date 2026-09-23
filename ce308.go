@@ -88,30 +88,53 @@ type ce308Reads struct {
 }
 
 // buildCE308Reads последовательно читает команды мгновенных значений.
+// Каждое чтение при таймауте ретраится (нестабильный BLE-канал), но постоянное
+// соединение при этом НЕ разрывается: решение о реконнекте принимает пулер по
+// числу подряд неудачных опросов.
 func buildCE308Reads(m *ce308Meter) (ce308Reads, error) {
 	var r ce308Reads
-	rd := func(cmd string) (string, error) { return m.Read(cmd) }
-	v, err := rd("VOLTA()")
+	v, err := readCE308WithRetries(m, "VOLTA()")
 	if err != nil {
 		return r, fmt.Errorf("VOLTA: %w", err)
 	}
 	r.Volta = ce308Floats(ce308Groups(v))
-	c, err := rd("CURRE()")
+	c, err := readCE308WithRetries(m, "CURRE()")
 	if err != nil {
 		return r, fmt.Errorf("CURRE: %w", err)
 	}
 	r.Curre = ce308Floats(ce308Groups(c))
-	p, err := rd("POWEP()")
+	p, err := readCE308WithRetries(m, "POWEP()")
 	if err != nil {
 		return r, fmt.Errorf("POWEP: %w", err)
 	}
 	r.ActiveP = toWatts(ce308Floats(ce308Groups(p)))
-	q, err := rd("POWEQ()")
+	q, err := readCE308WithRetries(m, "POWEQ()")
 	if err != nil {
 		return r, fmt.Errorf("POWEQ: %w", err)
 	}
 	r.ReactiveP = toWatts(ce308Floats(ce308Groups(q)))
 	return r, nil
+}
+
+// readCE308WithRetries выполняет одно чтение, ретрая только таймаут ответа
+// (транзиентный сбой радио, лечится повтором). Ошибка записи/транспорта (соединение,
+// вероятно, оборвано) возвращается сразу — ретраить её бессмысленно, пулер решит
+// про реконнект. Возвращает ошибку последней попытки, если все попытки не удались.
+func readCE308WithRetries(m *ce308Meter, cmd string) (string, error) {
+	var lastErr error
+	for attempt := 0; attempt <= ce308ReadRetries; attempt++ {
+		s, err := m.Read(cmd)
+		if err == nil {
+			return s, nil
+		}
+		lastErr = err
+		if isCE308ReadTimeout(err) && attempt < ce308ReadRetries {
+			logCE308("чтение %s: таймаут (попытка %d/%d) — повтор", cmd, attempt+1, ce308ReadRetries+1)
+			continue
+		}
+		return "", err
+	}
+	return "", lastErr
 }
 
 // toWatts переводит кВт/квар → Вт/вар и округляет до 1 знака.

@@ -17,6 +17,8 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"math"
 	"testing"
 )
@@ -103,6 +105,21 @@ func TestCEC308ConfigFromSection(t *testing.T) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+func TestCE308IsReadTimeout(t *testing.T) {
+	if !isCE308ReadTimeout(fmt.Errorf("POWEQ(): %w", errCE308ReadTimeout)) {
+		t.Error("wrapped timeout not classified as timeout")
+	}
+	if !isCE308ReadTimeout(errCE308ReadTimeout) {
+		t.Error("bare timeout not classified as timeout")
+	}
+	if isCE308ReadTimeout(fmt.Errorf("запись %q: %w", "VOLTA()", errors.New("ошибка записи"))) {
+		t.Error("transport error misclassified as timeout")
+	}
+	if isCE308ReadTimeout(nil) {
+		t.Error("nil classified as timeout")
+	}
+}
 
 func TestCE308ReadsValid(t *testing.T) {
 	good := ce308Reads{

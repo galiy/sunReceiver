@@ -39,6 +39,17 @@ const (
 	ce308TxUUID  = "b91b0105-8bef-45e2-97c3-1cd862d914df"
 )
 
+// errCE308ReadTimeout — признак таймаута ожидания ответа счётчика (транзиентный
+// сбой радио): отличается от ошибки записи/транспорта, при которой соединение,
+// вероятно, оборвано. Позволяет пулеру ретраить именно упавшее чтение, не рвя
+// постоянное соединение (см. readCE308WithRetries).
+var errCE308ReadTimeout = errors.New("нет ответа счётчика по BLE (таймаут)")
+
+// isCE308ReadTimeout — true, если ошибка является таймаутом чтения.
+func isCE308ReadTimeout(err error) bool {
+	return errors.Is(err, errCE308ReadTimeout)
+}
+
 var ce308RxUUIDs = []string{
 	"b91b0106-8bef-45e2-97c3-1cd862d914df",
 	"b91b0107-8bef-45e2-97c3-1cd862d914df",
@@ -161,8 +172,24 @@ func (m *ce308Meter) Close() {
 	_ = m.dev.Disconnect()
 }
 
+// reset сбрасывает состояние приёма перед чтением: обнуляет число ожидаемых
+// фрагментов и вычищает возможную «позднюю» нотификацию (см. Read).
+func (m *ce308Meter) reset() {
+	m.mu.Lock()
+	m.frags = 0
+	m.mu.Unlock()
+	select {
+	case <-m.notify:
+	default:
+	}
+}
+
 // Read отправляет команду и возвращает ответ строкой (без служебных байт).
 func (m *ce308Meter) Read(cmd string) (string, error) {
+	// Сброс состояния перед каждым чтением: после таймаута счётчик может задержать
+	// нотификацию, которая «всплывёт» позже и подставится под следующую команду
+	// (неверный frags/ответ). Дренируем канал и обнуляем счётчик фрагментов.
+	m.reset()
 	frame := buildCE308Frame(cmd)
 	for _, pkt := range ce308Fragments(frame, m.mtu) {
 		if _, err := m.tx.WriteWithoutResponse(pkt); err != nil {
@@ -172,7 +199,7 @@ func (m *ce308Meter) Read(cmd string) (string, error) {
 	select {
 	case <-m.notify:
 	case <-time.After(ce308TimeoutFor(cmd)):
-		return "", fmt.Errorf("%s: нет ответа (таймаут)", cmd)
+		return "", fmt.Errorf("%s: %w", cmd, errCE308ReadTimeout)
 	}
 
 	m.mu.Lock()

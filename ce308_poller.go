@@ -35,8 +35,23 @@ const ce308PollInterval = 2 * time.Second
 // время последнего снимка (см. ce308EnergyDelay).
 const ce308EnergyInterval = 30 * time.Minute
 
-// ce308ReconnectDelay — пауза между попытками переподключения при обрыве связи.
+// ce308ReconnectDelay — базовая пауза между попытками переподключения при обрыве связи.
 const ce308ReconnectDelay = 2 * time.Second
+
+// ce308ReconnectMaxDelay — верхняя граница ограниченного бэкоффа переподключения
+// (база удваивается после каждой неудачной попытки): не долбить радиоканал
+// непрерывно при длительном отсутствии связи, но и не ждать слишком долго.
+const ce308ReconnectMaxDelay = 30 * time.Second
+
+// ce308ReadRetries — число ПОВТОРОВ после первой неудачной попытки чтения при
+// таймауте (итого до ce308ReadRetries+1 попыток на одну команду). Транзиентный
+// сбой радио лечится повтором того же чтения, не разрывая постоянное соединение.
+const ce308ReadRetries = 2
+
+// ce308ConsecutiveFailLimit — число подряд неудачных опросов, после которых пулер
+// разрывает постоянное соединение и переподключается. Ниже порога одиночные сбои
+// (в т.ч. после исчерпания ретраев) не рвут связь.
+const ce308ConsecutiveFailLimit = 3
 
 // ce308ConnFailLogInterval — порог логирования неудачных подключений:
 // первый сбой — сразу, далее не чаще раза в 10 минут (при длительном отсутствии
@@ -65,6 +80,7 @@ func runCe308Poll(store *redisStore, pg *pgStore, cfg *ce308Config, ctx context.
 	defer setCE308TriggerChan(nil)
 
 	var lastFailLog time.Time
+	reconnect := ce308ReconnectDelay
 	for {
 		m, err := openCE308(cfg.MAC, cfg.PIN)
 		if err != nil {
@@ -72,11 +88,15 @@ func runCe308Poll(store *redisStore, pg *pgStore, cfg *ce308Config, ctx context.
 				logCE308("подключение к %s не удалось: %v", cfg.MAC, err)
 				lastFailLog = time.Now()
 			}
-			if !waitCtx(ctx, ce308ReconnectDelay) {
+			if !waitCtx(ctx, reconnect) {
 				return
 			}
+			// Ограниченный бэкофф: при устойчивой проблеме с BLE не долбить повторно.
+			reconnect = ce308Backoff(reconnect)
 			continue
 		}
+		// Успешное подключение сбрасывает бэкофф к базовой паузе.
+		reconnect = ce308ReconnectDelay
 		logCE308("подключено к %s", cfg.MAC)
 		err = ce308PollConnected(store, cfg, m, trig, ctx)
 		m.Close()
@@ -86,10 +106,20 @@ func runCe308Poll(store *redisStore, pg *pgStore, cfg *ce308Config, ctx context.
 		if err != nil {
 			logCE308("соединение с %s потеряно: %v — переподключение", cfg.MAC, err)
 		}
-		if !waitCtx(ctx, ce308ReconnectDelay) {
+		if !waitCtx(ctx, reconnect) {
 			return
 		}
+		reconnect = ce308Backoff(reconnect)
 	}
+}
+
+// ce308Backoff возвращает следующую ступень ограниченного бэкоффа переподключения.
+func ce308Backoff(d time.Duration) time.Duration {
+	d *= 2
+	if d > ce308ReconnectMaxDelay {
+		return ce308ReconnectMaxDelay
+	}
+	return d
 }
 
 // ce308PollConnected — цикл опроса на установленном соединении. Возвращает
@@ -103,11 +133,28 @@ func ce308PollConnected(store *redisStore, cfg *ce308Config, m *ce308Meter, trig
 	// иначе снимаем сразу. После каждого автоперечитывания таймер взводится заново.
 	energyT := time.NewTimer(ce308EnergyDelay(store))
 	defer energyT.Stop()
+	consecFails := 0
 	for {
 		select {
 		case <-ticker.C:
 			if err := ce308PollOnce(store, cfg, m); err != nil {
-				return err
+				consecFails++
+				if consecFails >= ce308ConsecutiveFailLimit {
+					// Счётчик подряд молчит / чтения не проходят — соединение считаем
+					// нерабочим, разрываем и переподключаемся.
+					logCE308("опрос %s: %d опросов подряд не удались (последняя: %v) — переподключение",
+						cfg.MAC, consecFails, err)
+					return err
+				}
+				// Одиночный сбой не рвёт постоянное соединение: он мог быть
+				// транзиентным (радио/нет ответа от счётчика).
+				logCE308("опрос %s: не удался (%d подряд): %v — соединение сохраняю",
+					cfg.MAC, consecFails, err)
+			} else {
+				if consecFails > 0 {
+					logCE308("опрос %s: связь восстановлена (%d неудачных сброшены)", cfg.MAC, consecFails)
+				}
+				consecFails = 0
 			}
 		case <-energyT.C:
 			if err := ce308CaptureEnergy(store, cfg, m); err != nil {
