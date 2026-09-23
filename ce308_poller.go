@@ -82,6 +82,12 @@ func runCe308Poll(store *redisStore, pg *pgStore, cfg *ce308Config, ctx context.
 	var lastFailLog time.Time
 	reconnect := ce308ReconnectDelay
 	for {
+		// Внешняя переинициализация контроллера (watchdog перезагружает драйвер
+		// btusb, см. ce308_agent_linux.go) может сменить его номер/объект BlueZ —
+		// сбрасываем кэш id, чтобы каждая попытка подключения заново обнаружила
+		// реальный адаптер. Иначе ремонт BT без рестарта сервиса не привёл бы к
+		// переподключению (пулер остался бы на мёртвом hci0).
+		ce308AdapterIDReset()
 		m, err := openCE308(cfg.MAC, cfg.PIN, ctx)
 		if err != nil {
 			if time.Since(lastFailLog) >= ce308ConnFailLogInterval {
