@@ -246,6 +246,13 @@ type seriesResponse struct {
 	HouseInverterPower []seriesPoint  `json:"house_inverter_power,omitempty"`
 	MeterVoltage       []seriesPoint  `json:"meter_voltage,omitempty"`
 	MeterActivePower   []seriesPoint  `json:"meter_active_power,omitempty"`
+	// Ряды электросчётчика CE308 (опрос по BLE, отдельный пулер/хранилище):
+	// фазные напряжения и суммарная активная мощность для наложения на графики
+	// напряжений и мощностей (аналог белых линий счётчика DDS238).
+	CE308L1Voltage   []seriesPoint `json:"ce308_l1_voltage,omitempty"`
+	CE308L2Voltage   []seriesPoint `json:"ce308_l2_voltage,omitempty"`
+	CE308L3Voltage   []seriesPoint `json:"ce308_l3_voltage,omitempty"`
+	CE308ActivePower []seriesPoint `json:"ce308_active_power,omitempty"`
 }
 
 // meterDailyResponse отвечает на GET /api/tariffs: посуточные тарифные величины
@@ -1264,6 +1271,19 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	res.MeterVoltage = meterSeries(snaps, "meter_voltage")
 	res.MeterActivePower = meterSeries(snaps, "meter_active_power")
 
+	// Ряды электросчётчика CE308 (опрос по BLE): фазные напряжения и суммарная
+	// активная мощность. CE308 хранится в собственных ключах Redis/PG (нет
+	// универсального контракта значений), поэтому читается отдельно от loadRange.
+	ce308, err := h.ce308SeriesRange(from, to, now)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	res.CE308L1Voltage = ce308[ce308L1Voltage]
+	res.CE308L2Voltage = ce308[ce308L2Voltage]
+	res.CE308L3Voltage = ce308[ce308L3Voltage]
+	res.CE308ActivePower = ce308[ce308ActiveP]
+
 	// Усреднение длинных серий: если в ряду больше maxSeriesPoints точек — диапазон
 	// [from, to] делится на равные периоды и точки в пределах периода схлопываются
 	// в одну усреднённую (см. downsampleSeries). Применяется ко всем рядам ответа.
@@ -1280,6 +1300,10 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	res.HouseInverterPower = downsampleSeries(res.HouseInverterPower, from, to)
 	res.MeterVoltage = downsampleSeries(res.MeterVoltage, from, to)
 	res.MeterActivePower = downsampleSeries(res.MeterActivePower, from, to)
+	res.CE308L1Voltage = downsampleSeries(res.CE308L1Voltage, from, to)
+	res.CE308L2Voltage = downsampleSeries(res.CE308L2Voltage, from, to)
+	res.CE308L3Voltage = downsampleSeries(res.CE308L3Voltage, from, to)
+	res.CE308ActivePower = downsampleSeries(res.CE308ActivePower, from, to)
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -1954,6 +1978,88 @@ func (h *dashboardHandler) apiCE308Series(w http.ResponseWriter, r *http.Request
 func ce308SeriesPoint(p ce308PGPoint) seriesPoint {
 	f, _ := toFloat(p.Values[ce308ActiveP])
 	return seriesPoint{T: p.TS.Format(time.RFC3339), V: f}
+}
+
+// ce308SeriesRange собирает по электросчётчику CE308 за период [from, to]
+// временные ряды фазных напряжений (ce308_l1/l2/l3_voltage) и суммарной активной
+// мощности (ce308_active_power) для наложения на графики напряжений и мощностей.
+// Рецентная часть (окно удержания Redis) — из Redis-ряда (~1 точка за 2 с),
+// более старая — из PostgreSQL (10-сек усреднённые точки). Возвращает map
+// «тег → ряд». Если счётчик ещё не опрошен (нет текущего имени) — nil.
+func (h *dashboardHandler) ce308SeriesRange(from, to time.Time, now time.Time) (map[string][]seriesPoint, error) {
+	cur, err := h.store.CE308Current()
+	if err != nil {
+		return nil, err
+	}
+	name := ""
+	for _, snap := range cur {
+		name = snap.Name
+		break
+	}
+	if name == "" {
+		return nil, nil
+	}
+	type rec struct {
+		ts   time.Time
+		vals map[string]float64
+	}
+	var recs []rec
+	cutoff := recentCutoff(now)
+	// Старая часть периода (до cutoff) — из PostgreSQL (10-сек точки).
+	if h.pg != nil && from.Before(cutoff) {
+		pgEnd := cutoff.Add(-time.Second)
+		if to.Before(pgEnd) {
+			pgEnd = to
+		}
+		old, err := h.pg.QueryCE308Averages(name, from, pgEnd)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range old {
+			recs = append(recs, rec{ts: p.TS, vals: p.Values})
+		}
+	}
+	// Рецентная часть (в пределах окна удержания) — из Redis-ряда.
+	redisStart := from
+	if redisStart.Before(cutoff) {
+		redisStart = cutoff
+	}
+	if to.After(redisStart) {
+		recent, err := h.store.QueryCE308Series(redisStart, to)
+		if err != nil {
+			return nil, err
+		}
+		for _, sn := range recent {
+			ts, terr := time.Parse(time.RFC3339, sn.Timestamp)
+			if terr != nil {
+				continue
+			}
+			recs = append(recs, rec{ts: ts, vals: sn.Values})
+		}
+	}
+	sort.Slice(recs, func(i, j int) bool { return recs[i].ts.Before(recs[j].ts) })
+	out := map[string][]seriesPoint{}
+	for _, metric := range []string{ce308L1Voltage, ce308L2Voltage, ce308L3Voltage, ce308ActiveP} {
+		var pts []seriesPoint
+		lastT := ""
+		for _, r := range recs {
+			v, ok := r.vals[metric]
+			if !ok {
+				continue
+			}
+			t := r.ts.Format(time.RFC3339)
+			if t == lastT {
+				if n := len(pts); n > 0 {
+					pts[n-1].V = v
+				}
+				continue
+			}
+			lastT = t
+			pts = append(pts, seriesPoint{T: t, V: v})
+		}
+		out[metric] = pts
+	}
+	return out, nil
 }
 
 // writeJSONResponse — вспомогательный вывод JSON-ответа (no-store).

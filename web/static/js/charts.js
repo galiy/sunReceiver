@@ -378,6 +378,9 @@ function buildGridVChart(data){
 	var grid=(data.map_grid_voltage||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
 	var bat=(data.map_battery_voltage||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
 	var meter=(data.meter_voltage||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
+	var ce1=(data.ce308_l1_voltage||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
+	var ce2=(data.ce308_l2_voltage||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
+	var ce3=(data.ce308_l3_voltage||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
 	var datasets=[
 		{ label:'Напряжение сети', data:grid, borderColor:'#428bca', backgroundColor:'#428bca',
 		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false },
@@ -387,6 +390,14 @@ function buildGridVChart(data){
 		{ label:'Напряжение счётчика', data:meter, borderColor:'#6b7785', backgroundColor:'#6b7785',
 		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false }
 	];
+	// Фазные напряжения CE308 (опрос по BLE) — на левую ось (как напряжение сети).
+	function addIfPts(dataset){ if(dataset.data.length) datasets.push(dataset); }
+	addIfPts({ label:'CE308 L1', data:ce1, borderColor:'#20c997', backgroundColor:'#20c997',
+	  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false });
+	addIfPts({ label:'CE308 L2', data:ce2, borderColor:'#e8590c', backgroundColor:'#e8590c',
+	  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false });
+	addIfPts({ label:'CE308 L3', data:ce3, borderColor:'#7048e8', backgroundColor:'#7048e8',
+	  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false });
 	renderChart('gridVChart', datasets, chartOpts(true,'V',{
 		scales:{ y1:{ type:'linear', position:'right', beginAtZero:false, title:{display:true, text:'Напряжение батареи, V'} } }
 	}));
@@ -417,6 +428,7 @@ function buildGridPChart(data){
 	// Вклад Дома в формулу: суммарная активная мощность сетевых инверторов Дома.
 	var houseAc=(data.house_inverter_power||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
 	var meter=(data.meter_active_power||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
+	var ce308=(data.ce308_active_power||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
 	var datasets=[
 		{ label:'Мощность сети', data:grid, borderColor:'#428bca', backgroundColor:'#428bca',
 		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false },
@@ -429,6 +441,10 @@ function buildGridPChart(data){
 		{ label:'Мощность счётчика (активная)', data:meter, borderColor:'#6b7785', backgroundColor:'#6b7785',
 		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.2, cubicInterpolationMode:'monotone', fill:false }
 	];
+	// Суммарная активная мощность CE308 (опрос по BLE). Линия добавляется только
+	// при наличии точек (счётчик мог быть не настроен/не опрошен).
+	if(ce308.length) datasets.push({ label:'CE308 (активная, Σ)', data:ce308, borderColor:'#e64980', backgroundColor:'#e64980',
+	  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false });
 	renderChart('gridPChart', datasets, chartOpts(true,'W'));
 	lgKit('gridPChart','gridPChartLg').build(window.gridPChart);
 	return window.gridPChart;
