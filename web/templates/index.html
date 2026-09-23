@@ -98,19 +98,26 @@
         <span class="meter-ts" id="ce308EnTs">Актуально: &mdash;</span>
       </span>
     </div>
-    <table class="pivot-table ce308-table" id="ce308En">
-      <thead>
-        <tr><th class="p-label">Энергия</th><th>Потребление</th><th>Отдача</th></tr>
-      </thead>
-      <tbody>
-        <tr><td class="p-label">Активная &mdash; день (kWh)</td><td id="ce308AtcDay">&mdash;</td><td id="ce308AtdDay">&mdash;</td></tr>
-        <tr><td class="p-label">Активная &mdash; ночь (kWh)</td><td id="ce308AtcNight">&mdash;</td><td id="ce308AtdNight">&mdash;</td></tr>
-        <tr><td class="p-label">Активная &mdash; всего (kWh)</td><td id="ce308AtcTotal">&mdash;</td><td id="ce308AtdTotal">&mdash;</td></tr>
-        <tr><td class="p-label">Реактивная &mdash; день (квар&middot;ч)</td><td id="ce308RtcDay">&mdash;</td><td id="ce308RtdDay">&mdash;</td></tr>
-        <tr><td class="p-label">Реактивная &mdash; ночь (квар&middot;ч)</td><td id="ce308RtcNight">&mdash;</td><td id="ce308RtdNight">&mdash;</td></tr>
-        <tr><td class="p-label">Реактивная &mdash; всего (квар&middot;ч)</td><td id="ce308RtcTotal">&mdash;</td><td id="ce308RtdTotal">&mdash;</td></tr>
-      </tbody>
-    </table>
+    <div class="ce308-sec">
+      <div class="ce308-sec-title">Активная энергия</div>
+      <div class="ce308-grid">
+        <div class="ce308-card"><div class="ce308-lbl">День<br>(А+)</div><div class="ce308-val" id="ce308AtcDay">&mdash;</div></div>
+        <div class="ce308-card"><div class="ce308-lbl">Ночь<br>(А+)</div><div class="ce308-val" id="ce308AtcNight">&mdash;</div></div>
+        <div class="ce308-card"><div class="ce308-lbl">День<br>(А&minus;)</div><div class="ce308-val" id="ce308AtdDay">&mdash;</div></div>
+        <div class="ce308-card"><div class="ce308-lbl">Ночь<br>(А&minus;)</div><div class="ce308-val" id="ce308AtdNight">&mdash;</div></div>
+      </div>
+      <div class="ce308-total">Всего (А+): <span id="ce308AtcTotal">&mdash;</span> &nbsp;&middot;&nbsp; Всего (А&minus;): <span id="ce308AtdTotal">&mdash;</span></div>
+    </div>
+    <div class="ce308-sec">
+      <div class="ce308-sec-title">Реактивная энергия</div>
+      <div class="ce308-grid">
+        <div class="ce308-card"><div class="ce308-lbl">День<br>(R+)</div><div class="ce308-val" id="ce308RtcDay">&mdash;</div></div>
+        <div class="ce308-card"><div class="ce308-lbl">Ночь<br>(R+)</div><div class="ce308-val" id="ce308RtcNight">&mdash;</div></div>
+        <div class="ce308-card"><div class="ce308-lbl">День<br>(R&minus;)</div><div class="ce308-val" id="ce308RtdDay">&mdash;</div></div>
+        <div class="ce308-card"><div class="ce308-lbl">Ночь<br>(R&minus;)</div><div class="ce308-val" id="ce308RtdNight">&mdash;</div></div>
+      </div>
+      <div class="ce308-total">Всего (R+): <span id="ce308RtcTotal">&mdash;</span> &nbsp;&middot;&nbsp; Всего (R&minus;): <span id="ce308RtdTotal">&mdash;</span></div>
+    </div>
   </div>
   {{end}}
 

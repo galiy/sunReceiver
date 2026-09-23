@@ -210,7 +210,9 @@ function renderMeter(meter){
 		var cls='val', txt;
 		if(isFinite(n)){
 			txt=n.toLocaleString('ru-RU',{maximumFractionDigits:2});
-			if(signed){ cls+=' '+(n<0?' neg':' pos'); }
+			// Инверсия цвета мощностей: положительная (потребление) — красная (neg),
+			// отрицательная (отдача в сеть) — зелёная (pos).
+			if(signed){ cls+=' '+(n<0?' pos':' neg'); }
 		}else{
 			cls+=' off'; txt='—';
 		}
@@ -258,14 +260,17 @@ function renderInvPlates(placements){
 // показания энергии — один объект (см. ce308.go). Знаки мощности: положительная —
 // потребление, отрицательная — отдача в сеть.
 function ce308Num(v){ return (v===undefined || v===null || !isFinite(Number(v))) ? null : Number(v); }
+// ce308Fmt — 2 знака + разделители разрядов (для показаний энергии, левый столбец).
+function ce308Fmt(v){ var n=ce308Num(v); return n===null ? '—' : n.toLocaleString('ru-RU',{minimumFractionDigits:2, maximumFractionDigits:2}); }
 function setCe308Cell(id, v, signed){
 	var el=document.getElementById(id);
 	if(!el) return;
 	var n=ce308Num(v);
 	if(n===null){ el.textContent='—'; el.className='ce-num'; return; }
-	// 2 знака после запятой + разделители разрядов; знаковые (мощности) — по знаку.
+	// 2 знака после запятой + разделители разрядов. Знаковые (мощности): инверсия —
+	// положительное (потребление) — красное, отрицательное (отдача) — зелёное.
 	el.textContent=n.toLocaleString('ru-RU',{minimumFractionDigits:2, maximumFractionDigits:2});
-	if(signed){ el.className='ce-num '+(n<0 ? 'ce-neg' : 'ce-pos'); }
+	if(signed){ el.className='ce-num '+(n<0 ? 'ce-pos' : 'ce-neg'); }
 	else{ el.className='ce-num'; }
 }
 function renderCE308Current(cur){
@@ -292,18 +297,31 @@ function renderCE308Energy(snap){
 	var ts=document.getElementById('ce308EnTs');
 	if(ts) ts.textContent = (snap && snap.timestamp) ? ('Актуально: '+fmtSec(snap.timestamp)) : 'Актуально: —';
 	var s=snap||{};
-	setCe308Cell('ce308AtcDay', s.active_consumption_day);
-	setCe308Cell('ce308AtcNight', s.active_consumption_night);
-	setCe308Cell('ce308AtcTotal', s.active_consumption_total);
-	setCe308Cell('ce308AtdDay', s.active_delivery_day);
-	setCe308Cell('ce308AtdNight', s.active_delivery_night);
-	setCe308Cell('ce308AtdTotal', s.active_delivery_total);
-	setCe308Cell('ce308RtcDay', s.reactive_consumption_day);
-	setCe308Cell('ce308RtcNight', s.reactive_consumption_night);
-	setCe308Cell('ce308RtcTotal', s.reactive_consumption_total);
-	setCe308Cell('ce308RtdDay', s.reactive_delivery_day);
-	setCe308Cell('ce308RtdNight', s.reactive_delivery_night);
-	setCe308Cell('ce308RtdTotal', s.reactive_delivery_total);
+	// Значения в ячейках карточек (День/Ночь × А+/А− и R+/R−) — левые подписи-надписи
+	// заданы в HTML (.ce308-lbl), здесь только числа (целочисленный формат + «,—»).
+	var set=function(id, v){ var el=document.getElementById(id); if(el) el.textContent=ce308Fmt(v); };
+	set('ce308AtcDay', s.active_consumption_day);  set('ce308AtcNight', s.active_consumption_night);
+	set('ce308AtdDay', s.active_delivery_day);     set('ce308AtdNight', s.active_delivery_night);
+	set('ce308RtcDay', s.reactive_consumption_day); set('ce308RtcNight', s.reactive_consumption_night);
+	set('ce308RtdDay', s.reactive_delivery_day);    set('ce308RtdNight', s.reactive_delivery_night);
+	// Итоги по каждому виду энергии (потребление/отдача за день+ночь).
+	set('ce308AtcTotal', s.active_consumption_total); set('ce308AtdTotal', s.active_delivery_total);
+	set('ce308RtcTotal', s.reactive_consumption_total); set('ce308RtdTotal', s.reactive_delivery_total);
+}
+// Ограничение частоты ручного снимка энергии: кнопка «Обновить» не чаще раза в
+// 5 минут (совпадает с бэкендом, POST /api/ce308/energy → 429 при частом нажатии).
+var ce308RefreshAt=0, ce308LockTimer=null;
+function ce308RefreshReserve(){
+	ce308RefreshAt=Date.now();
+	var btn=document.getElementById('ce308Refresh');
+	if(btn){ btn.disabled=true; btn.textContent='5 мин'; }
+	if(ce308LockTimer) clearTimeout(ce308LockTimer);
+	ce308LockTimer=setTimeout(function(){
+		if((Date.now()-ce308RefreshAt)>=5*60*1000){ // защита от сдвига таймера
+			var b=document.getElementById('ce308Refresh');
+			if(b){ b.disabled=false; b.textContent='Обновить'; }
+		}
+	}, 5*60*1000);
 }
 // tickCE308 — опрос текущих данных и показаний CE308 (вызывается из tick раз в секунду).
 // Кнопка «Обновить» шлёт POST /api/ce308/energy — сигнал пулеру снять свежий снимок энергии.
@@ -321,10 +339,12 @@ async function tickCE308(){
 	if(!btn) return;
 	btn.addEventListener('click', function(){
 		if(window.srRefresh && !window.srRefresh.isEnabled()) return;
-		btn.disabled=true; btn.textContent='Запрос…';
-		fetch('/api/ce308/energy',{method:'POST'})
-			.catch(function(){})
-			.finally(function(){ btn.disabled=false; btn.textContent='Обновить'; });
+		// Фронтовая защита: не чаще раза в 5 минут (не дёргаем API при активном локе).
+		if((Date.now()-ce308RefreshAt) < 5*60*1000) return;
+		ce308RefreshReserve();
+		fetch('/api/ce308/energy',{method:'POST'}).catch(function(){}).finally(function(){
+			// Снимок уже зарезервирован на 5 мин — кнопка остаётся заблокированной.
+		});
 	});
 })();
 
