@@ -164,7 +164,7 @@ type animScheme struct {
 	// KES — MPPT-контроллеры (КЭС) — только в схеме Дома (все КЭС под батареей).
 	KES []animInverter `json:"kes,omitempty"`
 	// Значения МАП (общие для схемы Дома): мощность сети и батареи.
-	MapGridPower   float64 `json:"map_grid_power"`
+	MapGridPower    float64 `json:"map_grid_power"`
 	MapBatteryPower float64 `json:"map_battery_power"`
 	// Активная мощность электросчётчика (только в схеме Дома).
 	MeterActivePower float64 `json:"meter_active_power"`
@@ -216,20 +216,20 @@ type deviceSeries struct {
 
 // seriesResponse отвечает на GET /api/series.
 type seriesResponse struct {
-	GeneratedAt      string         `json:"generated_at"`
-	From             string         `json:"from"`
-	To               string         `json:"to"`
-	Series           []deviceSeries `json:"series"`
-	Total            []seriesPoint  `json:"total,omitempty"`
-	MapGridVoltage   []seriesPoint  `json:"map_grid_voltage,omitempty"`
-	MapGridPower     []seriesPoint  `json:"map_grid_power,omitempty"`
-	MapBatVoltage    []seriesPoint  `json:"map_battery_voltage,omitempty"`
-	MapBatPower      []seriesPoint  `json:"map_battery_power,omitempty"`
-	MapCons          []seriesPoint  `json:"map_consumption,omitempty"`
-	HousePower       []seriesPoint  `json:"house_power,omitempty"`
-	HouseInverterPower []seriesPoint `json:"house_inverter_power,omitempty"`
-	MeterVoltage     []seriesPoint  `json:"meter_voltage,omitempty"`
-	MeterActivePower []seriesPoint  `json:"meter_active_power,omitempty"`
+	GeneratedAt        string         `json:"generated_at"`
+	From               string         `json:"from"`
+	To                 string         `json:"to"`
+	Series             []deviceSeries `json:"series"`
+	Total              []seriesPoint  `json:"total,omitempty"`
+	MapGridVoltage     []seriesPoint  `json:"map_grid_voltage,omitempty"`
+	MapGridPower       []seriesPoint  `json:"map_grid_power,omitempty"`
+	MapBatVoltage      []seriesPoint  `json:"map_battery_voltage,omitempty"`
+	MapBatPower        []seriesPoint  `json:"map_battery_power,omitempty"`
+	MapCons            []seriesPoint  `json:"map_consumption,omitempty"`
+	HousePower         []seriesPoint  `json:"house_power,omitempty"`
+	HouseInverterPower []seriesPoint  `json:"house_inverter_power,omitempty"`
+	MeterVoltage       []seriesPoint  `json:"meter_voltage,omitempty"`
+	MeterActivePower   []seriesPoint  `json:"meter_active_power,omitempty"`
 }
 
 // meterDailyResponse отвечает на GET /api/tariffs: посуточные тарифные величины
@@ -386,8 +386,8 @@ func placementTotals(devices []deviceSnapshot, order []string, staleCutoff time.
 		})
 	}
 	return placements,
-		math.Round(total*10)/10,
-		math.Round(totalPV*10)/10
+		math.Round(total*10) / 10,
+		math.Round(totalPV*10) / 10
 }
 
 func (h *dashboardHandler) charts(w http.ResponseWriter, r *http.Request) {
@@ -1358,7 +1358,8 @@ func sumSeries(a, b []seriesPoint) []seriesPoint {
 }
 
 // housePowerSeries собирает временной ряд мощности Дома по формуле анимации Дома:
-//   P_дом(t) = Σac(инверторы Дома, carry-forward) + grid_power(t) + battery_power(t)
+//
+//	P_дом(t) = Σac(инверторы Дома, carry-forward) + grid_power(t) + battery_power(t)
 //
 // Сетка времени — снимки МАП (как у map_grid_power/map_battery_power): на каждую
 // точку МАП берётся суммарная активная мощность инверторов Дома (breaking описан
@@ -1409,7 +1410,7 @@ func housePowerSeries(snaps []deviceSnapshot, placeByIP map[string]string) (hous
 
 	// Сетка времени — точки МАП (места, где есть grid_power и battery_power).
 	type mapRec struct {
-		ts  time.Time
+		ts   time.Time
 		grid float64
 		bat  float64
 	}
@@ -1792,6 +1793,141 @@ func buildDashboardMux(pages map[string]http.HandlerFunc, static http.Handler, a
 	return recoverMiddleware(mux)
 }
 
+// apiCE308Current отвечает на GET /api/ce308/current: текущий снимок CE308
+// (мгновенные значения + время актуальности). 404, если счётчик ещё не опрошен.
+func (h *dashboardHandler) apiCE308Current(w http.ResponseWriter, r *http.Request) {
+	cur, err := h.store.CE308Current()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if len(cur) == 0 {
+		http.Error(w, "нет данных CE308", http.StatusNotFound)
+		return
+	}
+	writeJSONResponse(w, cur)
+}
+
+// apiCE308Energy отвечает на GET /api/ce308/energy?from&to: история мгновенных значений CE308.
+// Обрабатывает также POST-сигнал снятия показаний энергии.
+func (h *dashboardHandler) apiCE308Energy(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		ok := triggerCE308EnergySnapshot()
+		writeJSONResponse(w, map[string]bool{"accepted": ok})
+		return
+	}
+	snap, err := h.store.CE308Energy()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if snap == nil {
+		http.Error(w, "нет снимка энергии CE308", http.StatusNotFound)
+		return
+	}
+	writeJSONResponse(w, snap)
+}
+
+// apiCE308Series отвечает на GET /api/ce308/series?from&to: история мгновенных
+// значений CE308 за период [from, to] (RFC3339; по умолчанию — последние 24 ч).
+// Рецентная часть (окно удержания Redis) — из Redis-ряда (~1 точка за 2 с),
+// более старая — из PostgreSQL (10-сек усреднённые точки). Точки объединяются
+// и сортируются по времени.
+func (h *dashboardHandler) apiCE308Series(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	to := now
+	if s := r.URL.Query().Get("to"); s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			to = t
+		}
+	}
+	from := to.Add(-24 * time.Hour)
+	if s := r.URL.Query().Get("from"); s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			from = t
+		}
+	}
+	if to.After(now) {
+		to = now
+	}
+	if minFrom := recentCutoff(now).AddDate(0, 0, -400); from.Before(minFrom) {
+		from = minFrom
+	}
+	if !from.Before(to) {
+		http.Error(w, "from >= to", http.StatusBadRequest)
+		return
+	}
+	cur, _ := h.store.CE308Current()
+	name := ""
+	for _, snap := range cur {
+		name = snap.Name
+		break
+	}
+	if name == "" {
+		http.Error(w, "нет данных CE308", http.StatusNotFound)
+		return
+	}
+	cutoff := recentCutoff(now)
+	var pts []seriesPoint
+	// Старая часть периода (до cutoff) — из PostgreSQL (вся история 10-сек точек).
+	if h.pg != nil && from.Before(cutoff) {
+		pgEnd := cutoff.Add(-time.Second)
+		if to.Before(pgEnd) {
+			pgEnd = to
+		}
+		old, err := h.pg.QueryCE308Averages(name, from, pgEnd)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, p := range old {
+			pts = append(pts, ce308SeriesPoint(p))
+		}
+	}
+	// Рецентная часть (в пределах окна удержания) — из Redis-ряда.
+	redisStart := from
+	if redisStart.Before(cutoff) {
+		redisStart = cutoff
+	}
+	if to.After(redisStart) {
+		recent, err := h.store.QueryCE308Series(redisStart, to)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, sn := range recent {
+			if fn, ferr := toFloat(sn.Values[ce308ActiveP]); ferr {
+				pts = append(pts, seriesPoint{T: sn.Timestamp, V: fn})
+			}
+		}
+	}
+	sort.Slice(pts, func(i, j int) bool { return pts[i].T < pts[j].T })
+	pts = downsampleSeries(pts, from, to)
+	if pts == nil {
+		pts = []seriesPoint{}
+	}
+	writeJSONResponse(w, map[string]any{
+		"name":   name,
+		"from":   from.Format(time.RFC3339),
+		"to":     to.Format(time.RFC3339),
+		"points": pts,
+	})
+}
+
+// ce308SeriesPoint преобразует усреднённую 10-сек точку PG в seriesPoint
+// (одна линия суммарной активной мощности CE308).
+func ce308SeriesPoint(p ce308PGPoint) seriesPoint {
+	f, _ := toFloat(p.Values[ce308ActiveP])
+	return seriesPoint{T: p.TS.Format(time.RFC3339), V: f}
+}
+
+// writeJSONResponse — вспомогательный вывод JSON-ответа (no-store).
+func writeJSONResponse(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(v)
+}
+
 // serveDashboard — HTTP-сервер веб-дашборда. При закрытии stop аккуратно
 // завершает сервер (http.Server.Shutdown, бюджет 5 с), чтобы main мог закрыть
 // пулы Redis/PG после завершения всех фоновых горутин (bgWg).
@@ -1800,18 +1936,21 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayCon
 	// Внутренние страницы (индекс/графики) открыты; данные и управление —
 	// в `/api/*`, защищаются HTTP Basic (если заданы учётные данные).
 	pages := map[string]http.HandlerFunc{
-		"/":         h.index,
-		"/charts":   h.charts,
-		"/energy":   h.energy,
-		"/bms/":     h.bmsDetail,
+		"/":       h.index,
+		"/charts": h.charts,
+		"/energy": h.energy,
+		"/bms/":   h.bmsDetail,
 	}
 	api := map[string]http.HandlerFunc{
-		"/current": h.apiCurrent,
-		"/series":  h.apiSeries,
-		"/tariffs": h.apiTariffs,
-		"/animation": h.apiAnimation,
-		"/bms":     h.apiBMS,
-		"/bms/":    h.apiBMSOne,
+		"/current":       h.apiCurrent,
+		"/series":        h.apiSeries,
+		"/tariffs":       h.apiTariffs,
+		"/animation":     h.apiAnimation,
+		"/bms":           h.apiBMS,
+		"/bms/":          h.apiBMSOne,
+		"/ce308/current": h.apiCE308Current,
+		"/ce308/energy":  h.apiCE308Energy,
+		"/ce308/series":  h.apiCE308Series,
 	}
 	if relay != nil {
 		api["/relay"] = h.apiRelay

@@ -71,7 +71,11 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 **`dashboard_port`** — **ОБЯЗАТЕЛЬНОЕ** (отсутствие = ошибка загрузки конфига; в
 `sunReceiver.sample.json` указан 80, на проде 8080). Счётчик DDS238 — раздел **`meter`**
 `{"name", "ip", "port", "unit", "first_reg", "register_count"}` (имеет приоритет над
-legacy-файлом `dds238.json`). Уведомления в мессенджер MAX — раздел **`notify`**
+legacy-файлом `dds238.json`). Счётчик Энергомера **CE308** (опрос по BLE) — раздел
+**`ce308`** `{"name", "mac", "pin"}` (**`disabled` — ОБЯЗАТЕЛЬНОЕ** поле: `false` —
+счётчик опрашивается, `true` — опрос CE308 отключён; `mac` — BD_ADDR счётчика,
+`pin` — BLE-PIN радиоинтерфейса для спаривания), полностью описан в
+[`docs/modules/ce308.md`](docs/modules/ce308.md). Уведомления в мессенджер MAX — раздел **`notify`**
 `{"token", "user_id", "chat_id", "disabled", "stable_window_sec", "map_undeclared_sec", "grid_voltage_low"}`
 (токен бота MAX обязателен; адресат `user_id`/`chat_id` — **необязателен**: если
 пуст, бот регистрирует первого подписчика по `bot_started`/`bot_added`/`message_created`
@@ -82,7 +86,8 @@ legacy-файлом `dds238.json`). Уведомления в мессендже
 (**`disabled` — ОБЯЗАТЕЛЬНОЕ** поле: `false` — модуль включён, `true` — модуля нет, лампы не
 управляются; `ip` обязателен при `disabled=false`), полностью описан в
 [`docs/relay_sr-201(2light).md`](docs/relay_sr-201(2light).md). Опрос Deye/Sofar — раз в 10 секунд; МАП и MPPT — 1 раз
-в секунду (с сохранением 1 точки за 10 с); BMS — 1 раз в секунду.
+в секунду (с сохранением 1 точки за 10 с); BMS — 1 раз в секунду; CE308 — раз в 2 секунды
+(мгновенные значения в Redis ~1 точка за 2 с, в PG — усреднённые точки за 10 с).
 
 **Шаблон `sunReceiver.sample.json`** (в git) — публичный пример структуры конфига.
 **Всегда** обновлять его при любом изменении структуры/содержимого `sunReceiver.json`
@@ -112,6 +117,11 @@ legacy-файлом `dds238.json`). Уведомления в мессендже
 - **Счётчик DDS238** — `meter_*.go`: мгновенные значения `meter_*` + посуточные
   тарифы (`daily_tariffs`), добор пропущенных границ. Полное описание —
   [`docs/dds238-meter.md`](docs/dds238-meter.md).
+- **Счётчик Энергомера CE308** (BLE) — `ce308_*.go`: `ce308_client.go` (BLE-транспорт),
+  `ce308.go` (маппинг/энергоснимок), `ce308_poller.go` (2-сек цикл, реконнект),
+  `ce308_accumulator.go` (усреднение до 1 записи за 10 с в PG),
+  `ce308_store.go` (Redis: current/series/energy), `ce308_agent_linux.go` (BlueZ-агент PIN).
+  Полное описание — [`docs/modules/ce308.md`](docs/modules/ce308.md).
 - **ANT BMS** — `bms_poller.go`, `bms_accumulator.go`, `bmslistener/`. Полное описание —
   [`docs/antbms.md`](docs/antbms.md). Демон bmslistener (установка на ПАК «Малина») —
   [`docs/modules/bms-listener.md`](docs/modules/bms-listener.md).

@@ -204,8 +204,9 @@ type configFile struct {
 	Map           *mapSection      `json:"map"`
 	DB            *dbConfig        `json:"db"`
 	Meter         *meterSection    `json:"meter"`
+	Ce308         *ce308Section    `json:"ce308"`
 	Notify        *notifySection   `json:"notify"`
-	Relay         *relaySection    `json:"relay"` // сетевое реле SR-201 (лампы), управление по UDP
+	Relay         *relaySection    `json:"relay"`          // сетевое реле SR-201 (лампы), управление по UDP
 	DashboardPort int              `json:"dashboard_port"` // порт веб-дашборда; 0 — дефолт 8080
 	// Необязательные учётные данные HTTP Basic для `/api/*` веб-дашборда. Если оба
 	// пусты — API открыт (обратный прокси закрывает доступ снаружи сам).
@@ -224,14 +225,14 @@ func configPath() string {
 
 // loadConfig читает и проверяет sunReceiver.json, возвращает список целей
 // (инверторы + МАП, без отключённых), настройки БД/счётчика/МАП-веб-API и порт дашборда.
-func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection, *relaySection, int, error) {
+func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection, *relaySection, *ce308Config, int, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, nil, nil, nil, 0, fmt.Errorf("read config %s: %w", path, err)
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("read config %s: %w", path, err)
 	}
 	var cf configFile
 	if err := json.Unmarshal(b, &cf); err != nil {
-		return nil, nil, nil, nil, nil, 0, fmt.Errorf("parse config %s: %w", path, err)
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	targets := make([]invTarget, 0, len(cf.Invertors)+1)
 	nextOrder := 0 // порядок устройства на дашборде = позиция в конфиге (в порядке invertors, затем map)
@@ -239,7 +240,7 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	// Инверторы (Deye/Sofar) из invertors; отключённые (disabled=true) пропускаются.
 	for _, t := range cf.Invertors {
 		if t.Disabled == nil {
-			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: для %s (%s) не задано обязательное поле disabled (false/true)", path, t.Name, t.IP)
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: для %s (%s) не задано обязательное поле disabled (false/true)", path, t.Name, t.IP)
 		}
 		if *t.Disabled {
 			log.Printf("config: %s (%s) отключён (disabled=true) — не опрашивается", t.Name, t.IP)
@@ -256,19 +257,19 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 			log.Printf("config: тип %q для %s не ожидается в invertors (используйте раздел map/mppt) — пропущен", t.Type, t.IP)
 			continue
 		default:
-			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: неизвестный тип %q для %s", path, t.Type, t.IP)
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: неизвестный тип %q для %s", path, t.Type, t.IP)
 		}
 		if t.IP == "" {
-			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустой ip (type=%s)", path, t.Type)
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустой ip (type=%s)", path, t.Type)
 		}
 		if t.Name == "" {
-			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустое имя name для %s", path, t.IP)
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустое имя name для %s", path, t.IP)
 		}
 		// Deye/Sofar: без серийного номера логгера (logger_sn=0) логгер отвечает
 		// кодом 0x06 (heartbeat_only) — данные получать невозможно. Ловим при
 		// старте (fatal), а не маскируем вечным heartbeat_only с логами на poll.
 		if (kind == kindDeyeString || kind == kindSofar) && t.LoggerSN == 0 {
-			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %s (%s): не задан logger_sn — без SN логгера логгер отвечает кодом 0x06 и данные получать невозможно", path, t.Name, t.IP)
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %s (%s): не задан logger_sn — без SN логгера логгер отвечает кодом 0x06 и данные получать невозможно", path, t.Name, t.IP)
 		}
 		placement := t.Placement
 		if placement == "" {
@@ -285,36 +286,46 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	// map/mppt/bms) и bms_disabled (отключает только пулер ANT BMS).
 	if cf.Map != nil {
 		if cf.Map.Disabled == nil {
-			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано обязательное поле disabled (false/true)", path)
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано обязательное поле disabled (false/true)", path)
 		}
 		if cf.Map.BMSDisabled == nil {
-			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано обязательное поле bms_disabled (false/true)", path)
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано обязательное поле bms_disabled (false/true)", path)
 		}
 		if *cf.Map.Disabled {
 			log.Printf("config: map disabled=true — пулеры МАП, MPPT и BMS не запускаются")
 		}
 	}
 	if cf.Meter != nil && cf.Meter.Disabled == nil {
-		return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе meter не задано обязательное поле disabled (false/true)", path)
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе meter не задано обязательное поле disabled (false/true)", path)
+	}
+	// Счётчик Энергомера CE308 (раздел "ce308"). Disabled обязателен; при
+	// отключённом — опрос не запускается (ce308Cfg = nil), при включённом —
+	// требуется mac и pin (BLE-PIN радиоинтерфейса).
+	if cf.Ce308 != nil && cf.Ce308.Disabled == nil {
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе ce308 не задано обязательное поле disabled (false/true)", path)
+	}
+	ce308Cfg, err := ce308ConfigFromSection(cf.Ce308)
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
 	}
 	// Сетевое реле SR-201 (лампы) — раздел "relay". Disabled обязателен: true
 	// отключает контроллер ламп; false — запускает управление по UDP. IP обязателен
 	// только при активном контроллере.
 	if cf.Relay != nil {
 		if cf.Relay.Disabled == nil {
-			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе relay не задано обязательное поле disabled (false/true)", path)
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе relay не задано обязательное поле disabled (false/true)", path)
 		}
 		if !*cf.Relay.Disabled && cf.Relay.IP == "" {
-			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе relay не задан ip устройства relay-sr201-2l", path)
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе relay не задан ip устройства relay-sr201-2l", path)
 		}
 	}
 	if cf.Map != nil && cf.Map.RS485 != nil && !*cf.Map.Disabled {
 		rs485 := cf.Map.RS485
 		if rs485.Disabled == nil {
-			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в подразделе map.rs485 не задано обязательное поле disabled (false/true)", path)
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в подразделе map.rs485 не задано обязательное поле disabled (false/true)", path)
 		}
 		if rs485.IP == "" {
-			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустой ip в подразделе map.rs485", path)
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустой ip в подразделе map.rs485", path)
 		}
 		name := rs485.Name
 		if name == "" {
@@ -333,18 +344,18 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 		}
 	}
 
-	if len(targets) == 0 && mapAPI == nil {
+	if len(targets) == 0 && mapAPI == nil && ce308Cfg == nil {
 		// Если активными остались только MPPT-контроллеры из API ПАК «Малина»,
 		// targets может быть пуст — это допустимо: цели собираются динамически.
 		mpptOk := cf.Map != nil && cf.Map.BaseURL != "" && cf.Map.MPPTPath != "" &&
 			cf.Map.Login != "" && cf.Map.Password != ""
 		if !mpptOk {
-			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: нет ни одного активного устройства", path)
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: нет ни одного активного устройства", path)
 		}
 	}
 	// Порт веб-дашборда — обязательное поле dashboard_port.
 	if cf.DashboardPort == 0 {
-		return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: не задано обязательное поле dashboard_port (порт веб-дашборда)", path)
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: не задано обязательное поле dashboard_port (порт веб-дашборда)", path)
 	}
 	// Учётные данные HTTP Basic для `/api/*` дашборда (необязательны). Заданы обе —
 	// требовать авторизацию; иначе API открыт (доступ снаружи закрывает прокси).
@@ -359,10 +370,10 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 			log.Printf("config: notify disabled=true — уведомления в MAX выключены (раздел в конфиге, но без оповещений)")
 			notifyCfg = nil
 		} else if notifyCfg.Token == "" {
-			return nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе notify не задан token", path)
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе notify не задан token", path)
 		}
 	}
-	return targets, cf.DB, cf.Meter, cf.Map, cf.Relay, cf.DashboardPort, nil
+	return targets, cf.DB, cf.Meter, cf.Map, cf.Relay, ce308Cfg, cf.DashboardPort, nil
 }
 
 // placementOrder возвращает упорядоченный список размещений сетевых инверторов
@@ -737,20 +748,20 @@ type DeviceResult struct {
 // deviceSnapshot — структура снимка, сохраняемого в Redis (HASH current и
 // временной ряд series). JSON-представление — контракт для дашборда и PG.
 type deviceSnapshot struct {
-	Name       string         `json:"name"`
-	IP         string         `json:"ip"`
-	Timestamp  string         `json:"timestamp"`
-	DeviceSN   string         `json:"device_sn,omitempty"`
-	InverterSN string         `json:"inverter_sn,omitempty"`
-	Order      int            `json:"order,omitempty"`
+	Name       string `json:"name"`
+	IP         string `json:"ip"`
+	Timestamp  string `json:"timestamp"`
+	DeviceSN   string `json:"device_sn,omitempty"`
+	InverterSN string `json:"inverter_sn,omitempty"`
+	Order      int    `json:"order,omitempty"`
 	// Placement — размещение инвертора (группа «Мощности инверторов»); у МАП,
 	// MPPT-контроллеров (КЭС) и счётчика не заполняется.
 	Placement string `json:"placement,omitempty"`
 	// Kind — марка/тип устройства из конфига (invTarget.Kind): "deye"|"sofar" для
 	// сетевых инверторов, "kes" для MPPT-контроллеров (КЭС), "" — МАП/счётчик.
 	// Заполняется пулером; используется страницей анимации для выбора спрайта.
-	Kind     string         `json:"kind,omitempty"`
-	Values   valuesContract `json:"values"`
+	Kind   string         `json:"kind,omitempty"`
+	Values valuesContract `json:"values"`
 }
 
 func int16val(v uint16) int {
@@ -1645,9 +1656,10 @@ func main() {
 	var meterSec *meterSection
 	var mapSec *mapSection
 	var relaySec *relaySection
+	var ce308Cfg *ce308Config
 	var dashPort int
 	var err error
-	targets, dbCfg, meterSec, mapSec, relaySec, dashPort, err = loadConfig(cfgPath)
+	targets, dbCfg, meterSec, mapSec, relaySec, ce308Cfg, dashPort, err = loadConfig(cfgPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1682,6 +1694,12 @@ func main() {
 	} else {
 		log.Printf("meter: не настроен (нет dds238.json рядом с бинарником) — опрос счётчика отключён")
 	}
+	// Счётчик Энергомера CE308 — раздел "ce308" sunReceiver.json (опрос по BLE).
+	if desc := describeCE308Config(ce308Cfg); desc != "" {
+		log.Printf("ce308: %s", desc)
+	} else {
+		log.Printf("ce308: не настроен (нет раздела ce308) — опрос CE308 отключён")
+	}
 
 	// Флаги видимости блоков дашборда, вычисленные из конфигурации:
 	//   - ShowMap — МАП/MPPT включены (map.disabled != true);
@@ -1689,10 +1707,10 @@ func main() {
 	//   - ShowBMS — пулер ANT BMS запущен (bms_disabled != true, заполнен bms_path);
 	//   - ShowRelay — контроллер ламп SR-201 включен (relay.disabled != true).
 	dash := dashFlags{
-		ShowMap:    mapSec != nil && (mapSec.Disabled == nil || !*mapSec.Disabled),
-		ShowMeter:  meterCfg != nil,
-		ShowBMS:    bmsSite != nil,
-		ShowRelay:  relaySec != nil && (relaySec.Disabled == nil || !*relaySec.Disabled),
+		ShowMap:   mapSec != nil && (mapSec.Disabled == nil || !*mapSec.Disabled),
+		ShowMeter: meterCfg != nil,
+		ShowBMS:   bmsSite != nil,
+		ShowRelay: relaySec != nil && (relaySec.Disabled == nil || !*relaySec.Disabled),
 	}
 
 	// Сетевое реле SR-201 (лампы): управление по UDP, состояние поддерживает
@@ -1855,6 +1873,22 @@ func main() {
 			defer bgWg.Done()
 			runMeterPoll(store, pg, meterCfg, stopCtx)
 		}()
+		// Счётчик Энергомера CE308 — отдельный 2-сек цикл опроса по BLE (текущие
+		// значения + история в Redis, усреднение до 1 записи за 10 с в PG), см.
+		// ce308_poller.go и ce308_accumulator.go. Разовый снимок энергии — по сигналу.
+		if ce308Cfg != nil {
+			bgWg.Add(1)
+			go func() {
+				defer bgWg.Done()
+				runCe308Poll(store, pg, ce308Cfg, stopCtx)
+			}()
+			bgWg.Add(1)
+			go func() {
+				defer bgWg.Done()
+				runCe308Accumulator(store, pg, ce308Cfg.Name, stopCtx)
+			}()
+		}
+
 		// Добор пропущенных тарифных границ («ближайшее из зафиксированного»),
 		// см. meter_backfill.go.
 		bgWg.Add(1)

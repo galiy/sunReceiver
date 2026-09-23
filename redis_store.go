@@ -517,6 +517,13 @@ func (s *redisStore) PurgeOld(now time.Time) {
 	} else {
 		keys = append(keys, bmsKeys...)
 	}
+	// Ряд мгновенных значений CE308 (окно удержания — те же 2 календарных суток).
+	ce308Keys, err := s.scanPrefixKeys(redisCE308SeriesPrefix + "*")
+	if err != nil {
+		log.Printf("redis cleanup ce308 keys: %v", err)
+	} else {
+		keys = append(keys, ce308Keys...)
+	}
 	// Операцию выполняем так, чтобы «строго старше cutoff», т.е. ZRemRangeByScore
 	// убирает [ -inf ; cutoff-1 ], поэтому ровно cutoff остаётся в ряде.
 	remBelow := strconv.FormatInt(cutoff.Unix()-1, 10)
