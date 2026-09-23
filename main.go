@@ -1874,28 +1874,29 @@ func main() {
 			defer bgWg.Done()
 			runMeterPoll(store, pg, meterCfg, stopCtx)
 		}()
-		// Счётчик Энергомера CE308 — отдельный 2-сек цикл опроса по BLE (текущие
-		// значения + история в Redis, усреднение до 1 записи за 10 с в PG), см.
-		// ce308_poller.go и ce308_accumulator.go. Разовый снимок энергии — по сигналу.
-		if ce308Cfg != nil {
-			bgWg.Add(1)
-			go func() {
-				defer bgWg.Done()
-				runCe308Poll(store, pg, ce308Cfg, stopCtx)
-			}()
-			bgWg.Add(1)
-			go func() {
-				defer bgWg.Done()
-				runCe308Accumulator(store, pg, ce308Cfg.Name, stopCtx)
-			}()
-		}
-
 		// Добор пропущенных тарифных границ («ближайшее из зафиксированного»),
 		// см. meter_backfill.go.
 		bgWg.Add(1)
 		go func() {
 			defer bgWg.Done()
 			runMeterBackfill(store, pg, meterCfg, stopCtx)
+		}()
+	}
+
+	// Счётчик Энергомера CE308 — отдельный 2-сек цикл опроса по BLE (текущие
+	// значения + история в Redis, усреднение до 1 записи за 10 с в PG), см.
+	// ce308_poller.go и ce308_accumulator.go. Разовый снимок энергии — по сигналу.
+	// Раздел ce308 независим от счётчика DDS238 (meter) и запускается даже без него.
+	if ce308Cfg != nil {
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			runCe308Poll(store, pg, ce308Cfg, stopCtx)
+		}()
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			runCe308Accumulator(store, pg, ce308Cfg.Name, stopCtx)
 		}()
 	}
 

@@ -190,6 +190,7 @@ func TestBuildAnimationStaleMark(t *testing.T) {
 		t.Fatalf("stale map grid power: want 0, got %v", res.House.MapGridPower)
 	}
 }
+
 // TestBuildAnimationPlacementFromConfig проверяет, что размещение берётся из
 // конфига (placeByIP) даже для устаревшего снимка без поля placement.
 func TestBuildAnimationPlacementFromConfig(t *testing.T) {
@@ -235,14 +236,14 @@ func TestBuildAnimationTemperatures(t *testing.T) {
 		}),
 		// Deye: radiator (Корпус) и igbt (Транзисторы).
 		animSnapKind("Deye", "10.0.0.1", "Дом", now, map[string]float64{
-			"ac_active_power":    100,
+			"ac_active_power":      100,
 			"temperature_radiator": 41.2,
 			"temperature_igbt":     55.6,
 		}, "deye"),
 		// Sofar: inner (Корпус) и module (Транзисторы).
 		animSnapKind("Sofar", "10.0.0.2", "Дом", now, map[string]float64{
-			"ac_active_power":  50,
-			"temperature_inner": 38,
+			"ac_active_power":    50,
+			"temperature_inner":  38,
 			"temperature_module": 47,
 		}, "sofar"),
 	}

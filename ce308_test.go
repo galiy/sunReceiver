@@ -42,14 +42,16 @@ func TestValuesCE308(t *testing.T) {
 	if got := v[ce308L1ActiveP]; got != -161.3 {
 		t.Errorf("ce308_l1_active_power = %v, want -161.3", got)
 	}
-	if got := v[ce308ActiveP]; got != 363.0 {
-		t.Errorf("ce308_active_power = %v, want 363.0", got)
+	// Σ — знаковая сумма фаз (-161.3 + -165.6 + 36.1 = -290.8), а не Σ счётчика.
+	if got := v[ce308ActiveP]; got != -290.8 {
+		t.Errorf("ce308_active_power = %v, want -290.8", got)
 	}
 	if got := v[ce308L3ReactP]; got != 44.0 {
 		t.Errorf("ce308_l3_reactive_power = %v, want 44.0", got)
 	}
-	if got := v[ce308ReactP]; got != 230.3 {
-		t.Errorf("ce308_reactive_power = %v, want 230.3", got)
+	// Σ реактивной — знаковая сумма фаз (-87.4 + -98.9 + 44.0 = -142.3).
+	if got := v[ce308ReactP]; got != -142.3 {
+		t.Errorf("ce308_reactive_power = %v, want -142.3", got)
 	}
 }
 
@@ -62,6 +64,8 @@ func TestParseCE308End(t *testing.T) {
 		{"END02()", "END02(22.09.26,10688.65857)(10348.13133)(340.52724)", 10348.13133, 340.52724, 10688.65857},
 		{"END03()", "END03(22.09.26,108.12524)(43.34151)(64.78373)", 43.34151, 64.78373, 108.12524},
 		{"END04()", "END04(22.09.26,2893.96321)(1889.12944)(1004.83377)", 1889.12944, 1004.83377, 2893.96321},
+		// Третий тариф (T3) входит в итог.
+		{"END01()", "END01(01.01.26,120)(50)(60)(10)", 50, 60, 120},
 	}
 	for _, c := range cases {
 		day, night, total, err := parseCE308End(c.cmd, c.resp)
@@ -78,6 +82,10 @@ func TestParseCE308EndBad(t *testing.T) {
 	if _, _, _, err := parseCE308End("END01()", "END01(ERR13)"); err == nil {
 		t.Error("expected error for malformed END response, got nil")
 	}
+	// Нечисловой тариф (искажённый кадр) — ошибка, а не молчаливый 0.
+	if _, _, _, err := parseCE308End("END01()", "END01(01.01.26,120)(abc)(60)"); err == nil {
+		t.Error("expected error for non-numeric tariff, got nil")
+	}
 }
 
 func TestCEC308ConfigFromSection(t *testing.T) {
@@ -87,19 +95,19 @@ func TestCEC308ConfigFromSection(t *testing.T) {
 		t.Errorf("disabled: got (%v,%v), want nil,nil", c, err)
 	}
 	// Включён, но без mac — ошибка.
-	if _, err := ce308ConfigFromSection(&ce308Section{Name: "x", PIN: "324742", Disabled: boolPtr(false)}); err == nil {
+	if _, err := ce308ConfigFromSection(&ce308Section{Name: "x", PIN: "000000", Disabled: boolPtr(false)}); err == nil {
 		t.Error("expected error when mac missing")
 	}
 	// Включён, без pin — ошибка.
-	if _, err := ce308ConfigFromSection(&ce308Section{Name: "x", MAC: "6C:B2:FD:70:BD:FF", Disabled: boolPtr(false)}); err == nil {
+	if _, err := ce308ConfigFromSection(&ce308Section{Name: "x", MAC: "AA:BB:CC:DD:EE:FF", Disabled: boolPtr(false)}); err == nil {
 		t.Error("expected error when pin missing")
 	}
 	// Полный — ok.
-	c, err := ce308ConfigFromSection(&ce308Section{Name: "CE308 #194232482", MAC: "6C:B2:FD:70:BD:FF", PIN: "324742", Disabled: boolPtr(false)})
+	c, err := ce308ConfigFromSection(&ce308Section{Name: "CE308 #000000000", MAC: "AA:BB:CC:DD:EE:FF", PIN: "000000", Disabled: boolPtr(false)})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if c == nil || c.Name != "CE308 #194232482" || c.MAC != "6C:B2:FD:70:BD:FF" || c.PIN != "324742" {
+	if c == nil || c.Name != "CE308 #000000000" || c.MAC != "AA:BB:CC:DD:EE:FF" || c.PIN != "000000" {
 		t.Errorf("bad config: %+v", c)
 	}
 }

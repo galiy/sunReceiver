@@ -45,8 +45,8 @@
   },
   "ce308": {
     "disabled": false,
-    "name": "CE308 #194232482",
-    "mac": "6C:B2:FD:70:BD:FF",
+    "name": "CE308 #000000000",
+    "mac": "AA:BB:CC:DD:EE:FF",
     "pin": "CHANGE_ME_PIN"
   },
   "notify": {
