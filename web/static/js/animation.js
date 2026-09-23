@@ -531,7 +531,7 @@ function layoutGarage(data){
      getValue:function(d){return d.ce308_power;}},
     // Счётчик → гараж (справа). P_гараж = P(CE308) − Σac(инверторы).
     {pts:[[meterX,MAI],[garageX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
-     label:{x:(meterX+garageX)/2, y:MAI-12},
+     label:{x:(dropX+garageX)/2, y:MAI-12},
      getValue:function(d){return d.garage_power;}}
   ];
 
