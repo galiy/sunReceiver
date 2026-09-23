@@ -81,6 +81,12 @@ func openCE308(mac string, pin string) (*ce308Meter, error) {
 		// Логируем и продолжаем — лишний вывод раз в подключение приемлем.
 		logCE308("bluez agent: %v", err)
 	}
+	// Питание BLE-адаптера проверяем программно и при необходимости включаем
+	// (BlueZ Powered). На Linux также перенацеливает tinygo на реальный
+	// контроллер, если тот не hci0 (перенумерация USB-адаптера).
+	if err := ce308EnsurePowered(); err != nil {
+		logCE308("проверка питания BLE-адаптера: %v", err)
+	}
 	a := bluetooth.DefaultAdapter
 	if err := a.Enable(); err != nil {
 		return nil, fmt.Errorf("включение BLE-адаптера: %w", err)
