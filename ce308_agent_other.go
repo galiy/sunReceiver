@@ -23,3 +23,9 @@ package main
 func registerCE308Agent(pin string) error {
 	return nil
 }
+
+// ensureCE308Known — no-op вне Linux (нет BlueZ/discovery; BlueZ-бэкенд tinygo
+// доступен только там). Возвращает nil.
+func ensureCE308Known(mac string) error {
+	return nil
+}

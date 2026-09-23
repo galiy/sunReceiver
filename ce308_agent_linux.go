@@ -21,7 +21,9 @@ package main
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -69,6 +71,45 @@ func (a *ce308BlueZAgent) AuthorizeService(device dbus.ObjectPath, uuid string) 
 }
 
 func (a *ce308BlueZAgent) Cancel() error { return nil }
+
+// ensureCE308Known (Linux) гарантирует, что BlueZ «знает» объект устройства по
+// MAC: без предварительного discovery tinygo Connect падает — объект
+// /org/bluez/hci0/dev_* отсутствует, и Properties.Get даёт UnknownMethod.
+// Если объект уже известен (устройство спарено ранее) — return nil. Иначе
+// запускаем короткий discovery и ждём появления устройства.
+func ensureCE308Known(mac string) error {
+	bus, err := dbus.SystemBus()
+	if err != nil {
+		return fmt.Errorf("system bus: %w", err)
+	}
+	devPath := dbus.ObjectPath("/org/bluez/hci0/dev_" + strings.Replace(strings.ToUpper(mac), ":", "_", -1))
+	known := func() bool {
+		var v bool
+		e := bus.Object("org.bluez", devPath).
+			Call("org.freedesktop.DBus.Properties.Get", 0, "org.bluez.Device1", "Connected").Store(&v)
+		return e == nil
+	}
+	if known() {
+		return nil
+	}
+	adapter := bus.Object("org.bluez", dbus.ObjectPath("/org/bluez/hci0"))
+	// Сбрасываем возможное зависшее discovery и запускаем новое.
+	_ = adapter.Call("org.bluez.Adapter1.StopDiscovery", 0).Err
+	if err := adapter.Call("org.bluez.Adapter1.StartDiscovery", 0).Err; err != nil {
+		// InProgress (discovery уже запущен) — не ошибка, ждём устройство.
+		logCE308("discovery: %v", err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if known() {
+			_ = adapter.Call("org.bluez.Adapter1.StopDiscovery", 0).Err
+			return nil
+		}
+		time.Sleep(time.Second)
+	}
+	_ = adapter.Call("org.bluez.Adapter1.StopDiscovery", 0).Err
+	return fmt.Errorf("устройство %s не обнаружено по BLE (не рекламируется)", mac)
+}
 
 // registerCE308Agent регистрирует BlueZ-агента с PIN (идемпотентно) на системной
 // шине и делает его агентом по умолчанию. Ошибка не фатальна: если счётчик уже
