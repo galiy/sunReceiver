@@ -512,7 +512,7 @@ function layoutGarage(data){
   var invs=data.inverters||[];
   var n=invs.length;
   var MAI=150, BUSY=320, INVY=430, PANY=560;
-  var gridX=110, innerX=470, garageX=810;
+  var gridX=110, innerX=710, garageX=810;
   var invXs=spread(140, 780, n);
 
   var nodes=[

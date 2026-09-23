@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="470" viewBox="0 0 400 470">
+  <!-- Счётчик CE308 (Енергомера) — стилизованный (без мелких надписей/штрихкода),
+       квадратный белый корпус: логотип/модель/штрихкод в одну строку у верха,
+       синяя пломба с кнопкой, клеммы с винтами снизу. -->
+  <defs>
+    <style>
+      .body  { fill:#f6f7f8; stroke:#c8ccd1; stroke-width:3; }
+      .case  { fill:#e9edf0; opacity:.7; stroke:#b7bec6; stroke-width:2.5; }
+      .vin   { fill:#5f6b76; }
+      .tex   { fill:#2c2f33; font-family:Arial,Helvetica,sans-serif; }
+      .brand { fill:#33383d; font-family:Georgia,'Times New Roman',serif; font-style:italic; }
+      .seal  { fill:#2b6cb0; stroke:#1f4f80; stroke-width:2.5; }
+      .cap   { fill:#c9cfd4; stroke:#98a0a7; stroke-width:2; }
+      .capin { fill:#9aa2a9; }
+      .mark  { fill:#b6bcc2; }
+    </style>
+  </defs>
+
+  <!-- === БЕЛЫЙ КОРПУС (почти квадратный) === -->
+  <rect class="body" x="20" y="16" width="360" height="424" rx="10"/>
+
+  <!-- логотип (курсив) слева -->
+  <text class="brand" x="48" y="66" font-size="26" font-weight="bold">Энергомера</text>
+  <!-- модель справа -->
+  <text class="tex" x="282" y="66" font-size="30" font-weight="bold" text-anchor="end">CE308</text>
+  <!-- штрихкод (абстрактный, справа) -->
+  <g class="mark">
+    <rect x="312" y="44" width="5" height="30"/>
+    <rect x="320" y="44" width="9" height="30"/>
+    <rect x="332" y="44" width="3" height="30"/>
+    <rect x="338" y="44" width="7" height="30"/>
+    <rect x="348" y="44" width="4" height="30"/>
+  </g>
+
+  <!-- === СИНЯЯ ПЛОМБА С КНОПКОЙ (по центру) === -->
+  <rect class="seal" x="128" y="290" width="144" height="96" rx="14"/>
+  <!-- выступающая круглая кнопка -->
+  <circle class="cap" cx="200" cy="338" r="26"/>
+  <circle class="capin" cx="200" cy="346" r="14"/>
+
+  <!-- === НИЖНЯЯ КЛЕММНАЯ ЗОНА (прозрачная) === -->
+  <rect class="case" x="36" y="404" width="328" height="120" rx="10"/>
+  <circle class="vin" cx="96" cy="436" r="18"/>
+  <circle class="vin" cx="96" cy="436" r="10" fill="#454f58"/>
+  <circle class="vin" cx="192" cy="436" r="18"/>
+  <circle class="vin" cx="192" cy="436" r="10" fill="#454f58"/>
+  <circle class="vin" cx="288" cy="436" r="18"/>
+  <circle class="vin" cx="288" cy="436" r="10" fill="#454f58"/>
+  <circle class="vin" cx="144" cy="502" r="15"/>
+  <circle class="vin" cx="144" cy="502" r="9" fill="#454f58"/>
+  <circle class="vin" cx="256" cy="502" r="15"/>
+  <circle class="vin" cx="256" cy="502" r="9" fill="#454f58"/>
+</svg>
