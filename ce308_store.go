@@ -52,7 +52,7 @@ func ce308SeriesKey(ts time.Time) string {
 // перезаписывая предыдущий снимок. Используется программным способом в каждом
 // успешном опросе. Ограничение удержания — у current нет TTL (последнее состояние
 // всегда хранится, как у инверторов).
-func (s *redisStore) SaveCE308Current(snap deviceSnapshot) error {
+func (s *redisStore) SaveCE308Current(snap ce308Snapshot) error {
 	b, err := json.Marshal(snap)
 	if err != nil {
 		return fmt.Errorf("marshal ce308 current %s: %w", snap.Name, err)
@@ -63,7 +63,7 @@ func (s *redisStore) SaveCE308Current(snap deviceSnapshot) error {
 // SaveCE308History кладёт точку во временной ряд CE308 (score = Unix-секунды).
 // Перед записью удаляет предыдущую версию того же устройства на том же score,
 // чтобы в ZSET не было дублей в один момент времени (аналог SaveSnapshot).
-func (s *redisStore) SaveCE308History(snap deviceSnapshot, ts time.Time) error {
+func (s *redisStore) SaveCE308History(snap ce308Snapshot, ts time.Time) error {
 	b, err := json.Marshal(snap)
 	if err != nil {
 		return fmt.Errorf("marshal ce308 history %s: %w", snap.Name, err)
@@ -76,7 +76,7 @@ func (s *redisStore) SaveCE308History(snap deviceSnapshot, ts time.Time) error {
 	}
 	var stale []any
 	for _, m := range old {
-		var q deviceSnapshot
+		var q ce308Snapshot
 		if json.Unmarshal([]byte(m), &q) != nil {
 			continue
 		}
@@ -107,14 +107,14 @@ func (s *redisStore) SaveCE308Energy(snap *ce308EnergySnapshot) error {
 }
 
 // CE308Current возвращает все текущие снимки CE308 из HASH (поле = имя).
-func (s *redisStore) CE308Current() (map[string]deviceSnapshot, error) {
+func (s *redisStore) CE308Current() (map[string]ce308Snapshot, error) {
 	m, err := s.rdb.HGetAll(s.ctx, redisCE308CurrentKey).Result()
 	if err != nil {
 		return nil, fmt.Errorf("HGETALL %s: %w", redisCE308CurrentKey, err)
 	}
-	out := make(map[string]deviceSnapshot, len(m))
+	out := make(map[string]ce308Snapshot, len(m))
 	for k, v := range m {
-		var snap deviceSnapshot
+		var snap ce308Snapshot
 		if err := json.Unmarshal([]byte(v), &snap); err != nil {
 			continue
 		}
@@ -141,20 +141,20 @@ func (s *redisStore) CE308Energy() (*ce308EnergySnapshot, error) {
 
 // QueryCE308Series возвращает мгновенные снимки CE308 за период [start, end]
 // включительно из временного ряда (по месячным сегментам, объединяя по времени).
-func (s *redisStore) QueryCE308Series(start, end time.Time) ([]deviceSnapshot, error) {
+func (s *redisStore) QueryCE308Series(start, end time.Time) ([]ce308Snapshot, error) {
 	if start.After(end) {
 		return nil, fmt.Errorf("ce308 series: start after end")
 	}
 	startScore := strconv.FormatInt(start.Unix(), 10)
 	endScore := strconv.FormatInt(end.Unix(), 10)
-	var out []deviceSnapshot
+	var out []ce308Snapshot
 	for key := ce308SeriesKey(start); !keyAfter(key, end); key = nextCe308SeriesKey(key) {
 		vals, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: startScore, Max: endScore}).Result()
 		if err != nil {
 			return nil, fmt.Errorf("ce308 series %s: %w", key, err)
 		}
 		for _, m := range vals {
-			var snap deviceSnapshot
+			var snap ce308Snapshot
 			if err := json.Unmarshal([]byte(m), &snap); err != nil {
 				continue
 			}

@@ -37,6 +37,29 @@ const ce308AvgStep = 10 * time.Second
 // чтения BLE ~4-5 с). Меньше ce308AvgStep, поэтому цикл не дрейфует.
 const ce308AvgDelay = 10 * time.Second
 
+// averageCe308 усредняет мгновенные снимки CE308 одного 10-секундного
+// промежутка в одну точку: каждое значение — среднее по снимкам (округление
+// до 1 знака). Промежуток обычно содержит несколько точек (~2 с), поэтому
+// честное усреднение, а не «последнее значение».
+func averageCe308(snaps []ce308Snapshot) map[string]float64 {
+	sums := map[string]float64{}
+	counts := map[string]float64{}
+	for _, sn := range snaps {
+		for k, v := range sn.Values {
+			sums[k] += v
+			counts[k]++
+		}
+	}
+	out := map[string]float64{}
+	for k, n := range counts {
+		if n == 0 {
+			continue
+		}
+		out[k] = ce308Round1(sums[k] / n)
+	}
+	return out
+}
+
 // runCe308Accumulator — фоновый процесс усреднения истории CE308 в PostgreSQL.
 // По завершении каждого 10-секундного промежутка (не сразу, а спустя
 // ce308AvgDelay) читает снимки промежутка из Redis-ряда и пишет одну усреднённую
@@ -78,7 +101,7 @@ func runCe308Accumulator(store *redisStore, pg *pgStore, name string, ctx contex
 			if len(snaps) == 0 {
 				return
 			}
-			vc := averageValues(snaps)
+			vc := averageCe308(snaps)
 			if len(vc) == 0 {
 				return
 			}

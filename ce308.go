@@ -128,10 +128,55 @@ func ce308Round1(v float64) float64 {
 	return math.Round(v*10) / 10
 }
 
-// valuesCE308 строит valuesContract из показаний (напряжения/токи в исходных
-// единицах, мощности уже в Вт/вар, округлены до 1 знака).
-func valuesCE308(r ce308Reads) valuesContract {
-	out := valuesContract{}
+// Допустимые диапазоны показаний CE308 (грубая проверка валидности после чтения
+// по нестабильному BLE-каналу). Границы щедрые — отбрасывается только очевидный
+// мусор (NaN/Inf, бессмысленно большие значения), но не реальная дельта сети.
+const (
+	ce308VoltageMax  = 500.0    // фазные напряжения, В
+	ce308CurrentMax  = 300.0    // фазные токи, А
+	ce308PowerAbsMax = 200000.0 // активная/реактивная мощность, Вт/вар (по фазам и Σ)
+)
+
+// ce308ReadsValid проверяет целостность принятых показаний: ожидаемое число
+// элементов (3 фазы; у мощности — ещё Σ), все значения конечны (не NaN/Inf) и
+// укладываются в грубые физические диапазоны. Нестабильный BLE-канал может дать
+// обрыв/искажение кадра, поэтому кривой снимок отбрасывается, а не пишется в
+// Redis/PG. Суммы мощности (Σ) проверяются только на диапазон, не на равенство
+// Σ = ф1+ф2+ф3 (счётчик может давать незначительную погрешность).
+func ce308ReadsValid(r ce308Reads) bool {
+	if len(r.Volta) < 3 || len(r.Curre) < 3 || len(r.ActiveP) < 4 || len(r.ReactiveP) < 4 {
+		return false
+	}
+	for _, v := range r.Volta[:3] {
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > ce308VoltageMax {
+			return false
+		}
+	}
+	for _, v := range r.Curre[:3] {
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > ce308CurrentMax {
+			return false
+		}
+	}
+	for _, v := range r.ActiveP {
+		if math.IsNaN(v) || math.IsInf(v, 0) || math.Abs(v) > ce308PowerAbsMax {
+			return false
+		}
+	}
+	for _, v := range r.ReactiveP {
+		if math.IsNaN(v) || math.IsInf(v, 0) || math.Abs(v) > ce308PowerAbsMax {
+			return false
+		}
+	}
+	return true
+}
+
+// valuesCE308 строит map значений из показаний (напряжения/токи в исходных
+// единицах, мощности уже в Вт/вар, округлены до 1 знака). Используется обычная
+// map[string]float64, а НЕ valuesContract: у последней MarshalJSON выводит только
+// общие теги контракта (commonContractTags), в которые теги ce308_* не входят —
+// иначе значения терялись бы при сериализации снимка.
+func valuesCE308(r ce308Reads) map[string]float64 {
+	out := map[string]float64{}
 	set := func(key string, vals []float64, i int) {
 		if i < len(vals) {
 			out[key] = ce308Round1(vals[i])
@@ -154,6 +199,16 @@ func valuesCE308(r ce308Reads) valuesContract {
 		set(key, r.ReactiveP, i)
 	}
 	return out
+}
+
+// ce308Snapshot — снимок CE308, хранимый в Redis (current/series) и PG.
+// Values — обычная map (без фильтрации тегов), т.к. у valuesContract при
+// сериализации остаются только общие теги.
+type ce308Snapshot struct {
+	Name      string             `json:"name"`
+	IP        string             `json:"ip"`
+	Timestamp string             `json:"timestamp"`
+	Values    map[string]float64 `json:"values"`
 }
 
 // ce308EnergySnapshot — разовый снимок накопленной электроэнергии по разрезам

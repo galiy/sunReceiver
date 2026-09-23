@@ -17,6 +17,7 @@
 package main
 
 import (
+	"math"
 	"testing"
 )
 
@@ -102,3 +103,46 @@ func TestCEC308ConfigFromSection(t *testing.T) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+func TestCE308ReadsValid(t *testing.T) {
+	good := ce308Reads{
+		Volta:     []float64{240.186, 239.058, 238.953},
+		Curre:     []float64{0.77701, 0.81489, 0.25237},
+		ActiveP:   toWatts([]float64{-0.161307, -0.165584, 0.036134, 0.363025}),
+		ReactiveP: toWatts([]float64{-0.087436, -0.09889, 0.043991, 0.230317}),
+	}
+	if !ce308ReadsValid(good) {
+		t.Error("valid reads rejected")
+	}
+
+	// Недостающие фазы (обрыв кадра).
+	short := good
+	short.Volta = []float64{240.1, 238.9}
+	if ce308ReadsValid(short) {
+		t.Error("reads with missing phases accepted")
+	}
+
+	// NaN / Inf.
+	nan := good
+	nan.Curre = []float64{0.7, math.NaN(), 0.25}
+	if ce308ReadsValid(nan) {
+		t.Error("reads with NaN current accepted")
+	}
+	inf := good
+	inf.ActiveP = []float64{math.Inf(1), 0, 0, 0}
+	if ce308ReadsValid(inf) {
+		t.Error("reads with Inf power accepted")
+	}
+
+	// Выход за физический диапазон.
+	over := good
+	over.Volta = []float64{900, 239, 238}
+	if ce308ReadsValid(over) {
+		t.Error("reads with absurd voltage accepted")
+	}
+	overN := good
+	overN.Curre = []float64{-5, 0.8, 0.25}
+	if ce308ReadsValid(overN) {
+		t.Error("reads with negative current accepted")
+	}
+}

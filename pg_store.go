@@ -216,7 +216,7 @@ ON CONFLICT (ip, ts) DO UPDATE
 // InsertCe308Average сохраняет одну усреднённую за 10 секунд точку CE308
 // (ts — начало промежутка). Идемпотентна по (name, ts), повторная запись
 // ОБНОВЛЯЕТ строку (last-write-wins), как в InsertAveraged.
-func (s *pgStore) InsertCe308Average(name string, ts time.Time, vc valuesContract) error {
+func (s *pgStore) InsertCe308Average(name string, ts time.Time, vc map[string]float64) error {
 	vals, err := json.Marshal(vc)
 	if err != nil {
 		return fmt.Errorf("pg marshal ce308 values %s: %w", name, err)
@@ -234,11 +234,11 @@ ON CONFLICT (name, ts) DO UPDATE
 }
 
 // ce308PGPoint — усреднённая точка CE308 из PostgreSQL (ts — начало 10-сек
-// промежутка, Values — усреднённый контракт мгновенных значений).
+// промежутка, Values — усреднённые мгновенные значения).
 type ce308PGPoint struct {
 	Name   string
 	TS     time.Time
-	Values valuesContract
+	Values map[string]float64
 }
 
 // QueryCE308Averages возвращает усреднённые 10-сек точки CE308 за период
@@ -261,7 +261,7 @@ ORDER BY ts`,
 		if err := rows.Scan(&ts, &raw); err != nil {
 			return nil, err
 		}
-		var vc valuesContract
+		var vc map[string]float64
 		if err := json.Unmarshal(raw, &vc); err != nil {
 			return nil, err
 		}
