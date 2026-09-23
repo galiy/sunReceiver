@@ -29,6 +29,12 @@ import (
 // тик и сбрасывает лишние).
 const ce308PollInterval = 2 * time.Second
 
+// ce308EnergyInterval — период АВТОНОМНОГО снимка накопленной энергии: раз в
+// 30 минут пулер сам (без внешнего HTTP-запроса) перечитывает END01..END04 и
+// обновляет разовый снимок. Первый запуск при инициализации ориентируется на
+// время последнего снимка (см. ce308EnergyDelay).
+const ce308EnergyInterval = 30 * time.Minute
+
 // ce308ReconnectDelay — пауза между попытками переподключения при обрыве связи.
 const ce308ReconnectDelay = 2 * time.Second
 
@@ -91,12 +97,25 @@ func runCe308Poll(store *redisStore, pg *pgStore, cfg *ce308Config, ctx context.
 func ce308PollConnected(store *redisStore, cfg *ce308Config, m *ce308Meter, trig chan struct{}, ctx context.Context) error {
 	ticker := time.NewTicker(ce308PollInterval)
 	defer ticker.Stop()
+	// Автономный снимок энергии (без внешнего запроса): раз в ce308EnergyInterval.
+	// Первый запуск при инициализации ориентируется на время последнего снимка в
+	// Redis (см. ce308EnergyDelay): если он свежее периода — ждём до (last+период),
+	// иначе снимаем сразу. После каждого автоперечитывания таймер взводится заново.
+	energyT := time.NewTimer(ce308EnergyDelay(store))
+	defer energyT.Stop()
 	for {
 		select {
 		case <-ticker.C:
 			if err := ce308PollOnce(store, cfg, m); err != nil {
 				return err
 			}
+		case <-energyT.C:
+			if err := ce308CaptureEnergy(store, cfg, m); err != nil {
+				// Ошибка чтения энергии не рвёт постоянное соединение — просто
+				// логируем; следующий опрос мгновенных значений продолжится.
+				logCE308("автоснимок энергии не удался: %v", err)
+			}
+			energyT.Reset(ce308EnergyInterval)
 		case <-trig:
 			if err := ce308CaptureEnergy(store, cfg, m); err != nil {
 				// Ошибка чтения энергии не рвёт постоянное соединение — просто
@@ -107,6 +126,26 @@ func ce308PollConnected(store *redisStore, cfg *ce308Config, m *ce308Meter, trig
 			return ctx.Err()
 		}
 	}
+}
+
+// ce308EnergyDelay — задержка до первого автономного снимка энергии (при
+// инициализации пулера). Ориентируется на время последнего снимка в Redis:
+//   - снимка ещё нет или время некорректно — снимаем сразу (0);
+//   - снимок свежее ce308EnergyInterval — ждём до (last + период);
+//   - снимок устарел (старше периода) — снимаем сразу (0).
+func ce308EnergyDelay(store *redisStore) time.Duration {
+	last, err := store.CE308Energy()
+	if err != nil || last == nil || last.Timestamp == "" {
+		return 0
+	}
+	ts, err := time.Parse(time.RFC3339, last.Timestamp)
+	if err != nil {
+		return 0
+	}
+	if d := time.Until(ts.Add(ce308EnergyInterval)); d > 0 {
+		return d
+	}
+	return 0
 }
 
 // ce308PollOnce выполняет один опрос мгновенных значений и пишет снимок.

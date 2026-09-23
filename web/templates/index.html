@@ -8,7 +8,8 @@
 </head>
 <body data-show-map="{{if .flags.ShowMap}}1{{else}}0{{end}}"
       data-show-meter="{{if .flags.ShowMeter}}1{{else}}0{{end}}"
-      data-show-bms="{{if .flags.ShowBMS}}1{{else}}0{{end}}">
+      data-show-bms="{{if .flags.ShowBMS}}1{{else}}0{{end}}"
+      data-show-ce308="{{if .flags.ShowCE308}}1{{else}}0{{end}}">
 <link rel="stylesheet" href="/static/css/site.css?v={{.CacheBust}}">
 <div class="top-nav">
   <div>
@@ -66,6 +67,52 @@
     <span class="spoiler-title">Детальные данные</span>
   </button>
   <div class="spoiler-body">
+
+  {{if .flags.ShowCE308}}
+  <div class="group group-top">
+    <div class="group-head">
+      <span class="group-title">Электросчётчик CE308 &mdash; текущие данные</span>
+      <span class="meter-ts" id="ce308CurTs">Актуально: &mdash;</span>
+    </div>
+    <table class="pivot-table ce308-table" id="ce308Cur">
+      <thead>
+        <tr><th class="p-label">Параметр</th><th>L1</th><th>L2</th><th>L3</th><th>&Sigma;</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="p-label">Напряжение (V)</td><td id="ce308V1">&mdash;</td><td id="ce308V2">&mdash;</td><td id="ce308V3">&mdash;</td><td></td></tr>
+        <tr><td class="p-label">Ток (A)</td><td id="ce308I1">&mdash;</td><td id="ce308I2">&mdash;</td><td id="ce308I3">&mdash;</td><td id="ce308Isum">&mdash;</td></tr>
+        <tr><td class="p-label">Активная мощность (W)</td><td id="ce308P1">&mdash;</td><td id="ce308P2">&mdash;</td><td id="ce308P3">&mdash;</td><td id="ce308Psum">&mdash;</td></tr>
+        <tr><td class="p-label">Реактивная мощность (var)</td><td id="ce308Q1">&mdash;</td><td id="ce308Q2">&mdash;</td><td id="ce308Q3">&mdash;</td><td id="ce308Qsum">&mdash;</td></tr>
+      </tbody>
+    </table>
+    <div class="meter-note">Отрицательное значение &mdash; отдача в сеть (генерация); положительное &mdash; потребление.</div>
+  </div>
+  {{end}}
+
+  {{if .flags.ShowCE308}}
+  <div class="group group-top">
+    <div class="group-head">
+      <span class="group-title">Электросчётчик CE308 &mdash; показания</span>
+      <span class="ce308-head-right">
+        <button id="ce308Refresh" type="button" class="ce308-btn">Обновить</button>
+        <span class="meter-ts" id="ce308EnTs">Актуально: &mdash;</span>
+      </span>
+    </div>
+    <table class="pivot-table ce308-table" id="ce308En">
+      <thead>
+        <tr><th class="p-label">Энергия</th><th>Потребление</th><th>Отдача</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="p-label">Активная &mdash; день (kWh)</td><td id="ce308AtcDay">&mdash;</td><td id="ce308AtdDay">&mdash;</td></tr>
+        <tr><td class="p-label">Активная &mdash; ночь (kWh)</td><td id="ce308AtcNight">&mdash;</td><td id="ce308AtdNight">&mdash;</td></tr>
+        <tr><td class="p-label">Активная &mdash; всего (kWh)</td><td id="ce308AtcTotal">&mdash;</td><td id="ce308AtdTotal">&mdash;</td></tr>
+        <tr><td class="p-label">Реактивная &mdash; день (квар&middot;ч)</td><td id="ce308RtcDay">&mdash;</td><td id="ce308RtdDay">&mdash;</td></tr>
+        <tr><td class="p-label">Реактивная &mdash; ночь (квар&middot;ч)</td><td id="ce308RtcNight">&mdash;</td><td id="ce308RtdNight">&mdash;</td></tr>
+        <tr><td class="p-label">Реактивная &mdash; всего (квар&middot;ч)</td><td id="ce308RtcTotal">&mdash;</td><td id="ce308RtdTotal">&mdash;</td></tr>
+      </tbody>
+    </table>
+  </div>
+  {{end}}
 
   {{if .flags.ShowMeter}}
   <div class="group group-top">

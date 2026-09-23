@@ -5,6 +5,7 @@
 var showMap = document.body.dataset.showMap === '1';
 var showMeter = document.body.dataset.showMeter === '1';
 var showBMS = document.body.dataset.showBms === '1';
+var showCE308 = document.body.dataset.showCe308 === '1';
 
 // ---------- Утилиты ----------
 function esc(s){ return String(s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
@@ -251,9 +252,86 @@ function renderInvPlates(placements){
 	box.innerHTML=h;
 }
 
+// ---------- Электросчётчик CE308 (текущие данные + показания) ----------
+// Данные — из Redis через /api/ce308/current и /api/ce308/energy, обновление раз в секунду
+// (вместе с tick спойлера «Детальные данные»). Текущий снимок приходит map имя→снимок,
+// показания энергии — один объект (см. ce308.go). Знаки мощности: положительная —
+// потребление, отрицательная — отдача в сеть.
+function ce308Num(v){ return (v===undefined || v===null || !isFinite(Number(v))) ? null : Number(v); }
+function setCe308Cell(id, v, signed){
+	var el=document.getElementById(id);
+	if(!el) return;
+	var n=ce308Num(v);
+	if(n===null){ el.textContent='—'; el.className='ce-num'; return; }
+	el.textContent=n.toLocaleString('ru-RU',{maximumFractionDigits:1});
+	// Знаковые величины (мощности) окрашиваем по знаку: потребление/отдача.
+	if(signed){ el.className='ce-num '+(n<0 ? 'ce-neg' : 'ce-pos'); }
+	else{ el.className='ce-num'; }
+}
+function renderCE308Current(cur){
+	var ts=document.getElementById('ce308CurTs');
+	var name=Object.keys(cur||{})[0];
+	var snap=name ? cur[name] : null;
+	if(ts) ts.textContent = (snap && snap.timestamp) ? ('Актуально: '+fmtSec(snap.timestamp)) : 'Актуально: —';
+	var v=(snap && snap.values) ? snap.values : null;
+	var v1=ce308Num(v&&v.ce308_l1_voltage), v2=ce308Num(v&&v.ce308_l2_voltage), v3=ce308Num(v&&v.ce308_l3_voltage);
+	setCe308Cell('ce308V1', v1); setCe308Cell('ce308V2', v2); setCe308Cell('ce308V3', v3);
+	var i1=ce308Num(v&&v.ce308_l1_current), i2=ce308Num(v&&v.ce308_l2_current), i3=ce308Num(v&&v.ce308_l3_current);
+	setCe308Cell('ce308I1', i1); setCe308Cell('ce308I2', i2); setCe308Cell('ce308I3', i3);
+	setCe308Cell('ce308Isum', (i1!==null&&i2!==null&&i3!==null) ? (i1+i2+i3) : null);
+	var p1=ce308Num(v&&v.ce308_l1_active_power), p2=ce308Num(v&&v.ce308_l2_active_power), p3=ce308Num(v&&v.ce308_l3_active_power);
+	setCe308Cell('ce308P1', p1, true); setCe308Cell('ce308P2', p2, true); setCe308Cell('ce308P3', p3, true);
+	setCe308Cell('ce308Psum', ce308Num(v&&v.ce308_active_power), true);
+	var q1=ce308Num(v&&v.ce308_l1_reactive_power), q2=ce308Num(v&&v.ce308_l2_reactive_power), q3=ce308Num(v&&v.ce308_l3_reactive_power);
+	setCe308Cell('ce308Q1', q1, true); setCe308Cell('ce308Q2', q2, true); setCe308Cell('ce308Q3', q3, true);
+	setCe308Cell('ce308Qsum', ce308Num(v&&v.ce308_reactive_power), true);
+}
+function renderCE308Energy(snap){
+	var ts=document.getElementById('ce308EnTs');
+	if(ts) ts.textContent = (snap && snap.timestamp) ? ('Актуально: '+fmtSec(snap.timestamp)) : 'Актуально: —';
+	var s=snap||{};
+	setCe308Cell('ce308AtcDay', s.active_consumption_day);
+	setCe308Cell('ce308AtcNight', s.active_consumption_night);
+	setCe308Cell('ce308AtcTotal', s.active_consumption_total);
+	setCe308Cell('ce308AtdDay', s.active_delivery_day);
+	setCe308Cell('ce308AtdNight', s.active_delivery_night);
+	setCe308Cell('ce308AtdTotal', s.active_delivery_total);
+	setCe308Cell('ce308RtcDay', s.reactive_consumption_day);
+	setCe308Cell('ce308RtcNight', s.reactive_consumption_night);
+	setCe308Cell('ce308RtcTotal', s.reactive_consumption_total);
+	setCe308Cell('ce308RtdDay', s.reactive_delivery_day);
+	setCe308Cell('ce308RtdNight', s.reactive_delivery_night);
+	setCe308Cell('ce308RtdTotal', s.reactive_delivery_total);
+}
+// tickCE308 — опрос текущих данных и показаний CE308 (вызывается из tick раз в секунду).
+// Кнопка «Обновить» шлёт POST /api/ce308/energy — сигнал пулеру снять свежий снимок энергии.
+async function tickCE308(){
+	if(!showCE308 || (window.srRefresh && !window.srRefresh.isEnabled())) return;
+	try{
+		var r=await fetch('/api/ce308/current');
+		if(r.ok) renderCE308Current(await r.json());
+		var re=await fetch('/api/ce308/energy');
+		if(re.ok) renderCE308Energy(await re.json());
+	}catch(e){}
+}
+(function(){
+	var btn=document.getElementById('ce308Refresh');
+	if(!btn) return;
+	btn.addEventListener('click', function(){
+		if(window.srRefresh && !window.srRefresh.isEnabled()) return;
+		btn.disabled=true; btn.textContent='Запрос…';
+		fetch('/api/ce308/energy',{method:'POST'})
+			.catch(function(){})
+			.finally(function(){ btn.disabled=false; btn.textContent='Обновить'; });
+	});
+})();
+
 async function tick(){
 	if(window.srRefresh && !window.srRefresh.isEnabled()) return;
 	try{
+		// Электросчётчик CE308 (текущие данные + показания) — опрашивается тем же
+		// ежесекундным циклом спойлера «Детальные данные» (свои /api/ce308/*).
+		tickCE308();
 		var r=await fetch('/api/current');
 		if(!r.ok) return;
 		var data=await r.json();
