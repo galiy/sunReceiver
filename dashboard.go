@@ -32,9 +32,10 @@ import (
 )
 
 // rangeCacheTTL — срок жизни кешированного набора снимков в loadRange. Страница
-// графиков делает 4 fetch /api/series с одинаковыми from/to за цикл (60 с), и
-// данные Redis обновляются каждые ~10 с, поэтому 15 с — свежее и даёт схождение
-// всех 4 запросов в один реальный read из Redis/PG.
+// графиков делает fetch /api/series с общими from/to за цикл (60 с), и данные
+// Redis обновляются каждые ~10 с, поэтому 15 с — свежее окно кеша: повторные
+// (в т.ч. параллельные вкладки) запросы за тот же период сходятся в один
+// реальный read из Redis/PG.
 const rangeCacheTTL = 15 * time.Second
 
 // tariffCacheTTL — срок жизни кеша тарифных исходников (границ текущего дня и
@@ -258,6 +259,12 @@ type seriesResponse struct {
 	CE308L2Voltage   []seriesPoint `json:"ce308_l2_voltage,omitempty"`
 	CE308L3Voltage   []seriesPoint `json:"ce308_l3_voltage,omitempty"`
 	CE308ActivePower []seriesPoint `json:"ce308_active_power,omitempty"`
+	// Temps — временные ряды температур всех устройств, отдающих температурные
+	// теги универсального контракта (инверторы Deye/Sofar и МАП): по одной линии
+	// на каждый датчик («Имя — датчик»). Только Redis (в PG температуры не
+	// усредняются, см. accumulatorSkipTags), поэтому за период старше окна
+	// удержания Redis ряды пусты.
+	Temps []deviceSeries `json:"temps,omitempty"`
 }
 
 // meterDailyResponse отвечает на GET /api/tariffs: посуточные тарифные величины
@@ -283,6 +290,16 @@ var seriesPalette = []string{
 	"#428bca", "#5cb85c", "#f0ad4e", "#d9534f",
 	"#5bc0de", "#9463b8", "#7f8fa6", "#17a2b8",
 	"#a6c9e2", "#9ec79b", "#f6c28b", "#c9a3a8",
+}
+
+// tempPalette — цвета линий графика температур (по индексу линии после
+// группировки по устройству и сортировки датчиков). Больше seriesPalette:
+// линий на графике много (каждый инвертор — 2 датчика, МАП — 3).
+var tempPalette = []string{
+	"#428bca", "#d9534f", "#5cb85c", "#f0ad4e",
+	"#9463b8", "#17a2b8", "#e8590c", "#20c997",
+	"#e64980", "#7048e8", "#f08c00", "#1098ad",
+	"#6b7785", "#c2255c", "#2b8a3e", "#862e9c",
 }
 
 // snapFloat извлекает числовое значение из универсального контракта по ключу
@@ -1219,6 +1236,100 @@ func mapSchemeTemps(v valuesContract) []animTemp {
 	return temps
 }
 
+// temperatureSeries собирает временные ряды температур всех устройств, отдающих
+// температурные теги универсального контракта: сетевые инверторы (Deye —
+// temperature_radiator/temperature_igbt, Sofar — temperature_inner/
+// temperature_module) и МАП (map_temp_battery/map_temp_tor/map_temp_transistor).
+// Каждая линия — отдельный датчик отдельного устройства («Имя — датчик»).
+// Отсутствующий датчик не добавляется: у Deye отсутствие маппится offset −100
+// (raw 0 → −100), такие значения (≤ −100) пропускаются; у МАП тег отсутствует,
+// если датчика нет (гейт по Temp_off на стороне пулера). Порядок устройств —
+// как на графике мощностей (MPPT в конец, затем по имени), МАП — в конце.
+// Температуры пишутся только в Redis (в PG не усредняются, см.
+// accumulatorSkipTags), поэтому за период старше окна удержания Redis ряды пусты.
+func temperatureSeries(snaps []deviceSnapshot) []deviceSeries {
+	type tempKey struct{ ip, label string }
+	byKey := map[tempKey]*deviceSeries{}
+	devName := map[string]string{}
+	devIsMap := map[string]bool{}
+	seenDev := map[string]bool{}
+	var devOrder []string
+	add := func(sn deviceSnapshot, label, tag string) {
+		if _, present := sn.Values[tag]; !present {
+			return
+		}
+		x, ok := snapFloat(sn.Values, tag)
+		if !ok || x <= -100 {
+			return
+		}
+		k := tempKey{sn.IP, label}
+		ds, ok := byKey[k]
+		if !ok {
+			ds = &deviceSeries{IP: sn.IP}
+			byKey[k] = ds
+		}
+		ds.Points = append(ds.Points, seriesPoint{T: sn.Timestamp, V: x})
+		if !seenDev[sn.IP] {
+			seenDev[sn.IP] = true
+			devOrder = append(devOrder, sn.IP)
+			devIsMap[sn.IP] = isMAPDevice(sn.Values)
+			devName[sn.IP] = sn.Name
+		}
+	}
+	for _, sn := range snaps {
+		if isMeterDevice(sn.Values) {
+			continue
+		}
+		switch {
+		case isMAPDevice(sn.Values):
+			add(sn, "Батарея", "map_temp_battery")
+			add(sn, "Тор", "map_temp_tor")
+			add(sn, "Транзисторы", "map_temp_transistor")
+		case sn.Kind == "deye":
+			add(sn, "Корпус", "temperature_radiator")
+			add(sn, "Транзисторы", "temperature_igbt")
+		case sn.Kind == "sofar":
+			add(sn, "Корпус", "temperature_inner")
+			add(sn, "Транзисторы", "temperature_module")
+		}
+	}
+	sort.SliceStable(devOrder, func(i, j int) bool {
+		a, b := devOrder[i], devOrder[j]
+		if devIsMap[a] != devIsMap[b] {
+			return !devIsMap[a]
+		}
+		mi, mj := isMPPTKey(a), isMPPTKey(b)
+		if mi != mj {
+			return !mi
+		}
+		return devName[a] < devName[b]
+	})
+	labelRank := map[string]int{"Батарея": 0, "Тор": 1, "Корпус": 2, "Транзисторы": 3}
+	out := make([]deviceSeries, 0, len(byKey))
+	for _, ip := range devOrder {
+		labels := make([]tempKey, 0, 3)
+		for k := range byKey {
+			if k.ip == ip {
+				labels = append(labels, k)
+			}
+		}
+		sort.SliceStable(labels, func(i, j int) bool { return labelRank[labels[i].label] < labelRank[labels[j].label] })
+		prefix := devName[ip]
+		if devIsMap[ip] {
+			prefix = "МАП"
+		}
+		for _, k := range labels {
+			ds := byKey[k]
+			ds.Name = prefix + " — " + k.label
+			out = append(out, *ds)
+		}
+	}
+	for i := range out {
+		out[i].Color = tempPalette[i%len(tempPalette)]
+	}
+	return out
+}
+
 // apiSeries отдаёт временные ряды ac_active_power по инверторам за период [from, to].
 // По умолчанию (без параметров или при ошибке парсинга) — текущие календарные сутки.
 // Часть периода, попадающая в последние 2 календарных суток, читается из Redis
@@ -1337,6 +1448,10 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	res.MeterVoltage = meterSeries(snaps, "meter_voltage")
 	res.MeterActivePower = meterSeries(snaps, "meter_active_power")
 
+	// Ряды температур всех устройств (инверторы Deye/Sofar + МАП) для отдельного
+	// графика температур. Только Redis (в PG температуры не усредняются).
+	res.Temps = temperatureSeries(snaps)
+
 	// Ряды электросчётчика CE308 (опрос по BLE): фазные напряжения и суммарная
 	// активная мощность. CE308 хранится в собственных ключах Redis/PG (нет
 	// универсального контракта значений), поэтому читается отдельно от loadRange.
@@ -1370,6 +1485,9 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	res.CE308L2Voltage = downsampleSeries(res.CE308L2Voltage, from, to)
 	res.CE308L3Voltage = downsampleSeries(res.CE308L3Voltage, from, to)
 	res.CE308ActivePower = downsampleSeries(res.CE308ActivePower, from, to)
+	for i := range res.Temps {
+		res.Temps[i].Points = downsampleSeries(res.Temps[i].Points, from, to)
+	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -1700,8 +1818,8 @@ func downsampleSeries(pts []seriesPoint, from, to time.Time) []seriesPoint {
 // точки внутри окна — из Redis (полное разрешение). Если PG отключено,
 // возвращаются только данные из Redis в пределах окна удержания.
 //
-// Результат кешируется на rangeCacheTTL: страница графиков делает 4 fetch
-// /api/series с одинаковыми from/to за цикл, и все 4 сходятся в один read.
+// Результат кешируется на rangeCacheTTL: повторные запросы /api/series за тот
+// же период за цикл (несколько вкладок, зум) сходятся в один read.
 func (h *dashboardHandler) loadRange(start, end time.Time, now time.Time) ([]deviceSnapshot, error) {
 	key := fmt.Sprintf("%d|%d", start.UnixNano(), end.UnixNano())
 	h.cacheMu.Lock()

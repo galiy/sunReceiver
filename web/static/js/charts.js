@@ -171,7 +171,7 @@ function syncZoomToOthers(fromChart){
 	var m=sx.min, M=sx.max;
 	zoomSyncing=true;
 	try{
-		['powerChart','totalChart','gridVChart','gridPChart'].forEach(function(id){
+		['powerChart','totalChart','gridVChart','gridPChart','tempChart'].forEach(function(id){
 			var c=window[id]||Chart.getChart(id);
 			if(!c || c===fromChart) return;
 			try{ c.zoomScale('x', {min:m, max:M}, 'none'); }catch(e){}
@@ -326,9 +326,29 @@ function shiftPeriod(delta){
 	else{ var span=to-from; newFrom=new Date(from.getTime()+delta*span); newTo=new Date(to.getTime()+delta*span); }
 	setPeriod(newFrom,newTo,periodMode,null);
 }
+// loadAll загружает данные ОДНИМ запросом /api/series и строит по ним все
+// графики страницы: ряды одни и те же (from/to общие), поэтому отдельные fetch
+// на каждый график лишь дублировали чтение Redis/PG.
 async function loadAll(){
 	if(window.srRefresh && !window.srRefresh.isEnabled()) return;
-	await Promise.all([loadTotalChart(), loadChart(), loadGridVChart(), loadGridPChart()]);
+	var url='/api/series?from='+encodeURIComponent(selRange.from.toISOString())+'&to='+encodeURIComponent(selRange.to.toISOString());
+	var data;
+	try{
+		var r=await fetch(url);
+		if(!r.ok) return;
+		data=await r.json();
+	}catch(e){ return; }
+	var range='Диапазон: '+fmt(selRange.from)+' — '+fmt(selRange.to);
+	document.getElementById('totalChartRange').textContent=range;
+	document.getElementById('chartRange').textContent=range;
+	document.getElementById('gridVChartRange').textContent=range;
+	document.getElementById('gridPChartRange').textContent=range;
+	document.getElementById('tempChartRange').textContent=range;
+	buildTotalChart(data);
+	buildChart(data);
+	buildGridVChart(data);
+	buildGridPChart(data);
+	buildTempChart(data);
 }
 
 // Суммарный график
@@ -338,16 +358,6 @@ function buildTotalChart(data){
 		pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false }];
 	renderChart('totalChart', datasets, chartOpts(false,'W'));
 	return window.totalChart;
-}
-async function loadTotalChart(){
-	var url='/api/series?from='+encodeURIComponent(selRange.from.toISOString())+'&to='+encodeURIComponent(selRange.to.toISOString());
-	try{
-		var r=await fetch(url);
-		if(!r.ok) return;
-		var data=await r.json();
-		document.getElementById('totalChartRange').textContent='Диапазон: '+fmt(selRange.from)+' — '+fmt(selRange.to);
-		buildTotalChart(data);
-	}catch(e){}
 }
 // Активная мощность по инверторам
 function buildChart(data){
@@ -362,15 +372,24 @@ function buildChart(data){
 	lgKit('powerChart','powerChartLg').build(window.powerChart);
 	return window.powerChart;
 }
-async function loadChart(){
-	var url='/api/series?from='+encodeURIComponent(selRange.from.toISOString())+'&to='+encodeURIComponent(selRange.to.toISOString());
-	try{
-		var r=await fetch(url);
-		if(!r.ok) return;
-		var data=await r.json();
-		document.getElementById('chartRange').textContent='Диапазон: '+fmt(selRange.from)+' — '+fmt(selRange.to);
-		buildChart(data);
-	}catch(e){}
+
+// Температуры всех устройств (инверторы Deye/Sofar + МАП), °C. По одной линии на
+// датчик («Имя — Корпус/Транзисторы», «МАП — Батарея/Тор/Транзисторы»). Данные —
+// только из Redis (в PG температуры не усредняются), за старый период линий нет.
+function buildTempChart(data){
+	var datasets=[];
+	var temps=data.temps||[];
+	for(var i=0;i<temps.length;i++){
+		var s=temps[i];
+		var pts=s.points.map(function(p){ return {x:new Date(p.t), y:p.v}; });
+		datasets.push({ label:s.name, data:pts, borderColor:s.color, backgroundColor:s.color,
+			pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false });
+	}
+	renderChart('tempChart', datasets, chartOpts(true,'°C',{
+		scales:{ y:{ beginAtZero:false, title:{display:true, text:'Температура, °C'} } }
+	}));
+	lgKit('tempChart','tempChartLg').build(window.tempChart);
+	return window.tempChart;
 }
 
 // Напряжения (МАП + счётчик). Счётчик на левой оси (белая линия).
@@ -403,16 +422,6 @@ function buildGridVChart(data){
 	}));
 	lgKit('gridVChart','gridVChartLg').build(window.gridVChart);
 	return window.gridVChart;
-}
-async function loadGridVChart(){
-	var url='/api/series?from='+encodeURIComponent(selRange.from.toISOString())+'&to='+encodeURIComponent(selRange.to.toISOString());
-	try{
-		var r=await fetch(url);
-		if(!r.ok) return;
-		var data=await r.json();
-		document.getElementById('gridVChartRange').textContent='Диапазон: '+fmt(selRange.from)+' — '+fmt(selRange.to);
-		buildGridVChart(data);
-	}catch(e){}
 }
 
 // Мощности (МАП + счётчик), знаки — по правилу «Мощности дома» (как на странице
@@ -448,16 +457,6 @@ function buildGridPChart(data){
 	renderChart('gridPChart', datasets, chartOpts(true,'W'));
 	lgKit('gridPChart','gridPChartLg').build(window.gridPChart);
 	return window.gridPChart;
-}
-async function loadGridPChart(){
-	var url='/api/series?from='+encodeURIComponent(selRange.from.toISOString())+'&to='+encodeURIComponent(selRange.to.toISOString());
-	try{
-		var r=await fetch(url);
-		if(!r.ok) return;
-		var data=await r.json();
-		document.getElementById('gridPChartRange').textContent='Диапазон: '+fmt(selRange.from)+' — '+fmt(selRange.to);
-		buildGridPChart(data);
-	}catch(e){}
 }
 
 // ---------- Кнопки выбора периода ----------
@@ -504,7 +503,7 @@ chartsStart();
 // панорама, двойной тап — сброс зума; хинт со значениями на мобильной
 // отключён — он мешал зуму).
 if(SR_COARSE){
-	['powerChart','totalChart','gridVChart','gridPChart'].forEach(function(id){
+	['powerChart','totalChart','gridVChart','gridPChart','tempChart'].forEach(function(id){
 		srTouchChart(function(){ return window[id]; }, id, 60*1000, null, function(isReset){ srWindowChanged(id, isReset); });
 	});
 }
