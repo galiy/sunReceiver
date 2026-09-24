@@ -135,7 +135,9 @@ type currentResponse struct {
 	MapGridP   float64          `json:"map_grid_power"`
 	MapBatV    float64          `json:"map_battery_voltage"`
 	MapBatP    float64          `json:"map_battery_power"`
-	MapCons    float64          `json:"map_consumption"`
+	// HousePower — текущая мощность Дома (та же формула, что у ряда «Мощность дома»
+	// на графике и у схемы анимации): Σac(инверторы Дома) + grid_power + battery_power.
+	HousePower float64 `json:"house_power"`
 	// Расчётные тарифные величины счётчика за текущие календарные сутки (kWh):
 	// потребление/отдача «День»/«Ночь», посчитанные из актуальных показаний
 	// счётчика (Redis) и фиксированных граничных показаний (PG daily_tariffs).
@@ -845,6 +847,34 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	batV = math.Round(batV*10) / 10
 	batP = math.Round(batP*10) / 10
 
+	// Мощность Дома — как на графике «Мощность дома» и в схеме анимации:
+	//   P_дома = Σac(инверторы Дома) + grid_power + battery_power
+	// Инверторы Дома — свежие снимки размещения «Дом» (с учётом placeByIP), кроме
+	// МАП, счётчика и MPPT-контроллеров (КЭС). Молчащие инверторы не входят.
+	var houseAC float64
+	for _, d := range devices {
+		if isMAPDevice(d.Values) || isMeterDevice(d.Values) || isMPPTKey(d.IP) {
+			continue
+		}
+		if ts, err := time.Parse(time.RFC3339, d.Timestamp); err != nil || !ts.After(staleCutoff) {
+			continue
+		}
+		pl := d.Placement
+		if m, ok := h.placeByIP[d.IP]; ok {
+			pl = m
+		}
+		if pl == "" {
+			pl = "Дом"
+		}
+		if pl != "Дом" {
+			continue
+		}
+		if v, ok := snapFloat(d.Values, "ac_active_power"); ok {
+			houseAC += v
+		}
+	}
+	housePower := math.Round((houseAC+gridP+batP)*10) / 10
+
 	// Расчёт тарифных величин сегодняшнего дня: актуальные показания счётчика
 	// (Redis, device с тегами meter_*) и фиксированные граничные (PG daily_tariffs).
 	now := time.Now()
@@ -901,7 +931,7 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 		MapGridP:              gridP,
 		MapBatV:               batV,
 		MapBatP:               batP,
-		MapCons:               gridP + batP,
+		HousePower:            housePower,
 		MeterImportDay:        impDay,
 		MeterImportNight:      impNight,
 		MeterExportDay:        expDay,

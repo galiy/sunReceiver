@@ -402,7 +402,7 @@ async function tick(){
 			setKpi('kpiGridP', data.map_grid_power);
 			setKpi('kpiBatV', data.map_battery_voltage);
 			setKpi('kpiBatP', data.map_battery_power);
-			setKpi('kpiConsP', data.map_consumption);
+			setKpi('kpiConsP', data.house_power);
 		}
 		// Плашки «Потребление/Отдача за сегодня» (kWh): считаются из актуальных
 		// показаний счётчика и фиксированных граничных точек тарифов.
