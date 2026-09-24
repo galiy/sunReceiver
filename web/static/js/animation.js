@@ -418,6 +418,11 @@ function layoutHouse(data){
   var gridX=80, meterX=270, mapX=500, nodeX=700, houseX=880;
   // Батарея и КЭС выстроены вверх, над МАП (МАП → батарея → шина КЭС → КЭС → панели);
   // инверторы — вниз, под узлом «Сеть дома».
+  // Если КЭС нет (k=0), место сверху под КЭС/панели не резервируем: сдвигаем всю
+  // схему вверх так, чтобы над батареей остался только небольшой отступ.
+  var topShift=(k>0)?0:(BATTY-sprH('battery')/2-60);
+  MAI-=topShift; BUSY-=topShift; INVY-=topShift; PANY-=topShift;
+  BATTY-=topShift; KESBUS-=topShift; KESY-=topShift; KPANY-=topShift;
   var mapTopY=MAI-26;
   var battX=470;
 
