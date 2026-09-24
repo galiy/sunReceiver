@@ -29,7 +29,7 @@ rectangle "Гараж" as garage
 
 grid -- meter : "P счётчика (CE308) = ce308_active_power"
 meter -- garage_net : "P счётчика (CE308) = ce308_active_power"
-garage_net -- garage : "P гаража (остаток) = P(CE308) − Σ ac_active_power"
+garage_net -- garage : "P гаража (нагрузка) = ce308_active_power + Σ ac_active_power"
 
 rectangle "Инвертор Sofar" as inv1
 rectangle "Инвертор Deye" as inv2

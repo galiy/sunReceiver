@@ -123,8 +123,9 @@ func TestBuildAnimationResponse(t *testing.T) {
 	}
 }
 
-// TestBuildAnimationGarageMeter проверяет мощность Гаража на развилке со счётчиком
-// CE308: P_гараж = P(CE308) − Σac(инверторы гаража). Без свежего снимка CE308 —
+// TestBuildAnimationGarageMeter проверяет мощность отрезка «Сеть гаража — Гараж»
+// со счётчиком CE308: P_гараж = ce308_active_power + Σac(инверторы гаража)
+// (новая формула 2026-09-24: (0 − отдача) + шина). Без свежего снимка CE308 —
 // мощность гаража нулевая (узел статичен).
 func TestBuildAnimationGarageMeter(t *testing.T) {
 	now := time.Now()
@@ -142,8 +143,8 @@ func TestBuildAnimationGarageMeter(t *testing.T) {
 	if want := 120.0; res.Garage.Ce308Power != want {
 		t.Fatalf("ce308 power: want %v, got %v", want, res.Garage.Ce308Power)
 	}
-	// 120 − (30+20) = 70 Вт в гараж.
-	if want := 70.0; res.Garage.GaragePower != want {
+	// 120 + (30+20) = 170 Вт в гараж (нагрузка = сеть + инверторы).
+	if want := 170.0; res.Garage.GaragePower != want {
 		t.Fatalf("garage power: want %v, got %v", want, res.Garage.GaragePower)
 	}
 	// Без свежего снимка CE308 — мощности гаража не считаем (0).
