@@ -11,7 +11,7 @@
 .anim-wire-trace { stroke:none; fill:none; } /* невидимая геометрия для огоньков */
 .anim-sprite { opacity:1; }
 .anim-sprite-stale { opacity:.35; filter:grayscale(1); } /* молчащее устройство: спрайт приглушён */
-.anim-net-node { fill:#ffffff; stroke:#3a4752; stroke-width:3; } /* узел «Сеть дома/гаража»: кружок */
+.anim-net-node { fill:#ffffff; stroke:#3a4752; stroke-width:2; } /* узел «Сеть дома/гаража»: кружок */
 .anim-bus { fill:#d98a3d; stroke:#8a5a24; stroke-width:1.5; } /* шина-соединитель: медная полоса */
 .anim-bus-bolt { fill:#f2c98a; stroke:#8a5a24; stroke-width:1.5; } /* зажим-болт на шине */
 .anim-name { fill:#6b7785; font-size:12px; paint-order:stroke; stroke:#ffffff; stroke-width:3px; }
