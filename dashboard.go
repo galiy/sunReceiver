@@ -193,6 +193,11 @@ type animScheme struct {
 	// Значения МАП (общие для схемы Дома): мощность сети и батареи.
 	MapGridPower    float64 `json:"map_grid_power"`
 	MapBatteryPower float64 `json:"map_battery_power"`
+	// HouseGridPower — P(сеть), используемая в формуле Дома: активная мощность
+	// счётчика DDS238, если его снимок не старше meterGridMaxAge, иначе
+	// map_grid_power. На это значение опирается ребро «МАП → Сеть дома»
+	// (house_grid_power + map_battery_power). Только в схеме Дома.
+	HouseGridPower float64 `json:"house_grid_power"`
 	// Активная мощность электросчётчика (только в схеме Дома).
 	MeterActivePower float64 `json:"meter_active_power"`
 	// Накопленные показания счётчика за всё время (kWh): потребление из сети
@@ -1149,6 +1154,7 @@ func buildAnimationResponse(devices []deviceSnapshot, ce308 map[string]ce308Snap
 	if meterFresh {
 		houseGrid = meterGridP
 	}
+	house.HouseGridPower = houseGrid
 	house.HousePower = houseAC + houseGrid + house.MapBatteryPower
 	// Мощность на отрезке «Сеть гаража — Гараж» (новая формула владельца):
 	//   P = (0 − P(внешняя сеть ↔ CE308)) + P(шина инверторов ↔ Сеть гаража)

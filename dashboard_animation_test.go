@@ -119,6 +119,10 @@ func TestBuildAnimationResponse(t *testing.T) {
 	if res.House.MeterActivePower != 250 {
 		t.Fatalf("meter power: want 250, got %v", res.House.MeterActivePower)
 	}
+	// P(сеть) для формулы Дома и ребра «МАП → Сеть дома» — со свежего счётчика.
+	if res.House.HouseGridPower != 250 {
+		t.Fatalf("house grid power: want 250 (meter), got %v", res.House.HouseGridPower)
+	}
 	if res.Garage.GaragePower != 0 {
 		t.Fatalf("garage power: want 0 (нет нагрузки), got %v", res.Garage.GaragePower)
 	}
@@ -229,6 +233,9 @@ func TestBuildAnimationMeterSubstitutionStale(t *testing.T) {
 	if want := 300.0; res.House.HousePower != want {
 		t.Fatalf("house power: want %v (fallback MAP), got %v", want, res.House.HousePower)
 	}
+	if res.House.HouseGridPower != 300 {
+		t.Fatalf("house grid power: want 300 (fallback MAP), got %v", res.House.HouseGridPower)
+	}
 	// Свежий счётчик заменяет сеть МАП: P_дом = 100 + 500 − 100 = 500.
 	fresh := append([]deviceSnapshot{}, devices[:2]...)
 	fresh = append(fresh, animSnap("Счётчик", "10.0.0.9", "", now,
@@ -236,6 +243,9 @@ func TestBuildAnimationMeterSubstitutionStale(t *testing.T) {
 	res2 := buildAnimationResponse(fresh, nil, nil, now)
 	if want := 500.0; res2.House.HousePower != want {
 		t.Fatalf("house power: want %v (meter), got %v", want, res2.House.HousePower)
+	}
+	if res2.House.HouseGridPower != 500 {
+		t.Fatalf("house grid power: want 500 (meter), got %v", res2.House.HouseGridPower)
 	}
 }
 
