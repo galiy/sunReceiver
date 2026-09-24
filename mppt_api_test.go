@@ -57,8 +57,8 @@ func TestMapMAPAPIParse(t *testing.T) {
 		"ac_active_power": 208.0, // 52.0 × 4
 		"grid_frequency":  50.0,
 		"grid_voltage":    220.0,
-		"grid_power":      -1141.2, // −_PNET_calc (инверсия знака ветки API; не _PNET=910)
-		"battery_power":   -208.0,  // −_PLoad_calc (= −(I×U)), а не −_PLoad=−(−200)
+		"grid_power":      1141.2, // _PNET_calc без флага (старая прошивка), не _PNET=910
+		"battery_power":   -208.0, // −_PLoad_calc (= −(I×U)), а не −_PLoad=−(−200)
 	}
 	for k, want := range checks {
 		got, ok := vals[k].(float64)
@@ -73,18 +73,26 @@ func TestMapMAPAPIParse(t *testing.T) {
 }
 
 func TestMapMAPAPIGridPowerSign(t *testing.T) {
-	// Новая Малина (mapd fw 4.3) отдаёт _PNET_calc с обратным знаком: при
-	// потреблении из сети значение отрицательное. Контракт дашборда — потребление
-	// положительное, отдача отрицательная, поэтому знак инвертируется.
+	// Знак grid_power зависит от _Inet_flag ПО «Малины»:
+	//   _Inet_flag=1 — API отдаёт _PNET_calc инвертированно → инвертируем;
+	//   0/отсутствует — значение уже в контракте (потребление +, отдача −).
 	cases := []struct {
+		flag   string // содержимое поля _Inet_flag ("" = поля нет)
 		net    string
 		wantGP float64
 	}{
-		{"-13578.8", 13578.8}, // потребление из сети → + (заряд АКБ из сети)
-		{"1141.2", -1141.2},   // отдача в сеть → −
+		{"1", "-13578.8", 13578.8},  // инверсия включена: потребление из сети → +
+		{"1", "1141.2", -1141.2},    // инверсия включена: отдача в сеть → −
+		{"0", "13578.8", 13578.8},   // инверсии нет: потребление → +
+		{"0", "-13578.8", -13578.8}, // инверсии нет: отдача → −
+		{"", "13578.8", 13578.8},    // старая прошивка без флага → как есть
 	}
 	for _, c := range cases {
-		body := `{"timestamp":"1","_Uacc":"52.0","_Iacc":"4","_UNET":"220","_PNET":"0","_PLoad":"0","_PLoad_calc":"208","_TFNET":"50.0","_PNET_calc":"` + c.net + `"}`
+		body := `{"timestamp":"1","_Uacc":"52.0","_Iacc":"4","_UNET":"220","_PNET":"0","_PLoad":"0","_PLoad_calc":"208","_TFNET":"50.0","_PNET_calc":"` + c.net + `"`
+		if c.flag != "" {
+			body += `,"_Inet_flag":"` + c.flag + `"`
+		}
+		body += `}`
 		var r mapRaw
 		if err := json.Unmarshal([]byte(body), &r); err != nil {
 			t.Fatalf("unmarshal mapRaw: %v", err)
@@ -94,7 +102,7 @@ func TestMapMAPAPIGridPowerSign(t *testing.T) {
 			t.Fatal("mapMAPAPI: ok=false, want true")
 		}
 		if got := vals["grid_power"].(float64); got != c.wantGP {
-			t.Errorf("_PNET_calc=%s → grid_power = %v, want %v", c.net, got, c.wantGP)
+			t.Errorf("flag=%q _PNET_calc=%s → grid_power = %v, want %v", c.flag, c.net, got, c.wantGP)
 		}
 	}
 }
@@ -200,11 +208,11 @@ func TestMapMAPRegistersTemperatures(t *testing.T) {
 	// уже включает эти ячейки, отдельного чтения не требуется.
 	cells := map[uint16]byte{
 		0x405: 0x8, 0x406: 0x6, // UAcc = 0x0608 = 1544 → 154.4 В (не важно для теста)
-		0x432: 0, 0x433: 0,      // IAcc = 0
-		0x400: 0,                // MODE (не заряд)
-		0x42E: 73,               // АКБ: 73−50 = 23
-		0x42F: 94,               // тор: 94−50 = 44
-		0x430: 85,               // транз.: 85−50 = 35
+		0x432: 0, 0x433: 0, // IAcc = 0
+		0x400: 0,  // MODE (не заряд)
+		0x42E: 73, // АКБ: 73−50 = 23
+		0x42F: 94, // тор: 94−50 = 44
+		0x430: 85, // транз.: 85−50 = 35
 	}
 	v := mapMAPRegisters(cells)
 	exp := map[string]float64{

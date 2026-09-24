@@ -168,6 +168,14 @@ func parseFloat(s string) (float64, bool) {
 	return f, true
 }
 
+// invertGridFromInetFlag сообщает, инвертирует ли ПО «Малины» знак мощности/тока
+// сети в ответе API. Флаг _Inet_flag=1 — инвертирует; 0 или отсутствие/непарсинг —
+// нет. Отсутствие поля (старая прошивка) безопасно: знак уже контрактный.
+func invertGridFromInetFlag(flag string) bool {
+	n, err := strconv.Atoi(strings.TrimSpace(flag))
+	return err == nil && n != 0
+}
+
 // apiURL собирает полный URL к read_json.php для нужного device. Для "mppt" берётся
 // MPPTPath, для "map" — MapPath (если задан), иначе из MPPTPath выводится URL с
 // параметром device=map (значение device в существующем mppt_path заменяется).
@@ -292,6 +300,9 @@ type mapRaw struct {
 	PLoad     string // Мощность нагрузки по АКБ, Вт (_PLoad) — НЕ батарейная (нагрузка потребителя)
 	PLoadCalc string // Расчётная мощность батареи, Вт (_PLoad_calc = _Uacc × _Iacc) — ДОСТОВЕРНАЯ
 	TFNet     string // Частота сети, Гц (_TFNET)
+	// InetFlag — флаг ПО Малины (_Inet_flag): 1 = _PNET_calc/_INET отдаются с
+	// обратным знаком относительно контракта, 0/отсутствует = знак уже верный.
+	InetFlag string
 	// Температуры, °C (API уже в градусах; сырые Modbus-ячейки требуют сдвига −50):
 	TempGrad0 string // Внешний датчик температуры АКБ (_Temp_Grad0, 0x42E)
 	TempGrad1 string // Датчик температуры тора/трансформатора (_Temp_Grad1, 0x42F)
@@ -321,6 +332,7 @@ func (r *mapRaw) UnmarshalJSON(data []byte) error {
 	str("_PLoad", &r.PLoad)
 	str("_PLoad_calc", &r.PLoadCalc)
 	str("_TFNET", &r.TFNet)
+	str("_Inet_flag", &r.InetFlag)
 	str("_Temp_Grad0", &r.TempGrad0)
 	str("_Temp_Grad1", &r.TempGrad1)
 	str("_Temp_Grad2", &r.TempGrad2)
@@ -367,14 +379,13 @@ func (s *mpptSite) FetchMAP(ctx context.Context) (*mapRaw, error) {
 //   - ac_active_power = _Uacc × _Iacc (Вт, как в Modbus);
 //   - grid_frequency = _TFNET (Гц; в Modbus всегда 0);
 //   - grid_voltage = _UNET (В; в API уже в вольтах, без смещения +100 из Modbus);
-//   - grid_power = −_PNET_calc (Вт; = _UNET × _INET, реальная мощность сети). НЕ _PNET:
+//   - grid_power = ±_PNET_calc (Вт; = _UNET × _INET, реальная мощность сети). НЕ _PNET:
 //     у МАП сырое поле _PNET сильно занижено (~ в 5 раз против электросчётчика),
-//     расчётное _PNET_calc сходится со счётчиком. Знак инвертируется: ПО нового ПАК
-//     «Малина» (mapd fw 4.3, _Inet_flag=1) отдаёт _PNET_calc/_INET с обратным знаком
-//     (при потреблении _PNET_calc<0), тогда как сырые регистры МАП (_PNET_Sign_P 0x587=1,
-//     _INET 0x423) и электросчётчик — с положительным. После инверсии: положительное =
-//     потребление из сети, отрицательное = отдача в сеть — контракт дашборда, как и в
-//     Modbus-ветке;
+//     расчётное _PNET_calc сходится со счётчиком. Знак зависит от _Inet_flag ПО
+//     «Малины»: при _Inet_flag=1 API отдаёт _PNET_calc/_INET с обратным знаком
+//     (при потреблении _PNET_calc<0) — инвертируем; при 0 (и в старой прошивке, где
+//     флага нет) значение уже в контракте. Итог всегда: положительное = потребление
+//     из сети, отрицательное = отдача в сеть — контракт дашборда, как в Modbus-ветке;
 //   - battery_power = −_PLoad_calc: расчётная мощность батареи = _Uacc × _Iacc
 //     (знак обратный контракту: _PLoad_calc положительное при заряде,
 //     отрицательное при отдаче). НЕ _PLoad — это мощность нагрузки по АКБ
@@ -412,14 +423,17 @@ func mapMAPAPI(r mapRaw) (valuesContract, time.Time, bool) {
 	// _PNET у МАП сильно занижено, ~×5). При отсутствии _PNET_calc grid_power НЕ
 	// выставляем: подставлять заведомо недостоверное значение хуже, чем отсутствие.
 	//
-	// ЗНАК: ПО нового ПАК «Малина» (mapd fw 4.3, _Inet_flag=1) отдаёт _PNET_calc
+	// ЗНАК: когда ПО ПАК «Малина» выставляет _Inet_flag=1, API отдаёт _PNET_calc
 	// инвертированно относительно контракта и сырых регистров МАП (_PNET_Sign_P
 	// 0x587=1, _INET 0x423 — положительный при потреблении): при потреблении из сети
-	// _PNET_calc < 0. Инвертируем, чтобы вернуть контракт дашборда (потребление +,
-	// отдача −). Правка ТОЛЬКО для ветки веб-API; Modbus-ветка (mapMAPRegisters)
-	// не затрагивается — она берёт знак из _PNET_Sign_P.
+	// _PNET_calc < 0. В этом случае инвертируем. При _Inet_flag=0 (и когда флага нет —
+	// старая прошивка) значение уже в контракте. Итог: потребление +, отдача −.
+	// Правка ТОЛЬКО для ветки веб-API; Modbus-ветка (mapMAPRegisters) не затрагивается.
 	if v, ok = parseFloat(r.PNetCalc); ok {
-		out["grid_power"] = -v
+		if invertGridFromInetFlag(r.InetFlag) {
+			v = -v
+		}
+		out["grid_power"] = v
 	}
 	// Мощность батареи — расчётная _PLoad_calc (= _Uacc × _Iacc), достоверная.
 	// Поле _PLoad — это мощность НАГРУЗКИ по АКБ (потребителя), не батарейная, и
