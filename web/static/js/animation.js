@@ -448,9 +448,11 @@ function layoutHouse(data){
      label:{x:(meterX+mapX)/2, y:MAI-12},
      getValue:function(d){return d.map_grid_power;}},
     // МАП → «Сеть дома» (вклад сети и батареи) и «Сеть дома» → Дом (потребление дома).
+    // P(сеть) — house_grid_power: активная мощность счётчика DDS238 при свежем
+    // снимке (<=20 с), иначе map_grid_power (см. buildAnimationResponse).
     {pts:[[mapX,MAI],[nodeX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
      label:{x:(mapX+nodeX)/2, y:MAI-12},
-     getValue:function(d){return d.map_grid_power + d.map_battery_power;}},
+     getValue:function(d){return d.house_grid_power + d.map_battery_power;}},
     {pts:[[nodeX,MAI],[houseX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
      label:{x:(nodeX+houseX)/2, y:MAI-12},
      getValue:function(d){return d.house_power;}}
