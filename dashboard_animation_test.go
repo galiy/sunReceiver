@@ -108,8 +108,9 @@ func TestBuildAnimationResponse(t *testing.T) {
 		t.Fatalf("kes: want 1 with pv 210, got %v", res.House.KES)
 	}
 
-	// P_дом = Σac(инверторы дома) + P(сеть) + P(батарея) = (100+50) + 300 + (−150) = 300.
-	if want := 300.0; res.House.HousePower != want {
+	// Счётчик свежий (снимок = now) → в формулу вместо grid_power МАП идёт его
+	// активная мощность: P_дом = (100+50) + 250 + (−150) = 250.
+	if want := 250.0; res.House.HousePower != want {
 		t.Fatalf("house power: want %v, got %v", want, res.House.HousePower)
 	}
 	if res.House.MapGridPower != 300 || res.House.MapBatteryPower != -150 {
@@ -208,6 +209,59 @@ func TestBuildAnimationPlacementFromConfig(t *testing.T) {
 	}
 	if len(res.House.Inverters) != 0 {
 		t.Fatalf("не должно быть инверторов в доме: %v", res.House.Inverters)
+	}
+}
+
+// TestBuildAnimationMeterSubstitutionStale проверяет, что устаревший (но не
+// «молчащий») снимок счётчика — старше meterGridMaxAge — в формулу Дома НЕ берётся:
+// используется grid_power МАП.
+func TestBuildAnimationMeterSubstitutionStale(t *testing.T) {
+	now := time.Now()
+	devices := []deviceSnapshot{
+		animSnapKind("Deye Дом", "10.0.0.1", "Дом", now, map[string]float64{"ac_active_power": 100}, "deye"),
+		animSnap("МАП", "10.0.0.8", "", now, map[string]float64{"battery_voltage": 52, "grid_power": 300, "battery_power": -100}),
+		// Счётчик старше 20 с (но младше 20 мин — не «молчащий»).
+		animSnap("Счётчик", "10.0.0.9", "", now.Add(-30*time.Second),
+			map[string]float64{"meter_voltage": 230, "meter_active_power": 500}),
+	}
+	res := buildAnimationResponse(devices, nil, nil, now)
+	// P_дом = 100 + 300 (МАП, т.к. счётчик старше 20 с) + (−100) = 300.
+	if want := 300.0; res.House.HousePower != want {
+		t.Fatalf("house power: want %v (fallback MAP), got %v", want, res.House.HousePower)
+	}
+	// Свежий счётчик заменяет сеть МАП: P_дом = 100 + 500 − 100 = 500.
+	fresh := append([]deviceSnapshot{}, devices[:2]...)
+	fresh = append(fresh, animSnap("Счётчик", "10.0.0.9", "", now,
+		map[string]float64{"meter_voltage": 230, "meter_active_power": 500}))
+	res2 := buildAnimationResponse(fresh, nil, nil, now)
+	if want := 500.0; res2.House.HousePower != want {
+		t.Fatalf("house power: want %v (meter), got %v", want, res2.House.HousePower)
+	}
+}
+
+// TestHousePowerSeriesMeterSubstitution проверяет график: для точки МАП берётся
+// активная мощность счётчика, если ближайший снимок счётчика не дальше
+// meterGridMaxAge; иначе — grid_power МАП.
+func TestHousePowerSeriesMeterSubstitution(t *testing.T) {
+	t0 := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	snaps := []deviceSnapshot{
+		animSnapKind("Deye Дом", "10.0.0.1", "Дом", t0, map[string]float64{"ac_active_power": 100}, "deye"),
+		animSnap("МАП t0", "10.0.0.8", "", t0, map[string]float64{"battery_voltage": 52, "grid_power": 300, "battery_power": -100}),
+		animSnap("Счётчик t0", "10.0.0.9", "", t0, map[string]float64{"meter_voltage": 230, "meter_active_power": 500}),
+		// Через 60 с — счётчика рядом нет (ближайший в 60 с > 20 с) → fallback на МАП.
+		animSnap("МАП t1", "10.0.0.8", "", t0.Add(time.Minute), map[string]float64{"battery_voltage": 52, "grid_power": 300, "battery_power": -100}),
+	}
+	house, _ := housePowerSeries(snaps, nil)
+	if len(house) != 2 {
+		t.Fatalf("house series: want 2 points, got %d (%v)", len(house), house)
+	}
+	// t0: счётчик 500 → 100 + 500 − 100 = 500.
+	if want := 500.0; house[0].V != want {
+		t.Fatalf("t0 house: want %v (meter), got %v", want, house[0].V)
+	}
+	// t1: счётчик далеко → МАП 300 → 100 + 300 − 100 = 300.
+	if want := 300.0; house[1].V != want {
+		t.Fatalf("t1 house: want %v (fallback MAP), got %v", want, house[1].V)
 	}
 }
 

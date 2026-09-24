@@ -45,6 +45,14 @@ const rangeCacheTTL = 15 * time.Second
 // 3 запроса к PG/сек (7200/мин) до ~1 раза в минуту без заметной задержки.
 const tariffCacheTTL = 60 * time.Second
 
+// meterGridMaxAge — максимальный возраст снимка счётчика DDS238, при котором его
+// активная мощность подставляется в формулу «Мощность дома» вместо grid_power МАП.
+// В этом окне счётчик считается «измерением того же момента»; если он старше —
+// формула берёт мощность сети МАП. 20 с перекрывают кадентность хранения
+// снапшотов (одна точка на 10-секундное окно SaveSnapshotWindow), чтобы источник
+// на графике не «пилил» между счётчиком и МАП.
+const meterGridMaxAge = 20 * time.Second
+
 // ce308EnergyMinInterval — минимальный период между ручными снимками энергии CE308:
 // кнопка «Обновить» на дашборде не чаще раза в 5 минут. Защита от частых нажатий:
 // чтение END01..END04 занимает ~1.5-2 мин и на это время блокирует опрос мгновенных
@@ -848,12 +856,24 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	batP = math.Round(batP*10) / 10
 
 	// Мощность Дома — как на графике «Мощность дома» и в схеме анимации:
-	//   P_дома = Σac(инверторы Дома) + grid_power + battery_power
+	//   P_дома = Σac(инверторы Дома) + P(сеть) + battery_power
+	// P(сеть) — активная мощность счётчика DDS238, если его снимок не старше
+	// meterGridMaxAge; иначе grid_power МАП (счётчик — общий ввод дома, точнее).
 	// Инверторы Дома — свежие снимки размещения «Дом» (с учётом placeByIP), кроме
 	// МАП, счётчика и MPPT-контроллеров (КЭС). Молчащие инверторы не входят.
 	var houseAC float64
+	var meterGridP float64
+	meterFresh := false
 	for _, d := range devices {
-		if isMAPDevice(d.Values) || isMeterDevice(d.Values) || isMPPTKey(d.IP) {
+		if isMAPDevice(d.Values) || isMPPTKey(d.IP) {
+			continue
+		}
+		if isMeterDevice(d.Values) {
+			if ts, err := time.Parse(time.RFC3339, d.Timestamp); err == nil && time.Since(ts) <= meterGridMaxAge {
+				if v, ok := snapFloat(d.Values, "meter_active_power"); ok {
+					meterGridP, meterFresh = v, true
+				}
+			}
 			continue
 		}
 		if ts, err := time.Parse(time.RFC3339, d.Timestamp); err != nil || !ts.After(staleCutoff) {
@@ -873,7 +893,11 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 			houseAC += v
 		}
 	}
-	housePower := math.Round((houseAC+gridP+batP)*10) / 10
+	gridForHouse := gridP
+	if meterFresh {
+		gridForHouse = meterGridP
+	}
+	housePower := math.Round((houseAC+gridForHouse+batP)*10) / 10
 
 	// Расчёт тарифных величин сегодняшнего дня: актуальные показания счётчика
 	// (Redis, device с тегами meter_*) и фиксированные граничные (PG daily_tariffs).
@@ -1020,6 +1044,11 @@ func buildAnimationResponse(devices []deviceSnapshot, ce308 map[string]ce308Snap
 	// Схема Дома и Гаража: инверторы по размещению (пустое → «Дом»).
 	house := animScheme{}
 	garage := animScheme{}
+	// Активная мощность счётчика для формулы Дома: если снимок не старше
+	// meterGridMaxAge — заменяет grid_power МАП (тот же выбор, что в apiCurrent
+	// и в housePowerSeries).
+	var meterGridP float64
+	meterFresh := false
 	// Мощности МАП (сеть/батарея) и счётчика — из устройства МАП (батарея/сеть)
 	// и электросчётчика; берём свежий снимок (аналог apiCurrent).
 	for _, d := range devices {
@@ -1048,6 +1077,9 @@ func buildAnimationResponse(devices []deviceSnapshot, ce308 map[string]ce308Snap
 			if !stale(d) {
 				if v, ok := snapFloat(d.Values, "meter_active_power"); ok {
 					house.MeterActivePower = v
+					if ts, err := time.Parse(time.RFC3339, d.Timestamp); err == nil && now.Sub(ts) <= meterGridMaxAge {
+						meterGridP, meterFresh = v, true
+					}
 				}
 				if v, ok := snapFloat(d.Values, "meter_import"); ok {
 					house.MeterImportTotal = math.Round(v*100) / 100
@@ -1102,7 +1134,9 @@ func buildAnimationResponse(devices []deviceSnapshot, ce308 map[string]ce308Snap
 
 	// Мощность Дома = сумма всех источников, приходящих в МАП:
 	//   P_дом = Σac(инверторы дома) + P(сеть) + P(батарея)
-	// где ак.мощность сети grid_power положительная при потреблении из сети и
+	// где P(сеть) — активная мощность счётчика DDS238, если его снимок не старше
+	// meterGridMaxAge, иначе grid_power МАП (см. meterFresh выше).
+	// Ак.мощность сети grid_power положительная при потреблении из сети и
 	// отрицательная при отдаче в сеть; battery_power положительная при отдаче
 	// батареи (разряде) и отрицательная при заряде. Инверторы дома отдают
 	// положительную (выработка). Следовательно при отдаче в сеть она вычитается:
@@ -1111,7 +1145,11 @@ func buildAnimationResponse(devices []deviceSnapshot, ce308 map[string]ce308Snap
 	for _, inv := range house.Inverters {
 		houseAC += inv.AC
 	}
-	house.HousePower = houseAC + house.MapGridPower + house.MapBatteryPower
+	houseGrid := house.MapGridPower
+	if meterFresh {
+		houseGrid = meterGridP
+	}
+	house.HousePower = houseAC + houseGrid + house.MapBatteryPower
 	// Мощность на отрезке «Сеть гаража — Гараж» (новая формула владельца):
 	//   P = (0 − P(внешняя сеть ↔ CE308)) + P(шина инверторов ↔ Сеть гаража)
 	// где P(внешняя сеть ↔ CE308) — поток из CE308 во внешнюю сеть (отдача;
@@ -1613,7 +1651,12 @@ func sumSeries(a, b []seriesPoint) []seriesPoint {
 
 // housePowerSeries собирает временной ряд мощности Дома по формуле анимации Дома:
 //
-//	P_дом(t) = Σac(инверторы Дома, carry-forward) + grid_power(t) + battery_power(t)
+//	P_дом(t) = Σac(инверторы Дома, carry-forward) + P(сеть)(t) + battery_power(t)
+//
+// P(сеть)(t) — активная мощность счётчика DDS238, если ближайший к t снимок
+// счётчика не дальше meterGridMaxAge (20 с); иначе grid_power МАП. Так счётчик
+// (общий ввод дома) уточняет формулу, когда доступен, и не «пилит» с МАП на
+// границе окон хранения.
 //
 // Сетка времени — снимки МАП (как у map_grid_power/map_battery_power): на каждую
 // точку МАП берётся суммарная активная мощность инверторов Дома (breaking описан
@@ -1686,6 +1729,50 @@ func housePowerSeries(snaps []deviceSnapshot, placeByIP map[string]string) (hous
 	}
 	sort.Slice(mapRecs, func(i, j int) bool { return mapRecs[i].ts.Before(mapRecs[j].ts) })
 
+	// Активная мощность счётчика DDS238 по времени — для подстановки в формулу
+	// вместо grid_power МАП, когда ближайший снимок не старше meterGridMaxAge.
+	type meterRec struct {
+		ts time.Time
+		v  float64
+	}
+	var meterRecs []meterRec
+	for _, sn := range snaps {
+		if !isMeterDevice(sn.Values) {
+			continue
+		}
+		v, ok := snapFloat(sn.Values, "meter_active_power")
+		if !ok {
+			continue
+		}
+		ts, err := time.Parse(time.RFC3339, sn.Timestamp)
+		if err != nil {
+			continue
+		}
+		meterRecs = append(meterRecs, meterRec{ts: ts, v: v})
+	}
+	sort.Slice(meterRecs, func(i, j int) bool { return meterRecs[i].ts.Before(meterRecs[j].ts) })
+	// meterNear — ближайший к t снимок счётчика, если он в пределах meterGridMaxAge.
+	meterNear := func(t time.Time) (float64, bool) {
+		i := sort.Search(len(meterRecs), func(i int) bool { return !meterRecs[i].ts.Before(t) })
+		best, bestD := -1, time.Duration(0)
+		for _, j := range [2]int{i - 1, i} {
+			if j < 0 || j >= len(meterRecs) {
+				continue
+			}
+			d := meterRecs[j].ts.Sub(t)
+			if d < 0 {
+				d = -d
+			}
+			if best < 0 || d < bestD {
+				best, bestD = j, d
+			}
+		}
+		if best < 0 || bestD > meterGridMaxAge {
+			return 0, false
+		}
+		return meterRecs[best].v, true
+	}
+
 	// Carry-forward суммы инверторов Дома по точкам МАП.
 	current := map[string]float64{}
 	lastSeen := map[string]time.Time{}
@@ -1708,7 +1795,11 @@ func housePowerSeries(snaps []deviceSnapshot, placeByIP map[string]string) (hous
 			ac += v
 		}
 		acR := math.Round(ac*10) / 10
-		house := math.Round((ac+mr.grid+mr.bat)*10) / 10
+		grid := mr.grid
+		if mv, ok := meterNear(mr.ts); ok {
+			grid = mv
+		}
+		house := math.Round((ac+grid+mr.bat)*10) / 10
 		if n := len(out); n > 0 && out[n-1].T == mr.ts.Format(time.RFC3339) {
 			out[n-1].V = house
 			acOut[n-1].V = acR
