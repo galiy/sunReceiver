@@ -96,19 +96,12 @@ function spriteNode(svg, key, cx, cy, label, raise){
   // Узел-«сеть» (Сеть дома / Сеть гаража): кружок с той же толщиной контура,
   // что у дорожек тока; подпись под кружком. Это узел-соединитель, не устройство.
   if(key==='net'){
+    // Узел-соединитель без подписи: небольшой кружок с тонким контуром.
     var ng=document.createElementNS(NS,'g');
     var nc=document.createElementNS(NS,'circle');
-    nc.setAttribute('cx',cx); nc.setAttribute('cy',cy); nc.setAttribute('r',15);
+    nc.setAttribute('cx',cx); nc.setAttribute('cy',cy); nc.setAttribute('r',9);
     nc.setAttribute('class','anim-net-node');
     ng.appendChild(nc);
-    if(label){
-      var nt=document.createElementNS(NS,'text');
-      nt.setAttribute('x',cx); nt.setAttribute('y',cy+15+14);
-      nt.setAttribute('text-anchor','middle');
-      nt.setAttribute('class','anim-name');
-      nt.textContent=label;
-      ng.appendChild(nt);
-    }
     svg.appendChild(ng);
     return {img:nc, meterReads:null};
   }
