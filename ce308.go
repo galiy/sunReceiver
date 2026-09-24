@@ -295,6 +295,18 @@ func readCE308Energy(m *ce308Meter) (*ce308EnergySnapshot, error) {
 // Тарифы: T1 — день, T2 — ночь. Нечисловая тарифная группа (искажённый кадр на
 // нестабильном BLE) — ошибка, а не молчаливый 0.
 func parseCE308End(cmd, resp string) (day, night, total float64, err error) {
+	// Счётчик может вернуть в ответ на одну команду НЕСКОЛЬКО суточных блоков подряд
+	// (текущий + предыдущие дни): ENDzz(дд.мм.гг,сумма)(T1)…ENDzz(…)…(T1)… Берём
+	// только ПЕРВЫЙ блок (актуальный снимок): обрезаем ответ по началу следующего
+	// ENDzz(. Иначе дата следующего блока ("23.09.26,7348.28…") попадает в тарифы и
+	// парсинг падает с «нечисловой тариф».
+	prefix := strings.TrimSuffix(cmd, "()") + "("
+	if i := strings.Index(resp, prefix); i >= 0 {
+		tail := resp[i+len(prefix):]
+		if j := strings.Index(tail, prefix); j >= 0 {
+			resp = resp[:i+len(prefix)+j]
+		}
+	}
 	g := ce308Groups(resp)
 	if len(g) < 3 {
 		return 0, 0, 0, fmt.Errorf("%s: неожиданный ответ %q", cmd, resp)
