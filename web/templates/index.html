@@ -74,17 +74,19 @@
       <span class="group-title">Электросчётчик CE308 &mdash; текущие данные</span>
       <span class="meter-ts" id="ce308CurTs">Актуально: &mdash;</span>
     </div>
-    <table class="pivot-table ce308-table" id="ce308Cur">
-      <thead>
-        <tr><th class="p-label">Параметр</th><th>L1</th><th>L2</th><th>L3</th><th>&Sigma;</th></tr>
-      </thead>
-      <tbody>
-        <tr><td class="p-label">Напряжение (V)</td><td id="ce308V1">&mdash;</td><td id="ce308V2">&mdash;</td><td id="ce308V3">&mdash;</td><td></td></tr>
-        <tr><td class="p-label">Ток (A)</td><td id="ce308I1">&mdash;</td><td id="ce308I2">&mdash;</td><td id="ce308I3">&mdash;</td><td id="ce308Isum">&mdash;</td></tr>
-        <tr><td class="p-label">Активная мощность (W)</td><td id="ce308P1">&mdash;</td><td id="ce308P2">&mdash;</td><td id="ce308P3">&mdash;</td><td id="ce308Psum">&mdash;</td></tr>
-        <tr><td class="p-label">Реактивная мощность (var)</td><td id="ce308Q1">&mdash;</td><td id="ce308Q2">&mdash;</td><td id="ce308Q3">&mdash;</td><td id="ce308Qsum">&mdash;</td></tr>
-      </tbody>
-    </table>
+    <div class="ce308-scroll">
+      <table class="pivot-table ce308-table" id="ce308Cur">
+        <thead>
+          <tr><th class="p-label">Параметр</th><th>L1</th><th>L2</th><th>L3</th><th>&Sigma;</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="p-label">Напряжение (V)</td><td id="ce308V1">&mdash;</td><td id="ce308V2">&mdash;</td><td id="ce308V3">&mdash;</td><td></td></tr>
+          <tr><td class="p-label">Ток (A)</td><td id="ce308I1">&mdash;</td><td id="ce308I2">&mdash;</td><td id="ce308I3">&mdash;</td><td id="ce308Isum">&mdash;</td></tr>
+          <tr><td class="p-label">Активная мощность (W)</td><td id="ce308P1">&mdash;</td><td id="ce308P2">&mdash;</td><td id="ce308P3">&mdash;</td><td id="ce308Psum">&mdash;</td></tr>
+          <tr><td class="p-label">Реактивная мощность (var)</td><td id="ce308Q1">&mdash;</td><td id="ce308Q2">&mdash;</td><td id="ce308Q3">&mdash;</td><td id="ce308Qsum">&mdash;</td></tr>
+        </tbody>
+      </table>
+    </div>
     <div class="meter-note">Отрицательное значение &mdash; отдача в сеть (генерация); положительное &mdash; потребление.</div>
   </div>
   {{end}}
