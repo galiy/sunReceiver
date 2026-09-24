@@ -93,6 +93,25 @@ var CM=16;
 var METER={bodyXFrac:0.80, dispXFrac:0.582};
 function spriteNode(svg, key, cx, cy, label, raise){
   raise=raise||0;
+  // Узел-«сеть» (Сеть дома / Сеть гаража): кружок с той же толщиной контура,
+  // что у дорожек тока; подпись под кружком. Это узел-соединитель, не устройство.
+  if(key==='net'){
+    var ng=document.createElementNS(NS,'g');
+    var nc=document.createElementNS(NS,'circle');
+    nc.setAttribute('cx',cx); nc.setAttribute('cy',cy); nc.setAttribute('r',15);
+    nc.setAttribute('class','anim-net-node');
+    ng.appendChild(nc);
+    if(label){
+      var nt=document.createElementNS(NS,'text');
+      nt.setAttribute('x',cx); nt.setAttribute('y',cy+15+14);
+      nt.setAttribute('text-anchor','middle');
+      nt.setAttribute('class','anim-name');
+      nt.textContent=label;
+      ng.appendChild(nt);
+    }
+    svg.appendChild(ng);
+    return {img:nc, meterReads:null};
+  }
   var g=document.createElementNS(NS,'g');
   var spec=SPR[sprKey(key)]||SPR.grid;
   var wScale=spec.wScale||1, effW=spec.w*wScale; // эффективная ширина (растяжение в ширину)
@@ -291,7 +310,7 @@ function animateEdge(e, dt){
 // все трубы объединяются в единый силуэт: ветвь корректно примыкает к магистрали,
 // а границы магистрали прерываются ровно там, где входит ветвь. Огоньки и подписи
 // рисуются поверх (поверх маскируемого тёмного слоя) в makeEdge.
-function buildScheme(container, nodes, edges, height){
+function buildScheme(container, nodes, edges, height, width){
   var svg=document.getElementById(container);
   svg.innerHTML='';
   var readings=[];
@@ -312,7 +331,7 @@ function buildScheme(container, nodes, edges, height){
   mask.setAttribute('id', maskId);
   mask.setAttribute('maskUnits','userSpaceOnUse');
   mask.setAttribute('x','0'); mask.setAttribute('y','0');
-  mask.setAttribute('width','1000'); mask.setAttribute('height', String(height));
+  mask.setAttribute('width', String(width)); mask.setAttribute('height', String(height));
   var outer=document.createElementNS(NS,'g');
   outer.setAttribute('fill','none'); outer.setAttribute('stroke','#ffffff');
   outer.setAttribute('stroke-width', 2*RAIL_GAP+RAIL_W);
@@ -332,7 +351,7 @@ function buildScheme(container, nodes, edges, height){
   // --- Тёмный слой труб, ограниченный маской (видно только кромки) ---
   var railLayer=document.createElementNS(NS,'rect');
   railLayer.setAttribute('x','0'); railLayer.setAttribute('y','0');
-  railLayer.setAttribute('width','1000'); railLayer.setAttribute('height', String(height));
+  railLayer.setAttribute('width', String(width)); railLayer.setAttribute('height', String(height));
   railLayer.setAttribute('fill','#3a4752');
   railLayer.setAttribute('mask','url(#'+maskId+')');
   svg.appendChild(railLayer);
@@ -394,18 +413,16 @@ function layoutHouse(data){
   var kes=data.kes||[];
   var n=invs.length, k=kes.length;
 
-  var MAI=140, BUSY=300, INVY=420, PANY=555;
-  var BATTY=230, KESY=430, KPANY=565;
-  var gridX=90, meterX=300, mapX=560, houseX=790;
-  // Батарея: без КЭС — левее, под Домом; с КЭС — справа (ветвь КЭС под ней).
-  var battX = k>0 ? 920 : 790;
-  // Порты подключения к МАП снизу: слева — ветвь инверторов, справа — батарея.
-  // Разные x, чтобы линии не накладывались друг на друга.
-  var mapBotY=MAI+26;             // низ спрайта МАП
-  var mapPortL=mapX-30, mapPortR=mapX+30;
+  var MAI=140, BUSY=310, INVY=430, PANY=560;
+  var BATTY=230, KESY=450, KPANY=580;
+  var gridX=80, meterX=270, mapX=500, nodeX=700, houseX=880;
+  // Порт МАП вниз-влево — ветвь батареи; батарея/КЭС слева, инверторы — справа
+  // (под узлом «Сеть дома»), чтобы труба узла не пересекала батарейную ветку.
+  var mapBotY=MAI+26;
+  var mapPortL=mapX-30;
+  var battX=180;
 
-  // Ветвь инверторов — левый блок; ветвь КЭС — правый блок (под батареей).
-  var invXs=spread(140, 830, n);
+  var invXs=spread(320, 660, n);
   var kesXs=centers(battX, k, 140);
 
   var nodes=[
@@ -417,6 +434,8 @@ function layoutHouse(data){
         {label:'Тор', get:function(d){ return tempValue(d.map_temps, 'Тор'); }},
         {label:'Транзисторы', get:function(d){ return tempValue(d.map_temps, 'Транзисторы'); }}
       ]},
+    // «Сеть дома» — узел-соединитель справа от МАП: МАП, шина инверторов, Дом.
+    {key:'net',  cx:nodeX, cy:MAI, label:'Сеть дома'},
     {key:'house',cx:houseX,cy:MAI, label:'Дом', raise:26},
     {key:'battery',cx:battX,cy:BATTY, label:'Батарея',
       tempPos:'right',
@@ -431,23 +450,24 @@ function layoutHouse(data){
     {pts:[[meterX,MAI],[mapX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
      label:{x:(meterX+mapX)/2, y:MAI-12},
      getValue:function(d){return d.map_grid_power;}},
-{pts:[[mapX,MAI],[houseX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
-      label:{x:(mapX+houseX)/2, y:MAI-12},
-      getValue:function(d){return d.house_power;}}
+    // МАП → «Сеть дома» (вклад сети и батареи) и «Сеть дома» → Дом (потребление дома).
+    {pts:[[mapX,MAI],[nodeX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
+     label:{x:(mapX+nodeX)/2, y:MAI-12},
+     getValue:function(d){return d.map_grid_power + d.map_battery_power;}},
+    {pts:[[nodeX,MAI],[houseX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
+     label:{x:(nodeX+houseX)/2, y:MAI-12},
+     getValue:function(d){return d.house_power;}}
   ];
 
-  // Ветвь «Внутренняя сеть» → инверторы → панели (слева).
+  // Ветвь «Сеть дома» → шина инверторов → инверторы → панели (справа).
   if(n>0){
-    var x1=invXs[0], x2=invXs[n-1];
-    // МАП (левый порт) → вниз к шине («Внутренняя сеть») — прямая вертикаль, без
-    // промежуточного горизонтального изгиба (иначе два близких поворота сливаются
-    // в S-образную кривую). При выдаче (Σac>0) энергия идёт вверх к МАП.
-    edges.push({pts:[[mapPortL,mapBotY],[mapPortL,BUSY]],
+    // «Сеть дома» → вниз к шине инверторов. При выдаче (Σac>0) энергия идёт вверх к узлу.
+    edges.push({pts:[[nodeX,MAI],[nodeX,BUSY]],
       rule:{greenSign:1,greenDir:'toStart',labelSign:-1},
-      label:{x:mapPortL-14, y:(mapBotY+BUSY)/2},
+      label:{x:nodeX-14, y:(MAI+BUSY)/2},
       getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }});
-    // Шина («Внутренняя сеть») — медная с болтами в точках присоединения инверторов.
-    edges.push({bus:true, x1:x1, x2:x2, y:BUSY, bolts:invXs});
+    // Шина инверторов — медная с болтами в точках присоединения инверторов.
+    edges.push({bus:true, x1:invXs[0], x2:nodeX, y:BUSY, bolts:invXs});
     for(var i=0;i<n;i++){
       var ix=invXs[i], inv=invs[i];
       nodes.push({key:inv.kind,cx:ix,cy:INVY,label:inv.name,
@@ -467,20 +487,15 @@ function layoutHouse(data){
     }
   }
 
-  // МАП (правый порт) ↓ вниз → батарея — ОДНА связь с закруглённым углом 90°
-  // (путь из трёх точек: МАП вниз, поворот, вправо к батарее). Огоньки бегут по
-  // всему пути непрерывно. Связь всегда (по UML map -- batt, battery_power),
-  // даже если КЭС нет (иначе батарея остаётся ни с чем не связанной). Знак здесь
-  // «наоборот» (→ −battery_power) и направление развёрнуто (greenDir toStart), а
-  // цвет сохранён: заряд (—) красный, отдача (+) зелёный — как на дисплее МАП.
-  edges.push({pts:[[mapPortR,mapBotY],[mapPortR,BATTY],[battX,BATTY]],
+  // МАП (левый порт) ↓ вниз → батарея (слева) — одна связь с поворотом 90°.
+  // Знак «наоборот» (−battery_power): заряд красный, отдача зелёная.
+  edges.push({pts:[[mapPortL,mapBotY],[mapPortL,BATTY],[battX,BATTY]],
     rule:{greenSign:-1,greenDir:'toStart'},
-    label:{x:(mapPortR+battX)/2, y:BATTY-12},
+    label:{x:(mapPortL+battX)/2+55, y:BATTY-12},
     getValue:function(d){return -d.map_battery_power;}});
 
-  // Ветвь батарея → КЭС → панели (справа) — только при наличии КЭС.
+  // Ветвь батарея → КЭС → панели (под батареей) — только при наличии КЭС.
   if(k>0){
-    // батарея → КЭС (через горизонтальную шину на уровне KESY-40).
     var kx1=kesXs[0], kx2=kesXs[k-1];
     edges.push({pts:[[battX,BATTY+sprH('battery')/2],[battX,KESY-40]],
       rule:{greenSign:1,greenDir:'toEnd',labelSign:-1},
@@ -503,7 +518,7 @@ function layoutHouse(data){
     }
   }
 
-  return {nodes:nodes, edges:edges, height:KPANY+80};
+  return {nodes:nodes, edges:edges, height:KPANY+80, width:houseX+120};
 }
 
 // ---------- Схема Гаража ----------
@@ -514,13 +529,15 @@ function layoutHouse(data){
 function layoutGarage(data){
   var invs=data.inverters||[];
   var n=invs.length;
-  var MAI=150, BUSY=320, INVY=430, PANY=560;
-  var gridX=110, meterX=330, dropX=620, garageX=810; // meterX — счётчик (слева), dropX — стык труб (справа)
-  var invXs=spread(140, 780, n);
+  var MAI=150, BUSY=330, INVY=440, PANY=570;
+  var gridX=110, meterX=330, nodeX=580, garageX=820;
+  var invXs=spread(140, 540, n);
 
   var nodes=[
     {key:'grid',  cx:gridX,  cy:MAI, label:'Сеть'},
     {key:'ce308', cx:meterX, cy:MAI, label:'Счётчик'},
+    // «Сеть гаража» — узел-соединитель справа от CE308: CE308, шина инверторов, Гараж.
+    {key:'net',   cx:nodeX,  cy:MAI, label:'Сеть гаража'},
     {key:'garage',cx:garageX,cy:MAI,label:'Гараж', raise:24}
   ];
 
@@ -529,21 +546,22 @@ function layoutGarage(data){
     {pts:[[gridX,MAI],[meterX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
      label:{x:(gridX+meterX)/2, y:MAI-12},
      getValue:function(d){return d.ce308_power;}},
-    // Счётчик → гараж (справа). P_гараж = P(CE308) − Σac(инверторы).
-    {pts:[[meterX,MAI],[garageX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
-     label:{x:(dropX+garageX)/2, y:MAI-12},
+    // Счётчик → «Сеть гаража» (показания CE308) и «Сеть гаража» → Гараж (остаток).
+    {pts:[[meterX,MAI],[nodeX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
+     label:{x:(meterX+nodeX)/2, y:MAI-12},
+     getValue:function(d){return d.ce308_power;}},
+    {pts:[[nodeX,MAI],[garageX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
+     label:{x:(nodeX+garageX)/2, y:MAI-12},
      getValue:function(d){return d.garage_power;}}
   ];
 
   if(n>0){
-    var x1=invXs[0], x2=invXs[n-1];
-    // Стык труб: от магистрали (вправо от счётчика) — вниз к горизонтальной шине
-    // инверторов. При выдаче (Σac>0) энергия идёт от инверторов вверх к магистрали.
-    edges.push({pts:[[dropX,MAI],[dropX,BUSY]],
+    // «Сеть гаража» → вниз к шине инверторов. При выдаче (Σac>0) энергия идёт вверх к узлу.
+    edges.push({pts:[[nodeX,MAI],[nodeX,BUSY]],
       rule:{greenSign:1,greenDir:'toStart',labelSign:-1},
-      label:{x:dropX-14, y:(MAI+BUSY)/2},
+      label:{x:nodeX-14, y:(MAI+BUSY)/2},
       getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }});
-    edges.push({bus:true, x1:x1, x2:x2, y:BUSY, bolts:invXs});
+    edges.push({bus:true, x1:invXs[0], x2:nodeX, y:BUSY, bolts:invXs});
     for(var i=0;i<n;i++){
       var ix=invXs[i], inv=invs[i];
       nodes.push({key:inv.kind,cx:ix,cy:INVY,label:inv.name,
@@ -561,17 +579,17 @@ function layoutGarage(data){
     }
   }
 
-  return {nodes:nodes, edges:edges, height:PANY+80};
+  return {nodes:nodes, edges:edges, height:PANY+80, width:garageX+120};
 }
 
 // ---------- Пересборка схемы при изменении набора устройств ----------
 function ensureScheme(which, layoutData, container){
-  var sig=layoutData.nodes.map(function(n){return n.label;}).join('|')+'#'+layoutData.height;
+  var sig=layoutData.nodes.map(function(n){return n.label;}).join('|')+'#'+layoutData.height+'x'+layoutData.width;
   if(BUILT[which] && BUILT[which].sig===sig) return BUILT[which].obj;
-  var obj=buildScheme(container, layoutData.nodes, layoutData.edges, layoutData.height);
+  var obj=buildScheme(container, layoutData.nodes, layoutData.edges, layoutData.height, layoutData.width);
   BUILT[which]={sig:sig, obj:obj};
   var svg=obj.svg;
-  svg.setAttribute('viewBox','0 0 1000 '+layoutData.height);
+  svg.setAttribute('viewBox','0 0 '+layoutData.width+' '+layoutData.height);
   svg.setAttribute('preserveAspectRatio','xMidYMid meet');
   return obj;
 }
