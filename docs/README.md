@@ -191,6 +191,8 @@ arm-linux-musleabihf -static` (статичный elf32 ARM), поэтому н�
 - [`malina-web-api.md`](malina-web-api.md) — устройство ПАК «Малина», shm, все
   PHP-эндпоинты.
 - [`read_json.md`](read_json.md) — форматы `read_json.php?device=map|mppt|bat`.
+- [`malina-bug_Inet_flag.md`](malina-bug_Inet_flag.md) — инверсия знака сети МАП у
+  новой Малины (`_Inet_flag`): сравнение API с сырыми регистрами, миграция данных.
 
 **Прочие**:
 
