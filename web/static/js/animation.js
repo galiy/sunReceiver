@@ -421,7 +421,7 @@ function layoutHouse(data){
   var mapTopY=MAI-26;
   var battX=470;
 
-  var invXs=spread(320, 660, n);
+  var invXs=spread(140, 840, n);
   var kesXs=centers(battX, k, 140);
 
   var nodes=[
@@ -466,7 +466,7 @@ function layoutHouse(data){
       label:{x:nodeX-14, y:(MAI+BUSY)/2},
       getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }});
     // Шина инверторов — медная с болтами в точках присоединения инверторов.
-    edges.push({bus:true, x1:invXs[0], x2:nodeX, y:BUSY, bolts:invXs});
+    edges.push({bus:true, x1:invXs[0]-14, x2:Math.max(invXs[n-1],nodeX)+14, y:BUSY, bolts:invXs.concat([nodeX])});
     for(var i=0;i<n;i++){
       var ix=invXs[i], inv=invs[i];
       nodes.push({key:inv.kind,cx:ix,cy:INVY,label:inv.name,
@@ -500,7 +500,7 @@ function layoutHouse(data){
       rule:{greenSign:1,greenDir:'toStart',labelSign:-1},
       label:{x:battX+58, y:(KESBUS+BATTY-32)/2},
       getValue:function(d){ var s=0; for(var i=0;i<d.kes.length;i++) s+=d.kes[i].ac; return s; }});
-    edges.push({bus:true, x1:kx1, x2:kx2, y:KESBUS, bolts:kesXs});
+    edges.push({bus:true, x1:kx1-14, x2:kx2+14, y:KESBUS, bolts:kesXs.concat([battX])});
     for(var j=0;j<k;j++){
       var kx=kesXs[j], kes=kes[j];
       nodes.push({key:'kes',cx:kx,cy:KESY,label:kes.name,
@@ -560,7 +560,7 @@ function layoutGarage(data){
       rule:{greenSign:1,greenDir:'toStart',labelSign:-1},
       label:{x:nodeX-14, y:(MAI+BUSY)/2},
       getValue:function(d){ var s=0; for(var i=0;i<d.inverters.length;i++) s+=d.inverters[i].ac; return s; }});
-    edges.push({bus:true, x1:invXs[0], x2:nodeX, y:BUSY, bolts:invXs});
+    edges.push({bus:true, x1:invXs[0]-14, x2:Math.max(invXs[n-1],nodeX)+14, y:BUSY, bolts:invXs.concat([nodeX])});
     for(var i=0;i<n;i++){
       var ix=invXs[i], inv=invs[i];
       nodes.push({key:inv.kind,cx:ix,cy:INVY,label:inv.name,
