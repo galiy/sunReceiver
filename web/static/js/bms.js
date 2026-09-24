@@ -192,6 +192,55 @@ function bmsUpdateAllCharts(){
     try{ BMS_CHARTS[id]&&BMS_CHARTS[id].update('none'); }catch(e){}
   });
 }
+// bmsNearestIndex — индекс точки, ближайшей по времени t (мс) к курсору.
+// Все датасеты одного графика построены по общему массиву точек, поэтому
+// достаточно бинарного поиска по данным первого датасета (x — Date).
+function bmsNearestIndex(chart, t){
+  try{
+    var ds=(chart.data&&chart.data.datasets)||[];
+    if(!ds.length) return -1;
+    var arr=ds[0].data||[];
+    if(!arr.length) return -1;
+    var hi=arr.length-1;
+    if(t<=new Date(arr[0].x).getTime()) return 0;
+    if(t>=new Date(arr[hi].x).getTime()) return hi;
+    var lo=0;
+    while(lo<=hi){
+      var mid=(lo+hi)>>1, xm=new Date(arr[mid].x).getTime();
+      if(xm===t) return mid;
+      if(xm<t) lo=mid+1; else hi=mid-1;
+    }
+    var a=new Date(arr[hi].x).getTime(), b=new Date(arr[lo].x).getTime();
+    return (t-a)<=(b-t)? hi : lo;
+  }catch(e){ return -1; }
+}
+// bmsSyncTooltips показывает хинты на ВСЕХ графиках BMS по общему срезу
+// времени: для каждого графика находится ближайшая точка, её (и одноимённые
+// по индексу точки остальных линий) помечаем активными через
+// tooltip.setActiveElements — Chart.js рисует штатный tooltip. t=null скрывает
+// хинты на всех графиках. Вызывается из onHover/mouseleave вместе с курсором.
+function bmsSyncTooltips(t){
+  BMS_CHART_IDS.forEach(function(id){
+    var c=BMS_CHARTS[id];
+    if(!c||!c.scales||!c.scales.x||!c.tooltip) return;
+    try{
+      if(t===null||!isFinite(t)){ c.tooltip.setActiveElements([],{x:0,y:0}); return; }
+      var idx=bmsNearestIndex(c,t);
+      if(idx<0){ c.tooltip.setActiveElements([],{x:0,y:0}); return; }
+      var els=[], py=null;
+      c.data.datasets.forEach(function(ds,i){
+        if(!c.isDatasetVisible(i)) return;
+        var p=ds.data[idx];
+        if(p && p.y!==null && p.y!==undefined){
+          els.push({datasetIndex:i, index:idx});
+          if(py===null){ var v=c.scales.y.getPixelForValue(p.y); if(isFinite(v)) py=v; }
+        }
+      });
+      var px=c.scales.x.getPixelForValue(t);
+      c.tooltip.setActiveElements(els,{x:px, y:(py!==null?py:c.chartArea.top)});
+    }catch(e){}
+  });
+}
 var bmsZoomSyncPlugin={ id:'bmsZoomSync', afterDraw:function(chart){ try{ checkBmsZoomSync(chart); drawBmsCursor(chart); }catch(e){} } };
 // ---------- Перезагрузка данных после зума/сдвига ----------
 // Окно X общее для всех графиков BMS. После завершения зума/панорамы данные
@@ -314,11 +363,12 @@ function bmsRender(id, datasets, yTitle, legend, zero){
         var v=chart.scales.x.getValueForPixel(event.x);
         if(isFinite(v)){
           bmsCursor.active=true; bmsCursor.value=v;
+          bmsSyncTooltips(v);
           bmsUpdateAllCharts(); return;
         }
       }
-      // Не удалось определить значение — прячем линию на всех графиках.
-      if(bmsCursor.active){ bmsCursor.active=false; bmsUpdateAllCharts(); }
+      // Не удалось определить значение — прячем линию и хинты на всех графиках.
+      if(bmsCursor.active){ bmsCursor.active=false; bmsSyncTooltips(null); bmsUpdateAllCharts(); }
     },
     animation:{ duration:200 },
     plugins:{
@@ -345,9 +395,9 @@ function bmsRender(id, datasets, yTitle, legend, zero){
     plugins:[bmsZoomSyncPlugin],
     options:bmsOpts
   });
-  // Сброс чёрточки курсора при уходе мыши с графика (линия гаснет на всех).
+  // Сброс чёрточки курсора и хинтов при уходе мыши с графика (гаснут на всех).
   var bmsCanvasEl=document.getElementById(id);
-  if(!bmsCanvasEl.__srMLBound){ bmsCanvasEl.__srMLBound=true; bmsCanvasEl.addEventListener('mouseleave',function(){ if(bmsCursor.active){ bmsCursor.active=false; bmsUpdateAllCharts(); } }); }
+  if(!bmsCanvasEl.__srMLBound){ bmsCanvasEl.__srMLBound=true; bmsCanvasEl.addEventListener('mouseleave',function(){ if(bmsCursor.active){ bmsCursor.active=false; bmsSyncTooltips(null); bmsUpdateAllCharts(); } }); }
   // На touch встроенный tooltip Chart.js отключён (показывается по тапу — хинт).
   // __srTouched — страховка, если SR_COARSE на устройстве не сработал.
   if(SR_COARSE || window.__srTouched){ BMS_CHARTS[id].options.plugins.tooltip.enabled=false; }
