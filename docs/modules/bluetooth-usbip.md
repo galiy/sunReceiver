@@ -160,6 +160,26 @@ systemctl enable --now usbip-bt-watchdog.service
 `journalctl -u usbip-bt-watchdog.service`). При штатной работе (линк жив) сообщений нет;
 сообщения появляются при недоступности сервера и re-attach.
 
+### Обязательный модуль `vhci-hcd` (клиент)
+
+`usbip attach` на `.253` невозможен без загруженного `vhci_hcd`. После перезагрузки
+`.253` модуль может не подняться автоматически (в юните watchdog его изначально не
+было): `usbip port` возвращает `open vhci_driver (is vhci_hcd loaded?)`, attach не
+проходит и `hci0` не появляется — снаружи это выглядит как «исчез Bluetooth-адаптер»
+вместе с данными CE308. Симптомы в журнале клиента: `usbip-bt-watchdog: port not
+attached while server up; attaching` каждые ~90 с, при этом `ls /sys/class/bluetooth/`
+пуст.
+
+Лечение и защита от повтора:
+- загрузка при старте: `/etc/modules-load.d/vhci-hcd.conf` со строкой `vhci-hcd`;
+- скрипт `usbip-bt-watchdog.sh` теперь сам делает `modprobe vhci-hcd` перед
+  `usbip attach` (в `do_attach`);
+- ручная проверка/лечение: `modprobe vhci-hcd && usbip attach -r 192.168.13.9 -b 5-5`.
+
+Историческая заметка: именно отсутствие `vhci-hcd` после перезагрузки `.253`
+(2026-09-24) дало ложный вывод «сломался пулер CE308 / пропал адаптер» — на деле был
+не загружен модуль vhci на клиенте.
+
 ## Параметры
 
 | Переменная (клиент) | Значение | Смысл |
@@ -197,6 +217,7 @@ usbip list -l                                   # устройство прив�
 # клиент (на .253)
 systemctl status usbip-bt-watchdog.service
 journalctl -u usbip-bt-watchdog.service -f       # сообщения re-attach / unreachable
+modprobe vhci-hcd                                # если usbip port ругается «is vhci_hcd loaded?»
 usbip port                                       # Port 00 In Use …
 hciconfig hci0 | head -3                         # BD C8:94:02:C0:FA:DA, UP RUNNING
 bluetoothctl list                                # Controller … gsrv [default]
