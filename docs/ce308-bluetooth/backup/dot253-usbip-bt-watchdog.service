@@ -1,0 +1,13 @@
+[Unit]
+Description=usbip Bluetooth link watchdog (attach 0e8d:0608 from 192.168.13.9)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/usbip-bt-watchdog.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

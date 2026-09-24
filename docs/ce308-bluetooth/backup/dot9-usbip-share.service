@@ -1,0 +1,15 @@
+[Unit]
+Description=usbip host: serve MediaTek Bluetooth (0e8d:0608)
+After=network-online.target systemd-modules-load.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/usr/local/sbin/usbip-share-bind.sh
+ExecStart=/usr/bin/usbipd
+Restart=on-failure
+RestartSec=5
+# usbipd is 0.0.0.0:3240. Restrict to LAN clients via firewall if needed.
+
+[Install]
+WantedBy=multi-user.target
