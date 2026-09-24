@@ -430,8 +430,8 @@ function buildGridVChart(data){
 // анимации Дома («батарея→МАП»). Активная мощность счётчика — белой линией.
 function buildGridPChart(data){
 	var grid=(data.map_grid_power||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
-	// Знак «Мощности батареи» — как в анимации Дома (−battery_power).
-	var bat=(data.map_battery_power||[]).map(function(p){ return {x:new Date(p.t), y:-p.v}; });
+	// Знак «Мощности батареи» — как в контракте (заряд −, разряд +), без инверсии.
+	var bat=(data.map_battery_power||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
 	// «Мощность дома» — по формуле анимации Дома: Σac(инверторы Дома)+grid+battery.
 	var house=(data.house_power||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
 	// Вклад Дома в формулу: суммарная активная мощность сетевых инверторов Дома.
