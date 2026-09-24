@@ -413,14 +413,13 @@ function layoutHouse(data){
   var kes=data.kes||[];
   var n=invs.length, k=kes.length;
 
-  var MAI=140, BUSY=310, INVY=430, PANY=560;
-  var BATTY=230, KESY=450, KPANY=580;
+  var MAI=520, BUSY=720, INVY=830, PANY=950;
+  var BATTY=400, KESBUS=320, KESY=220, KPANY=90;
   var gridX=80, meterX=270, mapX=500, nodeX=700, houseX=880;
-  // Порт МАП вниз-влево — ветвь батареи; батарея/КЭС слева, инверторы — справа
-  // (под узлом «Сеть дома»), чтобы труба узла не пересекала батарейную ветку.
-  var mapBotY=MAI+26;
-  var mapPortL=mapX-30;
-  var battX=180;
+  // Батарея и КЭС выстроены вверх, над МАП (МАП → батарея → шина КЭС → КЭС → панели);
+  // инверторы — вниз, под узлом «Сеть дома».
+  var mapTopY=MAI-26;
+  var battX=470;
 
   var invXs=spread(320, 660, n);
   var kesXs=centers(battX, k, 140);
@@ -429,7 +428,7 @@ function layoutHouse(data){
     {key:'grid', cx:gridX, cy:MAI, label:'Сеть'},
     {key:'meter',cx:meterX,cy:MAI, label:'Счётчик'},
     {key:'map',  cx:mapX,  cy:MAI, label:'МАП',
-      tempPos:'above',
+      tempPos:'below',
       temps:[
         {label:'Тор', get:function(d){ return tempValue(d.map_temps, 'Тор'); }},
         {label:'Транзисторы', get:function(d){ return tempValue(d.map_temps, 'Транзисторы'); }}
@@ -487,38 +486,38 @@ function layoutHouse(data){
     }
   }
 
-  // МАП (левый порт) ↓ вниз → батарея (слева) — одна связь с поворотом 90°.
-  // Знак «наоборот» (−battery_power): заряд красный, отдача зелёная.
-  edges.push({pts:[[mapPortL,mapBotY],[mapPortL,BATTY],[battX,BATTY]],
+  // МАП ↑ вверх → батарея (батарея над МАП). Знак «наоборот» (−battery_power):
+  // заряд красный, отдача зелёная.
+  edges.push({pts:[[battX,mapTopY],[battX,BATTY+sprH('battery')/2]],
     rule:{greenSign:-1,greenDir:'toStart'},
-    label:{x:(mapPortL+battX)/2+55, y:BATTY-12},
+    label:{x:battX-58, y:(mapTopY+BATTY+32)/2},
     getValue:function(d){return -d.map_battery_power;}});
 
-  // Ветвь батарея → КЭС → панели (под батареей) — только при наличии КЭС.
+  // Ветвь батарея → КЭС → панели (над батареей) — только при наличии КЭС.
   if(k>0){
     var kx1=kesXs[0], kx2=kesXs[k-1];
-    edges.push({pts:[[battX,BATTY+sprH('battery')/2],[battX,KESY-40]],
-      rule:{greenSign:1,greenDir:'toEnd',labelSign:-1},
-      label:{x:battX-14, y:(BATTY+30+KESY-40)/2},
+    edges.push({pts:[[battX,BATTY-sprH('battery')/2],[battX,KESBUS]],
+      rule:{greenSign:1,greenDir:'toStart',labelSign:-1},
+      label:{x:battX+58, y:(KESBUS+BATTY-32)/2},
       getValue:function(d){ var s=0; for(var i=0;i<d.kes.length;i++) s+=d.kes[i].ac; return s; }});
-    edges.push({bus:true, x1:kx1, x2:kx2, y:KESY-40, bolts:kesXs});
+    edges.push({bus:true, x1:kx1, x2:kx2, y:KESBUS, bolts:kesXs});
     for(var j=0;j<k;j++){
       var kx=kesXs[j], kes=kes[j];
       nodes.push({key:'kes',cx:kx,cy:KESY,label:kes.name,
         staleOf:(function(idx){return function(d){return d.kes[idx].stale;};})(j)});
       nodes.push({key:'panel',cx:kx,cy:KPANY,label:''});
-      edges.push({pts:[[kx,KESY-sprH('kes')/2],[kx,KESY-40]], rule:{greenSign:1,greenDir:'toEnd',labelSign:-1},
-        label:{x:kx+38,y:(KESY-37+KESY-40)/2}, stale:kes.stale,
+      edges.push({pts:[[kx,KESY+sprH('kes')/2],[kx,KESBUS]], rule:{greenSign:1,greenDir:'toEnd',labelSign:-1},
+        label:{x:kx+38,y:(KESY+37+KESBUS)/2}, stale:kes.stale,
         getValue:(function(idx){return function(d){return d.kes[idx].ac;};})(j)});
-      var kPvTop=KESY+sprH('kes')/2, kPvBot=KPANY-31;
-      // выработка: от панели (низ) вверх к КЭС (toStart)
+      var kPvTop=KESY-sprH('kes')/2, kPvBot=KPANY+31;
+      // выработка: от панели (верх) вниз к КЭС (toStart)
       edges.push({pts:[[kx,kPvTop],[kx,kPvBot]], rule:{greenSign:1,greenDir:'toStart',labelSign:-1},
         label:{x:kx+38,y:(kPvTop+kPvBot)/2}, stale:kes.stale,
         getValue:(function(idx){return function(d){return d.kes[idx].pv;};})(j)});
     }
   }
 
-  return {nodes:nodes, edges:edges, height:KPANY+80, width:houseX+120};
+  return {nodes:nodes, edges:edges, height:PANY+80, width:houseX+120};
 }
 
 // ---------- Схема Гаража ----------
@@ -707,6 +706,38 @@ function renderNodeTemps(svg, n){
     // Немного уже минимума (подписи стали мельче) — панель не выглядит громоздкой.
     var w=Math.max(labelMax+8+TEMP_VAL_W+TEMP_PAD_H*2, 92);
     var x=cx-w/2, y=(cy-raise-spec.h/2-6)-hgt;
+    var box=document.createElementNS(NS,'rect');
+    box.setAttribute('x',x); box.setAttribute('y',y);
+    box.setAttribute('width',w); box.setAttribute('height',hgt);
+    box.setAttribute('rx',5);
+    box.setAttribute('class','anim-temp-panel');
+    g.appendChild(box);
+    for(var j=0;j<rows;j++){(function(t){
+      var ly=y+TEMP_PAD_V+j*TEMP_ROW_H+TEMP_ROW_H*0.72;
+      var lab=document.createElementNS(NS,'text');
+      lab.setAttribute('x',x+TEMP_PAD_H); lab.setAttribute('y',ly);
+      lab.setAttribute('class','anim-temp-label'); lab.textContent=t.label;
+      g.appendChild(lab);
+      var val=document.createElementNS(NS,'text');
+      val.setAttribute('x',x+w-TEMP_PAD_H); val.setAttribute('y',ly);
+      val.setAttribute('text-anchor','end');
+      val.setAttribute('class','anim-temp-val');
+      var tsp=document.createElementNS(NS,'tspan'); tsp.textContent='';
+      val.appendChild(tsp);
+      g.appendChild(val);
+      upds.push(function(d){ var s=(t.stale&&t.stale(d))?null:fmtTemp(t.get(d)); if(!s){val.style.visibility='hidden';} else {val.style.visibility=''; tsp.textContent=s;} });
+    })(n.temps[j]);}
+  } else if(n.tempPos==='below'){
+    // Панель ПОД спрайтом (температуры МАП) — ниже подписи имени узла.
+    var rows=n.temps.length;
+    var hgt=rows*TEMP_ROW_H+TEMP_PAD_V*2;
+    var labelMax=0;
+    for(var jw=0;jw<rows;jw++){
+      var lp=(''+n.temps[jw].label).length*6.2;
+      if(lp>labelMax) labelMax=lp;
+    }
+    var w=Math.max(labelMax+8+TEMP_VAL_W+TEMP_PAD_H*2, 92);
+    var x=cx-w/2, y=cy+spec.h/2+24;
     var box=document.createElementNS(NS,'rect');
     box.setAttribute('x',x); box.setAttribute('y',y);
     box.setAttribute('width',w); box.setAttribute('height',hgt);
