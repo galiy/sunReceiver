@@ -995,15 +995,19 @@ func buildAnimationResponse(devices []deviceSnapshot, ce308 map[string]ce308Snap
 			}
 			continue
 		}
-		if isMeterDevice(d.Values) && !stale(d) {
-			if v, ok := snapFloat(d.Values, "meter_active_power"); ok {
-				house.MeterActivePower = v
-			}
-			if v, ok := snapFloat(d.Values, "meter_import"); ok {
-				house.MeterImportTotal = math.Round(v*100) / 100
-			}
-			if v, ok := snapFloat(d.Values, "meter_export"); ok {
-				house.MeterExportTotal = math.Round(v*100) / 100
+		// Счётчик DDS238 — не инвертор: пропускаем его ВСЕГДА (в т.ч. устаревший
+		// снимок), иначе при «молчании» он попадает в ветвь инверторов Дома.
+		if isMeterDevice(d.Values) {
+			if !stale(d) {
+				if v, ok := snapFloat(d.Values, "meter_active_power"); ok {
+					house.MeterActivePower = v
+				}
+				if v, ok := snapFloat(d.Values, "meter_import"); ok {
+					house.MeterImportTotal = math.Round(v*100) / 100
+				}
+				if v, ok := snapFloat(d.Values, "meter_export"); ok {
+					house.MeterExportTotal = math.Round(v*100) / 100
+				}
 			}
 			continue
 		}

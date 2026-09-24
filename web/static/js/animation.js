@@ -421,7 +421,7 @@ function layoutHouse(data){
   var mapTopY=MAI-26;
   var battX=470;
 
-  var invXs=spread(140, 840, n);
+  var invXs=spread(90, 880, n);
   var kesXs=centers(battX, k, 140);
 
   var nodes=[
@@ -517,7 +517,7 @@ function layoutHouse(data){
     }
   }
 
-  return {nodes:nodes, edges:edges, height:PANY+80, width:houseX+120};
+  return {nodes:nodes, edges:edges, height:PANY+80, width:houseX+220};
 }
 
 // ---------- Схема Гаража ----------
