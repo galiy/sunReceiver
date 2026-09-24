@@ -57,8 +57,8 @@ func TestMapMAPAPIParse(t *testing.T) {
 		"ac_active_power": 208.0, // 52.0 × 4
 		"grid_frequency":  50.0,
 		"grid_voltage":    220.0,
-		"grid_power":      1141.2, // из _PNET_calc (достоверная), а не _PNET=910
-		"battery_power":   -208.0, // −_PLoad_calc (= −(I×U)), а не −_PLoad=−(−200)
+		"grid_power":      -1141.2, // −_PNET_calc (инверсия знака ветки API; не _PNET=910)
+		"battery_power":   -208.0,  // −_PLoad_calc (= −(I×U)), а не −_PLoad=−(−200)
 	}
 	for k, want := range checks {
 		got, ok := vals[k].(float64)
@@ -68,6 +68,33 @@ func TestMapMAPAPIParse(t *testing.T) {
 		}
 		if got != want {
 			t.Errorf("%s = %v, want %v", k, got, want)
+		}
+	}
+}
+
+func TestMapMAPAPIGridPowerSign(t *testing.T) {
+	// Новая Малина (mapd fw 4.3) отдаёт _PNET_calc с обратным знаком: при
+	// потреблении из сети значение отрицательное. Контракт дашборда — потребление
+	// положительное, отдача отрицательная, поэтому знак инвертируется.
+	cases := []struct {
+		net    string
+		wantGP float64
+	}{
+		{"-13578.8", 13578.8}, // потребление из сети → + (заряд АКБ из сети)
+		{"1141.2", -1141.2},   // отдача в сеть → −
+	}
+	for _, c := range cases {
+		body := `{"timestamp":"1","_Uacc":"52.0","_Iacc":"4","_UNET":"220","_PNET":"0","_PLoad":"0","_PLoad_calc":"208","_TFNET":"50.0","_PNET_calc":"` + c.net + `"}`
+		var r mapRaw
+		if err := json.Unmarshal([]byte(body), &r); err != nil {
+			t.Fatalf("unmarshal mapRaw: %v", err)
+		}
+		vals, _, ok := mapMAPAPI(r)
+		if !ok {
+			t.Fatal("mapMAPAPI: ok=false, want true")
+		}
+		if got := vals["grid_power"].(float64); got != c.wantGP {
+			t.Errorf("_PNET_calc=%s → grid_power = %v, want %v", c.net, got, c.wantGP)
 		}
 	}
 }
