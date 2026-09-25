@@ -44,7 +44,7 @@ read_json.php?device=bat
 Пример ответа (2026-09-07, 21:44:17):
 
 ```json
-{"timestamp":"1788806657","time":"21:44:17","_UID":"51510","_MODE":"17","_Status_Char":"0",
+{"timestamp":"1788806657","time":"21:44:17","_UID":"CHANGE_ME","_MODE":"17","_Status_Char":"0",
  "_Uacc":"52.0","_Uch_T":"56.8","_Ubuf_T":"54.4","_Iacc":"4","_PLoad":"-200",
  "_PLoad_calc":"-204.8","_F_Acc_Over":"0","_F_Net_Over":"0","_UNET":"220","_INET":"5",
  "_PNET":"910","_PNET_calc":"1141.2","_TFNET":"50.0","_ThFMAP":"50.0","_UOUTmed":"220",
@@ -65,7 +65,7 @@ read_json.php?device=bat
 | Поле | Описание |
 |---|---|
 | `timestamp` / `time` | Unix-сек. / локальное время МАП |
-| `_UID` | Серийный номер МАП (51510) |
+| `_UID` | Серийный номер МАП (CHANGE_ME) |
 | `_MODE` | Режим работы МАП (см. `_MODE=0x400`) |
 | `_Status_Char` | Состояние заряда (см. `_StatusCh=0x402`) |
 | `_Uacc` | Напряжение АКБ, В (`_UAcc_med_VH/VL=0x405/0x406`, V=(VH\*256+VL)/10) |

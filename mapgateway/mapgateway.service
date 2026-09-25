@@ -8,7 +8,7 @@ Type=simple
 # Устройство по умолчанию — АВТОПОИСК: перебираем свободные /dev/ttyUSB* и коротким
 # Modbus-опросом (unit 1) находим свой МАП. Явно можно задать -d /dev/...
 # (systemd 215: StartLimitInterval в [Service]; 0 = без лимита частоты рестартов.)
-ExecStart=/settings/daemons/mapgateway -b 115200 -p 502 --sn 51510
+ExecStart=/settings/daemons/mapgateway -b 115200 -p 502 --sn CHANGE_ME
 Restart=always
 RestartSec=3
 StartLimitInterval=0
