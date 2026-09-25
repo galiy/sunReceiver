@@ -2,21 +2,23 @@ VERSION ?= dev
 
 BLDFLAGS_LINUX := -X main.version=$(VERSION)
 BLDFLAGS_WIN   := -H windowsgui -X main.version=$(VERSION)
-# bmslistener — C-демон: версия зашивается макросом VERSION как строка-литерал.
+# bmslistener / mapgateway — C-демоны: версия зашивается макросом VERSION как строка-литерал.
 BLDFLAGS_BMS   := -DVERSION=\"$(VERSION)\"
+BLDFLAGS_MAPGW := -DVERSION=\"$(VERSION)\"
 
 LINUX_ART := dist/sunReceiver-linux-amd64-$(VERSION)
 WIN_ART   := dist/sunReceiver-windows-amd64-$(VERSION).exe
 BMS_ART   := dist/bmslistener-armv7l-$(VERSION)
+MAPGW_ART := dist/mapgateway-armv7l-$(VERSION)
 
 # guard на внешние утилиты: zip нужен только релизу (Windows-архив),
 # zig — только bmslistener (кросс-сборка ARM).
 ZIP_CMD := $(shell command -v zip 2>/dev/null)
 ZIG_CMD := $(shell command -v zig 2>/dev/null)
 
-.PHONY: all linux-x64 win-x64 bmslistener release clean dist test vet
+.PHONY: all linux-x64 win-x64 bmslistener mapgateway release clean dist test vet
 
-all: linux-x64 win-x64 bmslistener vet test
+all: linux-x64 win-x64 bmslistener mapgateway vet test
 
 dist:
 	mkdir -p dist
@@ -47,6 +49,15 @@ bmslistener: dist
 		$(MAKE) VERSION=$(VERSION) $(BMS_ART); \
 	fi
 
+# mapgateway (ARM, кросс-сборка) — шлюз Modbus TCP<->RTU для МАП. Требует zig.
+mapgateway: dist
+	@if [ -z "$(ZIG_CMD)" ]; then \
+		echo "WARN: zig не найден (command -v zig) — пропускаю сборку $(MAPGW_ART)"; \
+	else \
+		rm -f $(MAPGW_ART); \
+		$(MAKE) VERSION=$(VERSION) $(MAPGW_ART); \
+	fi
+
 # Артефактные цели (пересобираются, только если исходники новее артефакта и
 # артефакт отсутствует/устарел). Здесь НЕТ фантомных зависимостей (dist/vet/test),
 # иначе make всегда считал бы артефакт устаревшим и пересобирал бы его. На эти
@@ -75,6 +86,17 @@ $(BMS_ART): bmslistener/bmslistener.c
 	zig cc -O2 -std=gnu99 -Wall -Wextra -target arm-linux-musleabihf -static \
 		$(BLDFLAGS_BMS) -o $(BMS_ART) bmslistener/bmslistener.c
 	@echo "OK: $(BMS_ART)"
+
+$(MAPGW_ART): mapgateway/mapgateway.c
+	@if [ -z "$(ZIG_CMD)" ]; then \
+		echo "ERROR: zig не найден (command -v zig) — не могу собрать $(MAPGW_ART)"; \
+		exit 1; \
+	fi
+	mkdir -p dist
+	rm -f $(MAPGW_ART)
+	zig cc -O2 -std=gnu99 -Wall -Wextra -target arm-linux-musleabihf -static \
+		$(BLDFLAGS_MAPGW) -o $(MAPGW_ART) mapgateway/mapgateway.c
+	@echo "OK: $(MAPGW_ART)"
 
 # Релиз. N38: использует уже собранные $(LINUX_ART)/$(WIN_ART), а не пересобирает
 # их (зависит от артефактных целей, а не от явных linux-x64/win-x64), кладёт
