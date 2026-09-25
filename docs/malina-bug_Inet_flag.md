@@ -86,8 +86,8 @@ grid_power = (0x587 == 1) ? +|_PNET_calc| : −|_PNET_calc|
 
 ## 4. Сопоставление со старым источником и счётчиком
 
-Непрерывный ряд `sunreceiver:series` (Redis), устройство МАП `192.168.13.74`
-против счётчика `192.168.13.77`:
+Непрерывный ряд `sunreceiver:series` (Redis), устройство МАП `192.0.2.74`
+против счётчика `192.0.2.77`:
 
 | Период | Совпадение знака с счётчиком |
 |---|---|
@@ -175,13 +175,13 @@ DDS238: `P(сеть)` = `meter_active_power`, если ближайший сни
 
 ### 7.1. Потребление/заряд (знак ошибался наоборот, окно заряда)
 
-- Redis `sunreceiver:series:2026-09`, устройство `192.168.13.74`:
+- Redis `sunreceiver:series:2026-09`, устройство `192.0.2.74`:
   - окно `[24.09 20:00 MSK, 25.09 00:38:39 MSK]` — знак `values.grid_power`
     инвертирован у **627** точек; бэкап-ключ
     `sunreceiver:series:2026-09:bak-migr20260925`;
   - позже, после того как флаг мигнул в `0` при ещё безусловной инверсии, доправлены
     **7** точек `01:03:39–01:04:49 MSK`.
-- PostgreSQL `sunreceiver.averages`, `ip='192.168.13.74'`:
+- PostgreSQL `sunreceiver.averages`, `ip='192.0.2.74'`:
   - окно `[24.09 20:00, 25.09 00:38:39 MSK]` — перевёрнут `grid_power` у **25** строк;
     бэкап-таблица `sunreceiver.averages_bak_migr20260925`;
   - удалена смешанная строка `25.09 00:35 MSK` (граница рестарта);
@@ -194,11 +194,11 @@ DDS238: `P(сеть)` = `meter_active_power`, если ближайший сни
 MAP из-за бага писал `grid_power > 0`; закончилось рестартом на исправленный код
 `25.09 09:04:32 MSK`. Миграция — инверсия знака (модуль достоверен):
 
-- Redis `sunreceiver:series:2026-09`, `192.168.13.74`:
+- Redis `sunreceiver:series:2026-09`, `192.0.2.74`:
   - окно `[25.09 07:00:19, 25.09 09:04:32 MSK]` — инвертированы **634** точки
     (`grid_power > 0` → `−`); бэкап-ключ
     `sunreceiver:series:2026-09:bak-migr20260925-gridsign`.
-- PostgreSQL `sunreceiver.averages`, `ip='192.168.13.74'`:
+- PostgreSQL `sunreceiver.averages`, `ip='192.0.2.74'`:
   - окно `[25.09 07:00, 25.09 09:05 MSK]` — инвертированы **23** строки;
     бэкап-таблица `sunreceiver.averages_bak_migr20260925_gridsign`.
 - Критерий выбора точек: `values.grid_power > 0` в окне (после инверсии повторный
@@ -209,12 +209,12 @@ MAP из-за бага писал `grid_power > 0`; закончилось ре�
 Сырьё и API новой Малины (`admin` / пароль из раздела `map` конфига):
 
 ```sh
-curl -s -u admin:PASS "http://192.168.13.60/read_json.php?device=map" \
+curl -s -u admin:PASS "http://192.0.2.60/read_json.php?device=map" \
   | python3 -c 'import sys,json;o=json.load(sys.stdin);print(o["_Inet_flag"],o["_INET"],o["_PNET_calc"])'
 
 # сырой знак мощности сети (0x587=1415, 0x423=1059)
-curl -s -u admin:PASS "http://192.168.13.60/read_memory.php?offset=1415&count=1"
-curl -s -u admin:PASS "http://192.168.13.60/read_memory.php?offset=1059&count=1"
+curl -s -u admin:PASS "http://192.0.2.60/read_memory.php?offset=1415&count=1"
+curl -s -u admin:PASS "http://192.0.2.60/read_memory.php?offset=1059&count=1"
 ```
 
 Критерий корректности на стороне sunReceiver: знак `grid_power` МАП должен совпадать

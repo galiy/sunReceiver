@@ -22,7 +22,7 @@ import (
 )
 
 func TestDecodeMeterRegs(t *testing.T) {
-	// Регистры из живого опроса DDS238 (192.168.13.77).
+	// Регистры из живого опроса DDS238 (192.0.2.77).
 	regs := []uint16{
 		0x015A, 0xA467, 0, 0, 0, 0, 0, 0, // 0-7: Total(0-1)
 		0x0036, 0x7AB0, // 8-9 Export

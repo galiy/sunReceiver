@@ -324,7 +324,7 @@ PL2303 (`/dev/ttyUSB*`), на которых ANT BMS вещают 140-байтн
   `/usr/sbin/bmslistener`, юнит в `/etc/systemd/system/bmslistener.service`, затем
   `systemctl daemon-reload && systemctl enable --now bmslistener`.
 - Логи демон теперь шлёт **только в syslog-сокет** `/dev/log` → rsyslog Малины →
-  правило `*.* @192.168.13.253` → `/var/log/malina/malina.log` на `.253`
+  правило `*.* @192.0.2.253` → `/var/log/malina/malina.log` на `.253`
   (rsyslog 215 на этой плате не собирает stderr в journal; юнит без
   `StandardOutput=file` — т.к. `append:` не поддерживается в 215). Локального
   файла `/tmp/bmslistener.log` **больше нет** (был до 2026-09-19, удалён).

@@ -76,7 +76,7 @@
  * На этой плате imuxsock слушает unix-dgram-сокет /dev/log (классический путь;
  * системного /run/systemd/journal/syslog тут нет — socket-unit syslog.socket
  * активен, но журнала journald нет). Датаграмму туда принимает rsyslog и по
- * правилу `*.* @192.168.13.253` пересылает на .253 в /var/log/malina/malina.log
+ * правилу `*.* @192.0.2.253` пересылает на .253 в /var/log/malina/malina.log
  * (фильтр hostname startswith "malina"). Проверено end-to-end (2026-09-19).
  * Локальный файл НЕ пишем: единственный источник — .253, чтобы файл на Малине
  * не рос безлимитно (ротация не настроена, /tmp — tmpfs 5МБ).

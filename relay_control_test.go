@@ -109,7 +109,7 @@ func TestRelaySteadyKeepalive(t *testing.T) {
 
 // Дефолты: порт 6723, частота 2 Гц, белая(1)/красная(2) при пустом списке ламп.
 func TestRelayBuildCfgDefaults(t *testing.T) {
-	cfg := buildRelayCfg(&relaySection{IP: "192.168.13.34", Disabled: boolp(false)})
+	cfg := buildRelayCfg(&relaySection{IP: "192.0.2.34", Disabled: boolp(false)})
 	if cfg.UDPPort != 6723 {
 		t.Fatalf("udp_port=%d, want 6723", cfg.UDPPort)
 	}
@@ -194,8 +194,8 @@ func TestRedLampDecision(t *testing.T) {
 
 // Последовательный алгоритм белой лампы (МАП + счётчик).
 func TestWhiteLampDecision(t *testing.T) {
-	const mapIP = "192.168.13.74"
-	meter := &meterConfig{IP: "192.168.13.77"}
+	const mapIP = "192.0.2.74"
+	meter := &meterConfig{IP: "192.0.2.77"}
 	now := time.Now()
 	old := now.Add(-25 * time.Second)
 

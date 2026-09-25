@@ -5,7 +5,7 @@
 слушает TCP-порт (по умолчанию **502**), транслируя запросы **Modbus TCP (MBAP)**
 в кадры **Modbus RTU** и обратно. Получается локальный Modbus TCP-сервер МАП.
 
-Зачем: отвязаться от внешнего Modbus-шлюза `192.168.13.74:502` и/или получить
+Зачем: отвязаться от внешнего Modbus-шлюза `192.0.2.74:502` и/или получить
 прямой Modbus-доступ к МАП с Малины. sunReceiver адресует МАП жёстко как
 `<ip>:502` (`modbusmap.DefaultPort = "502"`), поэтому достаточно сменить
 `map.rs485.ip` в `sunReceiver.json` на IP Малины — без правок кода.
@@ -40,11 +40,11 @@ gcc -O2 -std=gnu99 -Wall -Wextra -DVERSION='"dev"' -o /tmp/mapgateway mapgateway
 На Малине ничего не собираем — только копируем готовый артефакт:
 
 ```sh
-scp dist/mapgateway-armv7l-0.1.0 root@192.168.13.60:/settings/daemons/mapgateway
-ssh root@192.168.13.60 'chmod 755 /settings/daemons/mapgateway'
+scp dist/mapgateway-armv7l-0.1.0 root@192.0.2.60:/settings/daemons/mapgateway
+ssh root@192.0.2.60 'chmod 755 /settings/daemons/mapgateway'
 # юнит:
-scp mapgateway/mapgateway.service root@192.168.13.60:/etc/systemd/system/mapgateway.service
-ssh root@192.168.13.60 'systemctl daemon-reload && systemctl enable --now mapgateway.service'
+scp mapgateway/mapgateway.service root@192.0.2.60:/etc/systemd/system/mapgateway.service
+ssh root@192.0.2.60 'systemctl daemon-reload && systemctl enable --now mapgateway.service'
 ```
 
 (У Малины корень `/` смонтирован `ro`; запись в `/etc` и `/usr` — после
@@ -59,7 +59,7 @@ mapgateway [-d device] [-b baud] [-p tcp_port] [-l listen_addr] [-v]
 
 - `-d` — путь к COM **явно** (тогда без автопоиска).
 - `-u` — Modbus-адрес МАП для опроса при автопоиске (по умолчанию `1`).
-- `--sn N` — ожидаемый **серийный номер** МАП (16 бит; можно `51510` или `0xC936`). Если задан,
+- `--sn N` — ожидаемый **серийный номер** МАП (16 бит; можно `CHANGE_ME` или `CHANGE_ME`). Если задан,
   кандидат принимается только при точном совпадении `_SerialNum0/1` (0x18 мл., 0x19 ст.).
 - `--sn-letter C` — ожидаемая буква серийного номера (`_SerialNum3=0x23`, ASCII).
 - Автопоиск (по умолчанию, без `-d`): перебираем свободные `/dev/ttyUSB*` (занятые другими
@@ -79,7 +79,7 @@ mapgateway [-d device] [-b baud] [-p tcp_port] [-l listen_addr] [-v]
 ```sh
 python3 - <<'PY'
 import socket,struct
-s=socket.create_connection(("192.168.13.60",502),3); s.settimeout(3)
+s=socket.create_connection(("192.0.2.60",502),3); s.settimeout(3)
 txn=1
 for a in (438,1099,1027):
     pdu=struct.pack('>BHH',3,a,1); s.sendall(struct.pack('>HHHB',txn,0,len(pdu)+1,1)+pdu)
@@ -92,7 +92,7 @@ PY
 
 В `sunReceiver.json` достаточно поменять хост МАП на Малину (порт 502 зашит в коде):
 ```json
-"map": { "rs485": { "name": "МАП", "ip": "192.168.13.60", "unit": 1, "disabled": false } }
+"map": { "rs485": { "name": "МАП", "ip": "192.0.2.60", "unit": 1, "disabled": false } }
 ```
 Шлюз прозрачен: функция `0x03`, побайтовая адресация ячеек МАП, `unit` берётся из
 MBAP и пробрасывается в RTU.

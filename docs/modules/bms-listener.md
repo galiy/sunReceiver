@@ -66,7 +66,7 @@ bmslistener пишет логи **только в syslog-сокет** `/dev/log`
 RFC 3164 `<PRI>Mmm dd HH:MM:SS hostname msg`), без локального файла. Это сделано,
 чтобы на Малине не рос безлимитно файл-лог (ротация для него не настроена, а
 `/tmp` там — tmpfs всего 5 МБ). Поток: `bms_log()` → `/dev/log` → rsyslog Малины
-(правило `*.* @192.168.13.253`, UDP 514) → `/var/log/malina/malina.log` на `.253`
+(правило `*.* @192.0.2.253`, UDP 514) → `/var/log/malina/malina.log` на `.253`
 (фильтр `26-malina.conf`: `:hostname, startswith, "malina"`). Локального файла на
 Малине нет — единственный источник — `.253`; на самой Малине остаётся только
 дубль в stderr (в systemd уходит в `/dev/null`).

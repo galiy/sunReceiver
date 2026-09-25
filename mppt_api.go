@@ -79,8 +79,8 @@ func loadMPPTSite(sec *mapSection) *mpptSite {
 	}
 }
 
-// hostOf возвращает хост/порт из базового URL (например, "192.168.13.60" из
-// "http://192.168.13.60"); при ошибке парсинга — пустую строку.
+// hostOf возвращает хост/порт из базового URL (например, "192.0.2.60" из
+// "http://192.0.2.60"); при ошибке парсинга — пустую строку.
 func hostOf(u string) string {
 	parsed, err := url.Parse(u)
 	if err != nil {

@@ -31,7 +31,7 @@ func TestLoadConfigLoggerSNRequired(t *testing.T) {
 	path := filepath.Join(dir, "cfg.json")
 
 	// Deye без logger_sn — ошибка с упоминанием logger_sn.
-	if err := os.WriteFile(path, []byte(`{"dashboard_port":8080,"invertors":[{"ip":"192.168.13.91","name":"D1","type":"deye","disabled":false}]}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"dashboard_port":8080,"invertors":[{"ip":"192.0.2.91","name":"D1","type":"deye","disabled":false}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, _, _, _, _, _, err := loadConfig(path); err == nil {
@@ -41,7 +41,7 @@ func TestLoadConfigLoggerSNRequired(t *testing.T) {
 	}
 
 	// Sofar без logger_sn — тоже ошибка.
-	if err := os.WriteFile(path, []byte(`{"dashboard_port":8080,"invertors":[{"ip":"192.168.13.76","name":"S1","type":"sofar","disabled":false}]}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"dashboard_port":8080,"invertors":[{"ip":"192.0.2.76","name":"S1","type":"sofar","disabled":false}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, _, _, _, _, _, err := loadConfig(path); err == nil {
@@ -49,7 +49,7 @@ func TestLoadConfigLoggerSNRequired(t *testing.T) {
 	}
 
 	// С logger_sn — валиден.
-	if err := os.WriteFile(path, []byte(`{"dashboard_port":8080,"invertors":[{"ip":"192.168.13.91","name":"D1","type":"deye","disabled":false,"logger_sn":1774265353}]}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"dashboard_port":8080,"invertors":[{"ip":"192.0.2.91","name":"D1","type":"deye","disabled":false,"logger_sn":1774265353}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	targets, _, _, _, _, _, _, err := loadConfig(path)
@@ -65,15 +65,15 @@ func TestLoadConfigLoggerSNRequired(t *testing.T) {
 // опрос отключён (nil) БЕЗ fallback на legacy; register_count=0 → дефолт 27.
 func TestLoadMeterConfigValidation(t *testing.T) {
 	// Неполный раздел (port=0) — nil (опрос отключён, legacy НЕ используется).
-	if mc := loadMeterConfig(&meterSection{Name: "M", IP: "192.168.13.77", Port: 0, Unit: 1}); mc != nil {
+	if mc := loadMeterConfig(&meterSection{Name: "M", IP: "192.0.2.77", Port: 0, Unit: 1}); mc != nil {
 		t.Fatalf("неполный раздел → mc=%v, want nil", mc)
 	}
 	// first_reg != 0 — nil (декодер заточен под регистры 0..26).
-	if mc := loadMeterConfig(&meterSection{Name: "M", IP: "192.168.13.77", Port: 502, Unit: 1, FirstReg: 5}); mc != nil {
+	if mc := loadMeterConfig(&meterSection{Name: "M", IP: "192.0.2.77", Port: 502, Unit: 1, FirstReg: 5}); mc != nil {
 		t.Fatalf("first_reg!=0 → mc=%v, want nil", mc)
 	}
 	// Валидный с register_count=0 — дефолт 27.
-	mc := loadMeterConfig(&meterSection{Name: "M", IP: "192.168.13.77", Port: 502, Unit: 1})
+	mc := loadMeterConfig(&meterSection{Name: "M", IP: "192.0.2.77", Port: 502, Unit: 1})
 	if mc == nil {
 		t.Fatal("валидный раздел → nil")
 	}
@@ -87,7 +87,7 @@ func TestLoadMeterConfigValidation(t *testing.T) {
 func TestLoadConfigDashboardPortRequired(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cfg.json")
-	if err := os.WriteFile(path, []byte(`{"invertors":[{"ip":"192.168.13.91","name":"D1","type":"deye","disabled":false,"logger_sn":1774265353}]}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"invertors":[{"ip":"192.0.2.91","name":"D1","type":"deye","disabled":false,"logger_sn":1774265353}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, _, _, _, _, _, err := loadConfig(path); err == nil {

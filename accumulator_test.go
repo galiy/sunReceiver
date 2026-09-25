@@ -35,8 +35,8 @@ func TestReadBucketWindowBoundary(t *testing.T) {
 	start := b.Add(-5 * time.Minute)
 
 	// Точка ровно на границе b и точка на 1 с до b.
-	boundary := snap("A", "192.168.13.200", b, valuesContract{"ac_active_power": 1.0})
-	inside := snap("A", "192.168.13.200", b.Add(-1*time.Second), valuesContract{"ac_active_power": 2.0})
+	boundary := snap("A", "192.0.2.200", b, valuesContract{"ac_active_power": 1.0})
+	inside := snap("A", "192.0.2.200", b.Add(-1*time.Second), valuesContract{"ac_active_power": 2.0})
 	_ = s.SaveSnapshot(boundary, b)
 	_ = s.SaveSnapshot(inside, b.Add(-1*time.Second))
 
@@ -60,7 +60,7 @@ func TestGroupForBackfill(t *testing.T) {
 	start := time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC)
 	end := start.Add(5 * time.Minute)
 	mk := func(ts time.Time) deviceSnapshot {
-		return deviceSnapshot{IP: "192.168.13.1", Timestamp: ts.UTC().Format(time.RFC3339), Values: valuesContract{"ac_active_power": 1.0}}
+		return deviceSnapshot{IP: "192.0.2.1", Timestamp: ts.UTC().Format(time.RFC3339), Values: valuesContract{"ac_active_power": 1.0}}
 	}
 	snaps := []deviceSnapshot{
 		mk(start),                        // ts==start — ВХОДИТ (бакет 10:00)
@@ -74,11 +74,11 @@ func TestGroupForBackfill(t *testing.T) {
 	if len(groups) != 1 {
 		t.Fatalf("groupForBackfill бакетов=%d, want 1: %+v", len(groups), groups)
 	}
-	k := accBucketKey{ip: "192.168.13.1", bts: start}
+	k := accBucketKey{ip: "192.0.2.1", bts: start}
 	if len(groups[k]) != 2 {
 		t.Fatalf("бакет 10:00 снимков=%d, want 2 (start + внутри): %+v", len(groups[k]), groups[k])
 	}
-	if _, ok := groups[accBucketKey{ip: "192.168.13.1", bts: end}]; ok {
+	if _, ok := groups[accBucketKey{ip: "192.0.2.1", bts: end}]; ok {
 		t.Fatal("точка ts==end попала в текущий бакет — backfill не должен его трогать")
 	}
 }

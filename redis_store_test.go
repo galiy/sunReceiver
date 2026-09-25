@@ -70,8 +70,8 @@ func TestRedisStoreCurrentSorted(t *testing.T) {
 
 	now := time.Now()
 	for _, sp := range []deviceSnapshot{
-		snap("Zeta", "192.168.13.99", now, valuesContract{"ac_active_power": 10.0}),
-		snap("Alpha", "192.168.13.98", now, valuesContract{"ac_active_power": 20.0}),
+		snap("Zeta", "192.0.2.99", now, valuesContract{"ac_active_power": 10.0}),
+		snap("Alpha", "192.0.2.98", now, valuesContract{"ac_active_power": 20.0}),
 	} {
 		if err := s.SaveSnapshot(sp, now); err != nil {
 			t.Fatalf("SaveSnapshot: %v", err)
@@ -101,7 +101,7 @@ func TestRedisStoreQuerySeriesPeriod(t *testing.T) {
 	b := base.Add(-2 * time.Hour)
 	c := base.Add(-1 * time.Hour)
 	for _, ts := range []time.Time{a, b, c} {
-		_ = s.SaveSnapshot(snap("A", "192.168.13.1", ts, valuesContract{"energy_total": 1.0}), ts)
+		_ = s.SaveSnapshot(snap("A", "192.0.2.1", ts, valuesContract{"energy_total": 1.0}), ts)
 	}
 
 	got, err := s.QuerySeries(base.Add(-30*24*time.Hour), base)
@@ -217,7 +217,7 @@ func TestSaveSnapshotWindowReplace(t *testing.T) {
 
 	now := time.Now()
 	win := now.Truncate(10 * time.Second)
-	ip := "192.168.13.74"
+	ip := "192.0.2.74"
 	sp1 := snap("MAP", ip, win.Add(2*time.Second), valuesContract{"grid_voltage": 230.0})
 	sp2 := snap("MAP", ip, win.Add(7*time.Second), valuesContract{"grid_voltage": 231.0})
 	if err := s.SaveSnapshotWindow(sp1, win.Add(2*time.Second)); err != nil {
@@ -249,10 +249,10 @@ func TestRedisStoreSnapshotDedup(t *testing.T) {
 
 	now := time.Now()
 	ts := now.Truncate(time.Second)
-	ip := "192.168.13.77"
+	ip := "192.0.2.77"
 	s1 := snap("A", ip, ts, valuesContract{"ac_active_power": 1.0})
 	s2 := snap("A", ip, ts.Add(500*time.Millisecond), valuesContract{"ac_active_power": 2.0})
-	other := snap("B", "192.168.13.78", ts, valuesContract{"ac_active_power": 9.0})
+	other := snap("B", "192.0.2.78", ts, valuesContract{"ac_active_power": 9.0})
 
 	for _, sp := range []deviceSnapshot{s1, other, s2} {
 		if err := s.SaveSnapshot(sp, ts); err != nil {
