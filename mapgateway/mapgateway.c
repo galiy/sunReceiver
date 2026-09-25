@@ -94,6 +94,27 @@ static void syslog_send(const char *line)
         syslog_send(_b);                                   \
     } while (0)
 
+/* Троттлинг повторяющихся ошибок шины: не чаще одного сообщения в 5 c,
+ * подавленные — счётчиком ("(+N suppressed)"). */
+static uint64_t g_err_last_ms = 0;
+static unsigned g_err_suppressed = 0;
+static uint64_t now_ms(void);
+
+static void err_log(const char *msg)
+{
+    uint64_t now = now_ms();
+    if (g_err_last_ms == 0 || now - g_err_last_ms >= 5000) {
+        if (g_err_suppressed)
+            GW_LOG("%s (+%u suppressed)\n", msg, g_err_suppressed);
+        else
+            GW_LOG("%s\n", msg);
+        g_err_last_ms = now;
+        g_err_suppressed = 0;
+    } else {
+        g_err_suppressed++;
+    }
+}
+
 /* ---------------- время / сигналы ------------------------------------------ */
 static volatile sig_atomic_t g_stop = 0;
 static void on_signal(int sig) { (void)sig; g_stop = 1; }
@@ -240,14 +261,18 @@ static int serial_transaction(const uint8_t *req, int reqlen,
     }
 
     if (need == 0 || got < need) {
-        GW_LOG("serial timeout: got=%d need=%d\n", got, need);
+        char b[128];
+        snprintf(b, sizeof(b), "serial timeout: got=%d need=%d", got, need);
+        err_log(b);
         return -1;
     }
 
     uint16_t want = (uint16_t)(resp[need - 2] | (resp[need - 1] << 8));
     if (crc16(resp, need - 2) != want) {
-        GW_LOG("serial bad crc: got=%d need=%d calc=%04x got=%02x%02x\n",
-               got, need, crc16(resp, need - 2), resp[need - 2], resp[need - 1]);
+        char b[128];
+        snprintf(b, sizeof(b), "serial bad crc: got=%d need=%d calc=%04x got=%02x%02x",
+                 got, need, crc16(resp, need - 2), resp[need - 2], resp[need - 1]);
+        err_log(b);
         return -1;
     }
 
