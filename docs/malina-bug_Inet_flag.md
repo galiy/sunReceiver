@@ -171,11 +171,13 @@ DDS238: `P(сеть)` = `meter_active_power`, если ближайший сни
 
 ## 7. Миграция исторических данных
 
-Сделана после исправления кода:
+Сделана после исправления кода.
+
+### 7.1. Потребление/заряд (знак ошибался наоборот, окно заряда)
 
 - Redis `sunreceiver:series:2026-09`, устройство `192.168.13.74`:
-  - окно `[24.09 20:00 MSK, 25.09 00:38:39 MSK]` (до рестарта с исправлением) — знак
-    `values.grid_power` инвертирован у **627** точек; бэкап-ключ
+  - окно `[24.09 20:00 MSK, 25.09 00:38:39 MSK]` — знак `values.grid_power`
+    инвертирован у **627** точек; бэкап-ключ
     `sunreceiver:series:2026-09:bak-migr20260925`;
   - позже, после того как флаг мигнул в `0` при ещё безусловной инверсии, доправлены
     **7** точек `01:03:39–01:04:49 MSK`.
@@ -185,6 +187,22 @@ DDS238: `P(сеть)` = `meter_active_power`, если ближайший сни
   - удалена смешанная строка `25.09 00:35 MSK` (граница рестарта);
   - пересчитана строка `01:00 MSK` (была размыта смешением: `grid_power`
     `7341.9` → `13755.0` по исправленному ряду Redis).
+
+### 7.2. Отдача в сеть (знак был положительным вместо отрицательного)
+
+Окно, где физически шла отдача (счётчик DDS238 отрицательный с `07:00:19 MSK`), но
+MAP из-за бага писал `grid_power > 0`; закончилось рестартом на исправленный код
+`25.09 09:04:32 MSK`. Миграция — инверсия знака (модуль достоверен):
+
+- Redis `sunreceiver:series:2026-09`, `192.168.13.74`:
+  - окно `[25.09 07:00:19, 25.09 09:04:32 MSK]` — инвертированы **634** точки
+    (`grid_power > 0` → `−`); бэкап-ключ
+    `sunreceiver:series:2026-09:bak-migr20260925-gridsign`.
+- PostgreSQL `sunreceiver.averages`, `ip='192.168.13.74'`:
+  - окно `[25.09 07:00, 25.09 09:05 MSK]` — инвертированы **23** строки;
+    бэкап-таблица `sunreceiver.averages_bak_migr20260925_gridsign`.
+- Критерий выбора точек: `values.grid_power > 0` в окне (после инверсии повторный
+  прогон идемпотентен — положительных не остаётся).
 
 ## 8. Как проверить/диагностировать
 
@@ -201,6 +219,8 @@ curl -s -u admin:PASS "http://192.168.13.60/read_memory.php?offset=1059&count=1"
 
 Критерий корректности на стороне sunReceiver: знак `grid_power` МАП должен совпадать
 со знаком `meter_active_power` счётчика DDS238 (при отсутствии генерации ночью — точно).
+Проверка на проде: `curl -s http://127.0.0.1:8080/api/current` — сравнить
+`map_grid_power` и `meter_active_power`.
 
 ## 9. Открытые вопросы и рекомендации
 
@@ -216,8 +236,9 @@ curl -s -u admin:PASS "http://192.168.13.60/read_memory.php?offset=1059&count=1"
 
 ## 10. Ссылки
 
-- Код: `mppt_api.go` (`mapRaw`, `invertGridFromInetFlag`, `mapMAPAPI`),
-  `dashboard.go` (`meterGridMaxAge`, `house_grid_power`, `housePowerSeries`).
+- Код: `mppt_api.go` (`mapRaw.PNETSign`, `FetchPNETSign`, `invertGridFromInetFlag`,
+  `mapMAPAPI`, `pollMAPAPI`), `dashboard.go` (`meterGridMaxAge`, `house_grid_power`,
+  `housePowerSeries`).
 - Протокол МАП: `docs/map/map/protocol_MAP_cells_2026_07_15.doc` (ячейки `0x422`,
   `0x423`, `0x587`, `0x59A/B`).
 - Формат API: `docs/read_json.md`; МАП/MPPT: `docs/modules/map-mppt.md`.
