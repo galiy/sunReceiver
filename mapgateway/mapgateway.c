@@ -146,6 +146,8 @@ static uint16_t crc16(const uint8_t *d, int n)
 static int      g_serial_fd = -1;
 static speed_t  g_speed = B115200;
 static int      g_probe_unit = 1;            /* Modbus-адрес МАП для опроса при поиске */
+static long     g_sn = -1;                   /* --sn: ожидаемый серийник МАП (16 бит), -1 = не задан */
+static int      g_letter = -1;               /* --sn-letter: ожидаемая буква серийника, -1 = не задана */
 static char     g_override_dev[DEVPATH_MAX]; /* -d: устройство задано явно */
 static int      g_have_override = 0;
 static char     g_found_dev[DEVPATH_MAX];    /* устройство, найденное автоопределением */
@@ -217,7 +219,14 @@ static int port_in_use_by_other(const char *dev)
     return in_use;
 }
 
-/* Короткий Modbus-опрос: это наш МАП? Читаем 1 регистр 0x0400 (MODE). */
+/*
+ * Короткий Modbus-опрос идентификации: это наш МАП?
+ * Читаем блок ячеек 0x00..0x2F (24 регистра = 48 байт) и проверяем:
+ *   - валидный кадр 0x03 (unit/CRC);
+ *   - сигнатуру семейства МАП: _VerPO(0x02)!=0 и _DevOpt(0x07) in {1,2,3};
+ *   - при заданном --sn: серийник _SerialNum0/1 (0x18 мл., 0x19 ст.) == ожидаемому;
+ *   - при заданном --sn-letter: _SerialNum3(0x23) == букве.
+ */
 static int dev_is_map(const char *dev)
 {
     int fd = serial_open_path(dev);
@@ -226,8 +235,8 @@ static int dev_is_map(const char *dev)
     uint8_t req[8];
     req[0] = (uint8_t)g_probe_unit;
     req[1] = 0x03;
-    req[2] = 0x04; req[3] = 0x00;   /* адрес 0x0400 */
-    req[4] = 0x00; req[5] = 0x01;   /* 1 регистр */
+    req[2] = 0x00; req[3] = 0x00;   /* start = 0x0000 */
+    req[4] = 0x00; req[5] = 0x18;   /* count = 24 регистра (48 байт: 0x00..0x2F) */
     uint16_t c = crc16(req, 6);
     req[6] = (uint8_t)(c & 0xff);
     req[7] = (uint8_t)(c >> 8);
@@ -235,7 +244,7 @@ static int dev_is_map(const char *dev)
     tcflush(fd, TCIFLUSH);
     if (write(fd, req, sizeof req) != (ssize_t)sizeof req) { close(fd); return 0; }
 
-    uint8_t buf[16];
+    uint8_t buf[128];
     int got = 0;
     uint64_t dl = now_ms() + PROBE_MS;
     while (now_ms() < dl && got < 3) {
@@ -249,6 +258,7 @@ static int dev_is_map(const char *dev)
     if (got >= 3) {
         uint8_t fn = buf[1];
         int need = (fn & 0x80) ? 5 : 3 + buf[2] + 2;
+        if (need > (int)sizeof buf) { close(fd); return 0; }
         while (now_ms() < dl && got < need) {
             struct pollfd p = { fd, POLLIN, 0 };
             int pr = poll(&p, 1, 50);
@@ -259,9 +269,25 @@ static int dev_is_map(const char *dev)
         }
         close(fd);
         if (got < need || buf[0] != (uint8_t)g_probe_unit) return 0;
-        if (fn != 0x03 && fn != 0x83) return 0;
+        if (fn != 0x03) return 0;                       /* не МАП или исключение */
         uint16_t w = (uint16_t)(buf[need - 2] | (buf[need - 1] << 8));
         if (crc16(buf, need - 2) != w) return 0;
+
+        const uint8_t *d = buf + 3;                     /* данные: unit+func+bc */
+        int dlen = buf[2];
+        if (dlen < 0x24) return 0;
+        uint8_t verpo = d[0x02];
+        uint8_t devopt = d[0x07];
+        unsigned sn = (unsigned)d[0x18] | ((unsigned)d[0x19] << 8);
+        uint8_t letter = d[0x23];
+
+        if (verpo == 0) return 0;                       /* сигнатура семейства МАП */
+        if (devopt != 1 && devopt != 2 && devopt != 3) return 0;
+        if (g_sn >= 0 && (long)sn != g_sn) return 0;
+        if (g_letter >= 0 && (int)letter != g_letter) return 0;
+
+        GW_LOG("probe %s: sn=%u devopt=%u verPO=0x%02X letter=%u -> MAP\n",
+               dev, sn, devopt, verpo, letter);
         return 1;
     }
     close(fd);
@@ -492,8 +518,10 @@ static speed_t parse_baud(int b)
 static void usage(const char *a)
 {
     fprintf(stderr,
-        "usage: %s [-d device] [-b baud] [-u unit] [-p tcp_port] [-l listen_addr] [-v]\n"
-        "  device: по умолчанию автопоиск (свободные /dev/ttyUSB*, короткий Modbus-опрос)\n"
+        "usage: %s [-d device] [-b baud] [-u unit] [--sn N] [--sn-letter C]\n"
+        "          [-p tcp_port] [-l listen_addr] [-v]\n"
+        "  device: по умолчанию автопоиск (свободные /dev/ttyUSB*; проверка идентификации МАП:\n"
+        "          _VerPO!=0, _DevOpt in {1,2,3}, при --sn — совпадение серийника 0x18/0x19)\n"
         "  baud=115200, unit=1, tcp_port=%d, listen=%s\n",
         a, DEF_TCP_PORT, DEF_LISTEN);
 }
@@ -513,6 +541,10 @@ int main(int argc, char **argv)
             g_have_override = 1;
         } else if (!strcmp(argv[i], "-u") && i + 1 < argc) {
             g_probe_unit = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--sn") && i + 1 < argc) {
+            g_sn = strtol(argv[++i], NULL, 0);
+        } else if (!strcmp(argv[i], "--sn-letter") && i + 1 < argc) {
+            g_letter = (unsigned char)argv[++i][0];
         } else if (!strcmp(argv[i], "-b") && i + 1 < argc) {
             baud = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "-p") && i + 1 < argc) {
@@ -555,8 +587,8 @@ int main(int argc, char **argv)
     }
     if (listen(lfd, 8) != 0) { GW_LOG("listen: %s\n", strerror(errno)); return 1; }
 
-    GW_LOG("started: dev=%s baud=%d unit=%d listen=%s:%d\n",
-           g_have_override ? g_override_dev : "auto", baud, g_probe_unit, listen_addr, tcp_port);
+    GW_LOG("started: dev=%s baud=%d unit=%d sn=%ld listen=%s:%d\n",
+           g_have_override ? g_override_dev : "auto", baud, g_probe_unit, g_sn, listen_addr, tcp_port);
     serial_ensure();   /* пробуем открыть сразу (не критично) */
 
     struct client cl[MAX_CLIENTS];
