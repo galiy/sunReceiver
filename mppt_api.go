@@ -576,7 +576,7 @@ func pollMAPAPI(ctx context.Context) DeviceResult {
 	}
 	res.HasData = true
 	res.Values = vals
-	res.DeviceSN = "map-api"
+	res.DeviceSN = mapDevKey
 	// Источник — веб-API; фиксируем timestamp ответа (для детекции «устаревшего
 	// времени, которое не изменяется») и валидность опроса (наличие напряжения сети).
 	mapTracker.trackAPITS(r.Timestamp, now)
