@@ -53,8 +53,6 @@ func TestMapMAPAPIParse(t *testing.T) {
 	checks := map[string]float64{
 		"battery_voltage": 52.0,
 		"l1_voltage":      52.0,
-		"l1_current":      4.0,
-		"ac_active_power": 208.0, // 52.0 × 4
 		"grid_frequency":  50.0,
 		"grid_voltage":    220.0,
 		"grid_power":      1141.2, // _PNET_calc без флага (старая прошивка), не _PNET=910
@@ -175,8 +173,10 @@ func TestMapMAPAPIChargeSign(t *testing.T) {
 	if !ok {
 		t.Fatal("mapMAPAPI: ok=false, want true")
 	}
-	if v := vals["ac_active_power"].(float64); closeEnough(v, -202.8) {
-		t.Errorf("ac_active_power = %v, want -202.8", v)
+	for _, absent := range []string{"l1_current", "ac_active_power"} {
+		if _, present := vals[absent]; present {
+			t.Errorf("%s присутствует у МАП, want отсутствует", absent)
+		}
 	}
 	if v := vals["battery_power"].(float64); closeEnough(v, -200.0) {
 		t.Errorf("battery_power = %v, want -200.0 (заряд — отрицательная)", v)

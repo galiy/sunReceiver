@@ -435,8 +435,8 @@ func (s *mpptSite) FetchPNETSign(ctx context.Context) (int, error) {
 // Титанатор, батарея/сеть) из ответа read_json.php?device=map. Соответствует
 // контракту mapMAPRegisters (Modbus):
 //   - l1_voltage = battery_voltage = _Uacc (напряжение АКБ, В);
-//   - l1_current = _Iacc (ток АКБ, А, со знаком);
-//   - ac_active_power = _Uacc × _Iacc (Вт, как в Modbus);
+//   - l1_current / ac_active_power для МАП НЕ выставляются (это теги AC-инверторов,
+//     для МАП дублировали ток/мощность АКБ; дашборд МАП читает battery_power/grid_power);
 //   - grid_frequency = _TFNET (Гц; в Modbus всегда 0);
 //   - grid_voltage = _UNET (В; в API уже в вольтах, без смещения +100 из Modbus);
 //   - grid_power = ±_PNET_calc (Вт; = _UNET × _INET, реальная мощность сети). НЕ _PNET:
@@ -463,10 +463,6 @@ func mapMAPAPI(r mapRaw) (valuesContract, time.Time, bool) {
 	if okU && uacc > 0 {
 		out["l1_voltage"] = uacc
 		out["battery_voltage"] = uacc
-		if okI {
-			out["l1_current"] = iacc
-			out["ac_active_power"] = uacc * iacc
-		}
 	} else {
 		// Без напряжения АКБ нет базы для расчёта — возвращаем то, что есть, но
 		// устройство не считается имеющим данные АКБ (нет battery_voltage).
