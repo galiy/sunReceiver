@@ -492,10 +492,16 @@ func (s *mpptPollState) shouldPrune(empty bool) bool {
 	return true
 }
 
+// mapDevKey — постоянный ключ устройства МАП в хранилище (поле в HASH current,
+// ip в снимках ряда Redis и в PG averages). Не зависит от того, на каком адресе
+// находится МАП (Modbus TCP/RS485 или веб-API) и от его IP: МАП всегда одна
+// колонка/ряд с ключом "map".
+const mapDevKey = "map"
+
 // devKey возвращает ключ устройства в хранилище (поле IP снимка): для обычных
-// инверторов это IP; для kindMAP с slot и для kindMPPT — IP с суффиксом контроллера
-// (например, 192.168.13.74#mppt0 / 192.168.13.60#mppt-1097), чтобы разные
-// контроллеры одного гейта не сливались в одну колонку/ряд Redis и PG.
+// инверторов это IP; для МАП (kindMAP) — константа "map" (адрес не важен);
+// для kindMPPT — IP с суффиксом контроллера (например, 192.168.13.60#mppt-1097),
+// чтобы разные контроллеры одного гейта не сливались в одну колонку/ряд Redis и PG.
 // Для kindMPPT ключ строится по UID контроллера (стабильный идентификатор), а не
 // по индексу в массиве API: отвал контроллера с меньшим индексом сдвигает остальных
 // в ответе, и индексный ключ склеил бы ряды двух разных аппаратов. Подстрока "#mppt"
@@ -507,8 +513,8 @@ func devKey(t invTarget) string {
 		}
 		return fmt.Sprintf("%s#mppt%d", t.IP, t.Slot)
 	}
-	if t.Kind == kindMAP && t.Slot >= 0 {
-		return fmt.Sprintf("%s#mppt%d", t.IP, t.Slot)
+	if t.Kind == kindMAP {
+		return mapDevKey
 	}
 	return t.IP
 }
@@ -527,7 +533,7 @@ func mapSourceIdentity() (string, string) {
 		}
 	}
 	if mapAPI != nil {
-		return mapAPI.ip, mapAPI.name
+		return mapDevKey, mapAPI.name
 	}
 	return "", ""
 }
@@ -1437,7 +1443,7 @@ func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 		}
 		if len(res.Values) > 0 {
 			res.HasData = true
-			res.DeviceSN = fmt.Sprintf("map-%s", devKey(t))
+			res.DeviceSN = mapDevKey
 		}
 		// Фиксируем результат Modbus-опроса МАП для монитора уведомлений.
 		now := time.Now()
