@@ -300,9 +300,17 @@ type mapRaw struct {
 	PLoad     string // Мощность нагрузки по АКБ, Вт (_PLoad) — НЕ батарейная (нагрузка потребителя)
 	PLoadCalc string // Расчётная мощность батареи, Вт (_PLoad_calc = _Uacc × _Iacc) — ДОСТОВЕРНАЯ
 	TFNet     string // Частота сети, Гц (_TFNET)
-	// InetFlag — флаг ПО Малины (_Inet_flag): 1 = _PNET_calc/_INET отдаются с
-	// обратным знаком относительно контракта, 0/отсутствует = знак уже верный.
+	// InetFlag — флаг ПО Малины (_Inet_flag): управляет ТОЛЬКО знаком, в котором
+	// mapd отдаёт _PNET_calc/_INET (1 = инвертировано относительно сырого знака).
+	// Флаг динамический и НЕ определяет направление мощности сети, поэтому
+	// используется лишь как фолбэк, когда недоступен сырой _PNET_Sign_P.
 	InetFlag string
+	// PNETSign — сырой знак мощности сети _PNET_Sign_P (0x587), прочитанный отдельно
+	// через read_memory.php (в JSON read_json.php его нет). 1 — потребление из сети
+	// (положительная), 0 — отдача/продажа (отрицательная) — авторитетный признак
+	// направления, как в Modbus-ветке mapMAPRegisters. nil — не прочитан (фолбэк на
+	// InetFlag). Заполняется вызывающим кодом, не из JSON.
+	PNETSign *int
 	// Температуры, °C (API уже в градусах; сырые Modbus-ячейки требуют сдвига −50):
 	TempGrad0 string // Внешний датчик температуры АКБ (_Temp_Grad0, 0x42E)
 	TempGrad1 string // Датчик температуры тора/трансформатора (_Temp_Grad1, 0x42F)
@@ -371,6 +379,58 @@ func (s *mpptSite) FetchMAP(ctx context.Context) (*mapRaw, error) {
 	return &r, nil
 }
 
+// mapPNETSignOffset — десятичный адрес байт-ячейки _PNET_Sign_P (0x587=1415) в RAM
+// МАП. read_memory.php адресует байты десятичным offset (shm 1996, RAM МАП).
+const mapPNETSignOffset = 1415
+
+// FetchPNETSign читает сырую ячейку _PNET_Sign_P (0x587) через
+// read_memory.php?offset=1415&count=1. Возвращает 0/1: 1 — мощность сети
+// положительная (потребление из сети), 0 — отрицательная (отдача/продажа). Это
+// авторитетный знак направления (тот же, что использует Modbus-ветка
+// mapMAPRegisters), в отличие от динамического _Inet_flag ПО «Малины».
+func (s *mpptSite) FetchPNETSign(ctx context.Context) (int, error) {
+	u := fmt.Sprintf("%s/read_memory.php?offset=%d&count=1", s.BaseURL, mapPNETSignOffset)
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return 0, err
+	}
+	rctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	req = req.WithContext(rctx)
+	req.Header.Set("Authorization", s.authHdr)
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("read_memory _PNET_Sign_P: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("read_memory _PNET_Sign_P: status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, err
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil {
+		return 0, fmt.Errorf("read_memory _PNET_Sign_P: parse json: %w", err)
+	}
+	raw, ok := m[strconv.Itoa(mapPNETSignOffset)]
+	if !ok {
+		return 0, fmt.Errorf("read_memory _PNET_Sign_P: нет ячейки %d в ответе", mapPNETSignOffset)
+	}
+	var n int
+	if json.Unmarshal(raw, &n) == nil {
+		return n, nil
+	}
+	var str string
+	if json.Unmarshal(raw, &str) == nil {
+		if v, err := strconv.Atoi(strings.TrimSpace(str)); err == nil {
+			return v, nil
+		}
+	}
+	return 0, fmt.Errorf("read_memory _PNET_Sign_P: нечисловое значение %s", string(raw))
+}
+
 // mapMAPAPI строит значения универсального контракта обработчика kindMAP (МАП
 // Титанатор, батарея/сеть) из ответа read_json.php?device=map. Соответствует
 // контракту mapMAPRegisters (Modbus):
@@ -423,14 +483,22 @@ func mapMAPAPI(r mapRaw) (valuesContract, time.Time, bool) {
 	// _PNET у МАП сильно занижено, ~×5). При отсутствии _PNET_calc grid_power НЕ
 	// выставляем: подставлять заведомо недостоверное значение хуже, чем отсутствие.
 	//
-	// ЗНАК: когда ПО ПАК «Малина» выставляет _Inet_flag=1, API отдаёт _PNET_calc
-	// инвертированно относительно контракта и сырых регистров МАП (_PNET_Sign_P
-	// 0x587=1, _INET 0x423 — положительный при потреблении): при потреблении из сети
-	// _PNET_calc < 0. В этом случае инвертируем. При _Inet_flag=0 (и когда флага нет —
-	// старая прошивка) значение уже в контракте. Итог: потребление +, отдача −.
-	// Правка ТОЛЬКО для ветки веб-API; Modbus-ветка (mapMAPRegisters) не затрагивается.
+	// ЗНАК: сама _PNET_calc НЕ кодирует направление — сырой _INET (0x423) беззнаковый
+	// («ток, отбираемый от сети»), а mapd лишь опционально меняет знак по _Inet_flag
+	// (флаг динамический, к направлению не привязан: при отдаче в сеть встречается и 0,
+	// и 1). Поэтому направление берём из авторитетного сырого _PNET_Sign_P (0x587):
+	// 1 — потребление из сети (+), 0 — отдача/продажа (−). Мощность — по модулю
+	// _PNET_calc. Если сырая ячейка недоступна (r.PNETSign == nil) — фолбэк на прежнюю
+	// эвристику по _Inet_flag. Modbus-ветка (mapMAPRegisters) не затрагивается.
 	if v, ok = parseFloat(r.PNetCalc); ok {
-		if invertGridFromInetFlag(r.InetFlag) {
+		if r.PNETSign != nil {
+			if v < 0 {
+				v = -v
+			}
+			if *r.PNETSign == 0 {
+				v = -v // отдача в сеть
+			}
+		} else if invertGridFromInetFlag(r.InetFlag) {
 			v = -v
 		}
 		out["grid_power"] = v
@@ -490,6 +558,14 @@ func pollMAPAPI(ctx context.Context) DeviceResult {
 		log.Printf("map api: %v", err)
 		mapTracker.trackErr("api", fmt.Sprintf("веб-API ПАК «Малина» недоступно (%v)", err), now)
 		return res
+	}
+	// Сырой знак направления мощности сети _PNET_Sign_P (0x587) — в read_json.php его
+	// нет, читаем отдельно через read_memory.php. Недоступность ячейки не фатальна:
+	// mapMAPAPI уйдёт на фолбэк по _Inet_flag.
+	if sign, sErr := mppt.FetchPNETSign(ctx); sErr != nil {
+		log.Printf("map api: %v (знак сети — фолбэк на _Inet_flag)", sErr)
+	} else {
+		r.PNETSign = &sign
 	}
 	vals, _, ok := mapMAPAPI(*r)
 	if !ok {

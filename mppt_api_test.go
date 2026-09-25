@@ -107,6 +107,46 @@ func TestMapMAPAPIGridPowerSign(t *testing.T) {
 	}
 }
 
+func TestMapMAPAPIGridPowerRawSign(t *testing.T) {
+	// Сырой знак _PNET_Sign_P (0x587) — авторитетный: 1 = потребление (+),
+	// 0 = отдача в сеть (−). Мощность берётся по модулю _PNET_calc, независимо от
+	// значения _Inet_flag (флаг динамический и к направлению не привязан).
+	one, zero := 1, 0
+	cases := []struct {
+		name   string
+		sign   *int
+		flag   string
+		net    string
+		wantGP float64
+	}{
+		{"потребление, flag=1, API −", &one, "1", "-13578.8", 13578.8},
+		{"потребление, flag=0, API +", &one, "0", "3958.2", 3958.2},
+		{"отдача, flag=0, API + (баг)", &zero, "0", "3958.2", -3958.2},
+		{"отдача, flag=1, API −", &zero, "1", "-3735.2", -3735.2},
+		{"без сырого знака — фолбэк flag=1", nil, "1", "-13578.8", 13578.8},
+		{"без сырого знака — фолбэк без flag", nil, "", "3958.2", 3958.2},
+	}
+	for _, c := range cases {
+		body := `{"timestamp":"1","_Uacc":"52.0","_Iacc":"4","_UNET":"220","_PNET":"0","_PLoad":"0","_PLoad_calc":"208","_TFNET":"50.0","_PNET_calc":"` + c.net + `"`
+		if c.flag != "" {
+			body += `,"_Inet_flag":"` + c.flag + `"`
+		}
+		body += `}`
+		var r mapRaw
+		if err := json.Unmarshal([]byte(body), &r); err != nil {
+			t.Fatalf("%s: unmarshal mapRaw: %v", c.name, err)
+		}
+		r.PNETSign = c.sign
+		vals, _, ok := mapMAPAPI(r)
+		if !ok {
+			t.Fatalf("%s: mapMAPAPI: ok=false, want true", c.name)
+		}
+		if got := vals["grid_power"].(float64); got != c.wantGP {
+			t.Errorf("%s: grid_power = %v, want %v", c.name, got, c.wantGP)
+		}
+	}
+}
+
 func TestMapMAPAPINoGridPowerWithoutCalc(t *testing.T) {
 	// Нет _PNET_calc → grid_power НЕ выставляется (фолбэк на недостоверный _PNET
 	// убран: подставлять заведомо ошибочное значение хуже, чем отсутствие).
