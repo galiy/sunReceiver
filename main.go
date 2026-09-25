@@ -1124,10 +1124,9 @@ func mapClientFor(ip string, unit byte) *modbusmap.Client {
 //   - l1_voltage = напряжение АКБ МАП _UAcc_med_VH/VL (0x405/0x406), (VH*256+VL)/10.
 //     V_Bat самих контроллеров гейт МАП не отдаёт (проверено живьём 0x4D5=0),
 //     поэтому источник — то же напряжение АКБ, что заряжают контроллеры.
-//   - l1_current = ток АКБ _IAcc_med_A_u16_L/H (0x432/0x433), I[А]=(L+H*256)/16;
-//     в режиме заряда (MODE 0x400==4) — со знаком «минус» (как в API-ветке).
-//     Ток АКБ (а не токи отдельных MPPT-контроллеров 0x530+2*slot).
-//   - ac_active_power = l1_voltage × l1_current (W).
+//   - l1_current / ac_active_power для МАП НЕ выставляются: это теги AC-инверторов,
+//     для МАП они дублировали ток/мощность АКБ и нигде не используются (дашборд МАП
+//     читает battery_power/grid_power). Ток АКБ _IAcc (0x432/0x433) идёт только в battery_power.
 //   - grid_frequency = 0 (частоты сети инвертор МППТ не отдаёт).
 //   - pv1/pv2, ac_reactive_power, l2/l3 — в values не пишутся (нет данных).
 func mapMAPRegisters(cells map[uint16]byte) valuesContract {
@@ -1170,8 +1169,9 @@ func mapMAPRegisters(cells map[uint16]byte) valuesContract {
 		iAcc = -iAcc
 	}
 
-	out["l1_current"] = iAcc
-	out["ac_active_power"] = uAcc * iAcc
+	// NB: l1_current/ac_active_power для МАП НЕ выставляем — это теги AC-инверторов;
+	// для МАП они дублировали ток/мощность АКБ и нигде не используются (плашки/графики
+	// МАП — на battery_power/grid_power). Ток iAcc далее идёт только в battery_power.
 	out["grid_frequency"] = 0.0
 
 	// ---- Данные батареи и сети МАП (для дашборда КЭС) ----
