@@ -40,6 +40,8 @@
 #include <time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <dirent.h>
+#include <glob.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <netinet/in.h>
@@ -50,10 +52,10 @@
 #define VERSION "dev"
 #endif
 
-#define DEF_DEV_BYID "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AQ030UXL-if00-port0"
-#define DEF_DEV_FALLBACK "/dev/ttyUSB2"
 #define DEF_TCP_PORT 502
 #define DEF_LISTEN "0.0.0.0"
+#define DEVPATH_MAX  256
+#define PROBE_MS     400      /* короткий опрос устройства при поиске */
 
 #define MAX_CLIENTS   16
 #define MAX_FRAME     512      /* MBAP + PDU максимум */
@@ -140,25 +142,26 @@ static uint16_t crc16(const uint8_t *d, int n)
     return crc;
 }
 
-/* ---------------- COM-порт (Modbus RTU) ------------------------------------ */
-static int           g_serial_fd = -1;
-static const char   *g_dev = NULL;
-static speed_t       g_speed = B115200;
-static uint64_t      g_serial_retry_at = 0;
+/* ---------------- COM-порт (Modbus RTU): автопоиск своего устройства -------- */
+static int      g_serial_fd = -1;
+static speed_t  g_speed = B115200;
+static int      g_probe_unit = 1;            /* Modbus-адрес МАП для опроса при поиске */
+static char     g_override_dev[DEVPATH_MAX]; /* -d: устройство задано явно */
+static int      g_have_override = 0;
+static char     g_found_dev[DEVPATH_MAX];    /* устройство, найденное автоопределением */
+static uint64_t g_serial_retry_at = 0;
+static int      g_fail_streak = 0;
 
-static int serial_open(void)
+static const char *dev_used(void)
 {
-    int fd = open(g_dev, O_RDWR | O_NOCTTY | O_NONBLOCK);
-    if (fd < 0) {
-        GW_LOG("open %s: %s\n", g_dev, strerror(errno));
-        return -1;
-    }
+    if (g_have_override) return g_override_dev;
+    return g_found_dev[0] ? g_found_dev : NULL;
+}
+
+static void port_configure(int fd)
+{
     struct termios t;
-    if (tcgetattr(fd, &t) != 0) {
-        GW_LOG("tcgetattr %s: %s\n", g_dev, strerror(errno));
-        close(fd);
-        return -1;
-    }
+    if (tcgetattr(fd, &t) != 0) memset(&t, 0, sizeof t);
     t.c_iflag &= (tcflag_t)~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
     t.c_oflag &= (tcflag_t)~OPOST;
     t.c_lflag &= (tcflag_t)~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
@@ -168,26 +171,149 @@ static int serial_open(void)
     cfsetospeed(&t, g_speed);
     t.c_cc[VMIN]  = 0;
     t.c_cc[VTIME] = 0;
-    if (tcsetattr(fd, TCSANOW, &t) != 0) {
-        GW_LOG("tcsetattr %s: %s\n", g_dev, strerror(errno));
-        close(fd);
+    tcsetattr(fd, TCSANOW, &t);
+}
+
+static int serial_open_path(const char *dev)
+{
+    int fd = open(dev, O_RDWR | O_NOCTTY | O_NONBLOCK);
+    if (fd < 0) {
+        GW_LOG("open %s: %s\n", dev, strerror(errno));
         return -1;
     }
+    port_configure(fd);
     tcflush(fd, TCIOFLUSH);
-    GW_LOG("opened %s at %u baud\n", g_dev, (unsigned)115200);
     return fd;
 }
 
-/* Гарантирует открытый порт; при отсутствии — пытается открыть (с паузой). */
+/* Занят ли порт другим процессом (по /proc/PID/fd) — как в bmslistener. */
+static int port_in_use_by_other(const char *dev)
+{
+    struct stat st_dev, st_fd;
+    if (stat(dev, &st_dev) != 0) return 1;
+    DIR *dp = opendir("/proc");
+    if (!dp) return 1;
+    struct dirent *ent;
+    int in_use = 0;
+    char pd[64], fdpath[256], target[256];
+    while ((ent = readdir(dp)) && !in_use) {
+        if (ent->d_name[0] < '0' || ent->d_name[0] > '9') continue;
+        snprintf(pd, sizeof pd, "/proc/%s/fd", ent->d_name);
+        DIR *fdd = opendir(pd);
+        if (!fdd) continue;
+        struct dirent *fe;
+        while ((fe = readdir(fdd)) && !in_use) {
+            if (fe->d_name[0] == '.') continue;
+            snprintf(fdpath, sizeof fdpath, "%s/%s", pd, fe->d_name);
+            ssize_t tl = readlink(fdpath, target, sizeof target - 1);
+            if (tl < 0) continue;
+            target[tl] = 0;
+            if (stat(target, &st_fd) == 0 && S_ISCHR(st_fd.st_mode) &&
+                st_fd.st_rdev == st_dev.st_rdev) { in_use = 1; break; }
+        }
+        closedir(fdd);
+    }
+    closedir(dp);
+    return in_use;
+}
+
+/* Короткий Modbus-опрос: это наш МАП? Читаем 1 регистр 0x0400 (MODE). */
+static int dev_is_map(const char *dev)
+{
+    int fd = serial_open_path(dev);
+    if (fd < 0) return 0;
+
+    uint8_t req[8];
+    req[0] = (uint8_t)g_probe_unit;
+    req[1] = 0x03;
+    req[2] = 0x04; req[3] = 0x00;   /* адрес 0x0400 */
+    req[4] = 0x00; req[5] = 0x01;   /* 1 регистр */
+    uint16_t c = crc16(req, 6);
+    req[6] = (uint8_t)(c & 0xff);
+    req[7] = (uint8_t)(c >> 8);
+
+    tcflush(fd, TCIFLUSH);
+    if (write(fd, req, sizeof req) != (ssize_t)sizeof req) { close(fd); return 0; }
+
+    uint8_t buf[16];
+    int got = 0;
+    uint64_t dl = now_ms() + PROBE_MS;
+    while (now_ms() < dl && got < 3) {
+        struct pollfd p = { fd, POLLIN, 0 };
+        int pr = poll(&p, 1, 50);
+        if (pr > 0) {
+            ssize_t r = read(fd, buf + got, sizeof buf - (size_t)got);
+            if (r > 0) got += (int)r;
+        }
+    }
+    if (got >= 3) {
+        uint8_t fn = buf[1];
+        int need = (fn & 0x80) ? 5 : 3 + buf[2] + 2;
+        while (now_ms() < dl && got < need) {
+            struct pollfd p = { fd, POLLIN, 0 };
+            int pr = poll(&p, 1, 50);
+            if (pr > 0) {
+                ssize_t r = read(fd, buf + got, sizeof buf - (size_t)got);
+                if (r > 0) got += (int)r;
+            }
+        }
+        close(fd);
+        if (got < need || buf[0] != (uint8_t)g_probe_unit) return 0;
+        if (fn != 0x03 && fn != 0x83) return 0;
+        uint16_t w = (uint16_t)(buf[need - 2] | (buf[need - 1] << 8));
+        if (crc16(buf, need - 2) != w) return 0;
+        return 1;
+    }
+    close(fd);
+    return 0;
+}
+
+/* Сканируем свободные /dev/ttyUSB* и ищем наш МАП. */
+static int discover_device(char *out, size_t outn)
+{
+    glob_t g;
+    if (glob("/dev/ttyUSB*", 0, NULL, &g) != 0) { globfree(&g); return 0; }
+    int found = 0;
+    for (size_t i = 0; i < g.gl_pathc && !found; i++) {
+        const char *dev = g.gl_pathv[i];
+        if (port_in_use_by_other(dev)) continue;   /* порт занят (bmslistener/mapd/…) */
+        if (dev_is_map(dev)) {
+            snprintf(out, outn, "%s", dev);
+            GW_LOG("scan: МАП найден на %s\n", dev);
+            found = 1;
+        }
+    }
+    globfree(&g);
+    return found;
+}
+
+/* Гарантирует открытый порт: берёт заданный/-найденный; иначе ищет среди свободных. */
 static int serial_ensure(void)
 {
     if (g_serial_fd >= 0)
         return g_serial_fd;
+
     uint64_t t = now_ms();
     if (t < g_serial_retry_at)
         return -1;
     g_serial_retry_at = t + 2000;   /* не чаще, чем раз в 2 c */
-    g_serial_fd = serial_open();
+
+    const char *dev = dev_used();
+    if (!dev) {
+        if (!discover_device(g_found_dev, sizeof g_found_dev))
+            return -1;
+        dev = g_found_dev;
+    }
+
+    int fd = serial_open_path(dev);
+    if (fd < 0) {
+        if (!g_have_override)
+            g_found_dev[0] = 0;     /* устройство пропало — искать заново */
+        return -1;
+    }
+    g_serial_fd = fd;
+    g_fail_streak = 0;
+    GW_LOG("opened %s at %u baud\n", dev, (unsigned)115200);
     return g_serial_fd;
 }
 
@@ -264,6 +390,10 @@ static int serial_transaction(const uint8_t *req, int reqlen,
         char b[128];
         snprintf(b, sizeof(b), "serial timeout: got=%d need=%d", got, need);
         err_log(b);
+        if (++g_fail_streak >= 10 && !g_have_override) {
+            g_found_dev[0] = 0;          /* слишком много сбоев — искать устройство заново */
+            serial_drop("repeated failures");
+        }
         return -1;
     }
 
@@ -273,9 +403,14 @@ static int serial_transaction(const uint8_t *req, int reqlen,
         snprintf(b, sizeof(b), "serial bad crc: got=%d need=%d calc=%04x got=%02x%02x",
                  got, need, crc16(resp, need - 2), resp[need - 2], resp[need - 1]);
         err_log(b);
+        if (++g_fail_streak >= 10 && !g_have_override) {
+            g_found_dev[0] = 0;
+            serial_drop("repeated failures");
+        }
         return -1;
     }
 
+    g_fail_streak = 0;
     *rlen_out = need;
     return 0;
 }
@@ -357,17 +492,16 @@ static speed_t parse_baud(int b)
 static void usage(const char *a)
 {
     fprintf(stderr,
-        "usage: %s [-d device] [-b baud] [-p tcp_port] [-l listen_addr] [-v]\n"
-        "  default device: %s (fallback %s)\n"
-        "  default baud: 115200, tcp_port: %d, listen: %s\n",
-        a, DEF_DEV_BYID, DEF_DEV_FALLBACK, DEF_TCP_PORT, DEF_LISTEN);
+        "usage: %s [-d device] [-b baud] [-u unit] [-p tcp_port] [-l listen_addr] [-v]\n"
+        "  device: по умолчанию автопоиск (свободные /dev/ttyUSB*, короткий Modbus-опрос)\n"
+        "  baud=115200, unit=1, tcp_port=%d, listen=%s\n",
+        a, DEF_TCP_PORT, DEF_LISTEN);
 }
 
 int main(int argc, char **argv)
 {
     const char *listen_addr = DEF_LISTEN;
     int tcp_port = DEF_TCP_PORT;
-    const char *dev = NULL;
     int baud = 115200;
 
     for (int i = 1; i < argc; i++) {
@@ -375,7 +509,10 @@ int main(int argc, char **argv)
             printf("mapgateway %s\n", VERSION);
             return 0;
         } else if (!strcmp(argv[i], "-d") && i + 1 < argc) {
-            dev = argv[++i];
+            snprintf(g_override_dev, sizeof(g_override_dev), "%s", argv[++i]);
+            g_have_override = 1;
+        } else if (!strcmp(argv[i], "-u") && i + 1 < argc) {
+            g_probe_unit = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "-b") && i + 1 < argc) {
             baud = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "-p") && i + 1 < argc) {
@@ -393,11 +530,6 @@ int main(int argc, char **argv)
         }
     }
 
-    if (!dev) {
-        struct stat st;
-        dev = (stat(DEF_DEV_BYID, &st) == 0) ? DEF_DEV_BYID : DEF_DEV_FALLBACK;
-    }
-    g_dev = dev;
     g_speed = parse_baud(baud);
 
     signal(SIGPIPE, SIG_IGN);
@@ -423,7 +555,8 @@ int main(int argc, char **argv)
     }
     if (listen(lfd, 8) != 0) { GW_LOG("listen: %s\n", strerror(errno)); return 1; }
 
-    GW_LOG("started: dev=%s baud=%d listen=%s:%d\n", g_dev, baud, listen_addr, tcp_port);
+    GW_LOG("started: dev=%s baud=%d unit=%d listen=%s:%d\n",
+           g_have_override ? g_override_dev : "auto", baud, g_probe_unit, listen_addr, tcp_port);
     serial_ensure();   /* пробуем открыть сразу (не критично) */
 
     struct client cl[MAX_CLIENTS];
