@@ -5,10 +5,13 @@ After=network.target
 [Service]
 Type=simple
 # Порт 502 (<1024) требует прав root — на Малине сервисы и так запускаются от root.
-# Устройство по умолчанию ищется по by-id (FTDI), иначе /dev/ttyUSB2.
+# Устройство по умолчанию — АВТОПОИСК: перебираем свободные /dev/ttyUSB* и коротким
+# Modbus-опросом (unit 1) находим свой МАП. Явно можно задать -d /dev/...
+# (systemd 215: StartLimitInterval в [Service]; 0 = без лимита частоты рестартов.)
 ExecStart=/settings/daemons/mapgateway -b 115200 -p 502
 Restart=always
 RestartSec=3
+StartLimitInterval=0
 
 [Install]
 WantedBy=multi-user.target
