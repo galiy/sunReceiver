@@ -643,12 +643,13 @@ static void usage(const char *a)
         a, DEF_TCP_PORT, DEF_LISTEN);
 }
 
-/* Строгий разбор целого аргумента: вся строка, диапазон [min,max]. */
-static int parse_int_arg(const char *s, long min, long max, long *out)
+/* Строгий разбор целого аргумента: вся строка, диапазон [min,max].
+ * base=10 — без сюрприза восьмеричных ведущих нулей; base=0 — префиксы 0x/0. */
+static int parse_int_arg(const char *s, int base, long min, long max, long *out)
 {
     errno = 0;
     char *end = NULL;
-    long v = strtol(s, &end, 0);
+    long v = strtol(s, &end, base);
     if (errno != 0 || end == s || *end != '\0' || v < min || v > max)
         return -1;
     *out = v;
@@ -670,7 +671,7 @@ int main(int argc, char **argv)
             g_have_override = 1;
         } else if (!strcmp(argv[i], "-u") && i + 1 < argc) {
             long v;
-            if (parse_int_arg(argv[++i], 1, 247, &v) != 0) {
+            if (parse_int_arg(argv[++i], 10, 1, 247, &v) != 0) {
                 fprintf(stderr, "mapgateway: некорректный -u '%s' (1..247)\n", argv[i]);
                 return 2;
             }
@@ -682,7 +683,8 @@ int main(int argc, char **argv)
                 fprintf(stderr, "mapgateway: --sn CHANGE_ME -> фильтр по серийнику отключён\n");
             } else {
                 long x;
-                if (parse_int_arg(v, 0, 0xFFFF, &x) != 0) {
+                /* base 0: допускаются 0x-HEX и десятичные; диапазон 0..65535. */
+                if (parse_int_arg(v, 0, 0, 0xFFFF, &x) != 0) {
                     fprintf(stderr, "mapgateway: некорректный --sn '%s' (0..65535)\n", v);
                     return 2;
                 }
@@ -697,7 +699,7 @@ int main(int argc, char **argv)
             g_letter = (unsigned char)v[0];
         } else if (!strcmp(argv[i], "-b") && i + 1 < argc) {
             long v;
-            if (parse_int_arg(argv[++i], 0, 1000000, &v) != 0 ||
+            if (parse_int_arg(argv[++i], 10, 0, 1000000, &v) != 0 ||
                 (v != 9600 && v != 19200 && v != 38400 && v != 57600 && v != 115200)) {
                 fprintf(stderr, "mapgateway: некорректный -b '%s' (9600|19200|38400|57600|115200)\n", argv[i]);
                 return 2;
@@ -705,7 +707,7 @@ int main(int argc, char **argv)
             baud = (int)v;
         } else if (!strcmp(argv[i], "-p") && i + 1 < argc) {
             long v;
-            if (parse_int_arg(argv[++i], 1, 65535, &v) != 0) {
+            if (parse_int_arg(argv[++i], 10, 1, 65535, &v) != 0) {
                 fprintf(stderr, "mapgateway: некорректный -p '%s' (1..65535)\n", argv[i]);
                 return 2;
             }
@@ -886,5 +888,6 @@ int main(int argc, char **argv)
     for (int i = 0; i < MAX_CLIENTS; i++) if (cl[i].fd >= 0) close(cl[i].fd);
     close(lfd);
     serial_drop("exit");
+    scan_reset();        /* освободить незавершённый скан (glob) на выходе */
     return 0;
 }
