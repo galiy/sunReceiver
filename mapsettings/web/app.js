@@ -53,9 +53,18 @@
     maybeAutoRead();
   }).catch(function () { maybeAutoRead(); });
   function persist() {
-    lsSet(LS_MODE, modeEl.value);
-    lsSet(LS_IP, ipEl.value.trim());
-    lsSet(LS_PORT, portEl.value);
+    var t = target();
+    lsSet(LS_MODE, t.mode);
+    lsSet(LS_IP, t.ip);
+    lsSet(LS_PORT, String(t.port));
+    // Сохраняем и серверный конфиг (mapsettings.json), чтобы режим/IP/порт
+    // восстанавливались при следующем запуске программы.
+    fetch('/api/config', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(t)
+    }).catch(function () {});
   }
   modeEl.addEventListener('change', persist);
   ipEl.addEventListener('change', persist);

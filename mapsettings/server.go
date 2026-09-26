@@ -117,6 +117,42 @@ func targetFromQuery(r *http.Request) (mapSettingsTarget, error) {
 }
 
 func apiConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		var req targetReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		mode := req.Mode
+		if mode == "" {
+			mode = defaults.mode
+		}
+		ip := req.IP
+		if ip == "" {
+			ip = defaults.ip
+		}
+		port := req.Port
+		if port == 0 {
+			port = defaults.port
+		}
+		if _, err := validateMapTarget(mode, ip, port); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		defaults.mode = normalizeMapMode(mode)
+		defaults.ip = ip
+		defaults.port = port
+		fc := loadFileConfig(cfgPath)
+		if fc == nil {
+			fc = &fileConfig{}
+		}
+		fc.Mode, fc.IP, fc.Port = defaults.mode, ip, port
+		if err := saveFileConfig(cfgPath, fc); err != nil {
+			log.Printf("map-settings: сохранение конфига %s: %v", cfgPath, err)
+		}
+		writeJSON(w, map[string]any{"ok": true})
+		return
+	}
 	writeJSON(w, map[string]any{
 		"mode": defaults.mode,
 		"ip":   defaults.ip,

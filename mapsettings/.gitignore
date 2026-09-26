@@ -3,5 +3,10 @@
 /mapsettings.exe
 map-settings
 
+# Локальный конфиг программы (режим/IP/порт, параметры запуска) — не коммитить
+mapsettings.json
+mapsettings.local.json
+*.local.json
+
 # Python-кэш генератора каталога
 __pycache__/

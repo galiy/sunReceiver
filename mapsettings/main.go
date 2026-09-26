@@ -23,6 +23,10 @@ import (
 // version подставляется через -ldflags "-X main.version=..." (по умолчанию dev).
 var version = "dev"
 
+// cfgPath — путь к локальному конфигу (mapsettings.json), сохраняется сервером
+// при изменении режима/IP/порта. Файл в .gitignore.
+var cfgPath string
+
 func main() {
 	var (
 		listen  = flag.String("listen", ":8099", "адрес прослушивания HTTP (напр. :8099 или 127.0.0.1:8099)")
@@ -39,24 +43,63 @@ func main() {
 		return
 	}
 
-	ip, port, err := splitHostPort(*mapAddr)
-	if err != nil {
-		log.Fatalf("map-settings: -map: %v", err)
-	}
-	if *unit <= 0 || *unit > 255 {
-		log.Fatalf("map-settings: некорректный -unit %d", *unit)
-	}
-	defaults = mapSettingsTarget{mode: mapModeDominator, ip: ip, port: port, unit: byte(*unit)}
+	// Какие флаги заданы явно (они приоритетнее конфига).
+	set := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { set[f.Name] = true })
 
-	mux := newMux(*user, *pass)
+	cfgPath = configPath()
+	fc := loadFileConfig(cfgPath)
+
+	effListen := *listen
+	if !set["listen"] && fc != nil && fc.Listen != "" {
+		effListen = fc.Listen
+	}
+	effMap := *mapAddr
+	if !set["map"] && fc != nil && fc.Map != "" {
+		effMap = fc.Map
+	}
+	effUnit := *unit
+	if !set["unit"] && fc != nil && fc.Unit != 0 {
+		effUnit = fc.Unit
+	}
+	effUser, effPass := *user, *pass
+	if !set["user"] && fc != nil && fc.User != "" {
+		effUser = fc.User
+	}
+	if !set["pass"] && fc != nil && fc.Pass != "" {
+		effPass = fc.Pass
+	}
+
+	ip, port, err := splitHostPort(effMap)
+	if err != nil {
+		log.Fatalf("map-settings: адрес МАП: %v", err)
+	}
+	if effUnit <= 0 || effUnit > 255 {
+		log.Fatalf("map-settings: некорректный unit %d", effUnit)
+	}
+	// Режим/IP/порт по умолчанию для UI: из конфига, если сохранены.
+	mode := mapModeDominator
+	if fc != nil && fc.Mode != "" {
+		mode = normalizeMapMode(fc.Mode)
+	}
+	if fc != nil && fc.IP != "" {
+		ip = fc.IP
+	}
+	if fc != nil && fc.Port != 0 {
+		port = fc.Port
+	}
+	defaults = mapSettingsTarget{mode: mode, ip: ip, port: port, unit: byte(effUnit)}
+
+	mux := newMux(effUser, effPass)
 	srv := &http.Server{
-		Addr:              *listen,
+		Addr:              effListen,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	log.Printf("map-settings %s: http://%s/ (МАП по умолчанию %s, unit %d)", version, *listen, *mapAddr, *unit)
+	log.Printf("map-settings %s: http://%s/ (МАП по умолчанию %s:%d, unit %d; конфиг %s)",
+		version, effListen, defaults.ip, defaults.port, defaults.unit, cfgPath)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("map-settings: %v", err)
 	}
@@ -70,7 +113,6 @@ func splitHostPort(s string) (string, int, error) {
 	}
 	host, portStr, err := net.SplitHostPort(s)
 	if err != nil {
-		// Нет порта — добавляем стандартный.
 		if strings.Contains(s, ":") {
 			return "", 0, err
 		}
@@ -83,7 +125,7 @@ func splitHostPort(s string) (string, int, error) {
 	return host, port, nil
 }
 
-// writeJSON/readJSONBody — небольшие помощники ответов API.
+// writeJSON/writeJSONStatus — небольшие помощники ответов API.
 func writeJSONStatus(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
