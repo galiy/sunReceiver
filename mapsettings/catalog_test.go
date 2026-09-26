@@ -127,15 +127,19 @@ func TestMapSettingsNormalizeMode(t *testing.T) {
 	}
 }
 
-// TestMapSettingsHelp проверяет, что подсказка содержит имя и описание.
+// TestMapSettingsHelp проверяет, что подсказка содержит описание и расшифровки,
+// но не имя параметра.
 func TestMapSettingsHelp(t *testing.T) {
 	p := mapParamSpec{Name: "Напряжение АКБ", Cell: "_UACC", Addr: 0x405, Desc: "среднее напряжение",
 		Enum: map[string]string{"0": "нет"}, Bits: []mapBit{{Bit: 0, Name: "флаг"}}}
 	h := paramHelp(p)
-	for _, want := range []string{"Напряжение АКБ", "среднее напряжение", "0x405", "нет", "флаг"} {
+	for _, want := range []string{"среднее напряжение", "нет", "флаг"} {
 		if !strings.Contains(h, want) {
 			t.Errorf("подсказка не содержит %q: %q", want, h)
 		}
+	}
+	if strings.Contains(h, "Напряжение АКБ") {
+		t.Errorf("подсказка не должна содержать имя параметра: %q", h)
 	}
 }
 

@@ -189,7 +189,7 @@
       var wrap = el('div', 'ms-table-wrap');
       var tbl = el('table', 'ms-table');
       var cg = el('colgroup');
-      ['c-name', 'c-addr', 'c-val', 'c-unit', 'c-range', 'c-desc'].forEach(function (c) {
+      ['c-name', 'c-addr', 'c-val', 'c-unit', 'c-range'].forEach(function (c) {
         var col = document.createElement('col');
         col.className = c;
         cg.appendChild(col);
@@ -197,7 +197,7 @@
       tbl.appendChild(cg);
       var thead = el('thead');
       var hr = el('tr');
-      ['Параметр', 'Ячейка', 'Значение', 'Ед.', 'Диапазон', 'Описание'].forEach(function (h) {
+      ['Параметр', 'Ячейка', 'Значение', 'Ед.', 'Диапазон'].forEach(function (h) {
         hr.appendChild(el('th', null, h));
       });
       thead.appendChild(hr);
@@ -293,9 +293,6 @@
         if (p.min !== null && p.min !== undefined) rng += p.min;
         if (p.max !== null && p.max !== undefined) rng += (rng ? '…' : '') + p.max;
         tr.appendChild(el('td', 'ms-range', rng));
-        var note = p.desc || '';
-        if (p.kind === 'eeprom') note = (note ? note + ' · ' : '') + 'EEPROM';
-        tr.appendChild(el('td', 'ms-desc', note));
         tbody.appendChild(tr);
       });
       tbl.appendChild(tbody);

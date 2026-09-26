@@ -460,20 +460,19 @@ func paramOptions(p mapParamSpec) []mapOption {
 	return opts
 }
 
-// paramHelp собирает текст подсказки из документации: описание, единица/формула,
-// расшифровки значений (enum) и битовые поля.
+// paramHelp собирает текст подсказки из документации: описание ячейки, затем
+// (при наличии) единица/формула, расшифровки значений (enum) и битовые поля.
+// Имя параметра в подсказку не включается — оно и так в колонке «Параметр».
 func paramHelp(p mapParamSpec) string {
 	var b strings.Builder
-	b.WriteString(p.Name)
-	if p.Cell != "" {
-		fmt.Fprintf(&b, " (%s, адрес 0x%03X)", p.Cell, p.Addr)
-	}
 	if p.Desc != "" {
-		b.WriteString("\n\n")
 		b.WriteString(p.Desc)
 	}
 	if p.Unit != "" || p.Scale != 1 || p.Offset != 0 {
-		fmt.Fprintf(&b, "\n\nЕдиница: %s", p.Unit)
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		fmt.Fprintf(&b, "Единица: %s", p.Unit)
 		if p.Scale != 1 || p.Offset != 0 {
 			fmt.Fprintf(&b, "; отображение = значение×%g%+g", p.Scale, p.Offset)
 		}
@@ -486,7 +485,10 @@ func paramHelp(p mapParamSpec) string {
 			}
 		}
 		sort.Ints(keys)
-		b.WriteString("\n\nЗначения:")
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString("Значения:")
 		for _, k := range keys {
 			fmt.Fprintf(&b, "\n• %d — %s", k, p.Enum[strconv.Itoa(k)])
 		}
@@ -494,7 +496,10 @@ func paramHelp(p mapParamSpec) string {
 	if len(p.Bits) > 0 {
 		bits := append([]mapBit(nil), p.Bits...)
 		sort.Slice(bits, func(i, j int) bool { return bits[i].Bit < bits[j].Bit })
-		b.WriteString("\n\nБиты:")
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString("Биты:")
 		for _, bit := range bits {
 			fmt.Fprintf(&b, "\n• бит %d — %s", bit.Bit, bit.Name)
 		}
