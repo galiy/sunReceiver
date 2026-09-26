@@ -90,6 +90,20 @@ func main() {
 	}
 	defaults = mapSettingsTarget{mode: mode, ip: ip, port: port, unit: byte(effUnit)}
 
+	// Стартовый конфиг: если файла нет — создаём его с текущими значениями.
+	if fc == nil {
+		fc = &fileConfig{
+			Listen: effListen, Map: effMap, Unit: effUnit,
+			User: effUser, Pass: effPass,
+			Mode: defaults.mode, IP: defaults.ip, Port: defaults.port,
+		}
+		if err := saveFileConfig(cfgPath, fc); err != nil {
+			log.Printf("map-settings: не удалось создать конфиг %s: %v", cfgPath, err)
+		} else {
+			log.Printf("map-settings: создан стартовый конфиг %s", cfgPath)
+		}
+	}
+
 	mux := newMux(effUser, effPass)
 	srv := &http.Server{
 		Addr:              effListen,
