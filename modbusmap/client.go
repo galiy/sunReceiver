@@ -200,14 +200,6 @@ func (c *Client) closeConn() {
 	}
 }
 
-// Close закрывает соединение клиента. Для одноразовых клиентов (например,
-// модуль map-settings создаёт клиента на запрос), чтобы не оставлять сокеты.
-func (c *Client) Close() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.closeConn()
-}
-
 // ReadFull читает ровно len(buf) байт из соединения (сборка нескольких Read).
 // Общий для modbusmap и других Modbus TCP-клиентов (например, электросчётчика).
 func ReadFull(conn net.Conn, buf []byte) (int, error) {
