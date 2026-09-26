@@ -1,0 +1,229 @@
+// sunReceiver
+// Copyright (C) 2026  Aleksandr Galinskii
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+// Package modbusmap — минимальный Modbus-TCP клиент для МАП Титанатор («КЭС»).
+//
+// МАП хранит ячейки побайтно и отвечает на функ 03 (чтение регистров) словами:
+// слово = 2 байт-ячейки, значение ячейки лежит в СТАРШЕМ байте слова, младший
+// байт — значение следующей ячейки. Т.е. чтение N регистров с адреса A возвращает
+// байт-ячейки A..A+2N-1 (регистры идут подряд, адрес шагает на 2 за слово).
+// Адреса ячеек и/или их масштабы описаны в «protocol_MAP_cells_2023_06_27.doc».
+//
+// Гейт (192.0.2.74:502) отвечает медленно: первый ответ может прийти через
+// десятки секунд, после «прогрева» — быстро. Соединение переиспользуется между
+// опросами, чтобы не платить за повторный прогрев.
+package main
+
+import (
+	"context"
+	"encoding/binary"
+	"fmt"
+	"io"
+	"net"
+	"sync"
+	"time"
+)
+
+var (
+	DefaultPort    = "502"
+	ReadTimeout    = 3 * time.Second // таймаут чтения ответа гейта (по mapread.py работает при таймауте 3с)
+	ConnectTimeout = 3 * time.Second
+)
+
+// Client — переиспользуемое TCP-соединение к МАП-гейту (Modbus TCP).
+// Рассчитан на последовательное использование одним опрашивающим.
+type Client struct {
+	Address string // host:port
+	Unit    byte   // Modbus-адрес устройства (обычно 0x01)
+
+	mu   sync.Mutex
+	conn net.Conn
+	txn  uint16
+}
+
+// Dial устанавливает (или переиспользует) TCP-соединение к гейту.
+// Если существующее соединение мертво — переподнимает.
+func (c *Client) Dial() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn != nil {
+		return nil
+	}
+	conn, err := net.DialTimeout("tcp", c.Address, ConnectTimeout)
+	if err != nil {
+		return fmt.Errorf("dial %s: %w", c.Address, err)
+	}
+	c.conn = conn
+	return nil
+}
+
+// ReadRegisters читает registerCount регистров (слов) с адреса start, что
+// соответствует count*2 байт-ячейкам начиная с start. Возвращает байт-ячейки:
+// cell[start+i] = raw[2*i], cell[start+1+i] = raw[2*i+1].
+//
+// Уважает ctx только на этапе dial (DialContext): при отмене (стоп сервиса)
+// медленное подключение прерывается. Чтение ответа ограничено ReadTimeout (3 c)
+// независимым read-deadline, поэтому блокирующий conn.Read завершается сам.
+func (c *Client) ReadRegisters(ctx context.Context, start uint16, count uint16) ([]byte, error) {
+	if count > 120 {
+		return nil, fmt.Errorf("count %d слишком велик для МАП (макс 120)", count)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn == nil {
+		if err := c.dialLocked(ctx); err != nil {
+			return nil, err
+		}
+	}
+	// MBAP + PDU (func 03, start, count)
+	lenField := 6
+	req := make([]byte, 0, 12)
+	txn := c.nextTxn()
+	req = binary.BigEndian.AppendUint16(req, txn)              // transaction id
+	req = binary.BigEndian.AppendUint16(req, 0)                // protocol
+	req = binary.BigEndian.AppendUint16(req, uint16(lenField)) // length
+	req = append(req, c.Unit)
+	req = append(req, 0x03)
+	req = binary.BigEndian.AppendUint16(req, start)
+	req = binary.BigEndian.AppendUint16(req, count)
+
+	if err := c.conn.SetDeadline(time.Now().Add(ReadTimeout)); err != nil {
+		return nil, fmt.Errorf("set deadline: %w", err)
+	}
+	if _, err := c.conn.Write(req); err != nil {
+		// соединение могло умереть — переподнимаем один раз и повторяем
+		c.closeConn()
+		if derr := c.dialLocked(ctx); derr != nil {
+			return nil, fmt.Errorf("reconnect: %w", derr)
+		}
+		if err := c.conn.SetDeadline(time.Now().Add(ReadTimeout)); err != nil {
+			return nil, fmt.Errorf("set deadline: %w", err)
+		}
+		if _, err := c.conn.Write(req); err != nil {
+			c.closeConn()
+			return nil, fmt.Errorf("write: %w", err)
+		}
+	}
+
+	// Читаем MBAP (7 байт) затем остальное.
+	hdr := make([]byte, 7)
+	if _, err := ReadFull(c.conn, hdr); err != nil {
+		c.closeConn()
+		return nil, fmt.Errorf("read header: %w", err)
+	}
+	// Сверяем transaction id: nextTxn() инкрементит, поэтому храним использованный
+	// txn. Поздний ответ от СТАРОГО запроса на переиспользуемом сокете не принимается
+	// (иначе его данные ячеек пришли бы как ответ текущего запроса) — соединение
+	// закрываем, чтобы следующий опрос пошёл по чистому сокету.
+	if got := binary.BigEndian.Uint16(hdr[0:2]); got != txn {
+		c.closeConn()
+		return nil, fmt.Errorf("несовпадение transaction id: ожидался %d, получен %d", txn, got)
+	}
+	if binary.BigEndian.Uint16(hdr[2:4]) != 0 {
+		c.closeConn()
+		return nil, fmt.Errorf("не protocol=0 в MBAP")
+	}
+	if hdr[6] != c.Unit {
+		c.closeConn()
+		return nil, fmt.Errorf("несовпадение unit id: ожидался %d, получен %d", c.Unit, hdr[6])
+	}
+	mbLen := int(binary.BigEndian.Uint16(hdr[4:6]))
+	// Проверяем только минимум (нужно прочитать funcID и байт кода/bytecount):
+	// exception-кадр (func с 0x80) всегда имеет mbLen==3 и обрабатывается ниже,
+	// поэтому строгую проверку полной длины делаем ПОСЛЕ разбора исключения —
+	// иначе «Illegal data address» маскировался бы под «некорректный MBAP length».
+	if mbLen < 3 {
+		c.closeConn()
+		return nil, fmt.Errorf("некорректный MBAP length=%d (минимум 3)", mbLen)
+	}
+	rest := make([]byte, mbLen-1) // минус unit id (уже в hdr[6])
+	if _, err := ReadFull(c.conn, rest); err != nil {
+		c.closeConn()
+		return nil, fmt.Errorf("read pdu: %w", err)
+	}
+	funcID := rest[0]
+	if funcID&0x80 != 0 {
+		return nil, fmt.Errorf("modbus exception func=0x%02X code=0x%02X", funcID, rest[1])
+	}
+	if funcID != 0x03 {
+		// Читаем только holding registers (func 0x03); иной код — чужой/битый кадр.
+		c.closeConn()
+		return nil, fmt.Errorf("неожиданный function code=0x%02X (ждали 0x03)", funcID)
+	}
+	// Данные: ровно unit+func+bytecount+data = 3+2*count. Строгая проверка, чтобы
+	// слайс rest[2:2+bc] не вышел за буфер (усечённый кадр с завышенным bytecount
+	// иначе дал бы панику в горутине пулера).
+	if mbLen != 3+2*int(count) {
+		c.closeConn()
+		return nil, fmt.Errorf("некорректный MBAP length=%d, ждали %d", mbLen, 3+2*int(count))
+	}
+	bc := int(rest[1])
+	if bc != 2*int(count) {
+		c.closeConn()
+		return nil, fmt.Errorf("bytecount=%d, ждали %d", bc, 2*int(count))
+	}
+	data := rest[2 : 2+bc]
+	out := make([]byte, bc)
+	copy(out, data)
+	return out, nil
+}
+
+func (c *Client) nextTxn() uint16 { c.txn++; return c.txn }
+
+func (c *Client) dialLocked(ctx context.Context) error {
+	d := &net.Dialer{Timeout: ConnectTimeout}
+	conn, err := d.DialContext(ctx, "tcp", c.Address)
+	if err != nil {
+		return fmt.Errorf("dial %s: %w", c.Address, err)
+	}
+	c.conn = conn
+	return nil
+}
+
+func (c *Client) closeConn() {
+	if c.conn != nil {
+		c.conn.Close()
+		c.conn = nil
+	}
+}
+
+// Close закрывает соединение клиента. Для одноразовых клиентов (например,
+// модуль map-settings создаёт клиента на запрос), чтобы не оставлять сокеты.
+func (c *Client) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closeConn()
+}
+
+// ReadFull читает ровно len(buf) байт из соединения (сборка нескольких Read).
+// Общий для modbusmap и других Modbus TCP-клиентов (например, электросчётчика).
+func ReadFull(conn net.Conn, buf []byte) (int, error) {
+	total := 0
+	for total < len(buf) {
+		n, err := conn.Read(buf[total:])
+		if n > 0 {
+			total += n
+		}
+		if err != nil {
+			return total, err
+		}
+		if n == 0 {
+			// Read вернул (0, nil) — иначе цикл зациклился бы навсегда.
+			return total, io.ErrNoProgress
+		}
+	}
+	return total, nil
+}

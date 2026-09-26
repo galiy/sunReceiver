@@ -1,0 +1,7 @@
+# Артефакты сборки
+/mapsettings
+/mapsettings.exe
+map-settings
+
+# Python-кэш генератора каталога
+__pycache__/
