@@ -5,10 +5,13 @@ After=network.target
 [Service]
 Type=simple
 # Порт 502 (<1024) требует прав root — на Малине сервисы и так запускаются от root.
-# Устройство по умолчанию — АВТОПОИСК: перебираем свободные /dev/ttyUSB* и коротким
-# Modbus-опросом (unit 1) находим свой МАП. Явно можно задать -d /dev/...
+# Устройство по умолчанию — АВТОПОИСК: перебираем свободные /dev/ttyUSB*,
+# /dev/ttyACM* и /dev/serial/by-id/* и коротким Modbus-опросом (unit 1) находим
+# свой МАП. Явно можно задать -d /dev/...
+# --sn <число> ограничивает поиск серийником; заглушка CHANGE_ME НЕ ставится
+# (она лишь отключает фильтр, но лучше просто не указывать --sn).
 # (systemd 215: StartLimitInterval в [Service]; 0 = без лимита частоты рестартов.)
-ExecStart=/settings/daemons/mapgateway -b 115200 -p 502 --sn CHANGE_ME
+ExecStart=/settings/daemons/mapgateway -b 115200 -p 502
 Restart=always
 RestartSec=3
 StartLimitInterval=0
