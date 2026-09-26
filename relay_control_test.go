@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 )
@@ -274,4 +275,30 @@ func TestRedLampOnlyChangesOnTransition(t *testing.T) {
 	if c.State(1) != lampOn {
 		t.Fatalf("red=%v, want on", c.State(1))
 	}
+}
+
+// Конкурентные tick (фоновая горутина) и SetLampByName (HTTP-хендлер /api/relay)
+// не должны гонять c.conn: регрессия на гонку send/dial/drop. Ловится -race.
+func TestRelayConcurrentTickAndSetNoRace(t *testing.T) {
+	c, _ := newTestRelay([]relayLampCfg{{Name: "white", Relay: 1}, {Name: "red", Relay: 2}})
+	c.sendCmd = nil // реальная UDP-отправка на 127.0.0.1
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for ctx.Err() == nil {
+			c.tick(time.Now(), time.Second)
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	for i := 0; i < 300; i++ {
+		_ = c.SetLampByName("white", lampBlink)
+		_ = c.SetLampByName("red", lampOn)
+		_ = c.SetLampByName("white", lampOff)
+	}
+	cancel()
+	wg.Wait()
 }

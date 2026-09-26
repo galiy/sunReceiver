@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -111,7 +110,8 @@ CREATE TABLE IF NOT EXISTS sunreceiver.bms_averages (
 	ts     timestamptz NOT NULL,
 	values jsonb       NOT NULL DEFAULT '{}'::jsonb,
 	PRIMARY KEY (name, ts)
-);`); err != nil {
+);
+CREATE INDEX IF NOT EXISTS bms_averages_ts_idx ON sunreceiver.bms_averages (ts);`); err != nil {
 		return fmt.Errorf("pg bms_averages schema: %w", err)
 	}
 	// Таблица 10-секундных усреднённых точек счётчика Энергомера CE308.
@@ -156,11 +156,11 @@ func retryPg(fn func() error, attempts int) error {
 		if i == attempts-1 {
 			break
 		}
-		d := pgRetryBackoff[i]
-		if i >= len(pgRetryBackoff) {
-			d = pgRetryBackoff[len(pgRetryBackoff)-1]
+		idx := i
+		if idx >= len(pgRetryBackoff) {
+			idx = len(pgRetryBackoff) - 1
 		}
-		time.Sleep(d)
+		time.Sleep(pgRetryBackoff[idx])
 	}
 	return err
 }
@@ -530,14 +530,37 @@ SELECT EXISTS (
 	rows, err := s.pool.Query(s.ctx, `
 SELECT ip, name, ts, device_sn, values
 FROM sunreceiver.snapshots
-ORDER BY ts`)
+ORDER BY ip, ts`)
 	if err != nil {
 		return fmt.Errorf("pg legacy query: %w", err)
 	}
 	defer rows.Close()
 
-	// Группируем сырые снимки по (ip, 5-минутный промежуток); ключ = "ip|unixBucket".
-	groups := map[string][]deviceSnapshot{}
+	// Стриминг: строки идут ORDER BY ip, ts, поэтому снимки одного (ip, 5-минутного
+	// бакета) идут подряд. Держим в памяти только текущую группу, а не всю таблицу
+	// (раньше весь набор сырых снимков собирался в map — риск OOM на большой истории).
+	var (
+		inserted, failed int
+		curIP            string
+		curBucket        time.Time
+		group            []deviceSnapshot
+		haveGroup        bool
+	)
+	flush := func() {
+		if !haveGroup || len(group) == 0 {
+			return
+		}
+		vc := averageValues(group)
+		if len(vc) == 0 {
+			return
+		}
+		if err := s.InsertAveraged(curIP, group[0].Name, curBucket, group[0].DeviceSN, vc); err != nil {
+			log.Printf("pg legacy insert %s @ %s: %v", curIP, curBucket.Format(time.RFC3339), err)
+			failed++
+			return
+		}
+		inserted++
+	}
 	for rows.Next() {
 		var ip, name, deviceSN string
 		var ts time.Time
@@ -552,8 +575,12 @@ ORDER BY ts`)
 			}
 		}
 		bucket := floorToStep(ts)
-		key := fmt.Sprintf("%s|%d", ip, bucket.Unix())
-		groups[key] = append(groups[key], deviceSnapshot{
+		if !haveGroup || ip != curIP || !bucket.Equal(curBucket) {
+			flush()
+			curIP, curBucket, haveGroup = ip, bucket, true
+			group = group[:0]
+		}
+		group = append(group, deviceSnapshot{
 			Name:      name,
 			IP:        ip,
 			Timestamp: ts.Format(time.RFC3339),
@@ -564,29 +591,15 @@ ORDER BY ts`)
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("pg legacy rows: %w", err)
 	}
+	flush()
+	log.Printf("pg legacy: усреднённых точек записано: %d (ошибок: %d)", inserted, failed)
 
-	var inserted int
-	for key, group := range groups {
-		ip := strings.SplitN(key, "|", 2)[0]
-		first := group[0]
-		bts, ok := parseTS(first.Timestamp)
-		if !ok {
-			log.Printf("pg legacy: пропускаю снимок с нераспознанным timestamp %q", first.Timestamp)
-			continue
-		}
-		bucket := floorToStep(bts)
-		vc := averageValues(group)
-		if len(vc) == 0 {
-			continue
-		}
-		if err := s.InsertAveraged(ip, first.Name, bucket, first.DeviceSN, vc); err != nil {
-			log.Printf("pg legacy insert %s: %v", ip, err)
-			continue
-		}
-		inserted++
+	if failed > 0 {
+		// Не удаляем исходные snapshots: иначе не вставившиеся группы будут
+		// потеряны навсегда. InsertAveraged — идемпотентный upsert, поэтому
+		// повторный запуск миграции безопасен.
+		return fmt.Errorf("pg legacy: %d групп не вставлено, таблица snapshots сохранена для повтора", failed)
 	}
-	log.Printf("pg legacy: усреднённых точек записано: %d", inserted)
-
 	return s.dropLegacy()
 }
 

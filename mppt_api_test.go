@@ -328,3 +328,25 @@ func TestMapMPPTAPIZeroTimestamp(t *testing.T) {
 		t.Errorf("pv1_voltage = %v, want 120", v)
 	}
 }
+
+// Старая прошивка без Pwr_kW: energy_today выводится из Pwr_W (Вт → кВт·ч).
+func TestMapMPPTAPIEnergyTodayPwrWFallback(t *testing.T) {
+	vals, _, ok := mapMPPTAPI(mpptRaw{VcPV: "120.0", Pwr_W: "1500"})
+	if !ok {
+		t.Fatal("mapMPPTAPI: ok=false, want true")
+	}
+	if v, _ := vals["energy_today"].(float64); v != 1.5 {
+		t.Errorf("energy_today = %v, want 1.5", vals["energy_today"])
+	}
+}
+
+// timestamp=0 не должен давать 1970 год (time.Unix(0,0)); ts остаётся нулевым.
+func TestMapMAPAPIZeroTimestamp(t *testing.T) {
+	_, ts, ok := mapMAPAPI(mapRaw{Uacc: "52.0"})
+	if !ok {
+		t.Fatal("mapMAPAPI: ok=false, want true")
+	}
+	if !ts.IsZero() {
+		t.Errorf("ts = %v, want нулевое (IsZero)", ts)
+	}
+}

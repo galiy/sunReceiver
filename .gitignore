@@ -55,5 +55,6 @@ plans/
 
 # рабочие отчёты код-ревью (содержат ссылки на реальные идентификаторы) — вне git
 review-*.md
+mapgateway/review-*
 
 .kilo/gh-token.txt

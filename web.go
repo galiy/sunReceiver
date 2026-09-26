@@ -23,6 +23,7 @@ import (
 	"html/template"
 	"io/fs"
 	"net/http"
+	"strings"
 )
 
 // webFS — статика и HTML-шаблоны дашборда, эмбедed в бинарник. Вынесены из
@@ -79,6 +80,12 @@ func staticFiles() http.Handler {
 	}
 	files := http.FileServer(http.FS(sub))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Каталоги не отдаём: при отсутствии index.html FileServer показал бы
+		// directory listing и закэшировал его на год как immutable.
+		if strings.HasSuffix(r.URL.Path, "/") {
+			http.NotFound(w, r)
+			return
+		}
 		// http.FS(web) срезает ведущий "/", поэтому путь /static/css/site.css
 		// открывается как static/css/site.css внутри каталога web/ — StripPrefix
 		// не нужен (иначе путь терял бы префикс static/).

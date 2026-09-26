@@ -422,7 +422,8 @@ func (s *redisStore) QueryBMSSeries(name string, start, end time.Time) ([]bmsSer
 	return all, nil
 }
 
-// eachMonth вызывает fn для каждого года/месяца, покрывающего [start, end] включительно.// Возвращает false, если fn хочет остановиться.
+// eachMonth вызывает fn для каждого года/месяца, покрывающего [start, end] включительно.
+// Возвращает false, если fn хочет остановиться.
 func eachMonth(start, end time.Time, fn func(y int, m time.Month) bool) {
 	y, m := start.Year(), start.Month()
 	for {

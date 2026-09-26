@@ -163,16 +163,22 @@ func connectCE308Bounded(mac string, ctx context.Context) (*ce308Meter, error) {
 		err error
 	}
 	ch := make(chan res, 1)
+	// done закрывается, когда результат уже не нужен: горутина connectCE308 сама
+	// закроет соединение, если успеет завершиться после таймаута (иначе оно
+	// утекло бы — результат никто не забирает).
+	done := make(chan struct{})
 	go func() {
 		m, err := connectCE308(mac, ctx)
-		ch <- res{m, err}
+		select {
+		case ch <- res{m, err}:
+		case <-done:
+			if m != nil {
+				_ = m.Close()
+			}
+		}
 	}()
-	select {
-	case r := <-ch:
-		return r.m, r.err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-time.After(ce308ConnectTimeout):
+	drainClose := func() {
+		close(done)
 		select {
 		case r := <-ch:
 			if r.m != nil {
@@ -180,6 +186,15 @@ func connectCE308Bounded(mac string, ctx context.Context) (*ce308Meter, error) {
 			}
 		default:
 		}
+	}
+	select {
+	case r := <-ch:
+		return r.m, r.err
+	case <-ctx.Done():
+		drainClose()
+		return nil, ctx.Err()
+	case <-time.After(ce308ConnectTimeout):
+		drainClose()
 		return nil, fmt.Errorf("подключение к %s: превышено %s", mac, ce308ConnectTimeout)
 	}
 }
@@ -319,7 +334,10 @@ func (m *ce308Meter) Read(cmd string) (string, error) {
 		buf := make([]byte, 512)
 		n, err := m.rx[i].Read(buf)
 		if err != nil {
-			break
+			// Ошибку не глотаем: иначе наружу уйдёт частично прочитанный ответ с
+			// nil-ошибкой, и для энергии ENDzz это дало бы валидную по форме, но
+			// неверную накопленную энергию, молча записанную в Redis.
+			return "", fmt.Errorf("%s: чтение фрагмента %d: %w", cmd, i, err)
 		}
 		raw = append(raw, buf[:n]...)
 	}

@@ -33,11 +33,11 @@ func TestDashboardAPIRouting(t *testing.T) {
 		}
 	}
 	pages := map[string]http.HandlerFunc{
-		"/":         hit("index"),
-		"/charts":   hit("charts"),
-		"/energy":   hit("energy"),
+		"/":          hit("index"),
+		"/charts":    hit("charts"),
+		"/energy":    hit("energy"),
 		"/animation": hit("animation"),
-		"/bms/":     hit("bmsDetail"),
+		"/bms/":      hit("bmsDetail"),
 	}
 	api := map[string]http.HandlerFunc{
 		"/current":   hit("current"),

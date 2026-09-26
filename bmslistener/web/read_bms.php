@@ -11,6 +11,8 @@
 // читает shm 2018 целиком и отдаёт готовый JSON. Доступ — та же
 // Basic-авторизация, что и на остальном веб-интерфейсе ПАК «Малина».
 
+header("Content-Type: application/json; charset=utf-8");
+header("Cache-Control: no-store");
 $shm=shmop_open(2018,"a",0,0);
 if ($shm===false) { echo "{\"updated\":0,\"devices\":[]}"; die(); }
 $str_json=shmop_read($shm,0,32768);

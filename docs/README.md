@@ -27,7 +27,7 @@ DDS238 (Modbus TCP), нормализует всё в единый контра�
 Данные текут: **устройство → poller → Redis (сразу) → аккумулятор → PG (5-мин
 усреднённые точки) → дашборд (чтение)**. Опрос ведут независимые горутины
 (инверторы — раз в 10 с; MPPT/счётчик/BMS — раз в 1 с; МАП — цикл 1 с, но фактически
-~9 с из-за 3 последовательных чтений Modbus-блоков, см. [map-mppt.md](modules/map-mppt.md)). Дашборд только читает
+~6 с из-за 2 последовательных чтений Modbus-блоков, см. [map-mppt.md](modules/map-mppt.md)). Дашборд только читает
 `current`/`series` (Redis) и `averages` (PG).
 
 ## Модули системы
@@ -43,6 +43,7 @@ DDS238 (Modbus TCP), нормализует всё в единый контра�
 | **Счётчик Энергомера CE308** (`ce308_*.go`) | Опрос по BLE (2 с): напряжения/токи/мощности по фазам + разовый снимок накопленной энергии по сигналу; история усредняется до 1 записи за 10 с в PG | [modules/ce308.md](modules/ce308.md) |
 | **Проброс Bluetooth (usbip)** (вне кода, ОТКЛЮЧЕНО 2026-09-24) | Историческая схема: проброс BLE-контроллера MediaTek с `.9` на `.253` через usbip; на `.253` теперь физический USB-адаптер | [ce308-bluetooth/README.md](ce308-bluetooth/README.md) |
 | **ANT BMS** (`bms_poller.go`, `bmslistener/`) | Опрос батарей через `read_bms.php` → shm bmslistener; 5-мин усреднённые точки в Redis+PG | [antbms.md](antbms.md), [modules/bms-listener.md](modules/bms-listener.md) |
+| **Шлюз Modbus TCP↔RTU** (`mapgateway/`, C) | Публикует последовательный порт МАП как Modbus TCP (:502) для пулера; systemd на ПАК «Малина» | [mapgateway/README.md](../mapgateway/README.md) |
 | **Уведомления в MAX** (`notify.go`) | Отправка событий мониторинга МАП (недоступен / нет напряжения сети) в мессенджер MAX через Bot API, с гистерезисом и дедупликацией | [modules/notify.md](modules/notify.md) |
 | **Сетевое реле SR-201** (`relay_control.go`) | Управление двойным реле по UDP (белая/красная лампы): поддержка состояния (вкл/выкл/мигание 2 Гц) + автоиндикаторы (отдача в сеть, наличие напряжения сети) | [relay_sr-201(2light).md](relay_sr-201(2light).md) |
 | **Универсальный контракт `values`** | Набор общих тегов с одинаковыми именами/единицами для всех марок (PV, AC, фазы, энергия, МАП) | [universal-contract.md](universal-contract.md) |
@@ -90,7 +91,7 @@ DDS238 (Modbus TCP), нормализует всё в единый контра�
 ## Конфигурация
 
 Один файл **`sunReceiver.json`** рядом с бинарником (`os.Executable()`; при
-`go run .` — fallback в CWD). Разделы: `invertors`, `map` (с подразделом `rs485`), `db`, `meter`, `notify`, `relay`.
+`go run .` — fallback в CWD). Разделы: `invertors`, `map` (с подразделом `rs485`), `db`, `meter`, `ce308`, `notify`, `relay`, а также `dashboard_port` (обязательное) и необязательные `dashboard_user`/`dashboard_password`.
 Файл приватный (пароли — в открытом виде, в `.gitignore`); публичный шаблон
 структуры — [`sunReceiver.sample.json`](../sunReceiver.sample.json) (обновлять при
 любом изменении структуры конфига: IP — случайные из `192.168.0.x`, серийные
@@ -101,7 +102,8 @@ DDS238 (Modbus TCP), нормализует всё в единый контра�
 | `invertors[]` | `ip`, `name`, `type` (`deye`/`sofar`), `logger_sn`, `disabled` (обязательное) |
 | `map` | `disabled` (обязательное: `true` — все пулеры МАП/MPPT/BMS отключены, плашки МАП скрыты), `bms_disabled` (обязательное: `true` — пулер ANT BMS отключён, батарейки скрыты), `rs485` (подраздел: `name`, `ip`, `unit` (Modbus, умолч. 1), `disabled` (обязательное: `false`=Modbus/RS485, `true`=веб-API ПАК «Малина»)); веб-API: `base_url`, `mppt_path`, `map_path` (необязательное — путь к read_json.php?device=map, при отсутствии выводится из mppt_path), `login`, `password`, `bms_path` (включает опрос ANT BMS) |
 | `db` | `redis` (host:port), `pg` (DSN с паролем) |
-| `meter` | `disabled` (обязательное: `true` — пулеры отключены, плашки/кнопка «Электроэнергия» скрыты), `name`, `ip`, `port`, `unit`, `first_reg`, `register_count` |
+| `meter` | `disabled` (обязательное: `true` — пулеры отключены, плашки/кнопка «Электроэнергия» скрыты), `name`, `ip`, `port`, `unit`, `first_reg`, `register_count` (при ненулевом — не меньше 18) |
+| `ce308` | `disabled` (обязательное: `true` — опрос CE308 отключён), `name`, `mac` (BD_ADDR счётчика), `pin` (BLE-PIN радиоинтерфейса) — см. [modules/ce308.md](modules/ce308.md) |
 | `notify` | `token` (обязательное, токен бота MAX), `user_id`/`chat_id` (адресат, хотя бы одно), `disabled`, `stable_window_sec`, `map_undeclared_sec`, `grid_voltage_low` — см. [modules/notify.md](modules/notify.md) |
 | `relay` | `disabled` (обязательное: `true` — модуля нет), `ip` (обязательное при `disabled=false`), `udp_port`, `blink_hz`, `keepalive`, `lamps[]` (`name`, `relay`), `meter_stale_sec`, `map_stale_sec`, `meter_power_tag`, `meter_voltage_tag`, `map_grid_tag`, `voltage_present_min` — см. [relay_sr-201(2light).md](relay_sr-201(2light).md) |
 
@@ -135,7 +137,8 @@ go run .                     # запуск из исходников (конф�
 make VERSION=1.2.3 linux-x64     # dist/sunReceiver-linux-amd64-1.2.3
 make VERSION=1.2.3 win-x64       # dist/sunReceiver-windows-amd64-1.2.3.exe (-H windowsgui)
 make VERSION=1.2.3 bmslistener   # dist/bmslistener-armv7l-1.2.3 (zig)
-make VERSION=1.2.3 all           # все три
+make VERSION=1.2.3 mapgateway    # dist/mapgateway-armv7l-1.2.3 (zig)
+make VERSION=1.2.3 all           # все четыре
 make clean                       # rm -rf dist
 ```
 

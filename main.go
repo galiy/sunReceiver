@@ -207,7 +207,7 @@ type configFile struct {
 	Ce308         *ce308Section    `json:"ce308"`
 	Notify        *notifySection   `json:"notify"`
 	Relay         *relaySection    `json:"relay"`          // сетевое реле SR-201 (лампы), управление по UDP
-	DashboardPort int              `json:"dashboard_port"` // порт веб-дашборда; 0 — дефолт 8080
+	DashboardPort int              `json:"dashboard_port"` // порт веб-дашборда; обязательное поле (0 — ошибка загрузки конфига)
 	// Необязательные учётные данные HTTP Basic для `/api/*` веб-дашборда. Если оба
 	// пусты — API открыт (обратный прокси закрывает доступ снаружи сам).
 	DashboardUser     string `json:"dashboard_user,omitempty"`
@@ -235,7 +235,8 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	targets := make([]invTarget, 0, len(cf.Invertors)+1)
-	nextOrder := 0 // порядок устройства на дашборде = позиция в конфиге (в порядке invertors, затем map)
+	nextOrder := 0                // порядок устройства на дашборде = позиция в конфиге (в порядке invertors, затем map)
+	seenIP := map[string]string{} // ip -> имя устройства: запрет дублей (общий клиент/ключ Redis)
 
 	// Инверторы (Deye/Sofar) из invertors; отключённые (disabled=true) пропускаются.
 	for _, t := range cf.Invertors {
@@ -271,6 +272,10 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 		if (kind == kindDeyeString || kind == kindSofar) && t.LoggerSN == 0 {
 			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %s (%s): не задан logger_sn — без SN логгера логгер отвечает кодом 0x06 и данные получать невозможно", path, t.Name, t.IP)
 		}
+		if prev, dup := seenIP[t.IP]; dup {
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: дублирующийся ip %s (%s и %s) — опрос одного IP двумя целями недопустим", path, t.IP, prev, t.Name)
+		}
+		seenIP[t.IP] = t.Name
 		placement := t.Placement
 		if placement == "" {
 			placement = "Дом"
@@ -335,6 +340,10 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 			log.Printf("config: МАП (%s) disabled=true — опрашивается через веб-API ПАК «Малина», а не через Modbus", name)
 			mapAPI = &mapAPISource{name: name, ip: rs485.IP, order: nextOrder}
 		} else {
+			if prev, dup := seenIP[rs485.IP]; dup {
+				return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: дублирующийся ip %s (%s и %s)", path, rs485.IP, prev, name)
+			}
+			seenIP[rs485.IP] = name
 			unit := byte(1)
 			if rs485.Unit > 0 {
 				unit = byte(rs485.Unit)
@@ -344,7 +353,9 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 		}
 	}
 
-	if len(targets) == 0 && mapAPI == nil && ce308Cfg == nil {
+	meterActive := cf.Meter != nil && cf.Meter.Disabled != nil && !*cf.Meter.Disabled
+	relayActive := cf.Relay != nil && cf.Relay.Disabled != nil && !*cf.Relay.Disabled
+	if len(targets) == 0 && mapAPI == nil && ce308Cfg == nil && !meterActive && !relayActive {
 		// Если активными остались только MPPT-контроллеры из API ПАК «Малина»,
 		// targets может быть пуст — это допустимо: цели собираются динамически.
 		mpptOk := cf.Map != nil && cf.Map.BaseURL != "" && cf.Map.MPPTPath != "" &&
@@ -674,6 +685,8 @@ func needsRounding(tag string) bool {
 		strings.HasSuffix(tag, "current") ||
 		strings.HasSuffix(tag, "power") ||
 		strings.Contains(tag, "energy") ||
+		// Энергия счётчика DDS238 (kWh) — тоже энергия, хотя «energy» в имени нет.
+		tag == "meter_import" || tag == "meter_export" || tag == "meter_total" ||
 		strings.Contains(tag, "temperature")
 }
 
@@ -1281,27 +1294,31 @@ func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 	switch t.Kind {
 	case kindDeyeString:
 		result := map[uint16]uint16{}
-		for _, r := range [][2]uint16{{0x3C, 0x39}, {0xC6, 0x0D}} {
-			pdus, fr, err := client.ReadRegistersDeye(ctx, r[0], r[1], 1)
-			if err != nil {
+		// Читаем ТОЛЬКО диапазон 0x3C–0x74 (ядро контракта). Второй диапазон
+		// 0xC6–0xD2 (energy_load/sold/bought) не входит в commonContractTags и
+		// отбрасывался MarshalJSON — чтение лишь замедляло опрос.
+		const deyeStart, deyeCount uint16 = 0x3C, 0x39
+		pdus, fr, err := client.ReadRegistersDeye(ctx, deyeStart, deyeCount, 1)
+		if err != nil {
+			// Сеть/логгер недоступны: это offline, а не «heartbeat без данных»
+			// (раньше res.OK оставался true и устройство выглядело онлайн).
+			res.OK = false
+			return res
+		}
+		frames = append(frames, fr...)
+		for _, p := range pdus {
+			if p.CRC != p.CRCCalc {
 				continue
 			}
-			frames = append(frames, fr...)
-			for _, p := range pdus {
-				if p.CRC != p.CRCCalc {
-					continue
-				}
-				for k := 0; k < len(p.Values); k++ {
-					result[r[0]+uint16(k)] = p.Values[k]
-				}
+			for k := 0; k < len(p.Values); k++ {
+				result[deyeStart+uint16(k)] = p.Values[k]
 			}
 		}
 		if len(result) > 0 {
 			res.Values = mapDeyeRegisters(result)
-			// Ядро (ac_active_power, рег. 0x56/0x57 — только первый диапазон 0x3C–0x74)
-			// обязано быть: без него values после фильтра commonContractTags пуст, а снимок
-			// со свежим timestamp показывает инвертор «онлайн, но пустой» (не offline).
-			// Второй диапазон (0xC6–0xD2: energy_load/sold/bought) не входит в контракт.
+			// Ядро (ac_active_power, рег. 0x56/0x57) обязано быть: без него values после
+			// фильтра commonContractTags пуст, а снимок со свежим timestamp показывает
+			// инвертор «онлайн, но пустой» (не offline).
 			if _, ok := res.Values["ac_active_power"]; ok {
 				res.HasData = true
 			}
@@ -1406,9 +1423,11 @@ func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 
 	case kindMAP:
 		// МАП Титанатор («КЭС») — Modbus TCP (порт 502), не Solarman-кадр.
-		// Читаем блоки байт-ячеек: 0x400 (0x400..0x43F — режим/АКБ/сети),
-		// токи MPPT (0x530-0x551) и мощности сети/батареи (0x580-0x5A3, т.ч.
-		// 0x587 sign, 0x59A/0x59B PNET, 0x59E/0x59F PLOAD).
+		// Читаем блоки байт-ячеек: 0x400 (0x400..0x43F — режим/АКБ/сети) и мощности
+		// сети/батареи 0x580 (0x580..0x5A3, т.ч. 0x587 sign, 0x59A/0x59B PNET,
+		// 0x59E/0x59F PLOAD). Блок 0x530 (токи MPPT) не читаем: mapMAPRegisters его
+		// ячейки не использует (пер-слотовые MPPT берутся из веб-API), а чтение
+		// добавляло к циклу до ~3 с.
 		mc := mapClientFor(t.IP, t.Unit)
 		cells := map[uint16]byte{}
 		// Блок 0x400 (0x20 слов = 0x400..0x43F) охватывает режим (0x400), мощности
@@ -1422,13 +1441,6 @@ func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 			}
 		} else {
 			log.Printf("%s: MAP: блок 0x0400: %v", t.IP, err)
-		}
-		if b, err := mc.ReadRegisters(ctx, 0x0530, 0x40); err == nil {
-			for i := 0; i < len(b); i++ {
-				cells[0x0530+uint16(i)] = b[i]
-			}
-		} else {
-			log.Printf("%s: MAP: блок 0x0530: %v", t.IP, err)
 		}
 		if b, err := mc.ReadRegisters(ctx, 0x0580, 0x24); err == nil {
 			for i := 0; i < len(b); i++ {
@@ -1751,9 +1763,14 @@ func main() {
 	// ждал медленный логгер (до ~15 c на первый байт).
 	stopCtx, stopCancel := context.WithCancel(context.Background())
 	defer stopCancel()
-	// Привязываем контекст долгих операций Redis к сигналу остановки, чтобы они
-	// корректно прерывались при shutdown (N16).
-	store.SetCtx(stopCtx)
+	// storeCtx — контекст операций Redis/PG. Отдельный от stopCtx: циклы пулеров
+	// останавливаются по stopCtx, но финальные записи при shutdown (BMS-drain,
+	// averageBucket) должны выполняться с ЖИВЫМ контекстом — иначе go-redis
+	// вернёт "context canceled", и неполный бакет при остановке теряется (N16).
+	// storeCtx отменяется после bgWg.Wait() и до закрытия пулов.
+	storeCtx, storeCancel := context.WithCancel(context.Background())
+	defer storeCancel()
+	store.SetCtx(storeCtx)
 	// bgWg — все фоновые горутины, пишущие в Redis/PG: при завершении main
 	// отменяет stopCtx, ЖДЁТ их (bgWg.Wait()) и только потом defer'ы закрывают
 	// пулы rdb/pg — записи при остановке (BMS-drain, averageBucket) не гоняются
@@ -1964,8 +1981,10 @@ func main() {
 	stopCancel()
 	// Ждём завершения фоновых горутин (их завершающие записи в Redis/PG:
 	// BMS-drain, averageBucket), ПОСЛЕ чего defer'ы закрывают пулы — гонки
-	// «запись в закрытый пул» нет.
+	// «запись в закрытый пул» нет. storeCtx отменяем только теперь, чтобы
+	// завершающие записи не упали с "context canceled".
 	bgWg.Wait()
+	storeCancel()
 }
 
 // runInverterPoll — непрерывный цикл опроса ОДНОГО инвертора (Deye/Sofar) с
@@ -2128,10 +2147,10 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, st
 		log.Printf("pg restore: query: %v", err)
 		return
 	}
-	// Сортируем по ts ascending: pg.Averages не гарантирует порядок (без ORDER BY),
-	// а в цикле ниже каждый SaveSnapshot кладёт точку в HASH current[ip] — остаётся
-	// «последний из итерации». Сортируем, чтобы последний HSet был самым свежим
-	// (детерминированный current[ip] после реставрации).
+	// Сортируем по ts ascending (запрос уже с ORDER BY ts, но сортировка оставлена
+	// как страховка): в цикле ниже каждый SaveSnapshot кладёт точку в HASH current[ip]
+	// — остаётся «последний из итерации». Сортируем, чтобы последний HSet был самым
+	// свежим (детерминированный current[ip] после реставрации).
 	sort.Slice(snaps, func(i, j int) bool {
 		ti, _ := parseTS(snaps[i].Timestamp)
 		tj, _ := parseTS(snaps[j].Timestamp)

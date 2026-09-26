@@ -35,6 +35,10 @@ import (
 // client.Timeout (5 с), чтобы 1-сек цикл runMapPoll не блокировался надолго.
 const requestTimeout = 3 * time.Second
 
+// maxMPPTBody — предел размера тела ответа read_json.php (1 МиБ): защищает от
+// раздувания памяти при битом/враждебном ответе ПАК «Малина».
+const maxMPPTBody = 1 << 20
+
 // mpptSite — конфигурация доступа к веб-API ПАК «Малина» для мониторинга MPPT
 // (КЭС) через read_json.php?device=mppt. Источник — раздел "mppt" sunReceiver.json
 // (base_url, mppt_path, login/password); пароль в открытом виде, файл в git не выгружается.
@@ -216,7 +220,7 @@ func (s *mpptSite) fetchDevice(ctx context.Context, device string) ([]byte, erro
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("mppt api %s: status %d", u, resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	return io.ReadAll(io.LimitReader(resp.Body, maxMPPTBody))
 }
 
 // FetchMPPTs запрашивает текущие параметры всех MPPT-контроллеров через
@@ -279,6 +283,9 @@ func mapMPPTAPI(r mpptRaw) (valuesContract, time.Time, bool) {
 			v += w / 1000
 		}
 		out["energy_today"] = v
+	} else if w, ok2 := parseFloat(r.Pwr_W); ok2 {
+		// Старые прошивки без Pwr_kW: выработка за сутки есть только в Вт·ч.
+		out["energy_today"] = w / 1000
 	}
 	if len(out) == 0 {
 		return nil, ts, false
@@ -294,7 +301,7 @@ func mapMPPTAPI(r mpptRaw) (valuesContract, time.Time, bool) {
 type mapRaw struct {
 	Timestamp int64
 	Uacc      string // Напряжение АКБ, В (_UAcc_med, 0x405/0x406)
-	Iacc      string // Ток АКБ, А (знак «−» = заряд) (_IAcc_med, 0x432/0x433)
+	Iacc      string // Ток АКБ, А (знак «+» = заряд, «−» = отдача) (_IAcc_med, 0x432/0x433)
 	UNet      string // Напряжение сети, В (0 = нет сети) (_UNET, 0x422)
 	PNetCalc  string // Расчётная мощность сети, Вт (_PNET_calc = _UNET × _INET) — ДОСТОВЕРНАЯ
 	PLoad     string // Мощность нагрузки по АКБ, Вт (_PLoad) — НЕ батарейная (нагрузка потребителя)
@@ -406,7 +413,7 @@ func (s *mpptSite) FetchPNETSign(ctx context.Context) (int, error) {
 	if resp.StatusCode != http.StatusOK {
 		return 0, fmt.Errorf("read_memory _PNET_Sign_P: status %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMPPTBody))
 	if err != nil {
 		return 0, err
 	}
@@ -453,7 +460,10 @@ func (s *mpptSite) FetchPNETSign(ctx context.Context) (int, error) {
 //
 // Возвращает также ts актуальности данных (поле timestamp ответа API).
 func mapMAPAPI(r mapRaw) (valuesContract, time.Time, bool) {
-	ts := time.Unix(r.Timestamp, 0)
+	var ts time.Time
+	if r.Timestamp != 0 {
+		ts = time.Unix(r.Timestamp, 0)
+	}
 	out := valuesContract{}
 	var ok bool
 	var v float64

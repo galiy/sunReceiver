@@ -87,13 +87,13 @@ const (
 // в MAX. token — обязателен; адресат задаётся user_id (личный диалог) или chat_id
 // (чат/канал). Поля порогов необязательны (0 — дефолт).
 type notifySection struct {
-	Token             string `json:"token"`
-	UserID            string `json:"user_id"`
-	ChatID            string `json:"chat_id"`
-	Disabled          *bool  `json:"disabled"` // true — уведомления выключены (раздел в конфиге, но без оповещений)
-	StableWindowSec   int    `json:"stable_window_sec"`
-	MapUndeclaredSec  int    `json:"map_undeclared_sec"`
-	GridVoltageLow    float64 `json:"grid_voltage_low"`
+	Token            string  `json:"token"`
+	UserID           string  `json:"user_id"`
+	ChatID           string  `json:"chat_id"`
+	Disabled         *bool   `json:"disabled"` // true — уведомления выключены (раздел в конфиге, но без оповещений)
+	StableWindowSec  int     `json:"stable_window_sec"`
+	MapUndeclaredSec int     `json:"map_undeclared_sec"`
+	GridVoltageLow   float64 `json:"grid_voltage_low"`
 }
 
 // notifyCfg — глобально заполненный раздел notify (аналогично mapAPI/mppt).
@@ -101,15 +101,16 @@ var notifyCfg *notifySection
 
 // maxClient — клиент отправки сообщений в MAX (Bot API). Адресат может быть
 // установлен как из конфига, так и позже при авто-регистрации (bot_started),
-// поэтому поля адресата защищены мьютексом; send соблюдает лимит 2 сообщения/сек.
+// поэтому поля адресата защищены мьютексом. Отдельного лимитера частоты нет:
+// сообщения отправляются по событиям с гистерезисом/дедупликацией.
 type maxClient struct {
 	token string
 	mu    sync.Mutex
 	// Адресат: user_id (личный диалог) ИЛИ chat_id (чат/канал).
 	userID string
 	chatID string
-	hc     *http.Client // обычный клиент (короткий таймаут 5 с) для отправки
-	hcLong *http.Client // клиент для long polling /updates (таймаут 35 с > timeout запроса)
+	hc     *http.Client // обычный клиент (короткий таймаут) для отправки
+	hcLong *http.Client // клиент для long polling /updates (таймаут 50 с > timeout запроса)
 }
 
 func newMaxClient(n *notifySection) *maxClient {
@@ -336,6 +337,13 @@ func (d *alertDetector) evaluate(now time.Time, alarm bool, buildMsg func(alarm 
 		d.lastUp = true
 		d.upSince = now
 	}
+	// Короткая авария, о которой получателю НЕ сообщали (ALARM не ушёл): сбрасываем
+	// её без RECOVER, иначе абонент получил бы «восстановление» без предшествующей
+	// аварии. Следующая авария начнёт отсчёт заново.
+	if d.lastDown && !d.sentDown {
+		d.lastDown = false
+		d.downSince = time.Time{}
+	}
 	if d.lastDown && now.Sub(d.upSince) >= d.stable {
 		if msg, b := buildMsg(false); b {
 			d.pendingUp = msg
@@ -378,18 +386,18 @@ func (d *alertDetector) reset() {
 
 // monitorState — поведение монитора, персистентное между итерациями.
 type monitorState struct {
-	track       *mapTrack
-	client      *maxClient
-	undeclared  time.Duration
-	stable      time.Duration
-	gridLow     float64
-	meterIP     string // IP счётчика (для справочного напряжения); "" — не опрашивается
-	store       *redisStore
-	down        alertDetector
-	noVolt      alertDetector
-	mapIP       string // devKey МАП (для чтения снимка)
-	name        string // логическое имя МАП
-	configPath  string // путь sunReceiver.json (куда дописывать адресата при авто-регистрации)
+	track      *mapTrack
+	client     *maxClient
+	undeclared time.Duration
+	stable     time.Duration
+	gridLow    float64
+	meterIP    string // IP счётчика (для справочного напряжения); "" — не опрашивается
+	store      *redisStore
+	down       alertDetector
+	noVolt     alertDetector
+	mapIP      string // devKey МАП (для чтения снимка)
+	name       string // логическое имя МАП
+	configPath string // путь sunReceiver.json (куда дописывать адресата при авто-регистрации)
 }
 
 func newMonitorState(store *redisStore, n *notifySection, mapIP, name string) *monitorState {
@@ -732,8 +740,15 @@ func (m *monitorState) pollSubscriber(stop context.Context) {
 
 // handleSubscriberEvent обрабатывает одно событие подписки/отписки.
 func (m *monitorState) handleSubscriberEvent(up maxUpdate) {
-	userID := strconv.FormatInt(up.User.UserID, 10)
-	chatID := strconv.FormatInt(up.ChatID, 10)
+	// 0 — отсутствующий id; FormatInt дал бы строку "0" и сломал бы проверки
+	// «адресат задан»/выбор user_id vs chat_id.
+	userID, chatID := "", ""
+	if up.User.UserID != 0 {
+		userID = strconv.FormatInt(up.User.UserID, 10)
+	}
+	if up.ChatID != 0 {
+		chatID = strconv.FormatInt(up.ChatID, 10)
+	}
 	switch up.UpdateType {
 	case "bot_started", "bot_added":
 		// Подписка: первый подписчик фиксируется как адресат, ему отвечаем
@@ -792,14 +807,19 @@ func (m *monitorState) isOurSubscriber(evUserID, evChatID string) bool {
 	return (uid != "" && evUserID == uid) || (cid != "" && evChatID == cid)
 }
 
-// registerRecipient фиксирует первого подписчика: записывает адресат в конфиг и
-// устанавливает его в клиент. Не перезаписывает уже заданный адресат.
+// registerRecipient фиксирует первого подписчика. Адресат сначала ставится в
+// клиент (in-memory — источник истины для отправки в текущем процессе), затем
+// best-effort сохраняется в конфиг. Раньше при ошибке записи конфига адресат не
+// устанавливался вовсе, хотя подписчику уже отвечали «зарегистрированы»; на проде
+// (конфиг root:root при ProtectSystem=strict) это делало авто-регистрацию
+// нерабочей. Не перезаписывает уже заданный адресат.
 func (m *monitorState) registerRecipient(userID, chatID string) {
+	m.client.setRecipient(userID, chatID)
 	if err := m.saveRecipientToConfig(userID, chatID); err != nil {
-		log.Printf("notify: сохранить адресата в конфиг не удалось: %v", err)
+		log.Printf("notify: подписчик зарегистрирован (user_id=%s, chat_id=%s), но адресат не сохранён в %s: %v (после рестарта потребуется повторная подписка)",
+			userID, chatID, m.configPath, err)
 		return
 	}
-	m.client.setRecipient(userID, chatID)
 	log.Printf("notify: зарегистрирован подписчик (user_id=%s, chat_id=%s), адресат сохранён в %s",
 		userID, chatID, m.configPath)
 }

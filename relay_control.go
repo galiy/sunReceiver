@@ -130,7 +130,8 @@ type relaySection struct {
 
 // relayController — владелец физических реле SR-201. Desired-состояния ламп
 // задаются из других модулей (SetLamp/SetRelayLamp); фоновый цикл приводит их в
-// исполнение по UDP. Единственная горутина (runRelayControl) пишет в socket.
+// исполнение по UDP. Сокет сериализован sendMu: send вызывается из tick (фоновая
+// горутина) и из applyLamp (HTTP-хендлер /api/relay) конкурентно.
 type relayController struct {
 	cfg   *relaySection
 	store *redisStore
@@ -142,6 +143,8 @@ type relayController struct {
 	lastSent time.Time   // время последней отправки
 	clock    func() time.Time
 
+	// sendMu сериализует доступ к conn (dial/Write/drop) между горутинами.
+	sendMu sync.Mutex
 	dialMu sync.Mutex
 	conn   net.Conn // UDP, подключён к реле
 
@@ -466,6 +469,10 @@ func (c *relayController) send(cmd string) {
 		c.sendCmd(cmd)
 		return
 	}
+	// sendMu держится на весь цикл: dial/Write/drop над c.conn не должны
+	// пересекаться с другой горутиной (tick vs HTTP-хендлер).
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
 	for attempt := 0; attempt < 2; attempt++ {
 		if c.conn == nil {
 			c.dial()
@@ -488,7 +495,12 @@ func (c *relayController) dial() {
 	if c.conn != nil {
 		return
 	}
-	addr := &net.UDPAddr{IP: net.ParseIP(c.cfg.IP), Port: c.cfg.UDPPort}
+	ip := net.ParseIP(c.cfg.IP)
+	if ip == nil {
+		log.Printf("relay: некорректный IP реле %q", c.cfg.IP)
+		return
+	}
+	addr := &net.UDPAddr{IP: ip, Port: c.cfg.UDPPort}
 	conn, err := net.DialUDP("udp", nil, addr)
 	if err != nil {
 		log.Printf("relay: dial UDP %s:%d: %v", c.cfg.IP, c.cfg.UDPPort, err)
