@@ -234,7 +234,8 @@ func registerCE308Agent(pin string) error {
 		return nil
 	}
 	n, err := strconv.ParseUint(pin, 10, 32)
-	if err != nil || n == 0 {
+	if err != nil || pin == "" {
+		// n==0 допустим: корректный PIN «000000» парсится в 0.
 		return fmt.Errorf("некорректный pin %q", pin)
 	}
 	conn, err := dbus.SystemBus()

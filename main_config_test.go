@@ -17,6 +17,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,15 +50,15 @@ func TestLoadConfigLoggerSNRequired(t *testing.T) {
 	}
 
 	// С logger_sn — валиден.
-	if err := os.WriteFile(path, []byte(`{"dashboard_port":8080,"invertors":[{"ip":"192.0.2.91","name":"D1","type":"deye","disabled":false,"logger_sn":1774265353}]}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"dashboard_port":8080,"invertors":[{"ip":"192.0.2.91","name":"D1","type":"deye","disabled":false,"logger_sn":1234567890}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	targets, _, _, _, _, _, _, err := loadConfig(path)
 	if err != nil {
 		t.Fatalf("валидный конфиг: %v", err)
 	}
-	if len(targets) != 1 || targets[0].LoggerSN != 1774265353 {
-		t.Fatalf("targets=%+v, want 1 с LoggerSN=1774265353", targets)
+	if len(targets) != 1 || targets[0].LoggerSN != 1234567890 {
+		t.Fatalf("targets=%+v, want 1 с LoggerSN=1234567890", targets)
 	}
 }
 
@@ -87,7 +88,7 @@ func TestLoadMeterConfigValidation(t *testing.T) {
 func TestLoadConfigDashboardPortRequired(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cfg.json")
-	if err := os.WriteFile(path, []byte(`{"invertors":[{"ip":"192.0.2.91","name":"D1","type":"deye","disabled":false,"logger_sn":1774265353}]}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"invertors":[{"ip":"192.0.2.91","name":"D1","type":"deye","disabled":false,"logger_sn":1234567890}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, _, _, _, _, _, err := loadConfig(path); err == nil {
@@ -108,5 +109,70 @@ func TestDefaultPGRestoreWindow(t *testing.T) {
 	// Некорректная строка — дефолт.
 	if got := defaultPGRestoreWindow(&dbConfig{PGRestoreWindow: "abc"}); got != 30*24*time.Hour {
 		t.Fatalf("abc → %v, want дефолт", got)
+	}
+}
+
+// Дублирующийся IP у инверторов недопустим: общий solarman-клиент и общий ключ
+// Redis, гонка на одном устройстве.
+func TestLoadConfigDuplicateIPRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cfg.json")
+	body := `{"dashboard_port":8080,"invertors":[` +
+		`{"ip":"192.0.2.10","name":"A","type":"deye","disabled":false,"logger_sn":1},` +
+		`{"ip":"192.0.2.10","name":"B","type":"deye","disabled":false,"logger_sn":2}]}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, _, _, _, err := loadConfig(path); err == nil {
+		t.Fatal("ожидали ошибку для дублирующегося ip")
+	} else if !strings.Contains(err.Error(), "дублирующийся ip") {
+		t.Fatalf("err=%v, want упоминание дубля ip", err)
+	}
+}
+
+// Конфиг только со счётчиком (без инверторов/МАП/CE308) допустим.
+func TestLoadConfigMeterOnlyAccepted(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cfg.json")
+	body := `{"dashboard_port":8080,"meter":{"disabled":false,"name":"M","ip":"192.0.2.40","port":502,"unit":1}}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, _, _, _, err := loadConfig(path); err != nil {
+		t.Fatalf("meter-only конфиг должен грузиться, got %v", err)
+	}
+}
+
+// register_count < 18 отключает опрос счётчика (декодер читает регистры 0..17).
+func TestMeterRegisterCountValidation(t *testing.T) {
+	if mc := loadMeterConfig(&meterSection{Name: "M", IP: "192.0.2.77", Port: 502, Unit: 1, RegisterCnt: 10}); mc != nil {
+		t.Fatalf("register_count=10 → mc=%v, want nil", mc)
+	}
+	if mc := loadMeterConfig(&meterSection{Name: "M", IP: "192.0.2.77", Port: 502, Unit: 1, RegisterCnt: 18}); mc == nil {
+		t.Fatal("register_count=18 должен быть валиден")
+	}
+}
+
+// Энергия счётчика (kWh) округляется до 1 знака, коэффициент мощности — нет.
+func TestNeedsRoundingMeterTags(t *testing.T) {
+	for _, tag := range []string{"meter_import", "meter_export", "meter_total", "meter_voltage", "meter_power"} {
+		if !needsRounding(tag) {
+			t.Errorf("needsRounding(%q)=false, want true", tag)
+		}
+	}
+	if needsRounding("meter_power_factor") {
+		t.Error("needsRounding(meter_power_factor)=true, want false")
+	}
+}
+
+// Публичный sample обязан парситься как configFile (в частности logger_sn ≤ uint32).
+func TestSampleConfigParses(t *testing.T) {
+	b, err := os.ReadFile("sunReceiver.sample.json")
+	if err != nil {
+		t.Skipf("sample недоступен: %v", err)
+	}
+	var cf configFile
+	if err := json.Unmarshal(b, &cf); err != nil {
+		t.Fatalf("sunReceiver.sample.json не парсится: %v", err)
 	}
 }

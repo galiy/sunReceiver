@@ -31,6 +31,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -91,9 +92,9 @@ func (c *Client) ReadRegisters(ctx context.Context, start uint16, count uint16) 
 	lenField := 6
 	req := make([]byte, 0, 12)
 	txn := c.nextTxn()
-	req = binary.BigEndian.AppendUint16(req, txn)                 // transaction id
-	req = binary.BigEndian.AppendUint16(req, 0)                   // protocol
-	req = binary.BigEndian.AppendUint16(req, uint16(lenField))    // length
+	req = binary.BigEndian.AppendUint16(req, txn)              // transaction id
+	req = binary.BigEndian.AppendUint16(req, 0)                // protocol
+	req = binary.BigEndian.AppendUint16(req, uint16(lenField)) // length
 	req = append(req, c.Unit)
 	req = append(req, 0x03)
 	req = binary.BigEndian.AppendUint16(req, start)
@@ -157,6 +158,11 @@ func (c *Client) ReadRegisters(ctx context.Context, start uint16, count uint16) 
 	if funcID&0x80 != 0 {
 		return nil, fmt.Errorf("modbus exception func=0x%02X code=0x%02X", funcID, rest[1])
 	}
+	if funcID != 0x03 {
+		// Читаем только holding registers (func 0x03); иной код — чужой/битый кадр.
+		c.closeConn()
+		return nil, fmt.Errorf("неожиданный function code=0x%02X (ждали 0x03)", funcID)
+	}
 	// Данные: ровно unit+func+bytecount+data = 3+2*count. Строгая проверка, чтобы
 	// слайс rest[2:2+bc] не вышел за буфер (усечённый кадр с завышенным bytecount
 	// иначе дал бы панику в горутине пулера).
@@ -200,10 +206,16 @@ func ReadFull(conn net.Conn, buf []byte) (int, error) {
 	total := 0
 	for total < len(buf) {
 		n, err := conn.Read(buf[total:])
+		if n > 0 {
+			total += n
+		}
 		if err != nil {
 			return total, err
 		}
-		total += n
+		if n == 0 {
+			// Read вернул (0, nil) — иначе цикл зациклился бы навсегда.
+			return total, io.ErrNoProgress
+		}
 	}
 	return total, nil
 }

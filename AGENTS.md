@@ -24,7 +24,9 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 | Веб-дашборд (`dashboard.go`) | [`docs/modules/dashboard.md`](docs/modules/dashboard.md) |
 | МАП + MPPT | [`docs/modules/map-mppt.md`](docs/modules/map-mppt.md) |
 | Счётчик DDS238 | [`docs/dds238-meter.md`](docs/dds238-meter.md) |
+| Счётчик Энергомера CE308 (BLE) | [`docs/modules/ce308.md`](docs/modules/ce308.md) |
 | ANT BMS | [`docs/antbms.md`](docs/antbms.md) |
+| Шлюз Modbus TCP↔RTU (`mapgateway/`, C) | [`mapgateway/README.md`](mapgateway/README.md) |
 | Уведомления в MAX | [`docs/modules/notify.md`](docs/modules/notify.md) |
 | Сетевое реле SR-201 (лампы-индикаторы) | [`docs/relay_sr-201(2light).md`](docs/relay_sr-201(2light).md) |
 | Протокол Solarman V5 (реверс) | [`docs/research/solarman-v5.md`](docs/research/solarman-v5.md) |
@@ -125,6 +127,9 @@ legacy-файлом `dds238.json`). Счётчик Энергомера **CE308*
 - **ANT BMS** — `bms_poller.go`, `bms_accumulator.go`, `bmslistener/`. Полное описание —
   [`docs/antbms.md`](docs/antbms.md). Демон bmslistener (установка на ПАК «Малина») —
   [`docs/modules/bms-listener.md`](docs/modules/bms-listener.md).
+- **Шлюз Modbus TCP↔RTU** — `mapgateway/mapgateway.c` (C, systemd на ПАК «Малина»):
+  публикует последовательный порт МАП как Modbus TCP (:502) для пулера. Сборка
+  (`make mapgateway`) и эксплуатация — [`mapgateway/README.md`](mapgateway/README.md).
 - **Уведомления в MAX** — `notify.go` (`maxClient` + трекер состояния МАП
   `mapTrack` + `runNotifyMonitor`): события мониторинга МАП (недоступен / нет
   напряжения сети) и восстановление, отправка через Bot API MAX с гистерезисом
@@ -182,13 +187,14 @@ legacy-файлом `dds238.json`). Счётчик Энергомера **CE308*
 Релизы собираются через корневой **`Makefile`** (версия подставляется в имя файла и
 в `main.version` через `-ldflags "-X main.version=<версия>"`; по умолч. `dev`).
 `VERSION ?= dev`, `dist/` создаётся автоматически. Требуется установленный `zig`
-(только для цели `bmslistener`).
+(для целей `bmslistener` и `mapgateway`).
 
 ```sh
 make VERSION=1.2.3 linux-x64     # dist/sunReceiver-linux-amd64-1.2.3
 make VERSION=1.2.3 win-x64       # dist/sunReceiver-windows-amd64-1.2.3.exe (-H windowsgui)
 make VERSION=1.2.3 bmslistener   # dist/bmslistener-armv7l-1.2.3 (zig, кросс-сборка под Малину)
-make VERSION=1.2.3 all           # все три
+make VERSION=1.2.3 mapgateway    # dist/mapgateway-armv7l-1.2.3 (zig, кросс-сборка под Малину)
+make VERSION=1.2.3 all           # все четыре
 make clean                       # rm -rf dist
 ```
 

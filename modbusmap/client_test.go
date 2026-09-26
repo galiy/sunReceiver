@@ -19,8 +19,10 @@ package modbusmap
 import (
 	"context"
 	"encoding/binary"
+	"io"
 	"net"
 	"testing"
+	"time"
 )
 
 // mbResp — ответ Modbus-TCP сервера теста.
@@ -109,5 +111,23 @@ func TestReadRegistersWrongUnit(t *testing.T) {
 	}
 	if c.conn != nil {
 		t.Fatal("wrong unit: соединение не закрыто")
+	}
+}
+
+// stallConn — Read всегда (0, nil): ReadFull не должен зацикливаться.
+type stallConn struct{}
+
+func (stallConn) Read([]byte) (int, error)         { return 0, nil }
+func (stallConn) Write(b []byte) (int, error)      { return len(b), nil }
+func (stallConn) Close() error                     { return nil }
+func (stallConn) LocalAddr() net.Addr              { return nil }
+func (stallConn) RemoteAddr() net.Addr             { return nil }
+func (stallConn) SetDeadline(time.Time) error      { return nil }
+func (stallConn) SetReadDeadline(time.Time) error  { return nil }
+func (stallConn) SetWriteDeadline(time.Time) error { return nil }
+
+func TestReadFullNoProgress(t *testing.T) {
+	if _, err := ReadFull(stallConn{}, make([]byte, 4)); err != io.ErrNoProgress {
+		t.Fatalf("err = %v, want io.ErrNoProgress", err)
 	}
 }

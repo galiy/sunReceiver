@@ -296,6 +296,9 @@ func pollAndSaveBMS(ctx context.Context, store *redisStore) *bmsCollection {
 	// Возврат nil — аккумулятор (acc.add) по nil пропустит, в него уходят только
 	// валидные устройства.
 	if col.Updated == 0 {
+		// Сбойный ответ разрывает серию валидно-пустых: «пусто, пусто, сбой, пусто»
+		// не должно считаться тремя подряд пустыми и чистить дашборд.
+		bmsEmptyStreak = 0
 		log.Printf("bms api: сбойный ответ (updated=0) — коллекция не трогается")
 		return nil
 	}

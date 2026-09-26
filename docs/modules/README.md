@@ -11,7 +11,10 @@
 | Веб-дашборд | [dashboard.md](dashboard.md) | `dashboard.go` |
 | МАП + MPPT | [map-mppt.md](map-mppt.md) | `mppt_api.go`, `modbusmap/` |
 | Счётчик DDS238 | [../dds238-meter.md](../dds238-meter.md) | `meter_*.go` |
+| Счётчик Энергомера CE308 (BLE) | [ce308.md](ce308.md) | `ce308_*.go` |
 | ANT BMS | [../antbms.md](../antbms.md) | `bms_poller.go`, `bmslistener/` |
 | bmslistener (демон) | [bms-listener.md](bms-listener.md) | `bmslistener/` (C + systemd, установка) |
+| Шлюз Modbus TCP↔RTU | [../../mapgateway/README.md](../../mapgateway/README.md) | `mapgateway/` (C + systemd) |
+| Уведомления в MAX | [notify.md](notify.md) | `notify.go` |
 | Проброс Bluetooth (usbip) — исторически, отключено | [../ce308-bluetooth/README.md](../ce308-bluetooth/README.md) | `.9` → `.253`, watchdog, systemd |
 | Универсальный контракт `values` | [../universal-contract.md](../universal-contract.md) | `main.go`, `commonContractTags` |

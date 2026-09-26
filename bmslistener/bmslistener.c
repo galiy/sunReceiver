@@ -456,7 +456,25 @@ static void publish_all(bmsdev_t *devs, int n) {
     static char *shm = NULL;
     static int shmid = -1;
     if (shmid < 0) {
-        shmid = shmget(SHM_KEY, SHM_SIZE, IPC_CREAT | SHM_PERMS);
+        /* Создаём сегмент эксклюзивно. При существующем сегменте shmget игнорирует
+           запрошенный размер, поэтому проверяем фактический shm_segsz: иначе
+           memset/memcpy на SHM_SIZE переполнят меньший чужой сегмент. */
+        shmid = shmget(SHM_KEY, SHM_SIZE, IPC_CREAT | IPC_EXCL | SHM_PERMS);
+        if (shmid < 0 && errno == EEXIST) {
+            shmid = shmget(SHM_KEY, 0, SHM_PERMS);
+            if (shmid >= 0) {
+                struct shmid_ds ds;
+                if (shmctl(shmid, IPC_STAT, &ds) != 0 || ds.shm_segsz < SHM_SIZE) {
+                    bms_log("shm: существующий сегмент меньше %d байт — пересоздаю\n", SHM_SIZE);
+                    if (shmctl(shmid, IPC_RMID, NULL) != 0) {
+                        bms_log("shmctl(IPC_RMID): %s\n", strerror(errno));
+                        shmid = -1;
+                    } else {
+                        shmid = shmget(SHM_KEY, SHM_SIZE, IPC_CREAT | IPC_EXCL | SHM_PERMS);
+                    }
+                }
+            }
+        }
         if (shmid < 0) { bms_log("shmget: %s\n", strerror(errno)); return; }
         shm = shmat(shmid, NULL, 0);
         if (shm == (void *)-1) { bms_log("shmat: %s\n", strerror(errno)); shm = NULL; return; }
@@ -570,7 +588,7 @@ static void scan_for_new(bmsdev_t *devs, int n) {
             bms_log("no free slot for %s\n", path);
             close(probe_fd);
             probe_bad_add(path); /* не влезло — отложим повторную пробу на PROBE_BACKOFF */
-            break;
+            continue; /* проверяем остальные порты, а не прерываем весь скан */
         }
         probe_bad_clear(path);
 

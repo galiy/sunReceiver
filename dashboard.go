@@ -516,6 +516,7 @@ func (h *dashboardHandler) apiBMSOne(w http.ResponseWriter, r *http.Request) {
 	}
 	if raw == "" {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(http.StatusNotFound)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "BMS не найдена"})
 		return
@@ -1450,11 +1451,12 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	byIP := map[string]*deviceSeries{}
 	nameToIP := map[string]string{}
 	for _, sn := range snaps {
-		// Снимки устройства МАП (батарея/сеть) и счётчика DDS238 исключаем — их
-		// мощность отображается на своих графиках/плашках, а не на графике активной
-		// мощности инверторов. Смотрим дальше: устройство попадает в ряд только если
-		// хоть в одном снимке есть ac_active_power (у счётчика его нет).
-		if isMAPDevice(sn.Values) {
+		// Снимки устройства МАП (батарея/сеть), MPPT-контроллеров КЭС (их
+		// ac_active_power — это DC-мощность заряда, а не AC-выход) и счётчика DDS238
+		// исключаем — их мощность отображается на своих графиках/плашках, а не на
+		// графике активной мощности инверторов. Смотрим дальше: устройство попадает
+		// в ряд только если хоть в одном снимке есть ac_active_power (у счётчика его нет).
+		if isMAPDevice(sn.Values) || isMPPTKey(sn.IP) {
 			continue
 		}
 		v, hasPower := snapFloat(sn.Values, "ac_active_power")
@@ -1592,7 +1594,9 @@ func sumActive(snaps []deviceSnapshot) []seriesPoint {
 	}
 	var recs []rec
 	for _, sn := range snaps {
-		if isMAPDevice(sn.Values) {
+		// MPPT-контроллеры КЭС исключаем: их ac_active_power — DC-мощность заряда
+		// (не AC-выход инверторов), чтобы суммарный график не расходился с плашками.
+		if isMAPDevice(sn.Values) || isMPPTKey(sn.IP) {
 			continue
 		}
 		v, ok := snapFloat(sn.Values, "ac_active_power")
@@ -2056,6 +2060,11 @@ func (h *dashboardHandler) apiRelay(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "relay controller is not configured", http.StatusNotFound)
 		return
 	}
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method == http.MethodPost {
@@ -2406,8 +2415,11 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayCon
 		// Таймауты защищают от slowloris и «висящих» соединений, не ограничивая
 		// длинные ответы (/api/series за большой период идёт из PG — WriteTimeout=0):
 		// ReadHeaderTimeout отсекает медленные/зависшие клиенты при приёме заголовка,
-		// IdleTimeout сбрасывает неактивные keep-alive, MaxHeaderBytes — лимит шапки.
+		// ReadTimeout ограничивает чтение тела POST (slowloris на /api/relay и
+		// /api/ce308/energy), IdleTimeout сбрасывает неактивные keep-alive,
+		// MaxHeaderBytes — лимит шапки.
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		WriteTimeout:      0,
 		MaxHeaderBytes:    1 << 20,

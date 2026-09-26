@@ -72,25 +72,8 @@ func runCe308Accumulator(store *redisStore, pg *pgStore, name string, ctx contex
 	log.Printf("ce308: avg старт; период=%s, отсрочка=%s, 10-секундные промежутки", ce308AvgStep, ce308AvgDelay)
 	var wg sync.WaitGroup
 	defer wg.Wait()
-	for {
-		now := time.Now()
-		target := now.Truncate(ce308AvgStep).Add(ce308AvgStep)
-		boundary := time.NewTimer(time.Until(target))
-		select {
-		case <-boundary.C:
-		case <-ctx.Done():
-			stopTimer(boundary)
-			return
-		}
-		delay := time.NewTimer(ce308AvgDelay)
-		select {
-		case <-delay.C:
-		case <-ctx.Done():
-			stopTimer(delay)
-			return
-		}
-		start := target.Add(-ce308AvgStep)
-		end := target
+
+	process := func(start, end time.Time) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -112,5 +95,27 @@ func runCe308Accumulator(store *redisStore, pg *pgStore, name string, ctx contex
 				log.Printf("ce308: avg pg %s: %v", start.Format(time.RFC3339), err)
 			}
 		}()
+	}
+
+	// end — конец следующего необработанного 10-секундного окна. Окно пишем не
+	// раньше, чем через ce308AvgDelay после его границы (чтобы собрать
+	// запаздывающие снимки). После паузы/сна догоняем ВСЕ пропущенные окна, а не
+	// только последнее (раньше target считался от текущего now и окна терялись).
+	end := time.Now().Truncate(ce308AvgStep).Add(ce308AvgStep)
+	for {
+		if d := time.Until(end.Add(ce308AvgDelay)); d > 0 {
+			t := time.NewTimer(d)
+			select {
+			case <-t.C:
+			case <-ctx.Done():
+				stopTimer(t)
+				return
+			}
+		}
+		now := time.Now()
+		for !end.Add(ce308AvgDelay).After(now) {
+			process(end.Add(-ce308AvgStep), end)
+			end = end.Add(ce308AvgStep)
+		}
 	}
 }

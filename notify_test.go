@@ -410,3 +410,25 @@ func TestSubscriberLifecycle(t *testing.T) {
 		t.Fatalf("после отписки адресат должен быть удалён из конфига:\n%s", b)
 	}
 }
+
+// Короткая авария (< stable), о которой ALARM получателю не отправлялся, не должна
+// давать ложное «восстановление» после возврата в норму (регрессия).
+func TestAlertDetectorShortAlarmNoFalseRecover(t *testing.T) {
+	d := &alertDetector{stable: 30 * time.Second}
+	now := time.Now()
+	build := func(bool) (string, bool) { return "MSG", true }
+
+	if _, _, ok := d.evaluate(now, true, build); ok {
+		t.Fatal("ALARM до стабильности не должен слать")
+	}
+	if _, _, ok := d.evaluate(now.Add(10*time.Second), true, build); ok {
+		t.Fatal("ALARM 10с < stable не должен слать")
+	}
+	// Норма после короткой аварии: даже по истечении stable RECOVER не шлём.
+	if msg, _, ok := d.evaluate(now.Add(20*time.Second), false, build); ok {
+		t.Fatalf("ложное восстановление без предшествующей аварии: msg=%q", msg)
+	}
+	if msg, _, ok := d.evaluate(now.Add(60*time.Second), false, build); ok {
+		t.Fatalf("ложное восстановление после удержания: msg=%q", msg)
+	}
+}

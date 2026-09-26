@@ -67,6 +67,9 @@ func meterFromSection(m *meterSection) (*meterConfig, error) {
 	if regCnt == 0 {
 		regCnt = 27
 	}
+	if regCnt < 18 {
+		return nil, fmt.Errorf("register_count=%d: нужно минимум 18 (декодер читает регистры 0..17); при меньшем уйдут нулевые показания", regCnt)
+	}
 	return &meterConfig{Name: m.Name, IP: m.IP, Port: m.Port, Unit: m.Unit, FirstReg: 0, RegisterCnt: regCnt}, nil
 }
 
@@ -119,6 +122,10 @@ func loadMeterConfig(section *meterSection) *meterConfig {
 	if mc.RegisterCnt == 0 {
 		// Значения по умолчанию: полный блок 27 регистров с адреса 0 (как в dds238read.py).
 		mc.RegisterCnt = 27
+	}
+	if mc.RegisterCnt < 18 {
+		log.Printf("meter: legacy dds238.json register_count=%d < 18 — опрос счётчика отключён", mc.RegisterCnt)
+		return nil
 	}
 	return &mc
 }

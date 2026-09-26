@@ -23,7 +23,7 @@
   сети** МАП на дашборд. Цель `MAP (батарея/сеть)` (192.168.0.74, unit 1).
   Пер-слотовый MPPT через Modbus больше не опрашивается. Источник задаёт
   обязательное поле `disabled` подраздела `map.rs485` (отсутствие = ошибка конфига):
-  - `false` — **Modbus TCP/RS485** (`modbusmap/` + `mapClientFor`), блоки 0x400/0x530/0x580;
+  - `false` — **Modbus TCP/RS485** (`modbusmap/` + `mapClientFor`), блоки 0x400/0x580;
   - `true` — пулер по Modbus НЕ запускается, параметры из **веб-API ПАК «Малина»**
     `read_json.php?device=map` (`mpptSite.FetchMAP` + `mapMAPAPI`); обязателен полный
     раздел `map` (поля веб-API, иначе `log.Fatal` при старте). Ключ устройства (devKey)
@@ -44,16 +44,17 @@
   `I_Ch` (ток заряда); `ac_active_power` = `P_Out`; `energy_today` = `Pwr_kW` +
   `Pwr_W/1000` (выработка за сутки, кВт·ч). `timestamp` снимка = поле `timestamp`
   ответа API.
-- **MAP Modbus** (`mapMAPRegisters`): `l1_voltage`=АКБ, `l1_current`=ток заряда
-  (**в режиме заряда MODE 0x400==4 — со знаком «минус»,** согласовано с API-веткой);
-  `ac_active_power`=V×I; `grid_frequency`=0; и для дашборда: `grid_voltage` (`_UNET`
-  0x422, 0 → нет сети, иначе +100 В), `grid_power` (`_PNET` 0x59A/0x59B, sign
-  `_PNET_Sign_P` 0x587), `battery_voltage` (`_UAcc_med` 0x405/0x406,
-  `(VH*256+VL)/10`), `battery_power` (`_PLoad` 0x59E/0x59F, `((H*256+L)/8)*100`).
+- **MAP Modbus** (`mapMAPRegisters`): `l1_voltage`=`battery_voltage`=АКБ (`_UAcc_med`
+  0x405/0x406, `(VH*256+VL)/10`); `l1_current`/`ac_active_power` для МАП **НЕ
+  выставляются** (это теги AC-инверторов; раньше дублировали ток/мощность АКБ и нигде
+  не использовались); `grid_frequency`=0; `battery_power` = `U_АКБ × I_АКБ`
+  (ток 0x432/0x433, `(L+H*256)/16`; в заряде MODE==4 ток отрицательный → мощность
+  отрицательная, при отдаче положительная). `_PLoad` 0x59E/0x59F НЕ используется — это
+  мощность нагрузки, не батареи. Для дашборда: `grid_voltage` (`_UNET` 0x422, 0 → нет
+  сети, иначе +100 В), `grid_power` (`_PNET` 0x59A/0x59B, знак `_PNET_Sign_P` 0x587).
 - **MAP API** (`mapMAPAPI`, при `map.rs485.disabled=true`): тот же контракт из
-  `read_json.php?device=map`: `battery_voltage`/`l1_voltage` = `_Uacc`, `l1_current`
-  = `_Iacc`, `ac_active_power` = `_Uacc×_Iacc`, `grid_frequency` = `_TFNET`,
-  `grid_voltage` = `_UNET` (уже в В, без смещения +100), `grid_power` =
+  `read_json.php?device=map`: `battery_voltage`/`l1_voltage` = `_Uacc`, `grid_frequency`
+  = `_TFNET`, `grid_voltage` = `_UNET` (уже в В, без смещения +100), `grid_power` =
   `±|_PNET_calc|` (= `_UNET`×`_INET`, достоверная; сырой `_PNET` у МАП занижен ~в 5 раз
   против счётчика, поэтому не используется — фолбэк на него только при отсутствии
   `_PNET_calc`). Направление берётся из сырой ячейки `_PNET_Sign_P` (0x587),
@@ -72,17 +73,19 @@
 ## Ключ устройства и цикл опроса
 
 - **Ключ в Redis/PG = `devKey(t)`**: для kindMPPT и kindMAP с slot —
-  `IP#mppt<slot>` (напр. `192.168.0.60#mppt0`), чтобы контроллеры не сливались в
-  одну колонку/ряд. `slot<0` у kindMAP — база батареи/сети (ключ = IP).
+  `IP#mppt-<UID>` (напр. `192.168.0.60#mppt-1097`, UID из ответа веб-API), чтобы
+  контроллеры не сливались в одну колонку/ряд. `slot<0` у kindMAP — база батареи/сети
+  (ключ = IP).
 - **Опрос — 1 раз в секунду** (отдельный цикл `runMapPoll`, не в 10-сек циклах
   инверторов). `PollDevice` (case `kindMAP`) читает блоки `modbusmap`: 0x400
-  (0x20 слов = 0x400..0x43F), 0x530 (`_I_Akb_MPPT`), 0x580 (`_PNET_Sign_P` 0x587,
-  `_PNET` 0x59A/0x59B, `_PLoad` 0x59E/0x59F). Блок 0x420 отдельно не запрашивается —
-  это подмножество блока 0x400..0x43F.
-- **Фактический интервал.** Тикер цикла — 1 с, но сам опрос МАП делает **3
-  последовательных чтения блоков** Modbus (0x400, 0x530, 0x580), каждое — до
+  (0x20 слов = 0x400..0x43F) и 0x580 (`_PNET_Sign_P` 0x587, `_PNET` 0x59A/0x59B,
+  `_PLoad` 0x59E/0x59F). Блок 0x420 отдельно не запрашивается — это подмножество
+  блока 0x400..0x43F; блок 0x530 (токи MPPT) не читается — mapMAPRegisters его не
+  использует (пер-слотовые MPPT берутся из веб-API).
+- **Фактический интервал.** Тикер цикла — 1 с, но сам опрос МАП делает **2
+  последовательных чтения блоков** Modbus (0x400, 0x580), каждое — до
   таймаута чтения гейта (~3 с). Тики `Ticker` коалесцируются, поэтому при медленном
-  гейте реальный период опроса МАП — **~9 с**, а не 1 с (by-design, единый цикл на
+  гейте реальный период опроса МАП — **~6 с**, а не 1 с (by-design, единый цикл на
   всех МАП; одно устройство не даёт отдачи чаще). В Redis это не влияет: запись
   идёт через `SaveSnapshotWindow` (одна строка за 10 с).
 - Запись — через `SaveSnapshotWindow` (`redis_store.go`, см.
