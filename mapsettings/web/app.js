@@ -231,26 +231,9 @@
           inp.addEventListener('change', onInput);
           tdVal.appendChild(inp);
           if (p.text) tdVal.appendChild(el('span', 'ms-text', p.text));
-        } else {
-          tdVal.appendChild(el('span', 'ms-ro', fmt(p.value)));
-          if (p.text) tdVal.appendChild(el('span', 'ms-text', p.text));
-        }
-        tr.appendChild(tdVal);
-        tr.appendChild(el('td', 'ms-unit', p.unit || ''));
-        var rng = '';
-        if (p.min !== null && p.min !== undefined) rng += p.min;
-        if (p.max !== null && p.max !== undefined) rng += (rng ? '…' : '') + p.max;
-        tr.appendChild(el('td', 'ms-range', rng));
-        var note = p.desc || '';
-        if (p.kind === 'eeprom') note = (note ? note + ' · ' : '') + 'EEPROM';
-        tr.appendChild(el('td', 'ms-desc', note));
-        tbody.appendChild(tr);
-        if (isEnum) {
-          // Перечислимый параметр: отдельная строка на всю ширину с группой
-          // радиокнопок — все варианты видны сразу и с подписями.
-          var optTr = el('tr', 'ms-optrow');
-          var optTd = el('td', 'ms-optcell');
-          optTd.colSpan = 6;
+        } else if (isEnum) {
+          // Перечислимый параметр — радиогруппа прямо в колонке «Значение»:
+          // все варианты видны сразу и с подписями.
           var rg = el('div', 'ms-radios');
           p.options.forEach(function (o) {
             var lab = el('label', 'ms-radio');
@@ -268,20 +251,15 @@
           rg.dataset.editOrig = cur;
           rg.title = p.desc || '';
           var onRad = function () {
-            optTr.classList.toggle('changed', readEditValue(rg) !== rg.dataset.editOrig);
+            tr.classList.toggle('changed', readEditValue(rg) !== rg.dataset.editOrig);
           };
           rg.addEventListener('change', onRad);
           rg.addEventListener('input', onRad);
-          optTd.appendChild(rg);
-          optTr.appendChild(optTd);
-          tbody.appendChild(optTr);
+          tdVal.appendChild(rg);
         } else if (isBits) {
-          // Битовая маска: отдельная строка на всю ширину с чекбоксами —
-          // каждый бит включается/выключается независимо.
-          var bitTr = el('tr', 'ms-optrow');
-          var bitTd = el('td', 'ms-optcell');
-          bitTd.colSpan = 6;
-          var cg = el('div', 'ms-checks');
+          // Битовая маска — чекбоксы в колонке «Значение»: каждый бит
+          // включается/выключается независимо.
+          var cbox = el('div', 'ms-checks');
           var raw = (p.raw === null || p.raw === undefined) ? 0 : p.raw;
           var bits = p.bits.slice().sort(function (a, b) { return a.bit - b.bit; });
           bits.forEach(function (bit) {
@@ -292,22 +270,33 @@
             if (raw & (1 << bit.bit)) cb.checked = true;
             lab.appendChild(cb);
             lab.appendChild(document.createTextNode(bit.name || ('бит ' + bit.bit)));
-            cg.appendChild(lab);
+            cbox.appendChild(lab);
           });
-          cg.dataset.editKey = p.key;
-          cg.dataset.editOrig = cur;
-          cg.dataset.scale = String(p.scale === undefined ? 1 : p.scale);
-          cg.dataset.offset = String(p.offset === undefined ? 0 : p.offset);
-          cg.title = p.desc || '';
+          cbox.dataset.editKey = p.key;
+          cbox.dataset.editOrig = cur;
+          cbox.dataset.scale = String(p.scale === undefined ? 1 : p.scale);
+          cbox.dataset.offset = String(p.offset === undefined ? 0 : p.offset);
+          cbox.title = p.desc || '';
           var onBit = function () {
-            bitTr.classList.toggle('changed', readEditValue(cg) !== cg.dataset.editOrig);
+            tr.classList.toggle('changed', readEditValue(cbox) !== cbox.dataset.editOrig);
           };
-          cg.addEventListener('change', onBit);
-          cg.addEventListener('input', onBit);
-          bitTd.appendChild(cg);
-          bitTr.appendChild(bitTd);
-          tbody.appendChild(bitTr);
+          cbox.addEventListener('change', onBit);
+          cbox.addEventListener('input', onBit);
+          tdVal.appendChild(cbox);
+        } else {
+          tdVal.appendChild(el('span', 'ms-ro', fmt(p.value)));
+          if (p.text) tdVal.appendChild(el('span', 'ms-text', p.text));
         }
+        tr.appendChild(tdVal);
+        tr.appendChild(el('td', 'ms-unit', p.unit || ''));
+        var rng = '';
+        if (p.min !== null && p.min !== undefined) rng += p.min;
+        if (p.max !== null && p.max !== undefined) rng += (rng ? '…' : '') + p.max;
+        tr.appendChild(el('td', 'ms-range', rng));
+        var note = p.desc || '';
+        if (p.kind === 'eeprom') note = (note ? note + ' · ' : '') + 'EEPROM';
+        tr.appendChild(el('td', 'ms-desc', note));
+        tbody.appendChild(tr);
       });
       tbl.appendChild(tbody);
       wrap.appendChild(tbl);

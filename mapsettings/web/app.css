@@ -32,12 +32,12 @@ h1 { font-size:22px; margin:0 0 4px; }
 .ms-group-title { margin:0 0 8px; font-size:14px; color:#fff; background:linear-gradient(135deg,#428bca,#346fa1); padding:7px 12px; border-radius:8px; display:inline-block; }
 .ms-table-wrap { overflow-x:auto; }
 .ms-table { border-collapse:collapse; width:100%; table-layout:fixed; font-size:13px; color:#2b3238; }
-.ms-table col.c-name { width:26%; }
-.ms-table col.c-addr { width:16%; }
-.ms-table col.c-val { width:18%; }
+.ms-table col.c-name { width:24%; }
+.ms-table col.c-addr { width:14%; }
+.ms-table col.c-val { width:28%; }
 .ms-table col.c-unit { width:6%; }
-.ms-table col.c-range { width:12%; }
-.ms-table col.c-desc { width:22%; }
+.ms-table col.c-range { width:10%; }
+.ms-table col.c-desc { width:18%; }
 .ms-table th, .ms-table td { border:1px solid #e2e7ec; padding:6px 9px; text-align:left; vertical-align:middle; overflow-wrap:anywhere; word-break:break-word; }
 .ms-table thead th { font-size:12px; font-weight:600; color:#6b7785; background:#f4f7fa; }
 .ms-table td.ms-addr { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:12px; color:#6b7785; }
@@ -51,8 +51,6 @@ h1 { font-size:22px; margin:0 0 4px; }
 .ms-checks { display:flex; flex-direction:column; gap:3px; }
 .ms-radio { display:flex; align-items:flex-start; gap:6px; font-size:12px; font-weight:400; color:#2b3238; cursor:pointer; }
 .ms-radio input { width:auto; margin:2px 0 0; flex:0 0 auto; }
-.ms-optrow td.ms-optcell { background:#f8fbfe; padding:8px 12px; }
-.ms-optrow.changed td.ms-optcell { background:#fff9db; }
 .ms-input:focus { outline:none; border-color:#428bca; }
 .ms-ro { font-weight:600; font-variant-numeric:tabular-nums; }
 .ms-text { color:#6b7785; margin-left:6px; font-size:12px; }
