@@ -407,24 +407,54 @@ func enumText(p mapParamSpec, raw int) string {
 
 func mapRound3(v float64) float64 { return math.Round(v*1000) / 1000 }
 
+// mapOption — вариант перечислимого параметра (значение + подпись из документа).
+type mapOption struct {
+	Value float64 `json:"value"`
+	Label string  `json:"label"`
+}
+
 // mapSettingView — параметр в ответе API.
 type mapSettingView struct {
-	Key      string   `json:"key"`
-	Cell     string   `json:"cell"`
-	Addr     string   `json:"addr"`
-	Name     string   `json:"name"`
-	Unit     string   `json:"unit"`
-	Kind     string   `json:"kind"`
-	Access   string   `json:"access"`
-	Writable bool     `json:"writable"`
-	Value    *float64 `json:"value"`
-	Raw      *int     `json:"raw"`
-	Text     string   `json:"text,omitempty"`
-	Min      *float64 `json:"min,omitempty"`
-	Max      *float64 `json:"max,omitempty"`
-	Desc     string   `json:"desc,omitempty"`
-	Help     string   `json:"help,omitempty"`
-	Error    string   `json:"error,omitempty"`
+	Key      string      `json:"key"`
+	Cell     string      `json:"cell"`
+	Addr     string      `json:"addr"`
+	Name     string      `json:"name"`
+	Unit     string      `json:"unit"`
+	Kind     string      `json:"kind"`
+	Access   string      `json:"access"`
+	Writable bool        `json:"writable"`
+	Value    *float64    `json:"value"`
+	Raw      *int        `json:"raw"`
+	Text     string      `json:"text,omitempty"`
+	Min      *float64    `json:"min,omitempty"`
+	Max      *float64    `json:"max,omitempty"`
+	Desc     string      `json:"desc,omitempty"`
+	Help     string      `json:"help,omitempty"`
+	Error    string      `json:"error,omitempty"`
+	Options  []mapOption `json:"options,omitempty"`
+}
+
+// paramOptions строит список вариантов для перечислимого параметра: значение —
+// в отображаемых единицах (с учётом scale/offset), подпись — из документа.
+func paramOptions(p mapParamSpec) []mapOption {
+	if len(p.Enum) == 0 {
+		return nil
+	}
+	keys := make([]int, 0, len(p.Enum))
+	for k := range p.Enum {
+		if n, err := strconv.Atoi(k); err == nil {
+			keys = append(keys, n)
+		}
+	}
+	sort.Ints(keys)
+	opts := make([]mapOption, 0, len(keys))
+	for _, k := range keys {
+		opts = append(opts, mapOption{
+			Value: mapRound3(float64(k)*p.Scale + p.Offset),
+			Label: p.Enum[strconv.Itoa(k)],
+		})
+	}
+	return opts
 }
 
 // paramHelp собирает текст подсказки из документации: описание, единица/формула,
@@ -536,6 +566,9 @@ func buildSnapshot(mode, ip string, port int, unit byte, params []mapParamSpec, 
 			v.Text = enumText(p, raw)
 		}
 		if p.Access == "rw" {
+			if opts := paramOptions(p); len(opts) > 0 {
+				v.Options = opts
+			}
 			i := add(&snap.Settings, setIdx, p.Group)
 			snap.Settings[i].Params = append(snap.Settings[i].Params, v)
 		} else {

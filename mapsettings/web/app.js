@@ -103,6 +103,16 @@
     return String(v);
   }
 
+  // readEditValue — текущее значение поля правки: значение input/select либо
+  // выбранной радиокнопки в группе.
+  function readEditValue(root) {
+    if (root.classList.contains('ms-radios')) {
+      var r = root.querySelector('input[type=radio]:checked');
+      return r ? r.value : '';
+    }
+    return root.value;
+  }
+
   // ---- Подсказки из документации ----
   var popoverEl = null;
   function hidePopover() {
@@ -185,20 +195,24 @@
         tr.appendChild(tdName);
         tr.appendChild(el('td', 'ms-addr', p.addr + (p.cell ? ' ' + p.cell : '')));
         var tdVal = el('td', 'ms-val');
+        var isEnum = !!(editable && p.writable && p.options && p.options.length);
+        var cur = (p.value === null || p.value === undefined) ? '' : String(p.value);
         if (p.error) {
           tdVal.appendChild(el('span', 'ms-err', p.error));
-        } else if (editable && p.writable) {
+        } else if (editable && p.writable && !isEnum) {
           var inp = document.createElement('input');
           inp.type = 'number';
           inp.step = 'any';
           inp.className = 'ms-input';
-          inp.value = (p.value === null || p.value === undefined) ? '' : p.value;
-          inp.dataset.key = p.key;
-          inp.dataset.orig = (p.value === null || p.value === undefined) ? '' : String(p.value);
+          inp.value = cur;
+          inp.dataset.editKey = p.key;
+          inp.dataset.editOrig = cur;
           inp.title = p.desc || '';
-          inp.addEventListener('input', function () {
-            tr.classList.toggle('changed', inp.value !== inp.dataset.orig);
-          });
+          var onInput = function () {
+            tr.classList.toggle('changed', readEditValue(inp) !== inp.dataset.editOrig);
+          };
+          inp.addEventListener('input', onInput);
+          inp.addEventListener('change', onInput);
           tdVal.appendChild(inp);
           if (p.text) tdVal.appendChild(el('span', 'ms-text', p.text));
         } else {
@@ -215,6 +229,37 @@
         if (p.kind === 'eeprom') note = (note ? note + ' · ' : '') + 'EEPROM';
         tr.appendChild(el('td', 'ms-desc', note));
         tbody.appendChild(tr);
+        if (isEnum) {
+          // Перечислимый параметр: отдельная строка на всю ширину с группой
+          // радиокнопок — все варианты видны сразу и с подписями.
+          var optTr = el('tr', 'ms-optrow');
+          var optTd = el('td', 'ms-optcell');
+          optTd.colSpan = 6;
+          var rg = el('div', 'ms-radios');
+          p.options.forEach(function (o) {
+            var lab = el('label', 'ms-radio');
+            var r = document.createElement('input');
+            r.type = 'radio';
+            r.name = 'rad_' + p.key;
+            r.value = String(o.value);
+            if (String(o.value) === cur) r.checked = true;
+            lab.appendChild(r);
+            lab.appendChild(document.createTextNode(
+              (o.label && o.label !== '') ? o.label : String(o.value)));
+            rg.appendChild(lab);
+          });
+          rg.dataset.editKey = p.key;
+          rg.dataset.editOrig = cur;
+          rg.title = p.desc || '';
+          var onRad = function () {
+            optTr.classList.toggle('changed', readEditValue(rg) !== rg.dataset.editOrig);
+          };
+          rg.addEventListener('change', onRad);
+          rg.addEventListener('input', onRad);
+          optTd.appendChild(rg);
+          optTr.appendChild(optTd);
+          tbody.appendChild(optTr);
+        }
       });
       tbl.appendChild(tbody);
       wrap.appendChild(tbl);
@@ -271,14 +316,15 @@
 
   function collectChanges() {
     var changes = {};
-    var inputs = settingsBody.querySelectorAll('input.ms-input');
-    for (var i = 0; i < inputs.length; i++) {
-      var inp = inputs[i];
-      if (inp.value === '') continue;
-      if (inp.value === inp.dataset.orig) continue;
-      var v = parseFloat(inp.value);
-      if (isNaN(v)) continue;
-      changes[inp.dataset.key] = v;
+    var roots = settingsBody.querySelectorAll('[data-edit-key]');
+    for (var i = 0; i < roots.length; i++) {
+      var root = roots[i];
+      var v = readEditValue(root);
+      if (v === '') continue;
+      if (v === root.dataset.editOrig) continue;
+      var f = parseFloat(v);
+      if (isNaN(f)) continue;
+      changes[root.dataset.editKey] = f;
     }
     return changes;
   }
