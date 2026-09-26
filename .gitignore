@@ -61,3 +61,6 @@ mapgateway/review-*
 
 # Python-кэш генератора каталога map-settings
 __pycache__/
+
+# рабочие скрипты статистики по батареям BMS (локальные, вне git)
+bat_stat_scripts/
