@@ -285,3 +285,47 @@ systemd его НЕ перезапустит (`Restart=always` не сработ
 - `zig cc ... -target arm-linux-musleabihf -static` — чисто, ELF32 ARM static.
 - Runtime: `-p 01888` слушает 1888 (десятичное); нечисловые/вне диапазона
   `-p` → код 2; `--sn 0x1B6` → ok.
+
+---
+
+# Деплой на прод-Малину и проверка (2026-09-26)
+
+Собран `make VERSION=0.5.0 mapgateway` → `dist/mapgateway-armv7l-0.5.0`
+(ELF32 ARM, static, md5 `013a742e8b5a1652cfa261b4888e31d6`). Развёрнут на
+`192.168.13.60` в `/settings/daemons/mapgateway` (scp в `.new`, сверка md5,
+атомарная замена `mv`, `chmod 755`), сервис `mapgateway.service` перезапущен.
+
+**Важно про юнит на проде:** реальный `ExecStart` содержит `--sn 51510`
+(рабочий серийник МАП), а не `CHANGE_ME`. Юнит на Малине **не перезаписывали** —
+его `ExecStart` корректен и с новым бинарником; в git остаётся публичная
+заглушка без реального SN (публиковать серийник нельзя). Rollback-копия
+`mapgateway.prev.0.4.0` после успешной проверки удалена (артефакт 0.4.0 есть в
+`dist/`).
+
+## Логи (syslog/daemon.log) после рестарта 08:54:37
+
+```
+started: dev=auto baud=115200 unit=1 sn=51510 listen=0.0.0.0:502
+client 192.168.13.253:33308 connected
+probe /dev/ttyUSB2: sn=51510 devopt=3 verPO=0x64 letter=97 -> MAP
+scan: МАП найден на /dev/ttyUSB2
+opened /dev/ttyUSB2 at 115200 baud
+```
+
+- Новый автопоиск отработал (один кандидат за проход, фильтр `--sn 51510`
+  совпал), устройство открыто.
+- Счётчики ошибок с момента рестарта: `serial timeout` = 0, `serial bad crc` = 0,
+  `too many clients` = 0, `send queue overflow` = 0.
+- Установленное TCP-соединение: `192.168.13.253:33308 -> 192.168.13.60:502`.
+
+## Функциональная проверка
+
+- Прямое чтение через шлюз (Modbus TCP, `0x03`): адрес 438 → `0x455A`,
+  1099 → `0x0500`, 1027 → `0x0003`; кадры валидны по MBAP (CRC в TCP нет).
+- End-to-end: `/api/current` sunReceiver на `.253` отдаёт живые `map_*`
+  (`map_battery_voltage=52`, `map_grid_voltage=222`, `map_battery_power`,
+  `map_grid_power`), значения меняются между замерами (battery_power
+  3714.8 → 3659.5 за 6 с) — пулер МАП реально работает через новый шлюз.
+
+**Итог:** модуль развёрнут, активен, слушает `:502`, автопоиск и трансляция RTU
+работают, ошибок шины нет, данные МАП поступают в sunReceiver.
