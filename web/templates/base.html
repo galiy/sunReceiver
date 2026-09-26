@@ -7,7 +7,6 @@
   <a href="/" {{if eq .active "home"}}class="active"{{end}}>Главная</a>
   <a href="/charts" {{if eq .active "charts"}}class="active"{{end}}>Графики</a>
   {{if .flags.ShowMeter}}<a href="/energy" {{if eq .active "energy"}}class="active"{{end}}>Электроэнергия</a>{{end}}
-  {{if .flags.ShowMapSettings}}<a href="/map-settings" {{if eq .active "mapsettings"}}class="active"{{end}}>Настройки МАП</a>{{end}}
 </div>
 {{end}}
 {{define "refreshToggle"}}

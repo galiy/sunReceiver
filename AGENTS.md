@@ -29,7 +29,6 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 | Шлюз Modbus TCP↔RTU (`mapgateway/`, C) | [`mapgateway/README.md`](mapgateway/README.md) |
 | Уведомления в MAX | [`docs/modules/notify.md`](docs/modules/notify.md) |
 | Сетевое реле SR-201 (лампы-индикаторы) | [`docs/relay_sr-201(2light).md`](docs/relay_sr-201(2light).md) |
-| Настройки МАП (страница `/map-settings`) | [`map-settings/README.md`](map-settings/README.md) |
 | Протокол Solarman V5 (реверс) | [`docs/research/solarman-v5.md`](docs/research/solarman-v5.md) |
 | Регистры Sofar K-TLX | [`docs/research/sofar-registers.md`](docs/research/sofar-registers.md) |
 | Регистры Deye string | [`docs/research/deye-registers.md`](docs/research/deye-registers.md) |
@@ -143,14 +142,6 @@ legacy-файлом `dds238.json`). Счётчик Энергомера **CE308*
   и `runWhiteLampController` (белая — наличие напряжения сети). Данные — только
   из Redis, анализ не встроен в пулеры; состояния задаются из других модулей через
   `SetRelayLamp`. Полное описание — [`docs/relay_sr-201(2light).md`](docs/relay_sr-201(2light).md).
-- **Настройки МАП (страница `/map-settings`)** — `mapsettings.go` +
-  `mapsettings_api.go` + `mapsettings/catalog.json` (каталог ячеек): чтение/
-  инспекция/запись ячеек МАП по **Modbus TCP через mapgateway** (`0x03/0x06`)
-  со служебным обрамлением `03 → запись → 07`; настройки (rw) и отдельный
-  раздел «Управляющие воздействия и мониторинг» (ro-параметры и команды),
-  отдельная форма времени. Каталог — строго из
-  `protocol_MAP_cells_2026_07_15.doc`. Полное описание —
-  [`map-settings/README.md`](map-settings/README.md).
 
 ### Универсальный контракт `values`
 
