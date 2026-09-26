@@ -234,7 +234,7 @@ func ParseModbusPDU(payload []byte, offsets ...int) []ModbusPDU {
 			continue
 		}
 		vlen := int(payload[s+2])
-		if s+3+vlen+2 > len(payload) {
+		if vlen == 0 || vlen%2 != 0 || s+3+vlen+2 > len(payload) {
 			continue
 		}
 		p := ModbusPDU{Offset: s, Function: payload[s+1], ByteCount: uint8(vlen)}

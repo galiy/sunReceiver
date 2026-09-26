@@ -150,6 +150,7 @@ static uint16_t crc16(const uint8_t *d, int n)
 /* ---------------- COM-порт (Modbus RTU): автопоиск своего устройства -------- */
 static int      g_serial_fd = -1;
 static speed_t  g_speed = B115200;
+static int      g_baud = 115200;             /* запрошенный baud (для логов; g_speed — termios-константа) */
 static int      g_probe_unit = 1;            /* Modbus-адрес МАП для опроса при поиске */
 static long     g_sn = -1;                   /* --sn: ожидаемый серийник МАП (16 бит), -1 = не задан */
 static int      g_letter = -1;               /* --sn-letter: ожидаемая буква серийника, -1 = не задана */
@@ -404,7 +405,7 @@ static int serial_ensure(void)
     }
     g_serial_fd = fd;
     g_fail_streak = 0;
-    GW_LOG("opened %s at %u baud\n", dev, (unsigned)115200);
+    GW_LOG("opened %s at %d baud\n", dev, g_baud);
     return g_serial_fd;
 }
 
@@ -726,6 +727,7 @@ int main(int argc, char **argv)
     }
 
     g_speed = parse_baud(baud);
+    g_baud = baud;
 
     signal(SIGPIPE, SIG_IGN);
     signal(SIGTERM, on_signal);
@@ -769,7 +771,11 @@ int main(int argc, char **argv)
                 client_reset(&cl[i]);
                 continue;
             }
-            if (cl[i].out_len == 0 && now - cl[i].last_ms >= CLIENT_IDLE_MS) {
+            /* Любой клиент без активности >= CLIENT_IDLE_MS закрывается, в т.ч.
+               «живой, но нечитающий» с непустой исходящей очередью: иначе после
+               заполнения send-буфера он навсегда удерживал бы слот (out_len > 0
+               исключал его из рипера). Нормальный запрос обрабатывается за мс. */
+            if (now - cl[i].last_ms >= CLIENT_IDLE_MS) {
                 GW_LOG("client slot %d idle timeout, closing\n", i);
                 client_reset(&cl[i]);
             }

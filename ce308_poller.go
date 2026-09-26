@@ -189,6 +189,9 @@ func ce308PollConnected(store *redisStore, cfg *ce308Config, m *ce308Meter, trig
 				// логируем; следующий опрос мгновенных значений продолжится.
 				logCE308("снимок энергии не удался: %v", err)
 			}
+			// Сдвигаем автотаймер от ручного снимка, чтобы вскоре не запустился
+			// автономный и не читал END01..END04 дважды подряд.
+			energyT.Reset(ce308EnergyInterval)
 		case <-ctx.Done():
 			return ctx.Err()
 		}

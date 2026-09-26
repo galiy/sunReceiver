@@ -28,7 +28,9 @@ import (
 // testStore создаёт тестовый Redis-клиент (предполагается запущенный локально).
 func testStore(t *testing.T) *redisStore {
 	t.Helper()
-	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379"})
+	// Отдельная БД (15), чтобы тесты не чистили ключи приложения в DB 0 на
+	// машине разработки с живым локальным Redis.
+	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379", DB: 15})
 	if err := rdb.Ping(context.Background()).Err(); err != nil {
 		t.Skipf("redis недоступен: %v", err)
 	}
