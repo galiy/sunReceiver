@@ -163,6 +163,13 @@
       box.appendChild(el('h3', 'ms-group-title', g.name));
       var wrap = el('div', 'ms-table-wrap');
       var tbl = el('table', 'ms-table');
+      var cg = el('colgroup');
+      ['c-name', 'c-addr', 'c-val', 'c-unit', 'c-range', 'c-desc'].forEach(function (c) {
+        var col = document.createElement('col');
+        col.className = c;
+        cg.appendChild(col);
+      });
+      tbl.appendChild(cg);
       var thead = el('thead');
       var hr = el('tr');
       ['Параметр', 'Ячейка', 'Значение', 'Ед.', 'Диапазон', 'Описание'].forEach(function (h) {

@@ -31,19 +31,25 @@ h1 { font-size:22px; margin:0 0 4px; }
 .ms-group { background:#fff; border:1px solid #d0d6de; border-radius:10px; padding:12px 14px; margin-bottom:12px; }
 .ms-group-title { margin:0 0 8px; font-size:14px; color:#fff; background:linear-gradient(135deg,#428bca,#346fa1); padding:7px 12px; border-radius:8px; display:inline-block; }
 .ms-table-wrap { overflow-x:auto; }
-.ms-table { border-collapse:collapse; width:100%; font-size:13px; color:#2b3238; }
-.ms-table th, .ms-table td { border:1px solid #e2e7ec; padding:6px 9px; text-align:left; vertical-align:middle; }
+.ms-table { border-collapse:collapse; width:100%; table-layout:fixed; font-size:13px; color:#2b3238; }
+.ms-table col.c-name { width:26%; }
+.ms-table col.c-addr { width:16%; }
+.ms-table col.c-val { width:18%; }
+.ms-table col.c-unit { width:6%; }
+.ms-table col.c-range { width:12%; }
+.ms-table col.c-desc { width:22%; }
+.ms-table th, .ms-table td { border:1px solid #e2e7ec; padding:6px 9px; text-align:left; vertical-align:middle; overflow-wrap:anywhere; word-break:break-word; }
 .ms-table thead th { font-size:12px; font-weight:600; color:#6b7785; background:#f4f7fa; }
-.ms-table td.ms-addr { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:12px; color:#6b7785; white-space:nowrap; }
-.ms-table td.ms-val { white-space:nowrap; }
-.ms-table td.ms-unit, .ms-table td.ms-range { color:#6b7785; white-space:nowrap; }
+.ms-table td.ms-addr { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:12px; color:#6b7785; }
+.ms-table td.ms-val { white-space:normal; }
+.ms-table td.ms-unit, .ms-table td.ms-range { color:#6b7785; }
 .ms-table td.ms-desc { color:#8a94a0; font-size:12px; }
 .ms-table tr.changed td { background:#fff9db; }
 .ms-table tr.changed td.ms-name::before { content:"● "; color:#f59f00; }
-.ms-input { width:110px; background:#fff; color:#2b3238; border:1px solid #d0d6de; border-radius:6px; padding:5px 8px; font-size:14px; font-variant-numeric:tabular-nums; }
+.ms-input { width:100%; max-width:96px; background:#fff; color:#2b3238; border:1px solid #d0d6de; border-radius:6px; padding:5px 8px; font-size:14px; font-variant-numeric:tabular-nums; }
 .ms-input:focus { outline:none; border-color:#428bca; }
 .ms-ro { font-weight:600; font-variant-numeric:tabular-nums; }
-.ms-text { color:#6b7785; margin-left:8px; font-size:12px; }
+.ms-text { color:#6b7785; margin-left:6px; font-size:12px; }
 .ms-err { color:#f03e3e; }
 
 /* Кнопка-подсказка «?» у параметров и элементов управления. */

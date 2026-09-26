@@ -1149,6 +1149,65 @@ def make_key(raw, addr, used):
     return key
 
 
+def infer_unit(name, desc, group, scale):
+    """Выводит единицу измерения из русских слов имени/описания (если формула
+    в документе не дала unit). Возвращает "" там, где единицы нет по смыслу."""
+    t = (name + " " + desc).lower()
+    if re.search(r"напряж", t):
+        return "В"
+    if re.search(r"ток", t):
+        return "А"
+    if re.search(r"мощност|мощн", t):
+        return "Вт"
+    if re.search(r"частот", t):
+        return "Гц"
+    if re.search(r"температур|°c|градус|град", t):
+        return "°C"
+    if re.search(r"ёмкост|емкост|а[·.]?\s?ч\b", t):
+        return "А·ч"
+    if re.search(r"энерг|квт", t):
+        return "кВт·ч"
+    if re.search(r"врем|минут", t):
+        return "мин"
+    if re.search(r"процент", t):
+        return "%"
+    return ""
+
+
+def fill_units_ranges(params):
+    """Дозаполняет unit и min/max у всех параметров.
+
+    - unit: если формула документа не дала — по смыслу имени/описания;
+    - min/max (в отображаемых единицах): для перечислимых — по значениям
+      enum; иначе — представимый диапазон байта/слова (0..255 или 0..65535 с
+      учётом scale/offset), либо явный «от A до B» из описания.
+    """
+    for p in params:
+        scale = p.get("scale") or 1.0
+        offset = p.get("offset") or 0.0
+        enum = p.get("enum") or {}
+        has_bits = bool(p.get("bits"))
+        # Единицу выводим только для «измеримых» ячеек: перечислимые коды и
+        # битовые флаги единицы по смыслу не имеют; у настроек-кодов (scale=1,
+        # не RAM) единицу не выдумываем — иначе «Мощность устройства» получила
+        # бы Вт, будучи кодом.
+        if not p.get("unit") and not enum and not has_bits and (p["kind"] == "ram" or scale != 1.0):
+            p["unit"] = infer_unit(p.get("name", ""), p.get("desc", ""), p.get("group", ""), scale)
+        nums = sorted(int(k) for k in enum.keys() if re.fullmatch(r"-?\d+", k))
+        if nums:
+            p["min"] = round(nums[0] * scale + offset, 3)
+            p["max"] = round(nums[-1] * scale + offset, 3)
+            continue
+        m = re.search(r"от\s+(-?\d+)\s+до\s+(-?\d+)", p.get("desc", ""))
+        if m:
+            p["min"] = round(float(m.group(1)), 3)
+            p["max"] = round(float(m.group(2)), 3)
+            continue
+        raw_max = 65535 if p["width"] == 2 else 255
+        p["min"] = round(offset, 3)
+        p["max"] = round(offset + raw_max * scale, 3)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1229,6 +1288,7 @@ def main(argv=None):
         params.append(out)
 
     params.sort(key=lambda p: (p["addr"], p["cell"]))
+    fill_units_ranges(params)
     self_check(params)
     catalog = {"source": SOURCE_NAME, "title": TITLE, "params": params}
 
