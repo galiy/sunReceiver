@@ -19,7 +19,9 @@
  *
  * Использование:
  *   mapgateway [-d device] [-b baud] [-p tcp_port] [-l listen_addr] [-v]
- *   device — путь к COM (по умолчанию ищется FTDI by-id, иначе /dev/ttyUSB2)
+ *   device — путь к COM; по умолчанию автопоиск среди свободных
+ *            ttyUSB, ttyACM и serial-by-id в /dev с проверкой
+ *            идентификации МАП (по одному кандидату за проход)
  *   baud   — 9600|19200|38400|57600|115200 (по умолчанию 115200)
  *   tcp_port — по умолчанию 502
  *   --version / -V — печатает "mapgateway <VERSION>" и выходит
@@ -29,6 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <errno.h>
@@ -59,7 +62,9 @@
 
 #define MAX_CLIENTS   16
 #define MAX_FRAME     512      /* MBAP + PDU максимум */
+#define CLIENT_OUTBUF (MAX_FRAME * 4)  /* очередь недописанного ответа клиенту */
 #define RTU_MAX       260
+#define CLIENT_IDLE_MS 300000ull       /* 5 мин без обмена — слот освобождается */
 #define LOG_PRI       30       /* facility daemon(3)*8 + severity info(6) = 30 */
 
 /* ---------------- лог: syslog-уведомления в /dev/log (rsyslog -> .253) ------ */
@@ -294,23 +299,83 @@ static int dev_is_map(const char *dev)
     return 0;
 }
 
-/* Сканируем свободные /dev/ttyUSB* и ищем наш МАП. */
+/* Кандидаты автопоиска: /dev/ttyUSB{0..N}, /dev/ttyACM{0..N} и /dev/serial/by-id (симлинки). */
+static int build_scan_candidates(glob_t *g)
+{
+    memset(g, 0, sizeof *g);
+    /* GLOB_NOCHECK: отсутствие совпадений не ошибка, а литерал шаблона —
+     * он отсеется проверкой stat при обходе. Иначе первый же пустой шаблон
+     * (напр. нет ttyUSB, но есть ttyACM) сорвал бы весь скан. */
+    if (glob("/dev/ttyUSB*", GLOB_NOCHECK, NULL, g) != 0) {
+        globfree(g);
+        return -1;
+    }
+    glob("/dev/ttyACM*", GLOB_NOCHECK | GLOB_APPEND, NULL, g);
+    glob("/dev/serial/by-id/*", GLOB_NOCHECK | GLOB_APPEND, NULL, g);
+    return 0;
+}
+
+/*
+ * Сканируем свободные последовательные порты и ищем наш МАП.
+ * За один вызов проверяется не более одного кандидата: так event loop не
+ * блокируется на PROBE_MS * (число портов) при каждом сбое шины. Список
+ * кандидатов сохраняется между вызовами до исчерпания или находки.
+ */
+static glob_t g_scan;
+static int    g_scan_active = 0;
+static size_t g_scan_idx = 0;
+static dev_t  g_scan_seen[64];
+static int    g_scan_seen_n = 0;
+
+static void scan_reset(void)
+{
+    if (g_scan_active) { globfree(&g_scan); g_scan_active = 0; }
+    g_scan_idx = 0;
+    g_scan_seen_n = 0;
+}
+
+/* Один и тот же порт может встретиться и как ttyUSB*, и как by-id — дедуп. */
+static int scan_seen(dev_t rdev)
+{
+    for (int i = 0; i < g_scan_seen_n; i++)
+        if (g_scan_seen[i] == rdev) return 1;
+    if (g_scan_seen_n < (int)(sizeof(g_scan_seen) / sizeof(g_scan_seen[0])))
+        g_scan_seen[g_scan_seen_n++] = rdev;
+    return 0;
+}
+
 static int discover_device(char *out, size_t outn)
 {
-    glob_t g;
-    if (glob("/dev/ttyUSB*", 0, NULL, &g) != 0) { globfree(&g); return 0; }
-    int found = 0;
-    for (size_t i = 0; i < g.gl_pathc && !found; i++) {
-        const char *dev = g.gl_pathv[i];
-        if (port_in_use_by_other(dev)) continue;   /* порт занят (bmslistener/mapd/…) */
-        if (dev_is_map(dev)) {
-            snprintf(out, outn, "%s", dev);
-            GW_LOG("scan: МАП найден на %s\n", dev);
-            found = 1;
-        }
+    if (!g_scan_active) {
+        if (build_scan_candidates(&g_scan) != 0)
+            return 0;
+        g_scan_active = 1;
+        g_scan_idx = 0;
+        g_scan_seen_n = 0;
     }
-    globfree(&g);
-    return found;
+
+    if (g_scan_idx >= g_scan.gl_pathc) {   /* список исчерпан — начнём заново */
+        scan_reset();
+        return 0;
+    }
+
+    const char *dev = g_scan.gl_pathv[g_scan_idx++];
+
+    struct stat st;
+    if (stat(dev, &st) != 0 || !S_ISCHR(st.st_mode))
+        return 0;                          /* пропал или не tty — следующий */
+    if (scan_seen(st.st_rdev))
+        return 0;                          /* уже проверяли в этом проходе */
+    if (port_in_use_by_other(dev))
+        return 0;                          /* порт занят (bmslistener/mapd/…) */
+
+    if (dev_is_map(dev)) {
+        snprintf(out, outn, "%s", dev);
+        GW_LOG("scan: МАП найден на %s\n", dev);
+        scan_reset();
+        return 1;
+    }
+    return 0;   /* проверен один кандидат — вернём управление event loop */
 }
 
 /* Гарантирует открытый порт: берёт заданный/-найденный; иначе ищет среди свободных. */
@@ -443,33 +508,83 @@ static int serial_transaction(const uint8_t *req, int reqlen,
 
 /* ---------------- TCP-сервер (Modbus TCP) ---------------------------------- */
 struct client {
-    int  fd;
-    uint8_t buf[MAX_FRAME * 2];
-    int  len;
+    int      fd;
+    uint8_t  buf[MAX_FRAME * 2];  /* входной поток MBAP */
+    int      len;
+    uint8_t  out[CLIENT_OUTBUF];  /* недописанный ответ */
+    int      out_off;             /* смещение непереданной части в out */
+    int      out_len;             /* сколько байт ещё не передано */
+    uint64_t last_ms;             /* время последней активности */
+    int      dead;               /* сокет сломан — слот освободить */
 };
 
-static void send_mbap(int fd, uint16_t txn, uint8_t unit,
-                      const uint8_t *pdu, int pdu_len)
+static void client_reset(struct client *c)
 {
-    uint8_t out[MAX_FRAME];
-    int len = pdu_len + 1;              /* unit + pdu */
-    out[0] = (uint8_t)(txn >> 8); out[1] = (uint8_t)(txn & 0xff);
-    out[2] = 0; out[3] = 0;
-    out[4] = (uint8_t)(len >> 8); out[5] = (uint8_t)(len & 0xff);
-    out[6] = unit;
-    memcpy(out + 7, pdu, (size_t)pdu_len);
-    ssize_t n = write(fd, out, (size_t)(7 + pdu_len));
-    (void)n;
+    if (c->fd >= 0) close(c->fd);
+    c->fd = -1;
+    c->len = 0;
+    c->out_off = 0;
+    c->out_len = 0;
+    c->dead = 0;
 }
 
-static void send_exception(int fd, uint16_t txn, uint8_t unit, uint8_t func, uint8_t code)
+/* Дописывает накопленный ответ: EAGAIN — ждём POLLOUT, ошибка — dead. */
+static void client_flush(struct client *c)
+{
+    while (c->fd >= 0 && c->out_len > 0) {
+        ssize_t w = write(c->fd, c->out + c->out_off, (size_t)c->out_len);
+        if (w > 0) {
+            c->out_off += (int)w;
+            c->out_len -= (int)w;
+            continue;
+        }
+        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
+            break;                 /* сокет не готов — допишем по POLLOUT */
+        c->dead = 1;               /* EPIPE/ECONNRESET/… — клиент отвалился */
+        return;
+    }
+    if (c->out_off > 0) {
+        if (c->out_len > 0)
+            memmove(c->out, c->out + c->out_off, (size_t)c->out_len);
+        c->out_off = 0;
+    }
+}
+
+/* Ставит ответ в очередь и пытается отдать его, не блокируя event loop. */
+static void send_mbap(struct client *c, uint16_t txn, uint8_t unit,
+                      const uint8_t *pdu, int pdu_len)
+{
+    if (c->fd < 0 || c->dead) return;
+    if (pdu_len < 0 || pdu_len > MAX_FRAME - 7) { c->dead = 1; return; }
+
+    uint8_t out[MAX_FRAME];
+    int total = 7 + pdu_len;
+    out[0] = (uint8_t)(txn >> 8); out[1] = (uint8_t)(txn & 0xff);
+    out[2] = 0; out[3] = 0;
+    out[4] = (uint8_t)((pdu_len + 1) >> 8);
+    out[5] = (uint8_t)((pdu_len + 1) & 0xff);
+    out[6] = unit;
+    memcpy(out + 7, pdu, (size_t)pdu_len);
+
+    if (c->out_len + total > (int)sizeof(c->out)) {
+        GW_LOG("client %d send queue overflow, dropping\n", c->fd);
+        c->dead = 1;
+        return;
+    }
+    memcpy(c->out + c->out_len, out, (size_t)total);
+    c->out_len += total;
+    client_flush(c);
+}
+
+static void send_exception(struct client *c, uint16_t txn, uint8_t unit,
+                           uint8_t func, uint8_t code)
 {
     uint8_t pdu[2] = { (uint8_t)(func | 0x80), code };
-    send_mbap(fd, txn, unit, pdu, 2);
+    send_mbap(c, txn, unit, pdu, 2);
 }
 
 /* Обработка одного MBAP-запроса целиком (frame длиной framelen). */
-static void handle_frame(int cfd, const uint8_t *frame, int framelen)
+static void handle_frame(struct client *c, const uint8_t *frame, int framelen)
 {
     if (framelen < 8) return;
     uint16_t txn  = (uint16_t)((frame[0] << 8) | frame[1]);
@@ -482,25 +597,25 @@ static void handle_frame(int cfd, const uint8_t *frame, int framelen)
 
     /* RTU: unit + PDU + CRC(lo,hi) */
     uint8_t rtu[RTU_MAX];
-    if (plen + 3 > RTU_MAX) { send_exception(cfd, txn, unit, pdu[0], 0x03); return; }
+    if (plen + 3 > RTU_MAX) { send_exception(c, txn, unit, pdu[0], 0x03); return; }
     rtu[0] = unit;
     memcpy(rtu + 1, pdu, (size_t)plen);
-    uint16_t c = crc16(rtu, plen + 1);
-    rtu[plen + 1] = (uint8_t)(c & 0xff);
-    rtu[plen + 2] = (uint8_t)(c >> 8);
+    uint16_t c16 = crc16(rtu, plen + 1);
+    rtu[plen + 1] = (uint8_t)(c16 & 0xff);
+    rtu[plen + 2] = (uint8_t)(c16 >> 8);
 
     uint8_t resp[RTU_MAX];
     int rlen = 0;
     if (serial_transaction(rtu, plen + 3, resp, &rlen, 1000) != 0) {
-        send_exception(cfd, txn, unit, pdu[0], 0x0B);   /* gateway target failed */
+        send_exception(c, txn, unit, pdu[0], 0x0B);   /* gateway target failed */
         return;
     }
     if (rlen < 3 || resp[0] != unit) {
-        send_exception(cfd, txn, unit, pdu[0], 0x0B);
+        send_exception(c, txn, unit, pdu[0], 0x0B);
         return;
     }
     /* resp: unit + PDU(без CRC) — отдаём в MBAP */
-    send_mbap(cfd, txn, resp[0], resp + 1, rlen - 3);
+    send_mbap(c, txn, resp[0], resp + 1, rlen - 3);
 }
 
 static speed_t parse_baud(int b)
@@ -520,10 +635,24 @@ static void usage(const char *a)
     fprintf(stderr,
         "usage: %s [-d device] [-b baud] [-u unit] [--sn N] [--sn-letter C]\n"
         "          [-p tcp_port] [-l listen_addr] [-v]\n"
-        "  device: по умолчанию автопоиск (свободные /dev/ttyUSB*; проверка идентификации МАП:\n"
-        "          _VerPO!=0, _DevOpt in {1,2,3}, при --sn — совпадение серийника 0x18/0x19)\n"
+        "  device: по умолчанию автопоиск (свободные /dev/ttyUSB*, /dev/ttyACM*,\n"
+        "          /dev/serial/by-id/*; проверка идентификации МАП: _VerPO!=0,\n"
+        "          _DevOpt in {1,2,3}, при --sn — совпадение серийника 0x18/0x19)\n"
+        "  --sn CHANGE_ME — заглушка: фильтр по серийнику отключается (не задаёт sn=0)\n"
         "  baud=115200, unit=1, tcp_port=%d, listen=%s\n",
         a, DEF_TCP_PORT, DEF_LISTEN);
+}
+
+/* Строгий разбор целого аргумента: вся строка, диапазон [min,max]. */
+static int parse_int_arg(const char *s, long min, long max, long *out)
+{
+    errno = 0;
+    char *end = NULL;
+    long v = strtol(s, &end, 0);
+    if (errno != 0 || end == s || *end != '\0' || v < min || v > max)
+        return -1;
+    *out = v;
+    return 0;
 }
 
 int main(int argc, char **argv)
@@ -540,15 +669,47 @@ int main(int argc, char **argv)
             snprintf(g_override_dev, sizeof(g_override_dev), "%s", argv[++i]);
             g_have_override = 1;
         } else if (!strcmp(argv[i], "-u") && i + 1 < argc) {
-            g_probe_unit = atoi(argv[++i]);
+            long v;
+            if (parse_int_arg(argv[++i], 1, 247, &v) != 0) {
+                fprintf(stderr, "mapgateway: некорректный -u '%s' (1..247)\n", argv[i]);
+                return 2;
+            }
+            g_probe_unit = (int)v;
         } else if (!strcmp(argv[i], "--sn") && i + 1 < argc) {
-            g_sn = strtol(argv[++i], NULL, 0);
+            const char *v = argv[++i];
+            if (!strcasecmp(v, "CHANGE_ME")) {
+                g_sn = -1;
+                fprintf(stderr, "mapgateway: --sn CHANGE_ME -> фильтр по серийнику отключён\n");
+            } else {
+                long x;
+                if (parse_int_arg(v, 0, 0xFFFF, &x) != 0) {
+                    fprintf(stderr, "mapgateway: некорректный --sn '%s' (0..65535)\n", v);
+                    return 2;
+                }
+                g_sn = x;
+            }
         } else if (!strcmp(argv[i], "--sn-letter") && i + 1 < argc) {
-            g_letter = (unsigned char)argv[++i][0];
+            const char *v = argv[++i];
+            if (v[0] == '\0') {
+                fprintf(stderr, "mapgateway: пустой --sn-letter\n");
+                return 2;
+            }
+            g_letter = (unsigned char)v[0];
         } else if (!strcmp(argv[i], "-b") && i + 1 < argc) {
-            baud = atoi(argv[++i]);
+            long v;
+            if (parse_int_arg(argv[++i], 0, 1000000, &v) != 0 ||
+                (v != 9600 && v != 19200 && v != 38400 && v != 57600 && v != 115200)) {
+                fprintf(stderr, "mapgateway: некорректный -b '%s' (9600|19200|38400|57600|115200)\n", argv[i]);
+                return 2;
+            }
+            baud = (int)v;
         } else if (!strcmp(argv[i], "-p") && i + 1 < argc) {
-            tcp_port = atoi(argv[++i]);
+            long v;
+            if (parse_int_arg(argv[++i], 1, 65535, &v) != 0) {
+                fprintf(stderr, "mapgateway: некорректный -p '%s' (1..65535)\n", argv[i]);
+                return 2;
+            }
+            tcp_port = (int)v;
         } else if (!strcmp(argv[i], "-l") && i + 1 < argc) {
             listen_addr = argv[++i];
         } else if (!strcmp(argv[i], "-v")) {
@@ -596,13 +757,31 @@ int main(int argc, char **argv)
     for (int i = 0; i < MAX_CLIENTS; i++) cl[i].fd = -1;
 
     while (!g_stop) {
+        uint64_t now = now_ms();
+
+        /* Слоты «мёртвых» и простаивающих клиентов не должны выедать MAX_CLIENTS. */
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+            if (cl[i].fd < 0) continue;
+            if (cl[i].dead) {
+                GW_LOG("client slot %d dropped\n", i);
+                client_reset(&cl[i]);
+                continue;
+            }
+            if (cl[i].out_len == 0 && now - cl[i].last_ms >= CLIENT_IDLE_MS) {
+                GW_LOG("client slot %d idle timeout, closing\n", i);
+                client_reset(&cl[i]);
+            }
+        }
+
         struct pollfd pfds[1 + MAX_CLIENTS];
         int      map[1 + MAX_CLIENTS];
         int n = 0;
         pfds[n].fd = lfd; pfds[n].events = POLLIN; map[n] = -1; n++;
         for (int i = 0; i < MAX_CLIENTS; i++) {
             if (cl[i].fd >= 0) {
-                pfds[n].fd = cl[i].fd; pfds[n].events = POLLIN; map[n] = i; n++;
+                pfds[n].fd = cl[i].fd;
+                pfds[n].events = (short)(POLLIN | (cl[i].out_len > 0 ? POLLOUT : 0));
+                map[n] = i; n++;
             }
         }
         int pr = poll(pfds, (nfds_t)n, 500);
@@ -614,14 +793,29 @@ int main(int argc, char **argv)
             socklen_t cl_len = sizeof(ca);
             int cfd = accept(lfd, (struct sockaddr *)&ca, &cl_len);
             if (cfd >= 0) {
+                fcntl(cfd, F_SETFL, fcntl(cfd, F_GETFL, 0) | O_NONBLOCK);
                 setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+                setsockopt(cfd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
+#ifdef TCP_KEEPIDLE
+                int ka = 60;
+                setsockopt(cfd, IPPROTO_TCP, TCP_KEEPIDLE, &ka, sizeof(ka));
+                ka = 10;
+                setsockopt(cfd, IPPROTO_TCP, TCP_KEEPINTVL, &ka, sizeof(ka));
+                ka = 3;
+                setsockopt(cfd, IPPROTO_TCP, TCP_KEEPCNT, &ka, sizeof(ka));
+#endif
                 int slot = -1;
                 for (int i = 0; i < MAX_CLIENTS; i++) if (cl[i].fd < 0) { slot = i; break; }
                 if (slot < 0) {
                     GW_LOG("too many clients, rejecting\n");
                     close(cfd);
                 } else {
-                    cl[slot].fd = cfd; cl[slot].len = 0;
+                    cl[slot].fd = cfd;
+                    cl[slot].len = 0;
+                    cl[slot].out_off = 0;
+                    cl[slot].out_len = 0;
+                    cl[slot].dead = 0;
+                    cl[slot].last_ms = now_ms();
                     GW_LOG("client %s:%d connected\n",
                            inet_ntoa(ca.sin_addr), ntohs(ca.sin_port));
                 }
@@ -629,32 +823,61 @@ int main(int argc, char **argv)
         }
 
         for (int k = 1; k < n; k++) {
-            if (!(pfds[k].revents & (POLLIN | POLLHUP | POLLERR))) continue;
             int ci = map[k];
-            if (cl[ci].fd < 0) continue;
-            ssize_t r = read(cl[ci].fd, cl[ci].buf + cl[ci].len,
-                             sizeof(cl[ci].buf) - (size_t)cl[ci].len);
-            if (r <= 0) {
+            struct client *c = &cl[ci];
+            if (c->fd < 0) continue;
+
+            if (pfds[k].revents & POLLOUT)
+                client_flush(c);
+            if (c->dead) { client_reset(c); continue; }
+
+            if (!(pfds[k].revents & (POLLIN | POLLHUP | POLLERR)))
+                continue;
+
+            /* Неблокирующее чтение всего доступного: сокет помечен O_NONBLOCK. */
+            for (;;) {
+                if (c->len >= (int)sizeof(c->buf)) break;
+                ssize_t r = read(c->fd, c->buf + c->len,
+                                 sizeof(c->buf) - (size_t)c->len);
+                if (r > 0) {
+                    c->len += (int)r;
+                    c->last_ms = now_ms();
+                    continue;
+                }
+                if (r == 0) { c->dead = 1; break; }
+                if (errno == EINTR) continue;
+                if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                c->dead = 1; break;
+            }
+            if (c->dead) {
                 GW_LOG("client slot %d disconnected\n", ci);
-                close(cl[ci].fd);
-                cl[ci].fd = -1; cl[ci].len = 0;
+                client_reset(c);
                 continue;
             }
-            cl[ci].len += (int)r;
 
             /* обрабатываем все полные MBAP-кадры в буфере */
             int off = 0;
-            while (cl[ci].len - off >= 6) {
-                uint16_t mlen = (uint16_t)((cl[ci].buf[off + 4] << 8) | cl[ci].buf[off + 5]);
+            while (c->len - off >= 6) {
+                uint16_t mlen = (uint16_t)((c->buf[off + 4] << 8) | c->buf[off + 5]);
                 int total = 6 + mlen;
-                if (total < 8 || total > (int)sizeof(cl[ci].buf)) { off = cl[ci].len; break; }
-                if (cl[ci].len - off < total) break;
-                handle_frame(cl[ci].fd, cl[ci].buf + off, total);
+                if (total < 8 || total > (int)sizeof(c->buf)) { off = c->len; break; }
+                if (c->len - off < total) break;
+                handle_frame(c, c->buf + off, total);
+                if (c->dead) break;    /* send_mbap мог пометить сокет мёртвым */
                 off += total;
             }
             if (off > 0) {
-                memmove(cl[ci].buf, cl[ci].buf + off, (size_t)(cl[ci].len - off));
-                cl[ci].len -= off;
+                memmove(c->buf, c->buf + off, (size_t)(c->len - off));
+                c->len -= off;
+            }
+            if (c->dead) {
+                GW_LOG("client slot %d dropped on send\n", ci);
+                client_reset(c);
+                continue;
+            }
+            if (c->len >= (int)sizeof(c->buf)) {
+                GW_LOG("client slot %d buffer overflow, dropping\n", ci);
+                client_reset(c);
             }
         }
     }
