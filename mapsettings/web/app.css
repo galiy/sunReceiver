@@ -48,6 +48,7 @@ h1 { font-size:22px; margin:0 0 4px; }
 .ms-table tr.changed td.ms-name::before { content:"● "; color:#f59f00; }
 .ms-input { width:100%; max-width:96px; background:#fff; color:#2b3238; border:1px solid #d0d6de; border-radius:6px; padding:5px 8px; font-size:14px; font-variant-numeric:tabular-nums; }
 .ms-radios { display:flex; flex-direction:column; gap:3px; }
+.ms-checks { display:flex; flex-direction:column; gap:3px; }
 .ms-radio { display:flex; align-items:flex-start; gap:6px; font-size:12px; font-weight:400; color:#2b3238; cursor:pointer; }
 .ms-radio input { width:auto; margin:2px 0 0; flex:0 0 auto; }
 .ms-optrow td.ms-optcell { background:#f8fbfe; padding:8px 12px; }

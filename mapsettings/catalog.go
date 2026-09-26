@@ -428,10 +428,13 @@ type mapSettingView struct {
 	Text     string      `json:"text,omitempty"`
 	Min      *float64    `json:"min,omitempty"`
 	Max      *float64    `json:"max,omitempty"`
+	Scale    float64     `json:"scale"`
+	Offset   float64     `json:"offset"`
 	Desc     string      `json:"desc,omitempty"`
 	Help     string      `json:"help,omitempty"`
 	Error    string      `json:"error,omitempty"`
 	Options  []mapOption `json:"options,omitempty"`
+	Bits     []mapBit    `json:"bits,omitempty"`
 }
 
 // paramOptions строит список вариантов для перечислимого параметра: значение —
@@ -553,6 +556,7 @@ func buildSnapshot(mode, ip string, port int, unit byte, params []mapParamSpec, 
 			Key: p.Key, Cell: p.Cell, Addr: fmt.Sprintf("0x%03X", p.Addr),
 			Name: p.Name, Unit: p.Unit, Kind: p.Kind, Access: p.Access,
 			Writable: p.Access == "rw", Min: p.Min, Max: p.Max, Desc: p.Desc,
+			Scale: p.Scale, Offset: p.Offset,
 			Help: paramHelp(p),
 		}
 		raw, ok := rawValue(p, cells)
@@ -568,6 +572,9 @@ func buildSnapshot(mode, ip string, port int, unit byte, params []mapParamSpec, 
 		if p.Access == "rw" {
 			if opts := paramOptions(p); len(opts) > 0 {
 				v.Options = opts
+			}
+			if len(p.Bits) > 0 {
+				v.Bits = p.Bits
 			}
 			i := add(&snap.Settings, setIdx, p.Group)
 			snap.Settings[i].Params = append(snap.Settings[i].Params, v)

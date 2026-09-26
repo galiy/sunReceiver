@@ -110,6 +110,21 @@
       var r = root.querySelector('input[type=radio]:checked');
       return r ? r.value : '';
     }
+    if (root.classList.contains('ms-checks')) {
+      var mask = 0;
+      var boxes = root.querySelectorAll('input[type=checkbox]');
+      for (var i = 0; i < boxes.length; i++) {
+        if (boxes[i].checked) {
+          var b = parseInt(boxes[i].dataset.bit, 10);
+          if (!isNaN(b)) mask += (1 << b);
+        }
+      }
+      var sc = parseFloat(root.dataset.scale);
+      if (isNaN(sc)) sc = 1;
+      var of = parseFloat(root.dataset.offset);
+      if (isNaN(of)) of = 0;
+      return String(Math.round((mask * sc + of) * 1000) / 1000);
+    }
     return root.value;
   }
 
@@ -196,10 +211,11 @@
         tr.appendChild(el('td', 'ms-addr', p.addr + (p.cell ? ' ' + p.cell : '')));
         var tdVal = el('td', 'ms-val');
         var isEnum = !!(editable && p.writable && p.options && p.options.length);
+        var isBits = !!(editable && p.writable && p.bits && p.bits.length);
         var cur = (p.value === null || p.value === undefined) ? '' : String(p.value);
         if (p.error) {
           tdVal.appendChild(el('span', 'ms-err', p.error));
-        } else if (editable && p.writable && !isEnum) {
+        } else if (editable && p.writable && !isEnum && !isBits) {
           var inp = document.createElement('input');
           inp.type = 'number';
           inp.step = 'any';
@@ -259,6 +275,38 @@
           optTd.appendChild(rg);
           optTr.appendChild(optTd);
           tbody.appendChild(optTr);
+        } else if (isBits) {
+          // Битовая маска: отдельная строка на всю ширину с чекбоксами —
+          // каждый бит включается/выключается независимо.
+          var bitTr = el('tr', 'ms-optrow');
+          var bitTd = el('td', 'ms-optcell');
+          bitTd.colSpan = 6;
+          var cg = el('div', 'ms-checks');
+          var raw = (p.raw === null || p.raw === undefined) ? 0 : p.raw;
+          var bits = p.bits.slice().sort(function (a, b) { return a.bit - b.bit; });
+          bits.forEach(function (bit) {
+            var lab = el('label', 'ms-radio');
+            var cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.dataset.bit = String(bit.bit);
+            if (raw & (1 << bit.bit)) cb.checked = true;
+            lab.appendChild(cb);
+            lab.appendChild(document.createTextNode(bit.name || ('бит ' + bit.bit)));
+            cg.appendChild(lab);
+          });
+          cg.dataset.editKey = p.key;
+          cg.dataset.editOrig = cur;
+          cg.dataset.scale = String(p.scale === undefined ? 1 : p.scale);
+          cg.dataset.offset = String(p.offset === undefined ? 0 : p.offset);
+          cg.title = p.desc || '';
+          var onBit = function () {
+            bitTr.classList.toggle('changed', readEditValue(cg) !== cg.dataset.editOrig);
+          };
+          cg.addEventListener('change', onBit);
+          cg.addEventListener('input', onBit);
+          bitTd.appendChild(cg);
+          bitTr.appendChild(bitTd);
+          tbody.appendChild(bitTr);
         }
       });
       tbl.appendChild(tbody);
