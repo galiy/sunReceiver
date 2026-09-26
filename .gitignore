@@ -58,3 +58,6 @@ review-*.md
 mapgateway/review-*
 
 .kilo/gh-token.txt
+
+# Python-кэш генератора каталога map-settings
+__pycache__/
