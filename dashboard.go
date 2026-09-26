@@ -68,11 +68,12 @@ const ce308EnergyMinInterval = 5 * time.Minute
 //   - ShowBMS — показывать блок BMS-батареек (пулер ANT BMS запущен);
 //   - ShowCE308 — показывать рамки «Электросчётчик CE308» (раздел ce308 настроен).
 type dashFlags struct {
-	ShowMap   bool
-	ShowMeter bool
-	ShowBMS   bool
-	ShowRelay bool
-	ShowCE308 bool
+	ShowMap         bool
+	ShowMeter       bool
+	ShowBMS         bool
+	ShowRelay       bool
+	ShowCE308       bool
+	ShowMapSettings bool // страница «Настройки МАП» (map.rs485 настроен и не отключён)
 }
 
 // dashboardHandler — веб-дашборд: отдаёт три HTML-страницы и JSON API.
@@ -98,6 +99,10 @@ type dashboardHandler struct {
 	// У устаревшего снимка поле placement может отсутствовать (записано старой
 	// версией до его появления), поэтому группировку анимации строим по конфигу.
 	placeByIP map[string]string
+
+	// mapDefaults — адрес МАП (mapgateway) по умолчанию для страницы «Настройки МАП»;
+	// клиент может переопределить IP/порт и сохранить их у себя (localStorage).
+	mapDefaults mapSettingsTarget
 
 	// Кэш loadRange: 4 одинаковых запроса /api/series за цикл сойдутся в один
 	// read из Redis/PG. Ключ — от (start, end).
@@ -2385,8 +2390,8 @@ func writeJSONResponse(w http.ResponseWriter, v any) {
 // serveDashboard — HTTP-сервер веб-дашборда. При закрытии stop аккуратно
 // завершает сервер (http.Server.Shutdown, бюджет 5 с), чтобы main мог закрыть
 // пулы Redis/PG после завершения всех фоновых горутин (bgWg).
-func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayController, stop context.Context, flags dashFlags, placements []string, placeByIP map[string]string, authUser, authPass string) {
-	h := &dashboardHandler{store: store, pg: pg, flags: flags, relay: relay, placements: placements, placeByIP: placeByIP}
+func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayController, stop context.Context, flags dashFlags, placements []string, placeByIP map[string]string, authUser, authPass string, mapDefaults mapSettingsTarget) {
+	h := &dashboardHandler{store: store, pg: pg, flags: flags, relay: relay, placements: placements, placeByIP: placeByIP, mapDefaults: mapDefaults}
 	// Внутренние страницы (индекс/графики) открыты; данные и управление —
 	// в `/api/*`, защищаются HTTP Basic (если заданы учётные данные).
 	pages := map[string]http.HandlerFunc{
@@ -2394,6 +2399,9 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayCon
 		"/charts": h.charts,
 		"/energy": h.energy,
 		"/bms/":   h.bmsDetail,
+	}
+	if h.mapDefaults.ip != "" {
+		pages["/map-settings"] = h.mapSettingsPage
 	}
 	api := map[string]http.HandlerFunc{
 		"/current":       h.apiCurrent,
@@ -2405,6 +2413,12 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayCon
 		"/ce308/current": h.apiCE308Current,
 		"/ce308/energy":  h.apiCE308Energy,
 		"/ce308/series":  h.apiCE308Series,
+	}
+	if h.mapDefaults.ip != "" {
+		api["/map-settings"] = h.apiMapSettings
+		api["/map-settings/apply"] = h.apiMapSettingsApply
+		api["/map-settings/action"] = h.apiMapSettingsAction
+		api["/map-settings/time"] = h.apiMapSettingsTime
 	}
 	if relay != nil {
 		api["/relay"] = h.apiRelay

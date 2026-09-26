@@ -1,0 +1,5123 @@
+{
+  "source": "protocol_MAP_cells_2026_07_15.doc",
+  "title": "SVEN POWER MANAGER II — ячейки МАП",
+  "params": [
+    {
+      "key": "device",
+      "cell": "_Device",
+      "addr": 0,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "ro",
+      "name": "Код устройства, =3 для МАП",
+      "group": "Сервис и идентификация",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "код устройства, =3 для МАП (другие коды соответствуют другим изделиям фирмы Микроарт)."
+    },
+    {
+      "key": "verpow",
+      "cell": "_VerPow",
+      "addr": 1,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "ro",
+      "name": "Версия текущей модели Pow",
+      "group": "Сервис и идентификация",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "означает гибрид, 7-й и 6 бит зарезервирован. Младшие 5 бит версия силовой платы."
+    },
+    {
+      "key": "verpo",
+      "cell": "_VerPO",
+      "addr": 2,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "ro",
+      "name": "Версия ПO для данного устройства, старшие 3бита",
+      "group": "Сервис и идентификация",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "значение после точки:"
+    },
+    {
+      "key": "pow",
+      "cell": "_POW",
+      "addr": 5,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Мощность устройства",
+      "group": "Сервис и идентификация",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Мощность устройства. Значения от 0 до11 последовательно соответствуют мощностям:"
+    },
+    {
+      "key": "uacc",
+      "cell": "_UACC",
+      "addr": 6,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Рабочее напряжение МАП",
+      "group": "Сервис и идентификация",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Рабочее напряжение МАП. Значения от 0 до 3 последовательно соответствуют напряжениям:"
+    },
+    {
+      "key": "devopt",
+      "cell": "_DevOpt",
+      "addr": 7,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Версия процессора: 1",
+      "group": "Сервис и идентификация",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "для для МАП Sin, Доминатор; 2-снята с производства; 3 – Для модели Титанатор."
+    },
+    {
+      "key": "ram_end_l",
+      "cell": "_RAM_END_L",
+      "addr": 8,
+      "width": 2,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Адрес конечной ячейки RAM",
+      "group": "Сервис и идентификация",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "адрес конечной ячейки RAM",
+      "order": "lh"
+    },
+    {
+      "key": "language",
+      "cell": "_Language",
+      "addr": 10,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Русский язык меню, 1-английский",
+      "group": "Сервис и идентификация",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Русский язык меню, 1-английский. Есть также во всех моделях но только на чтение, а в Титанаторе язык можно изменить программированием этой ячейки. Пункт меню Титанатор."
+    },
+    {
+      "key": "verplatpic",
+      "cell": "_VerPlatPic",
+      "addr": 12,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Версия платы с процессором Ver Plat Pic = EE_VerPlatPic",
+      "group": "Сервис и идентификация",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "версия платы с процессором Ver Plat Pic = EE_VerPlatPic"
+    },
+    {
+      "key": "verplatnet",
+      "cell": "_VerPlatNet",
+      "addr": 13,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Версия сетевой платы Ver Plat NET =",
+      "group": "Сервис и идентификация",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 0,
+      "desc": "версия сетевой платы Ver Plat NET = (EE_VerPlatNET&7)+6, 4-й бит отвечает за тип сетевой платы:",
+      "enum": {
+        "0": "low, 1 – Hi."
+      }
+    },
+    {
+      "key": "verplatpowdop",
+      "cell": "_VerPlatPowDop",
+      "addr": 14,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Данные о версии Pow платы",
+      "group": "Сервис и идентификация",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "бит1=0 Low плата, бит1=1 Hi плата, 0x80 – Hybrid (гибрид)"
+    },
+    {
+      "key": "vertest",
+      "cell": "_VerTest",
+      "addr": 15,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Под версия PO для тестирования, 0",
+      "group": "Сервис и идентификация",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "релиз."
+    },
+    {
+      "key": "tft_cichargesoc95",
+      "cell": "_TFT_CIChargeSOC95",
+      "addr": 19,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Ток заряда при достижении емкости АКБ 95%",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "%",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Ток заряда при достижении емкости АКБ 95%. Активна только для модульных АКБ со связью с МАП."
+    },
+    {
+      "key": "fuacc_korr",
+      "cell": "_fUAcc_Korr",
+      "addr": 22,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Поправка датчика напряжения АКБ в десятых вольта приведенные к 12В",
+      "group": "Сервис и идентификация",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "В",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Поправка датчика напряжения АКБ в десятых вольта приведенные к 12В."
+    },
+    {
+      "key": "serialnum0",
+      "cell": "_SerialNum0",
+      "addr": 24,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Номер младший байт",
+      "group": "Сервис и идентификация",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "номер младший байт"
+    },
+    {
+      "key": "serialnum1",
+      "cell": "_SerialNum1",
+      "addr": 25,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Номер старший байт",
+      "group": "Сервис и идентификация",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "номер старший байт"
+    },
+    {
+      "key": "t_butch_r",
+      "cell": "_T_ButCh_r",
+      "addr": 26,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Время в секундах*4",
+      "group": "Время и часы",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "время на реакцию топливного генератора т.е. на его включение и прогрев, если нет реакции выключаем генератор. Если включена соотв. опция в доп. реле."
+    },
+    {
+      "key": "t_diz_prof",
+      "cell": "_T_Diz_prof",
+      "addr": 27,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Время в секундах*4",
+      "group": "Время и часы",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "время на включение топливного генератора на профилактику. Если включена соотв. опция в доп. реле."
+    },
+    {
+      "key": "pow_korr",
+      "cell": "_POW_Korr",
+      "addr": 28,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Коррекция мощности",
+      "group": "Сервис и идентификация",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Коррекция мощности. Значение ячейки содержит отношение реальной мощности к измеренной датчиком и умноженное на 128. Т.е. если EE_POW_Korr=128 коррекции нет."
+    },
+    {
+      "key": "i_chage_korr",
+      "cell": "_I_Chage_Korr",
+      "addr": 29,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Коррекция тока во время заряда",
+      "group": "Сервис и идентификация",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Коррекция тока во время заряда. Значение ячейки содержит отношение реального тока к измеренной датчиком и умноженное на 128. Т.е. если EE_I_Chage_Korr =128 коррекции нет."
+    },
+    {
+      "key": "temptoptobms",
+      "cell": "_TempTopToBMS",
+      "addr": 33,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Оставлена для совместимости",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 8,
+      "desc": "Оставлена для совместимости. В том числе для выбора сторонних BMS и датчика температуры тора ранних моделей. Пункты 6-8 дублируются в _LCD_BMSFunk см. ниже.",
+      "enum": {
+        "0": "Совместим со старым МАП (опрашивается датчик температуры тора),",
+        "1": "Подключен BMS с одним сухим контактом для выравнивания литий ионных АКБ,",
+        "2": "BMS выключен /Нет датчика температуры тора (для совместимости со старыми моделями, без управления BMS),",
+        "3": "Подключен BMS c двумя сухими контактами для заряда и разряда вход активный - 1,",
+        "4": "Подключен BMS по RS232,",
+        "5": "Подключен BMS c двумя сухими контактами для заряда и разряда, вход активный (инверсный) – 0.",
+        "6": "BMS (C)mART – BMS от фирмы Микроарт.",
+        "7": "MPPT (C)mART – MPPT от фирмы Микроарт.",
+        "8": "BMS+MPPT mART– совместное подключение BMS и MPPT от фирмы Микроарт."
+      }
+    },
+    {
+      "key": "serialnum2",
+      "cell": "_SerialNum2",
+      "addr": 34,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Зарезервированный байт серийного номера",
+      "group": "Сервис и идентификация",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "зарезервирован (0)"
+    },
+    {
+      "key": "serialnum3",
+      "cell": "_SerialNum3",
+      "addr": 35,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Индекс серийного номера",
+      "group": "Сервис и идентификация",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "индекс серийного номера (буква ASCII)."
+    },
+    {
+      "key": "syncdiz_plat",
+      "cell": "_SyncDiz_Plat",
+      "addr": 36,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Для Титанатора",
+      "group": "Сервис и идентификация",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Для Титанатора :",
+      "bits": [
+        {
+          "bit": 0,
+          "name": "подключена плата синхронизации 3-фаз и паралл."
+        },
+        {
+          "bit": 1,
+          "name": "подключены на плате синхронизации внешние доп. реле управления (в том числе можно использовать для управления стартером дизеля)."
+        },
+        {
+          "bit": 3,
+          "name": "подключено управление мощным реле переключения сети на дизель, т.е. есть подключен II вход сети."
+        },
+        {
+          "bit": 0,
+          "name": "=1 всегда"
+        },
+        {
+          "bit": 1,
+          "name": "подключен II вход сети."
+        }
+      ]
+    },
+    {
+      "key": "no3fazemotor",
+      "cell": "_No3FazeMotor",
+      "addr": 37,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Коррекция синусоид 3 фаз для асинхронных моторов",
+      "group": "Сервис и идентификация",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "если разрешена коррекция синусоид 3-х фаз для асинхронных Моторов (по умолчанию). Также пункт меню Титанатор."
+    },
+    {
+      "key": "t_accdisch_exth",
+      "cell": "_T_AccDisch_ExtH",
+      "addr": 38,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Верхний байт времени работы при полной разрядке в секундах, для расширения",
+      "group": "Время и часы",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "верхний байт времени работы при полной разрядке в секундах, для расширения времени более чем _T_AccDisch т.е. если надо сделать время работы на полном разряде > 255с=~4мин."
+    },
+    {
+      "key": "tft_soc_discharge",
+      "cell": "_TFT_SOC_DisCharge",
+      "addr": 44,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Выключение по полному разряду по SOC",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "выключение по полному разряду по SOC."
+    },
+    {
+      "key": "tft_soc_startcharge",
+      "cell": "_TFT_SOC_StartCharge",
+      "addr": 45,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Старт заряда по SOC",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Старт заряда по SOC"
+    },
+    {
+      "key": "tft_soc_dizstart",
+      "cell": "_TFT_SOC_DizStart",
+      "addr": 46,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Старт дизель-генератора по SOC",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Старт дизель-генератора по SOC"
+    },
+    {
+      "key": "pnet_prodag_max",
+      "cell": "_PNET_Prodag_MAX",
+      "addr": 51,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Максимальная мощность на продажу",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "максимальная мощность на продажу."
+    },
+    {
+      "key": "digitinfunc1",
+      "cell": "_DigitInFunc1",
+      "addr": 52,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Назначение цифрового входа 1",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "0-нет, 1- кнопка старт, 2- кнопка заряд, 3- реле. Назначение на цифровой вход1 от внешней доп. платы ExtBut."
+    },
+    {
+      "key": "digitinfunc2",
+      "cell": "_DigitInFunc2",
+      "addr": 53,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Назначение цифрового входа 2",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "0-нет, 1- кнопка старт, 2- кнопка заряд, 3- реле. Назначение на цифровой вход2 от внешней доп. платы ExtBut."
+    },
+    {
+      "key": "avr_on",
+      "cell": "_AVR_On",
+      "addr": 62,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Включает через доп",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "автоматизированная работа с топливным генератором, у которого есть соответствующие контакты управления. Подробнее см. доп. Реле. Пункт меню Титанатор."
+    },
+    {
+      "key": "grid_52hz",
+      "cell": "_Grid_52Hz",
+      "addr": 63,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Управление сетевым солнечным инвертором",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "0- нет управления сетевым солнечным инвертором, 1- включаем управление сетевым солнечным инвертором, 2- включаем управление сетевым солнечным инвертором но с управлением частотой до 52Гц.."
+    },
+    {
+      "key": "mask_dev_on",
+      "cell": "_MASK_DEV_ON",
+      "addr": 81,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Маски на включенные компоненты",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "отсутствует в модели TITANATOR (т.к. включены всегда).",
+      "bits": [
+        {
+          "bit": 1,
+          "name": "есть датчик температуры окружающей среды (АКБ)."
+        },
+        {
+          "bit": 2,
+          "name": "есть датчик температуры тора (в модели DOMINATOR)"
+        },
+        {
+          "bit": 3,
+          "name": "есть датчик температуры транзисторов"
+        }
+      ]
+    },
+    {
+      "key": "numculler",
+      "cell": "_NUMCULLER",
+      "addr": 82,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Кол-во опрашиваемых вентиляторов",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "разное в зависимости от мощности прибора."
+    },
+    {
+      "key": "watch",
+      "cell": "_WATCH",
+      "addr": 83,
+      "width": 2,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Внутреннее время",
+      "group": "Время и часы",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "день месяца(5 бит); 5-8 – месяц года (4 бита); 9-14 – год столетия (6 бит) до 2063 года; 15 бит в резерве. Часы и десятки минут лежат в _LCD_TimeCyr.",
+      "order": "lh"
+    },
+    {
+      "key": "watch2",
+      "cell": "_WATCH2",
+      "addr": 85,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Внутреннее время, резерв",
+      "group": "Время и часы",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Внутреннее время, резерв."
+    },
+    {
+      "key": "uaccafterdischage",
+      "cell": "_UAccAfterDisChage",
+      "addr": 91,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "ro",
+      "name": "Напряжение, с которого МАП начнет генерацию, после отключения по полному разряду",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "В",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Напряжение, с которого МАП начнет генерацию, после отключения по полному разряду, т.е. после 1минуты работы на напряжении ниже _LCD_UAccMin."
+    },
+    {
+      "key": "frozenuaccafterdischage",
+      "cell": "_FrozenUAccAfterDisChage",
+      "addr": 93,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Замораживает значение ячейки _UAccAfterDisChage=0x5B в том смысле, что делает",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Замораживает значение ячейки _UAccAfterDisChage=0x5B в том смысле, что делает ее независимой, что позволяет самостоятельно менять ее значение."
+    },
+    {
+      "key": "netupeco_net2_off",
+      "cell": "_NetUpECO_net2_off",
+      "addr": 95,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Отключает подкачку для второго входа сети",
+      "group": "Сеть",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "отключает подкачку для второго входа сети (но не принудительную генерацию) в ЭКО режимах. Пункт меню Титанатор."
+    },
+    {
+      "key": "dettfordoprele",
+      "cell": "_detTforDopRele",
+      "addr": 96,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Датчик температуры от которого будет зависеть переключение внешнего реле",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 0,
+      "desc": "датчик температуры от которого будет зависеть переключение внешнего реле настроенного на переключение по температуре (0-1биты Реле1, 2-3биты Реле3, 4-5биты Реле2, 6-7биты реле на доп плате или Реле II второго входа для спец. моделей). Также пункт меню Титанатор.",
+      "enum": {
+        "0": "датчик температуры АКБ (по умолчанию ), 1- датчик температуры тора (трансформатора), 2- датчик температуры силовых транзисторов, 3 -для внешнего датчика температуры модели титанатора."
+      }
+    },
+    {
+      "key": "lcd_uaccdizstart_dop",
+      "cell": "_LCD_UAccDizStart_dop",
+      "addr": 97,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Дополнительная ячейка для увеличения точности установки напряжения",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Дополнительная ячейка для увеличения точности установки напряжения _LCD_UAccDizStart=0x153 см. ниже."
+    },
+    {
+      "key": "rsbaud_rasb_load",
+      "cell": "_RSBAUD_Rasb_Load",
+      "addr": 100,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Нижние 4 бита",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "нижние 4 бита (по умолчанию 4 - 115200 бод) для работы RS232 для малины; верхние 4 бита (по умолчанию 6 - 625000 бод) для загрузки через PC."
+    },
+    {
+      "key": "cichargeabsorb",
+      "cell": "_CIChargeAbsorb",
+      "addr": 101,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Минимальный ток заряда в режиме дозаряда",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "А",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Минимальный ток заряда в режиме дозаряда (после которого дозаряд прекращается) в процентах от выставленной емкости АКБ. Также пункт меню Титанатор."
+    },
+    {
+      "key": "t_maxliionbms",
+      "cell": "_T_MaxLiIonBMS",
+      "addr": 102,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Время работы в дозаряде при активировании BMS",
+      "group": "Время и часы",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Время работы в дозаряде при активировании BMS. По умолчанию 30 мин."
+    },
+    {
+      "key": "del_uaccchbuf_24h",
+      "cell": "_del_UAccChBUF_24h",
+      "addr": 103,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "На сколько надо снизить буферное напряжение через 24ч",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "В",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "На сколько надо снизить буферное напряжение через 24ч. По умолчанию значение ячейки 5, что соответствует 0,5В/1В/2В/4В для 12/24/48/96 блоков."
+    },
+    {
+      "key": "powaccnom",
+      "cell": "_PowAccNom",
+      "addr": 104,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Номинальная мощность в процентах от заявленной максимальной",
+      "group": "Нагрузка и мощность",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "%",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Номинальная мощность в процентах от заявленной максимальной. При привышении этой мощности генерация прекратится через 10-30мин (в зависимости от модели). По умолчанию 67% от максимальной мощности."
+    },
+    {
+      "key": "num_overload",
+      "cell": "_NUM_Overload",
+      "addr": 115,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Кол-во попыток перегрузки при срабатывании защиты по перегрузкам",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Кол-во попыток перегрузки при срабатывании защиты по перегрузкам."
+    },
+    {
+      "key": "t_charge_120",
+      "cell": "_T_CHARGE",
+      "addr": 120,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Задержка в сек перехода на заряд после появления сети и разряженном АКБ",
+      "group": "Время и часы",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Задержка в сек перехода на заряд после появления сети и разряженном АКБ."
+    },
+    {
+      "key": "t_charge_umaxeco_diz",
+      "cell": "_T_CHARGE_UmaxECO_diz",
+      "addr": 121,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Максимальное время дозаряда от генератора/MPPT",
+      "group": "Время и часы",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Если один из входов сети 220в настроен на топливный генератор или в доп. реле выбран топливный генератор или режим АВР то можно изменить время дозаряда, чтобы снизить расход топлива при полном цикле заряда (уменьшив время последней стадии). Так-же это время ограничивает время заряда в дозаряде (в отсутствии сети 220в) для КЭС."
+    },
+    {
+      "key": "deluchargeend",
+      "cell": "_DelUChargeEnd",
+      "addr": 122,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Сдвиг напряжения относительно конца заряда",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 0.1,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "сдвиг напряжения относительно конца заряда (вниз) для отработки перехода на вторую ступень заряда. Этот сдвиг напряжения рассчитан под 48в модель титанатора, Т.е. для моделей 24в и 12в это напряжение автоматически делится на 2 или 4. Обычно делаем наоборот, но тут сделано так, чтобы не потерять точность на моделях 24в и 48в. Для вычисления порога необходимо вычесть это смещение (деленное на 2 или 4 соотв. для 24 и 12в моделей) из напряжения конца заряда _LCD_UAccChMax=0x185. Хоть смещение и фиксировано но сам порог вслед за максимальным напряжением заряда может меняться в зависимости от температуры АКБ. Пункт меню Титанатор (в меню приводится к напряжению порога т.е. вычитается из максимального напряжения заряда)."
+    },
+    {
+      "key": "t_net_on",
+      "cell": "_T_NET_ON",
+      "addr": 123,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Время на стабилизацию сети при ее появлении, перед тем как пропустить ее на",
+      "group": "Время и часы",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Время на стабилизацию сети при ее появлении, перед тем как пропустить ее на выход."
+    },
+    {
+      "key": "t_charge_umax",
+      "cell": "_T_CHARGE_Umax",
+      "addr": 126,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Максимальное время работы в режиме дозаряда в мин",
+      "group": "Время и часы",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Максимальное время работы в режиме дозаряда в мин. Через это время дозаряд закончится даже если ток заряда будет выше значения выставленного в ячейке _CIChargeAbsorb."
+    },
+    {
+      "key": "t_charge_need_eco_127",
+      "cell": "_T_CHARGE_NEED_ECO",
+      "addr": 127,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Задержка перехода на сеть в ЭКО режиме",
+      "group": "Время и часы",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Время (в минутах) задержки для перехода на сеть в ЭКО режиме, чтобы не реагировать на просадку ниже EE_LCD_UAccMinNetGen по кратковременной нагрузке."
+    },
+    {
+      "key": "t_accdisch_128",
+      "cell": "_T_ACCDISCH",
+      "addr": 128,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Время работы на разряженном AКБ",
+      "group": "Время и часы",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Время работы на разряженном AКБ (ниже EE_LCD_UAccMin) в сек."
+    },
+    {
+      "key": "t_nominal_131",
+      "cell": "_T_NOMINAL",
+      "addr": 131,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Время работы на нагрузке выше номинальной в минутах",
+      "group": "Время и часы",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "время работы на нагрузке выше номинальной в минутах (через это время генерация отключится)."
+    },
+    {
+      "key": "korrtempakb",
+      "cell": "_KorrTempAkb",
+      "addr": 133,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Также пункт меню Титанатор",
+      "group": "Температуры",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Также пункт меню Титанатор.",
+      "bits": [
+        {
+          "bit": 0,
+          "name": "0 - нет коррекции уровня напряжения конца заряда от температуры, 1 - будет коррекция;"
+        },
+        {
+          "bit": 1,
+          "name": "Зарезервирован: 0- не заряжаем при температуре ниже 00, 1- заряжаем ниже 00 токами НЕ более 0,2С (не используется в текущих моделях)."
+        }
+      ]
+    },
+    {
+      "key": "lcd_unet2up",
+      "cell": "_LCD_UNET2Up",
+      "addr": 137,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Ограничение напряжения II входа сети сверху, если сетевое напряжение превысит",
+      "group": "Сеть",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "В",
+      "scale": 1.0,
+      "offset": 100.0,
+      "min": null,
+      "max": null,
+      "desc": "Ограничение напряжения II входа сети сверху, если сетевое напряжение превысит этот порог то МАП перейдет на генерацию от АКБ. Обратный возврат на сеть произойдет как только напряжение снизится ниже этого порога минус гистерезис 5В. Пункт меню Титанатор."
+    },
+    {
+      "key": "lcd_unet2down",
+      "cell": "_LCD_UNET2Down",
+      "addr": 138,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Ограничение напряжения II входа сети с снизу, если сетевое напряжение будет",
+      "group": "Сеть",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "В",
+      "scale": 1.0,
+      "offset": 100.0,
+      "min": null,
+      "max": null,
+      "desc": "Ограничение напряжения II входа сети с снизу, если сетевое напряжение будет ниже этого порога то МАП перейдет на генерацию от АКБ. Обратный возврат на сеть произойдет как только напряжение станет выше этого порога плюс гистерезис 20В. Пункт меню Титанатор."
+    },
+    {
+      "key": "relenetnum",
+      "cell": "_ReleNetNum",
+      "addr": 215,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "По 2 бита для каждого доп",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "по второму;"
+    },
+    {
+      "key": "releizbnum",
+      "cell": "_ReleIzbNum",
+      "addr": 216,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Очередность избытка мощности для реле",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "2-й избыток, 2 - 3-й избыток, 3 - 4-й избыток. Например, b 11 10 01 00 – первое реле настроено на 1-й избыток, второе реле на 2-й избыток, третье реле на 3-й избыток, четвертое реле на 4-й избыток, если конечно эти реле настроены на избыток."
+    },
+    {
+      "key": "tch_mppt_grid52",
+      "cell": "_TCh_MPPT_GRID52",
+      "addr": 218,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "В 2часах 2д*24ч=48 -> 48/2ч=24, 0- выключено",
+      "group": "Время и часы",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "в 2часах 2д*24ч=48 -> 48/2ч=24, 0- выключено. Пункт меню Титанатор."
+    },
+    {
+      "key": "tdizprofilact_day",
+      "cell": "_TdizProfilact_day",
+      "addr": 219,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "В 2часах",
+      "group": "Время и часы",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "профилактика топливного генератора. Активируется если доп. реле настроено на включение топливного генератора (в том числе если выбрана опция “АВР”). Пункт меню Титанатор."
+    },
+    {
+      "key": "tcheco_14day",
+      "cell": "_TchEco_14day",
+      "addr": 220,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "В 2часах 14д*24ч=336 -> 336/2ч=168, 0- выключено",
+      "group": "Время и часы",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "запланированный заряд через X дней. 14 дней по умолчанию."
+    },
+    {
+      "key": "mintarifanch",
+      "cell": "_minTarifAnCh",
+      "addr": 222,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "По умолчанию EE_minTarifACh=0, 0 - при вЫходе из тарифного режима НЕ",
+      "group": "Сеть",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "По умолчанию EE_minTarifACh=0, 0 - при вЫходе из тарифного режима НЕ заканчиваем заряд пока не пройдет полный заряд, 1 - при вЫходе из тарифного режима заканчиваем заряд. Также пункт меню Титанатор."
+    },
+    {
+      "key": "mintarifch",
+      "cell": "_minTarifCh",
+      "addr": 223,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "По умолчанию EE_minTarifCh=1, при входе в тарифный режим МАП переходит на заряд",
+      "group": "Сеть",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "По умолчанию EE_minTarifCh=1, при входе в тарифный режим МАП переходит на заряд. Если EE_minTarifCh=0, заряд будет осуществляться по общему алгоритму, т.е. если напряжение на АКБ ниже напряжения старта заряда или не было полного заряда в течении недели. Также пункт меню Титанатор."
+    },
+    {
+      "key": "cap_onoff",
+      "cell": "_CAP_OnOff",
+      "addr": 246,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Включение САП-Заряд",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 1,
+      "desc": "Включение САП-Заряд. Включается режим управления САП, по проводу DSR на разъеме RS232, осуществляется управление САП-ом на включение/выключение дизель-генератора для заряда.",
+      "enum": {
+        "0": "отключено управление САП через DSR на разъеме RS232.",
+        "1": "управление САП через DSR на разъеме RS232."
+      }
+    },
+    {
+      "key": "p_modemvdd",
+      "cell": "_P_ModemVdd",
+      "addr": 254,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Включение питания +12В на разъем МОДЕМА",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "отсутствует в модели TITANATOR."
+    },
+    {
+      "key": "bms_num",
+      "cell": "_BMS_Num",
+      "addr": 256,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Кол-во ячеек BMS",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "кол-во ячеек BMS, (для более ранних версий ПО определялись как 4/8/16 для моделей 12/24/48v соответственно). Также пункт меню Титанатор."
+    },
+    {
+      "key": "lcd_cacc_dop",
+      "cell": "_LCD_CAcc_dop",
+      "addr": 257,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Эти ячейки",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Эти ячейки используются совместно с такими же названиями без окончания _dop см. ниже."
+    },
+    {
+      "key": "lcd_uaccmin_dop",
+      "cell": "_LCD_UAccMin_dop",
+      "addr": 258,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Эти ячейки",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Эти ячейки используются совместно с такими же названиями без окончания _dop см. ниже."
+    },
+    {
+      "key": "lcd_uaccminnetgen_dop",
+      "cell": "_LCD_UAccMinNetGen_dop",
+      "addr": 259,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Эти ячейки",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Эти ячейки используются совместно с такими же названиями без окончания _dop см. ниже."
+    },
+    {
+      "key": "lcd_uaccchmax_dop",
+      "cell": "_LCD_UAccChMax_dop",
+      "addr": 260,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Эти ячейки",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Эти ячейки используются совместно с такими же названиями без окончания _dop см. ниже."
+    },
+    {
+      "key": "lcd_uaccchbuf_dop",
+      "cell": "_LCD_UAccChBUF_dop",
+      "addr": 261,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Эти ячейки",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Эти ячейки используются совместно с такими же названиями без окончания _dop см. ниже."
+    },
+    {
+      "key": "lcd_uaccchstart_dop",
+      "cell": "_LCD_UAccChStart_dop",
+      "addr": 262,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Эти ячейки",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Эти ячейки используются совместно с такими же названиями без окончания _dop см. ниже."
+    },
+    {
+      "key": "lcd_netmaxpow_dop",
+      "cell": "_LCD_NetMaxPow_dop",
+      "addr": 263,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Эти ячейки",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Эти ячейки используются совместно с такими же названиями без окончания _dop см. ниже."
+    },
+    {
+      "key": "lcd_rele3_funk",
+      "cell": "_LCD_Rele3_Funk",
+      "addr": 288,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Функция реле 3",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "0x128 - 0х12B – минимальные значения"
+    },
+    {
+      "key": "lcd_rele3_l1",
+      "cell": "_LCD_Rele3_L1",
+      "addr": 289,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Порог 1 реле 3",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "0x128 - 0х12B – минимальные значения"
+    },
+    {
+      "key": "lcd_rele3_l2",
+      "cell": "_LCD_Rele3_L2",
+      "addr": 290,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Порог 2 реле 3",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "0x128 - 0х12B – минимальные значения"
+    },
+    {
+      "key": "lcd_rele3_gist",
+      "cell": "_LCD_Rele3_Gist",
+      "addr": 291,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Гистерезис и инверсия реле 3",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "0x128 - 0х12B – минимальные значения"
+    },
+    {
+      "key": "lcd_releii_funk",
+      "cell": "_LCD_ReleII_Funk",
+      "addr": 292,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Функция реле II входа сети",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "0х12C - 0х12F – минимальные значения"
+    },
+    {
+      "key": "lcd_releii_l1",
+      "cell": "_LCD_ReleII_L1",
+      "addr": 293,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Порог 1 реле II входа сети",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "0х12C - 0х12F – минимальные значения"
+    },
+    {
+      "key": "lcd_releii_l2",
+      "cell": "_LCD_ReleII_L2",
+      "addr": 294,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Порог 2 реле II входа сети",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "0х12C - 0х12F – минимальные значения"
+    },
+    {
+      "key": "lcd_releii_gist",
+      "cell": "_LCD_ReleII_Gist",
+      "addr": 295,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Гистерезис и инверсия реле II входа сети",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "0х12C - 0х12F – минимальные значения"
+    },
+    {
+      "key": "lcd_typesin",
+      "cell": "_LCD_TypeSin",
+      "addr": 312,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Точность синуса на выходе",
+      "group": "Выход / инвертор",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "%",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 3,
+      "desc": "Точность синуса на выходе. При малых нагрузках (<*Pmax/3) коэф. гармоник не превышает 1% для любого значения этой ячейки. При повышении мощности, чтобы не падало напряжение на выходе можно выбрать один из алгоритмов работы:",
+      "enum": {
+        "0": "Чистый Sin, коэф. гармоник не более 5%, не зависимо от просадок напряжения на выходе из-за нагрузки. Pro-модель на заряженных АКБ дает просадку на максимальной мощности не более 3% относительно 220В.",
+        "1": "Оптимальный Sin, коэф. гармоник не более 5% до падения напряжения на выходе до 200В, на более мощных нагрузках коэфициэнт гармоник может возрасти до 12%. Для Pro-моделей этот режим не дает просадку вплоть до максимальной мощности.",
+        "2": "Pmаx, коэф. гармоник не более 20% напряжение на выходе даже при перегрузках будет не ниже 220В. Не рекомендуется использовать, Использовалось в ранних моделях.",
+        "3": "Прецинзионный Sin, коэф. гармоник не более 1%, не зависимо от просадок напряжения на выходе из-за нагрузки. Рекомендуется для особо требовательной нагрузки, в Pro-моделях на заряженных АКБ дает просадку на максимальной мощности не более 15% относительно 220В."
+      }
+    },
+    {
+      "key": "lcd_map_ifaze",
+      "cell": "_LCD_MAP_iFaze",
+      "addr": 313,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Только для моделей с дополнительной платой расширения или DOMINATOR/Титанатор",
+      "group": "Выход / инвертор",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 255,
+      "desc": "Только для моделей с дополнительной платой расширения или DOMINATOR/Титанатор.",
+      "enum": {
+        "0": "Ведущий, но используем прибор для работы как обычный однофазный.",
+        "1": "Ведущий/фаза1 - назначение фазы в трехфазной работе.",
+        "2": "Фаза2 - назначение фазы в трехфазной работе.",
+        "3": "Фаза3 - назначение фазы в трехфазной работе.",
+        "4": "Ведомый – для работы в параллельном режиме для увеличения мощности. Кол-во ведомых вслед за текущим ведомым задается в ячейке _LCD_SlaveMAPNum=0x155 см. ниже.",
+        "255": "Однофазная работа (нет трехфазной доп. платы),"
+      }
+    },
+    {
+      "key": "lcd_umap220_need",
+      "cell": "_LCD_UMAP220_NEED",
+      "addr": 314,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Выходное напряжение которое стабилизирует МАП на выходе",
+      "group": "Выход / инвертор",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "В",
+      "scale": 1.0,
+      "offset": 100.0,
+      "min": null,
+      "max": null,
+      "desc": "Выходное напряжение которое стабилизирует МАП на выходе (реальное напряжение может быть ниже на максимальных мощностях и/или сильно разряженных АКБ)"
+    },
+    {
+      "key": "lcd_netupload",
+      "cell": "_LCD_NetUpLoad",
+      "addr": 315,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Только для моделей Hybrid или DOMINATOR/Титанатор",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 1,
+      "desc": "Только для моделей Hybrid или DOMINATOR/Титанатор.",
+      "enum": {
+        "0": "подкачка сети по Pmax выключена. При превышении мощности _LCD_NetMaxPow - МАП перейдет на генерацию от АКБ.",
+        "1": "подкачка сети при выходе за мощность заданную в EE_LCD_NetMaxPow включена."
+      }
+    },
+    {
+      "key": "lcd_netupeco",
+      "cell": "_LCD_NetUpECO",
+      "addr": 316,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Подкачка по ЭКО",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 255,
+      "desc": "Подкачка по ЭКО. Только для моделей Hybrid или DOMINATOR/Титанатор.",
+      "enum": {
+        "0": "Нет подкачки сети, но как только возникает ситуация ЭКО - МАП перейдет на принудительную генерацию от АКБ.",
+        "1": "Подкачка сети включена, как только возникает ситуация ЭКО - МАП будет подкачивать энергию от АКБ в нагрузку совместно с сетью. Для сторонних MPPT максимальная мощность подкачиваемая МАП-ом определяется по разности между напряжениями EE_LCD_UAccChMax и EE_LCD_UAccMinNetGen. Для MPPT Микроарт подкачка зависит от тока который выдает MPPT.",
+        "2": "Продажа в Сеть. Как только возникает ситуация ЭКО - МАП будет подкачивать энергию от АКБ в нагрузку совместно с сетью. Но в отличии от предыдущего пункта если максимальная мощность, которую может подкачать МАП, больше мощности нагрузки то подкачка не ограничивается мощностью нагрузки и ее излишки попадают в сеть. Если установлена опция, что на входе дизель-генератор, то этот пункт заблокирован.",
+        "255": "Пункт отсутствует если не установлен режим ЭКО в _LCD_NETAlg."
+      }
+    },
+    {
+      "key": "lcd_uaccmin",
+      "cell": "_LCD_UAccMin",
+      "addr": 317,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Минимальное напряжение для работы от АКБ, работаем на нем EE_T_ACCDISCH+",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "В",
+      "scale": 0.1,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Минимальное напряжение для работы от АКБ, работаем на нем EE_T_ACCDISCH+ EE_T_AccDisch_ExtH*256 секунд."
+    },
+    {
+      "key": "lcd_sensload",
+      "cell": "_LCD_SensLoad",
+      "addr": 318,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Включение режима в котором генерация от АКБ будет происходить только при",
+      "group": "Нагрузка и мощность",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 0,
+      "desc": "Включение режима в котором генерация от АКБ будет происходить только при подключенной нагрузке.",
+      "enum": {
+        "0": "нет включения генерации по нагрузке, МАП всегда производит генерацию от АКБ."
+      }
+    },
+    {
+      "key": "lcd_map_sync",
+      "cell": "_LCD_MAP_Sync",
+      "addr": 319,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Только для моделей с дополнительной платой",
+      "group": "Выход / инвертор",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 255,
+      "desc": "Только для моделей с дополнительной платой.",
+      "enum": {
+        "0": "Независимая работа 3-фаз т.е. текущая фаза продолжает работать даже если другие отключились, например, по перегрузке,",
+        "1": "Полностью синхронная работа. Фаза отключится, если отключилась одна из других фаз.",
+        "255": "Отключена, если МАП настроен на работу в однофазном режиме ячейкой _LCD_MAP_iFaze."
+      }
+    },
+    {
+      "key": "lcd_netdizel",
+      "cell": "_LCD_NetDizel",
+      "addr": 336,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Указывает кто является источником сети на основном входе",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 2,
+      "desc": "Указывает кто является источником сети на основном входе. Под дизель-генератором подразумевается любая мини-электростанция в том числе на газу или бензине.",
+      "enum": {
+        "0": "\"Промышлен. Сеть\" - На I входе сети 220в промышленная сеть.",
+        "1": "\"Топливн.Генератор\" - На I входе сети 220в - дизель-генератор. Некоторые параметры настраиваются на работу с “плохой” сетью. Менее критичны по отклонению по напряжению и частоте и т.д.",
+        "2": "\"Пром.Топливн.Генератор\" - На I входе сети 220в – мощный дизель-генератор со стабильными параметрами. Некоторые параметры настраиваются на работу с “плохой” сетью. Менее критичны по отклонению по напряжению и частоте и т.д. При этом напряжение на выходе генератора достаточно “чистое”, чтобы осуществлять алгоритм быстрого переключения при пропаже напряжения. Только для модели Титанатор."
+      }
+    },
+    {
+      "key": "lcd_net2",
+      "cell": "_LCD_Net2",
+      "addr": 337,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "В модели DOMINATOR/Титанатор есть второй вход для напряжения 220В",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 4,
+      "desc": "В модели DOMINATOR/Титанатор есть второй вход для напряжения 220В.",
+      "enum": {
+        "0": "\"ВЫкл\" – Вход II не задействован.",
+        "1": "\"Промышлен. Сеть\" - На II входе сети 220в промышленная сеть.",
+        "2": "\"Топливн.Генератор\" - На II входе сети 220в - дизель-генератор. Некоторые параметры настраиваются на работу с “плохой” сетью. Менее критичны по отклонению по напряжению и частоте и т.д.",
+        "3": "\"Пром.Топливн.Генератор\" - На II входе сети 220в – мощный дизель-генератор со стабильными параметрами. Некоторые параметры настраиваются на работу с “плохой” сетью. Менее критичны по отклонению по напряжению и частоте и т.д. При этом напряжение на выходе генератора достаточно “чистое”, чтобы осуществлять алгоритм быстрого переключения при пропаже напряжения. Только для модели Титанатор.",
+        "4": "\"ВходСетиВх1 'до'\" - дублер Вх1 на отключение сети. Вх2 подключается на вход инверторного стабилизатора выход которого подключен на Вх1. Используется для двойного преобразования. Только для модели Титанатор."
+      }
+    },
+    {
+      "key": "lcd_dizelmaxpow",
+      "cell": "_LCD_DizelMaxPow",
+      "addr": 338,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Установка максимальной мощности для второго входа для модели DOMINATOR/Титанатор",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Установка максимальной мощности для второго входа для модели DOMINATOR/Титанатор."
+    },
+    {
+      "key": "lcd_uaccdizstart",
+      "cell": "_LCD_UAccDizStart",
+      "addr": 339,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Напряжение старта дизель-генератора для модели DOMINATOR/Титанатор",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "В",
+      "scale": 0.1,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Напряжение старта дизель-генератора для модели DOMINATOR/Титанатор."
+    },
+    {
+      "key": "lcd_slavemapnum",
+      "cell": "_LCD_SlaveMAPNum",
+      "addr": 341,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Количество подключенных параллельных",
+      "group": "Выход / инвертор",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Количество подключенных параллельных (ведомых) MАП для модели DOMINATOR."
+    },
+    {
+      "key": "lcd_bmsfunk",
+      "cell": "_LCD_BMSFunk",
+      "addr": 342,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Подключение внешних BMS и/или MPPT",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 3,
+      "desc": "Подключение внешних BMS и/или MPPT.",
+      "enum": {
+        "0": "Выключена – нет внешних устройств",
+        "1": "BMS (C)mART – BMS от фирмы Микроарт.",
+        "2": "MPPT (C)mART – MPPT от фирмы Микроарт.",
+        "3": "BMS+MPPT mART– совместное подключение BMS и MPPT от фирмы Микроарт, кол-во параллельных MPPT в следующей строке."
+      }
+    },
+    {
+      "key": "lcd_mpptnum",
+      "cell": "_LCD_MPPTNum",
+      "addr": 343,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Количество подключенных параллельных MPPT",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "подключен один MPPT."
+    },
+    {
+      "key": "lcd_netmaxpow",
+      "cell": "_LCD_NetMaxPow",
+      "addr": 360,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Максимальная мощность сетевого входа",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "Вт",
+      "scale": 100.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Максимальная мощность сетевого входа. По умолчанию выставлена максимальной которую МАП может через себя пропустить. Пользователь может ее установить ниже если ему необходимо ограничить отбираемую мощность от внешней сети. При этом если мощность нагрузки превысит выставленную в этой ячейке то произойдет переход на генерацию от АКБ, а в случае Hybrid моделей можно также включить подкачку (_LCD_NetUpLoad) стабилизируя потребление от сети на этой максимальной мощности."
+    },
+    {
+      "key": "lcd_unetup",
+      "cell": "_LCD_UNETUp",
+      "addr": 361,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Ограничение напряжение сети сверху, если сетевое напряжение превысит этот порог",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "В",
+      "scale": 1.0,
+      "offset": 100.0,
+      "min": null,
+      "max": null,
+      "desc": "Ограничение напряжение сети сверху, если сетевое напряжение превысит этот порог то МАП перейдет на генерацию от АКБ. Обратный возврат на сеть произойдет как только напряжение снизится ниже этого порога минус гистерезис 5В."
+    },
+    {
+      "key": "lcd_unetdown",
+      "cell": "_LCD_UNETDown",
+      "addr": 362,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Ограничение напряжение сети с снизу, если сетевое напряжение будет ниже этого",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "В",
+      "scale": 1.0,
+      "offset": 100.0,
+      "min": null,
+      "max": null,
+      "desc": "Ограничение напряжение сети с снизу, если сетевое напряжение будет ниже этого порога то МАП перейдет на генерацию от АКБ. Обратный возврат на сеть произойдет как только напряжение станет выше этого порога плюс гистерезис 20В."
+    },
+    {
+      "key": "lcd_netalg",
+      "cell": "_LCD_NETAlg",
+      "addr": 363,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Алгоритм работы с сетью",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 3,
+      "desc": "Алгоритм работы с сетью.",
+      "enum": {
+        "0": "Трансляция+заряд. Обычный режим МАП.",
+        "1": "Только трансляция. Удобен, если есть независимый зарядник АКБ.",
+        "2": "Принудительная генерация ЭКО. Режим, в котором при заряженых АКБ и внешней зарядке (в виде солнечных батарей или ветряка), МАП перейдет на генерацию от АКБ (даже при наличии сети). Для Hybrid или DOMINATOR моделей можно выставить и подкачку ячейкой _LCD_NetUpECO. Работа задается ячейкой _LCD_UAccMinNetGen и также _LCD_PercentECOMinGen для Hybrid во время подкачки. Более подробно см. Паспорт к МАП.",
+        "3": "Тарифная сеть. Тот-же алгоритм как и “ Принудительная генерация ЭКО ”, но в выставленном временном интервале (_LCD_TimeEcoStart и _LCD_TimeEcoEnd). Удобен там где есть многотарифная сеть, а особенно вкупе с солнечными батареями."
+      }
+    },
+    {
+      "key": "lcd_uaccminnetgen",
+      "cell": "_LCD_UAccMinNetGen",
+      "addr": 364,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Напряжение меньше которого в ЭКО принудительная генерация",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "В",
+      "scale": 0.1,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Напряжение меньше которого в ЭКО принудительная генерация (или подкачка) заканчивается и переходим на сеть. Обратный возврат на принудительную генерацию (или подкачку) произойдет только после полного заряда АКБ (либо сетью либо солнечными батареями) и напряжение АКБ превысит EE_LCD_UAccChMax (с коррекцией по температуре). Опция закрыта, если не выбран один из ЭКО режимов (“Принудительная генерация ЭКО” или “ Тарифная сеть ”) ячейкой _LCD_NETAlg."
+    },
+    {
+      "key": "lcd_timeecostart",
+      "cell": "_LCD_TimeEcoStart",
+      "addr": 365,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Время начала минимального тарифа с точностью до 10 мин",
+      "group": "Время и часы",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Время начала минимального тарифа с точностью до 10 мин. В старших 5 битах хранятся часы, в младших 3 битах десятки минут."
+    },
+    {
+      "key": "lcd_timeecoend",
+      "cell": "_LCD_TimeEcoEnd",
+      "addr": 366,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Время окончания минимального тарифа с точностью до 10мин",
+      "group": "Время и часы",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Время окончания минимального тарифа с точностью до 10мин, аналогично в старших 5 битах хранятся часы, в младших 3 битах десятки минут."
+    },
+    {
+      "key": "lcd_percentecomingen",
+      "cell": "_LCD_PercentECOMinGen",
+      "addr": 367,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Только для моделей Hybrid или DOMINATOR",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Только для моделей Hybrid или DOMINATOR."
+    },
+    {
+      "key": "lcd_acctype",
+      "cell": "_LCD_AccType",
+      "addr": 384,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Тип АКБ",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 6,
+      "desc": "Тип АКБ. Могут добавляться по мере увеличения номенклатуры.",
+      "enum": {
+        "0": "Кислотный. Стандартный автомобильный АКБ.",
+        "1": "Гелевый/AGM, относятся тоже к кислотным но с немного отличающимися порогами напряжения заряда.",
+        "2": "AGM Shoto, одна из разновидностей AGM со своими порогами.",
+        "3": "Vect/Dyn 15S^3,4v, - Литиевые сборки из 15 банок только для 48в модели, максимальное напряжение заряда 3,4в на банку (15*3,4=51,0).",
+        "4": "Vect/Sep/Dyn 16S^3,4v - Литиевые сборки из 16 банок (для 48в модели), максимальное напряжение заряда 3,4в на банку (8*3,4=27,2 в 24в исполнении; 16*3,4=54,4 в 48в исполнении).",
+        "5": "LiFe 16S^3,6v - Литий Железо Фосфат, максимальное напряжение заряда 3,6в на банку (4*3,6=14,4 в 12в исполнении; 8*3,6=28,8 в 24в исполнении; 16*3,6=57,6 в 48в исполнении).",
+        "6": "LiTi 24S^2,7v – Литий Титанатные акб (LTO), максимальное напряжение заряда 2,7в на банку (6*2,7=16,2 в 12в исполнении; 12*2,7=32,4 в 24в исполнении; 24*2,7=64,8 в 48в исполнении)."
+      }
+    },
+    {
+      "key": "lcd_cacc",
+      "cell": "_LCD_CAcc",
+      "addr": 385,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Емкость АКБ",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Емкость АКБ. В этой ячейке хранится так называемая “полная емкость” АКБ, сделано это для совместимости со старыми моделями."
+    },
+    {
+      "key": "lcd_cichargestart",
+      "cell": "_LCD_CIChargeStart",
+      "addr": 386,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Ток первой ступени в единицах емкости АКБ",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "0,5В (1в, 2в, 4в соотв. для 24,48 и 96в блоков ). Далее Алгоритм перейдет на ток второй ступени."
+    },
+    {
+      "key": "lcd_cichargeend",
+      "cell": "_LCD_CIChargeEnd",
+      "addr": 387,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Только для тока от КЭС",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "только для тока от КЭС(MPPT)."
+    },
+    {
+      "key": "lcd_chargealg",
+      "cell": "_LCD_ChargeAlg",
+      "addr": 388,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Алгоритм заряда",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 3,
+      "desc": "Алгоритм заряда.",
+      "enum": {
+        "0": "2Ступен 2-тока. Заряд осуществляется вначале током первой ступени и по достижению напряжения EE_LCD_UAccChMax-5 переходит на вторую ступень. По достижению напряжения EE_LCD_UAccChMax заканчивается заряд.",
+        "1": "3Ступени 2-тока+Дозаряд. Вначале отрабатываем 2Ступен 2-тока, но по достижению EE_LCD_UAccChMax заряд переходит в дозаряд и заряжает пока ток не упадет ниже EE_CIChargeAbsorb. Также по истечении времени EE_T_CHARGE_Umax заканчиваем заряд даже если ток не упал ниже EE_CIChargeAbsorb.",
+        "2": "3Ступени 2-тока+Буферный. Вначале отрабатываем 2Ступен 2-тока, но по достижению EE_LCD_UAccChMax заряд переходит не в дозаряд, а сразу в буферный режим.",
+        "3": "4Ступени 2-тока+Дозаряд+Буфер. Отрабатываем 3Ступени 2-тока+Дозаряд, и переходим в буферный режим."
+      }
+    },
+    {
+      "key": "lcd_uaccchmax",
+      "cell": "_LCD_UAccChMax",
+      "addr": 389,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Напряжение окончания заряда",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "В",
+      "scale": 0.1,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Напряжение окончания заряда используется совместно с _LCD_UAccChMax_dop и корректируется от датчика температуры АКБ."
+    },
+    {
+      "key": "lcd_uaccchbuf",
+      "cell": "_LCD_UAccChBUF",
+      "addr": 390,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Напряжение буферного",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "В",
+      "scale": 0.1,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Напряжение буферного используется совместно с _LCD_UAccChBUF_dop и корректируется от датчика температуры АКБ."
+    },
+    {
+      "key": "lcd_uaccchstart",
+      "cell": "_LCD_UAccChStart",
+      "addr": 391,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Напряжение старта заряда",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "В",
+      "scale": 0.1,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Напряжение старта заряда используется совместно с _LCD_UAccChStart_dop."
+    },
+    {
+      "key": "lcd_rele1_funk",
+      "cell": "_LCD_Rele1_Funk",
+      "addr": 408,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "РЕЛЕ1 можно запрограммировать на пуск Бензо-Дизель генератора, а также можно",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 9,
+      "desc": "РЕЛЕ1 можно запрограммировать на пуск Бензо-Дизель генератора, а также можно включать РЕЛЕ по условию. Как правило, это нужно для включения/ отключения нагрузки или индикации.",
+      "enum": {
+        "0": "Выключена",
+        "1": "ПускБ/ДизГенер – реле настроено на пуск дизель-генератора.",
+        "2": "По Напряж. АКБ – реле включается по условию напряжения на АКБ.",
+        "3": "По ТемператАКБ – реле включается по температуре АКБ.",
+        "4": "По Времени – реле включается по времени.",
+        "5": "По Событию Сети 220в. Включая: “Пропала Сеть”, “ТрансляцияСети”, “В РежимеЗаряда”, а также “Нет220наВыходе”.",
+        "7": "ТаймерОтРеле-1(Заслонка)",
+        "8": "ТаймерОтРеле+1(Стартер)",
+        "9": "По событию BMS",
+        "10": "Изб. Мощности MPPT.",
+        "11": "Изб. Мощности Сетевик.",
+        "12": "По Внешнему цифровому входу.",
+        "13": "По Мощности Выхода."
+      }
+    },
+    {
+      "key": "lcd_rele1_u_t_min",
+      "cell": "_LCD_Rele1_U_T_min",
+      "addr": 409,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Зависит от выбора пункта “Функция Реле1”",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "В",
+      "scale": 0.1,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Зависит от выбора пункта “Функция Реле1” т.е. ячейки _LCD_Rele1_Funk."
+    },
+    {
+      "key": "lcd_rele1_u_t_maxinv",
+      "cell": "_LCD_Rele1_U_T_maxInv",
+      "addr": 410,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Зависит от выбора пункта “Функция Реле1”",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "В",
+      "scale": 0.1,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Зависит от выбора пункта “Функция Реле1” т.е. ячейки _LCD_Rele1_Funk."
+    },
+    {
+      "key": "lcd_rele1_gistinv",
+      "cell": "_LCD_Rele1_GistInv",
+      "addr": 411,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Зависит от выбора пункта “Функция Реле1”",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Зависит от выбора пункта “Функция Реле1” т.е. ячейки _LCD_Rele1_Funk."
+    },
+    {
+      "key": "lcd_rele2_funk",
+      "cell": "_LCD_Rele2_Funk",
+      "addr": 412,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Аналогично _LCD_Rele1_Funk, только для Реле2",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Аналогично _LCD_Rele1_Funk, только для Реле2."
+    },
+    {
+      "key": "lcd_rele2_u_t_min",
+      "cell": "_LCD_Rele2_U_T_min",
+      "addr": 413,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Аналогично _LCD_Rele1_U_T_min, только для Реле2 и",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Аналогично _LCD_Rele1_U_T_min, только для Реле2 и зависит ячейки _LCD_Rele2_Funk."
+    },
+    {
+      "key": "lcd_rele2_u_t_maxinv",
+      "cell": "_LCD_Rele2_U_T_maxInv",
+      "addr": 414,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Аналогично _LCD_Rele1_U_T_mах, только для Реле2 и",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Аналогично _LCD_Rele1_U_T_mах, только для Реле2 и зависит ячейки _LCD_Rele2_Funk."
+    },
+    {
+      "key": "lcd_rele2_gistinv",
+      "cell": "_LCD_Rele2_GistInv",
+      "addr": 415,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Аналогично _LCD_Rele1_GistInv, только для Реле2 и",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Аналогично _LCD_Rele1_GistInv, только для Реле2 и зависит ячейки _LCD_Rele2_Funk."
+    },
+    {
+      "key": "lcd_vers",
+      "cell": "_LCD_Vers",
+      "addr": 432,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "ro",
+      "name": "Версия ПО и модели, реально ячейка пустая и не",
+      "group": "ЖКИ и меню (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Версия ПО и модели, реально ячейка пустая и не используется, нужна только как пункт меню."
+    },
+    {
+      "key": "lcd_lcdtype",
+      "cell": "_LCD_LCDType",
+      "addr": 434,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Режим подсветки ЖКИ",
+      "group": "ЖКИ и меню (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 2,
+      "desc": "Режим подсветки ЖКИ.",
+      "enum": {
+        "0": "Подсветка выключена.",
+        "1": "Горит по ситуации (переходы и т.д.).",
+        "2": "Всегда горит."
+      }
+    },
+    {
+      "key": "lcd_sound",
+      "cell": "_LCD_Sound",
+      "addr": 435,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Подтверждение звуком",
+      "group": "ЖКИ и меню (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 2,
+      "desc": "Подтверждение звуком.",
+      "enum": {
+        "0": "На все ситуации.",
+        "1": "Только Проблемы (перегрузки, ошибки и.т.д.).",
+        "2": "Никаких Звуков."
+      }
+    },
+    {
+      "key": "lcd_signalnetoff",
+      "cell": "_LCD_SignalNetOff",
+      "addr": 436,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Звук на пропажу сети",
+      "group": "ЖКИ и меню (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 2,
+      "desc": "Звук на пропажу сети.",
+      "enum": {
+        "0": "Не звучим.",
+        "1": "Звучим раз в минуту.",
+        "2": "Звучим раз в 10 минут."
+      }
+    },
+    {
+      "key": "lcd_rsbaud",
+      "cell": "_LCD_RSBAUD",
+      "addr": 437,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Скорость работы по RS232",
+      "group": "ЖКИ и меню (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 6,
+      "desc": "Скорость работы по RS232 (RS1), Режитм САП, Питание для WiFi.",
+      "enum": {
+        "0": "2400 бод.",
+        "1": "9600 бод.",
+        "2": "19200 бод.",
+        "3": "57600 бод.",
+        "4": "115200 бод.",
+        "5": "САП-Заряд. Включается режим управления САП, по проводу DSR на разъеме RS232, осуществляется управление САП-ом на включение/выключение дизель-генератора для заряда.",
+        "6": "Включение/ вЫключение питания для внешнего Wi-Fi адаптера."
+      }
+    },
+    {
+      "key": "lcd_timecyr",
+      "cell": "_LCD_TimeCyr",
+      "addr": 438,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Текущее время",
+      "group": "Время и часы",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Текущее время. В старших 5 битах хранятся часы, в младших 3 битах десятки минут."
+    },
+    {
+      "key": "lcd_t_maxcharge",
+      "cell": "_LCD_T_MAXCharge",
+      "addr": 439,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Максимальное время заряда если не установлен буферный режим",
+      "group": "Заряд АКБ (настройки)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Максимальное время заряда если не установлен буферный режим."
+    },
+    {
+      "key": "lcd_rasberyon",
+      "cell": "_LCD_RasberyON",
+      "addr": 457,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Малина (Raspberry) включена",
+      "group": "ЖКИ и меню (настройки)",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "вЫключен, 1- Rasbery включен"
+    },
+    {
+      "key": "lcd_devadr",
+      "cell": "_LCD_DevAdr",
+      "addr": 458,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Адрес МАП (ModBus)",
+      "group": "ЖКИ и меню (настройки)",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "номер (адрес) МАП по которому можно адресоваться к МАП, например, по протоколу ModBus."
+    },
+    {
+      "key": "lcd_rs_protocol",
+      "cell": "_LCD_RS_Protocol",
+      "addr": 459,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Протокол RS1 (USB)",
+      "group": "ЖКИ и меню (настройки)",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "0- обычный протокол, 1- ModBus RTU (USB), 2- ModBus RTU (RS485) т.е транслируем RS1 на RS485 c спротоколом ModBus."
+    },
+    {
+      "key": "lcd_adddevice",
+      "cell": "_LCD_AddDevice",
+      "addr": 460,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Устройства на доп. плате RS485",
+      "group": "ЖКИ и меню (настройки)",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Seplos485_BMS Master, 4 - Dyness485_ BMS Master. Устройства могут добавляться."
+    },
+    {
+      "key": "lcd_rsbaud485",
+      "cell": "_LCD_RSBAUD485",
+      "addr": 461,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Скорость RS3 (RS485)",
+      "group": "ЖКИ и меню (настройки)",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "19200, 3 - 57600, 4 - 115200, 5 - 312500, 6- 625000 скорость в бод для RS3."
+    },
+    {
+      "key": "lcd_rs485_num",
+      "cell": "_LCD_RS485_Num",
+      "addr": 462,
+      "width": 1,
+      "kind": "eeprom",
+      "access": "rw",
+      "name": "Количество устройств RS3 по ModBus",
+      "group": "ЖКИ и меню (настройки)",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 255,
+      "max": 255,
+      "desc": "Кол-во устройств подключаемых к RS3 по ModBus.",
+      "enum": {
+        "255": "sum; sum++; put_char(sum);//запись контрольной суммы"
+      }
+    },
+    {
+      "key": "mode",
+      "cell": "_MODE",
+      "addr": 1024,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Режим работы МАП",
+      "group": "Состояние МАП",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 4,
+      "desc": "копия этой ячейки записывается в eeprom по адресу _MODE=0x50.",
+      "enum": {
+        "0": "МАП выключен (нет генерации) и нет сети на входе",
+        "1": "МАП выключен (нет генерации) но есть сеть на входе (значение напряжения сети выводится в ЖКИ)",
+        "2": "МАП включен - происходит генерация 220В от АКБ.",
+        "3": "МАП включен и транслирует сеть (есть сеть на входе).",
+        "4": "МАП включен, транслирует сеть и одновременно заряжает АКБ."
+      }
+    },
+    {
+      "key": "statusch",
+      "cell": "_StatusCh",
+      "addr": 1026,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Показывает состояние заряда в котором находится МАП",
+      "group": "Состояние МАП",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Показывает состояние заряда в котором находится МАП.",
+      "bits": [
+        {
+          "bit": 0,
+          "name": "Идет заряд малым током (буферный)."
+        },
+        {
+          "bit": 1,
+          "name": "Флаг, что необходим заряд АКБ (если нет заряда), в режиме заряда - первая ступень."
+        },
+        {
+          "bit": 2,
+          "name": "Идет вторая ступень заряда."
+        },
+        {
+          "bit": 3,
+          "name": "Идет дозаряд постоянным напряжением Uакбмакс – 3-я ступень заряда."
+        }
+      ]
+    },
+    {
+      "key": "put_eeprom",
+      "cell": "_put_eeprom",
+      "addr": 1027,
+      "width": 1,
+      "kind": "ram",
+      "access": "rw",
+      "name": "Была запись в EEProm",
+      "group": "Состояние МАП",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "обнулить после чтения.",
+      "bits": [
+        {
+          "bit": 0,
+          "name": "была запись в EEProm."
+        },
+        {
+          "bit": 1,
+          "name": "изменился режим работы – МАП изменит ячейку _MODE=0x50."
+        },
+        {
+          "bit": 2,
+          "name": "изменили настройки МАП - ячейки с _LCD_TypeSin=0x138 до _LCDmax_T_MAXCharge=0x1CF - Эти ячейки мог поменять пользователь с помощью дисплея ЖКИ (в этом случае этот бит укажет на это действие)."
+        },
+        {
+          "bit": 3,
+          "name": "изменились ячейки накопители ошибок с _CulerErr=0x48 до 0x4f (прописывает МАП)."
+        },
+        {
+          "bit": 4,
+          "name": "изменилась ячейка текущего времени _LCD_TimeCyr=0x1B6 (МАП обновляет раз в 10мин)."
+        }
+      ]
+    },
+    {
+      "key": "stateuacc",
+      "cell": "_StateUAcc",
+      "addr": 1028,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Состояние напряжения на АКБ",
+      "group": "Состояние МАП",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 5,
+      "desc": "Состояние напряжения на АКБ.",
+      "enum": {
+        "0": "Напряжение ниже которого МАП отключает генерацию и будет работать только с сетью 220В.",
+        "1": "Напряжение ниже минимально допустимого для АКБ, МАП отключит генерацию через 1мин.",
+        "2": "Напряжение АКБ ниже нормы (для отображения индикатора заряда АКБ).",
+        "3": "Напряжение АКБ в норме (для отображения индикатора заряда АКБ).",
+        "4": "Напряжение АКБ больше напряжения окончания заряда, заканчиваем заряд .",
+        "5": "Напряжение АКБ больше максимально допустимого, отключаем заряд или генерацию."
+      }
+    },
+    {
+      "key": "uacc_med_vh",
+      "cell": "_UAcc_med_VH",
+      "addr": 1029,
+      "width": 2,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Напряжение АКБ",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "В",
+      "scale": 0.1,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Напряжение АКБ.",
+      "order": "hl"
+    },
+    {
+      "key": "iacc_med_a_2",
+      "cell": "_IAcc_med_A_2",
+      "addr": 1032,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Ток по АКБ при генерации или ток заряда",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "А",
+      "scale": 2.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Ток по АКБ при генерации или ток заряда (или при трансляции сети в режиме подкачки в сеть)."
+    },
+    {
+      "key": "pload_l",
+      "cell": "_PLoad_L",
+      "addr": 1033,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Текущая мощность нагрузки по АКБ",
+      "group": "Нагрузка и мощность",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "Вт",
+      "scale": 100.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "текущая мощность нагрузки по АКБ т.е. при генерации (или при трансляции сети в режиме подкачки в сеть). Данная ячейка отображает мощность потребления блоков мощностью до 25кВт. Для блоков большей мощности необходимо задействовать ячейку _PLoad_H см. ниже."
+    },
+    {
+      "key": "t_neton",
+      "cell": "_T_NetOn",
+      "addr": 1035,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Обратный отсчет задержки переключения с генерации на сеть при ее появлении, при",
+      "group": "Время и часы",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "обратный отсчет задержки переключения с генерации на сеть при ее появлении, при NetOn=0 и наличии сети произойдет переключение на трансляцию сети."
+    },
+    {
+      "key": "t_charge",
+      "cell": "_T_Charge",
+      "addr": 1036,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Обратный отсчет времени для перехода на заряд, при T_Charge=0 начнется заряд",
+      "group": "Время и часы",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "обратный отсчет времени для перехода на заряд, при T_Charge=0 начнется заряд."
+    },
+    {
+      "key": "t_accdisch_l",
+      "cell": "_T_AccDisch_L",
+      "addr": 1038,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Обратный отсчёт работы на низком напряжении АКБ (устаревшая)",
+      "group": "Время и часы",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "счетчик, обратного отсчета времени работы в режиме генерации на напряжении АКБ ниже минимально допустимого, при T_AccDisch=0 генерация выключается. Ячейка осталась для совместимости, желательно использовать двух-байтовую ячейку по адресу _T_AccDisch=0x52E. Если T_AccDisch<256 то T_AccDisch_L=T_AccDisch иначе T_AccDisch_L=255."
+    },
+    {
+      "key": "t_nominal",
+      "cell": "_T_Nominal",
+      "addr": 1039,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Счетчик времени работы на нагрузке выше номинальной в минутах",
+      "group": "Энергия и счётчики",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "счетчик времени работы на нагрузке выше номинальной в минутах (через 30мин генерация отключится)."
+    },
+    {
+      "key": "t_overload",
+      "cell": "_T_Overload",
+      "addr": 1040,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Обратный отсчет времени работы на перегрузке",
+      "group": "Энергия и счётчики",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "МАП выключится."
+    },
+    {
+      "key": "toff_overload",
+      "cell": "_TOff_Overload",
+      "addr": 1041,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Обратный отсчет времени простоя после перегрузки или другой критической ситуации",
+      "group": "Энергия и счётчики",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "обратный отсчет времени простоя после перегрузки или другой критической ситуации (КЗ, низкое напряжение), при TOff_Overload=0 генерация возобновится."
+    },
+    {
+      "key": "f_accover",
+      "cell": "_F_AccOver",
+      "addr": 1052,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Показывает состояние возникающее при перегрузках",
+      "group": "Ошибки и предупреждения",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Показывает состояние возникающее при перегрузках (генерация приостанавливается).",
+      "bits": [
+        {
+          "bit": 0,
+          "name": "Отключение по перегрузке по току АКБ, 10 попыток перезапуска."
+        },
+        {
+          "bit": 1,
+          "name": "Отключение по перегрузке по току АКБ во время заряда, 10 попыток перезапуска."
+        },
+        {
+          "bit": 2,
+          "name": "Отключение по перегрузке по S_UAccLow - критически низкое напряжение АКБ, снимается при востановлении напряжения на АКБ."
+        },
+        {
+          "bit": 3,
+          "name": "Отключение по неисправности вентилятора, 10 попыток перезапуска."
+        },
+        {
+          "bit": 4,
+          "name": "Отключение по мощности выше номинальной более 30мин - снимается через 30мин"
+        },
+        {
+          "bit": 5,
+          "name": "Отключение по полному разряду АКБ - снимаем по достижению напряжения на АКБ выше EE_UAccAfterDisChage или при переходе на заряд."
+        },
+        {
+          "bit": 6,
+          "name": "Отключение по выходу за пределы датчика температуры, снимается при остывании."
+        },
+        {
+          "bit": 7,
+          "name": "Полное отключение по многократным перегрузкам по АКБ, снимается персоналом кнопкой “СТАРТ”."
+        }
+      ]
+    },
+    {
+      "key": "f_netover",
+      "cell": "_F_NETOver",
+      "addr": 1053,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Показывает состояние возникающее при перегрузках по сети 220В",
+      "group": "Ошибки и предупреждения",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Показывает состояние возникающее при перегрузках по сети 220В.",
+      "bits": [
+        {
+          "bit": 0,
+          "name": "Отключение генерации - на выходе постороннее напряжение или неисправное реле. Т.е. либо не правильное подключение проводов 220В либо необходима замена сетевого реле."
+        }
+      ]
+    },
+    {
+      "key": "unet",
+      "cell": "_UNET",
+      "addr": 1058,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Напряжение сети",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "В",
+      "scale": 1.0,
+      "offset": 100.0,
+      "min": null,
+      "max": null,
+      "desc": "Напряжение сети."
+    },
+    {
+      "key": "inet",
+      "cell": "_INET",
+      "addr": 1059,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Ток отбираемый от сети, в том числе на заряд",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "А",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Ток отбираемый от сети, в том числе на заряд."
+    },
+    {
+      "key": "pnet_l",
+      "cell": "_PNET_L",
+      "addr": 1060,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Мощность отбираемая от сети, в том числе на заряд",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "Вт",
+      "scale": 100.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Мощность отбираемая от сети, в том числе на заряд. Данная ячейка отображает мощность потребления блоков мощностью до 25кВт. Для блоков большей мощности необходимо задействовать ячейку _PNET_H см. ниже."
+    },
+    {
+      "key": "tfnet",
+      "cell": "_TFNET",
+      "addr": 1061,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Частота напряжения в сети",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "Гц",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Частота напряжения в сети."
+    },
+    {
+      "key": "thfmap",
+      "cell": "_ThFMAP",
+      "addr": 1062,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Частота напряжения на выходе во время генерации",
+      "group": "Выход / инвертор",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "Гц",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Частота напряжения на выходе во время генерации."
+    },
+    {
+      "key": "uoutmed",
+      "cell": "_UOUTmed",
+      "addr": 1063,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Напряжение на выходе во время генерации",
+      "group": "Выход / инвертор",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "В",
+      "scale": 1.0,
+      "offset": 100.0,
+      "min": null,
+      "max": null,
+      "desc": "Напряжение на выходе во время генерации"
+    },
+    {
+      "key": "tfnet_limit",
+      "cell": "_TFNET_Limit",
+      "addr": 1064,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Частота вышла за пределы",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "переходим с сети на генерацию, значение этой ячейки сохраняет значение этой частоты Flimit(Гц)=6250/TFNET_Limit для версий ПО >= 17.0. (Flimit (Гц)=2500/TFNET_Limit для версий ПО < 17.0)"
+    },
+    {
+      "key": "unet_limit",
+      "cell": "_UNET_Limit",
+      "addr": 1065,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Напряжение вышло за пределы",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "переходим с сети на генерацию, значение этой ячейки сохраняет значение этого напряжения Ulimit(В)=UNET_Limit+100."
+    },
+    {
+      "key": "rserrsis",
+      "cell": "_RSErrSis",
+      "addr": 1066,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Ошибки системы критические",
+      "group": "Ошибки и предупреждения",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "произойдет выключение - необходимо исправить МАП, в нормальной работе должно быть RSErrSis=0.",
+      "bits": [
+        {
+          "bit": 0,
+          "name": "Не используется"
+        },
+        {
+          "bit": 1,
+          "name": "Ошибка записи в EEPROM"
+        },
+        {
+          "bit": 2,
+          "name": "Кто-то другой вызвал интерапт"
+        },
+        {
+          "bit": 3,
+          "name": "Не работает датчик температуры"
+        },
+        {
+          "bit": 4,
+          "name": "Другая системная ошибка"
+        },
+        {
+          "bit": 5,
+          "name": "несоответствие перемычек"
+        },
+        {
+          "bit": 6,
+          "name": "не правильная полярность подключения тора"
+        },
+        {
+          "bit": 7,
+          "name": "не работает часовой кварцевый резонатор"
+        }
+      ]
+    },
+    {
+      "key": "rserrjobm",
+      "cell": "_RSErrJobM",
+      "addr": 1067,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Ошибки (перегрузки) с автовозвратом в рабочий режим",
+      "group": "Ошибки и предупреждения",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "после устранения выход в рабочий режим (отображается на ЖКИ).",
+      "bits": [
+        {
+          "bit": 0,
+          "name": "АКБ полностью разряжен, напряжение критически низкое для работы МАП."
+        },
+        {
+          "bit": 1,
+          "name": "Превышение напряжения на АКБ, генерация или заряд временно приостановлен."
+        },
+        {
+          "bit": 2,
+          "name": "Ток KZ по АКБ при заряде, заряд временно приостановлен."
+        },
+        {
+          "bit": 3,
+          "name": "Ток KZ по АКБ, генерация или заряд временно приостановлен."
+        },
+        {
+          "bit": 4,
+          "name": "Возможно залипло основное реле, необходим ремонт."
+        },
+        {
+          "bit": 5,
+          "name": "Ток КЗ по сети 220В, произойдет переход на генерацию с возможным дальнейшим отключением по КЗ АКБ."
+        },
+        {
+          "bit": 6,
+          "name": "На выходе 220В (но не на входе сети 220В) постороннее напряжение, генерация будет отключена."
+        },
+        {
+          "bit": 7,
+          "name": "Произошел сброс программы, возможно сильная помеха от грозы и т.д."
+        }
+      ]
+    },
+    {
+      "key": "rserrjob",
+      "cell": "_RSErrJob",
+      "addr": 1068,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Ошибки (перегрузки) с автовозвратом в рабочий режим",
+      "group": "Ошибки и предупреждения",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "после устранения выход в рабочий режим (отображается на ЖКИ).",
+      "bits": [
+        {
+          "bit": 0,
+          "name": "АКБ полностью разряжен, МАП будет работать еще 1 минуту и отключит генерацию, пока напряжение на АКБ не станет выше EE_UAccAfterDisChage или не перейдет на заряд."
+        },
+        {
+          "bit": 1,
+          "name": "Перегрузка по АКБ, генерация продолжится в течении 10сек (отсчет времени в ячейке _T_Overload). После чего произойдет отключение на 10сек. (_TOff_Overload) и так не более 10 раз в течении 10мин."
+        },
+        {
+          "bit": 2,
+          "name": "Нагрузка выше номинальной мощности – будем работать ограниченное время (30 мин для Pro модели). Отсчет времени работы в ячейке _T_Nominal."
+        },
+        {
+          "bit": 3,
+          "name": "Превышение температуры, приостановка генерации или заряда."
+        },
+        {
+          "bit": 4,
+          "name": "Вентилятор не крутится, отрабатывает аналогично перегрузке ErrJ_PowAccMax."
+        },
+        {
+          "bit": 5,
+          "name": "Топливный генератор после многих попыток не запускается"
+        },
+        {
+          "bit": 6,
+          "name": "Был сбой в режиме работы (например по сбросу питания или сильной помехи)."
+        },
+        {
+          "bit": 7,
+          "name": "Выключились по многократным КЗ по заряду, через 2ч снимаем ошибку."
+        }
+      ]
+    },
+    {
+      "key": "rswarning",
+      "cell": "_RSWarning",
+      "addr": 1069,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Предупреждения рабочие",
+      "group": "Ошибки и предупреждения",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "не меняют ход работы (отображается на ЖКИ).",
+      "bits": [
+        {
+          "bit": 0,
+          "name": "Нет действия для комбинации кнопка (“СТАРТ” и “ЗАРЯД”), можно игнорировать."
+        },
+        {
+          "bit": 1,
+          "name": "Сетевое напряжение вышло за пределы."
+        },
+        {
+          "bit": 2,
+          "name": "Есть постороннее напряжение на выходной розетке или большие выбросы напряжения от нагрузки."
+        },
+        {
+          "bit": 3,
+          "name": "Выбросы напряжения в сети 220В по входу."
+        },
+        {
+          "bit": 4,
+          "name": "Залипла кнопка (“СТАРТ” или “ЗАРЯД”)."
+        },
+        {
+          "bit": 5,
+          "name": "Переход на заряд не возможен - нет сети на входе."
+        },
+        {
+          "bit": 6,
+          "name": "В режиме трансляции сети и возможно заряда, мощность нагрузки за пределами выставленной максимальной мощности (EE_LCD_NetMaxPow), но меньше мощности МАР. Произойдет переход на генерацию (кроме режима подкачки)."
+        },
+        {
+          "bit": 7,
+          "name": "Сеть не стабильна (по напряжению или частоте), не будет перехода на трансляцию сети или выход из заряда если насчитали много нестабильностей."
+        }
+      ]
+    },
+    {
+      "key": "temp_grad0",
+      "cell": "_Temp_Grad0",
+      "addr": 1070,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Температура от внешнего датчика температуры",
+      "group": "Температуры",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "°C",
+      "scale": 1.0,
+      "offset": -50.0,
+      "min": null,
+      "max": null,
+      "desc": "Температура от внешнего датчика температуры (который наклеен на АКБ)."
+    },
+    {
+      "key": "temp_grad1",
+      "cell": "_Temp_Grad1",
+      "addr": 1071,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Температура датчика тора",
+      "group": "Температуры",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "°C",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Температура датчика тора (отсутствовал в старых моделях)"
+    },
+    {
+      "key": "temp_grad2",
+      "cell": "_Temp_Grad2",
+      "addr": 1072,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Температура датчика температуры транзисторов",
+      "group": "Температуры",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "°C",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Температура датчика температуры транзисторов"
+    },
+    {
+      "key": "inet_16_4",
+      "cell": "_INET_16_4",
+      "addr": 1073,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Более точное значение тока сети",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "А",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Более точное значение тока сети (аналогичное _INET), для подсчета статистики."
+    },
+    {
+      "key": "iacc_med_a_u16_l",
+      "cell": "_IAcc_med_A_u16_L",
+      "addr": 1074,
+      "width": 2,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Более точное значение тока по АКБ",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "А",
+      "scale": 0.0625,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Более точное значение тока по АКБ (аналогичное _IAcc_med_A_2), для подсчета статистики.",
+      "order": "lh"
+    },
+    {
+      "key": "rcon_img",
+      "cell": "_RCON_img",
+      "addr": 1081,
+      "width": 1,
+      "kind": "ram",
+      "access": "rw",
+      "name": "Служебная ячейка из которой можно узнать по какой причине произошел сброс",
+      "group": "Ошибки и предупреждения",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Служебная ячейка из которой можно узнать по какой причине произошел сброс микроконтроллера.",
+      "bits": [
+        {
+          "bit": 7,
+          "name": "IPEN: Interrupt Priority Enable bit"
+        },
+        {
+          "bit": 6,
+          "name": "SBOREN: BOR Software Enable bit"
+        },
+        {
+          "bit": 5,
+          "name": "Unimplemented: Read as ‘0’"
+        },
+        {
+          "bit": 4,
+          "name": "~RI: RESET Instruction Flag bit"
+        },
+        {
+          "bit": 3,
+          "name": "~TO: Watchdog Time-out Flag bit"
+        },
+        {
+          "bit": 2,
+          "name": "~PD: Power-down Detection Flag bit"
+        },
+        {
+          "bit": 1,
+          "name": "~POR: Power-on Reset Status bit"
+        },
+        {
+          "bit": 0,
+          "name": "~BOR: Brown-out Reset Status bit"
+        }
+      ]
+    },
+    {
+      "key": "rcon_img_l",
+      "cell": "_RCON_img_L",
+      "addr": 1081,
+      "width": 1,
+      "kind": "ram",
+      "access": "rw",
+      "name": "Служебная ячейка из которой можно узнать по какой причине произошел сброс",
+      "group": "Ошибки и предупреждения",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Служебная ячейка из которой можно узнать по какой причине произошел сброс микроконтроллера.",
+      "bits": [
+        {
+          "bit": 7,
+          "name": "EXTR Вывод внешнего сброса (MCLR)"
+        },
+        {
+          "bit": 6,
+          "name": "SWR выполнена инструкция RESET"
+        },
+        {
+          "bit": 5,
+          "name": "SWDTEN Software Enable/Disable of WDT"
+        },
+        {
+          "bit": 4,
+          "name": "WDTO Watchdog Timer Time-out Flag"
+        },
+        {
+          "bit": 3,
+          "name": "SLEEP устройство было в спящем режиме"
+        },
+        {
+          "bit": 2,
+          "name": "IDLE устройство было в режиме ожидания"
+        },
+        {
+          "bit": 1,
+          "name": "BOR Brown-out Reset Flag произошел сброс при просадке напряжения питания"
+        },
+        {
+          "bit": 0,
+          "name": "POR /Power-on Reset Flag произошел сброс при включении питания"
+        }
+      ]
+    },
+    {
+      "key": "temp_off",
+      "cell": "_Temp_off",
+      "addr": 1084,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Для того чтобы знать какие есть датчики температуры",
+      "group": "Температуры",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "для того чтобы знать какие есть датчики температуры.",
+      "bits": [
+        {
+          "bit": 0,
+          "name": "Внешний датчик температуры (АКБ) отсутствует."
+        },
+        {
+          "bit": 1,
+          "name": "Датчик температуры тора отсутствует."
+        },
+        {
+          "bit": 2,
+          "name": "Датчик температуры транзисторов отсутствует."
+        }
+      ]
+    },
+    {
+      "key": "e_lcd_uaccchmax",
+      "cell": "_E_LCD_UAccChMax",
+      "addr": 1087,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Текущее значение максимального напряжения заряда",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "В",
+      "scale": 0.1,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Текущее значение максимального напряжения заряда (конца заряда) поправленное по температуре внешнего датчика."
+    },
+    {
+      "key": "e_lcd_uaccchbuf",
+      "cell": "_E_LCD_UAccChBUF",
+      "addr": 1088,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Текущее значение буферного",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "В",
+      "scale": 0.1,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Текущее значение буферного (поддерживающего) напряжения заряда поправленное по температуре внешнего датчика."
+    },
+    {
+      "key": "t_charge_need_eco",
+      "cell": "_T_CHARGE_NEED_ECO",
+      "addr": 1089,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Задержка перехода на сеть в ЭКО режиме",
+      "group": "Время и часы",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Счетчик, в минутах, задержки перехода из ЭКО режима (режим принудительной генерации при напряжении ниже EE_LCD_UAccMin) для игнорирования просадки."
+    },
+    {
+      "key": "rcon_img_h",
+      "cell": "_RCON_img_H",
+      "addr": 1094,
+      "width": 1,
+      "kind": "ram",
+      "access": "rw",
+      "name": "По сбросу после чтения в обе ячейки записывается значение 0",
+      "group": "Ошибки и предупреждения",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "По сбросу после чтения в обе ячейки записывается значение 0.",
+      "bits": [
+        {
+          "bit": 15,
+          "name": "TRAPR произошел сброс конфликта ловушек"
+        },
+        {
+          "bit": 14,
+          "name": "IOPUWR обнаружение недопустимого кода операции, недопустимый режим адреса или неинициализированный регистр W, используемый в качестве указателя адреса, вызвал сброс"
+        },
+        {
+          "bit": 11,
+          "name": "VREGSF Flash voltage regulator is active during Sleep"
+        },
+        {
+          "bit": 9,
+          "name": "CM бит флага несоответствия конфигурации"
+        },
+        {
+          "bit": 8,
+          "name": "VREGS регулятор напряжения активен во время сна"
+        }
+      ]
+    },
+    {
+      "key": "rserrdop",
+      "cell": "_RSErrDop",
+      "addr": 1095,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Ошибки трехфазной системы, параллельных МАП, BMS и MPPT",
+      "group": "Ошибки и предупреждения",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Ошибки трехфазной системы, параллельных МАП, BMS и MPPT.",
+      "bits": [
+        {
+          "bit": 0,
+          "name": "Неправильные данные от предыдущей фазы или нет связи вообще."
+        },
+        {
+          "bit": 1,
+          "name": "Вышли за окно синхронизации сдвига между фазами в 60 град."
+        },
+        {
+          "bit": 2,
+          "name": "ошибка I2C для BMS."
+        },
+        {
+          "bit": 3,
+          "name": "ошибка I2C для MPPT."
+        },
+        {
+          "bit": 4,
+          "name": "устаревшая версия ПO МППТ (<4.0)."
+        },
+        {
+          "bit": 5,
+          "name": "Ошибка синхронизации параллельных МАП. не правильные данные (но есть сигнал синхронизации 50Гц) или нет связи вообще."
+        },
+        {
+          "bit": 6,
+          "name": "На ведомом параллельном МАП нет сети, в то время как ведущий перешел на сеть - выключаем генерацию ведомого."
+        }
+      ]
+    },
+    {
+      "key": "thfmapsync",
+      "cell": "_ThFMAPSync",
+      "addr": 1097,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Частота предыдущей фазы",
+      "group": "Выход / инвертор",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "Гц",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Частота предыдущей фазы (если текущая фаза в режиме генерации, то ее частота станет равной частоте предыдущей фазе)."
+    },
+    {
+      "key": "timecyr_minut",
+      "cell": "_TimeCyr_MINUT",
+      "addr": 1099,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Счетчик минут текущего времени",
+      "group": "Время и часы",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Счетчик минут текущего времени. Счетчик кратен 10 минутам, т.е. значения в ней от 0 до 9, на десятой минуте сбрасывается в 0. Остальные значения (часы и десятки минут) находятся в ячейке E_LCD_TimeCyr=0x1B6."
+    },
+    {
+      "key": "bms",
+      "cell": "_BMS",
+      "addr": 1100,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Состояние BMS (сухие контакты)",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Ячейка для работы с BMS. Либо можно читать состояние BMS подключенного по сухим контактам, либо управлять непосредственно через RS232. Режим работы BMS задается ячейкой EEProm _TempTopToBMS=0x21.",
+      "bits": [
+        {
+          "bit": 0,
+          "name": "Сигнал от BMS о Разряде"
+        },
+        {
+          "bit": 1,
+          "name": "Сигнал от BMS о ПереЗаряде"
+        }
+      ]
+    },
+    {
+      "key": "m_powhournet_l",
+      "cell": "_M_POWhourNET_L",
+      "addr": 1101,
+      "width": 2,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Статистика потребления от сети",
+      "group": "Энергия и счётчики",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "кВт·ч",
+      "scale": 0.01,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "- Статистика потребляемой мощности от сети, от АКБ и от сети на заряд.",
+      "order": "lh"
+    },
+    {
+      "key": "m_powhournet_hh",
+      "cell": "_M_POWhourNET_HH",
+      "addr": 1103,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Старший байт статистики потребления от сети",
+      "group": "Энергия и счётчики",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "кВт·ч",
+      "scale": 0.01,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "- Статистика потребляемой мощности от сети, от АКБ и от сети на заряд."
+    },
+    {
+      "key": "m_powhourmap_l",
+      "cell": "_M_POWhourMAP_L",
+      "addr": 1104,
+      "width": 2,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Статистика потребления от АКБ",
+      "group": "Энергия и счётчики",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "кВт·ч",
+      "scale": 0.01,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "- Статистика потребляемой мощности от сети, от АКБ и от сети на заряд.",
+      "order": "lh"
+    },
+    {
+      "key": "m_powhourmap_hh",
+      "cell": "_M_POWhourMAP_HH",
+      "addr": 1106,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Старший байт статистики потребления от АКБ",
+      "group": "Энергия и счётчики",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "кВт·ч",
+      "scale": 0.01,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "- Статистика потребляемой мощности от сети, от АКБ и от сети на заряд."
+    },
+    {
+      "key": "m_powhourmapcharge_l",
+      "cell": "_M_POWhourMAPCharge_L",
+      "addr": 1107,
+      "width": 2,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Статистика потребления от сети на заряд",
+      "group": "Энергия и счётчики",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "кВт·ч",
+      "scale": 0.01,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "- Статистика потребляемой мощности от сети, от АКБ и от сети на заряд.",
+      "order": "lh"
+    },
+    {
+      "key": "m_powhourmapcharge_hh",
+      "cell": "_M_POWhourMAPCharge_HH",
+      "addr": 1109,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Старший байт статистики потребления на заряд",
+      "group": "Энергия и счётчики",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "кВт·ч",
+      "scale": 0.01,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "- Статистика потребляемой мощности от сети, от АКБ и от сети на заряд."
+    },
+    {
+      "key": "pload_h",
+      "cell": "_PLoad_H",
+      "addr": 1110,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Дополнительный байт для отображения мощности нагрузки по АКБ",
+      "group": "Нагрузка и мощность",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "Вт",
+      "scale": 100.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "дополнительный байт для отображения мощности нагрузки по АКБ (или при трансляции сети в режиме подкачки в сеть) для блоков мощностью более 25кВт."
+    },
+    {
+      "key": "pnet_h",
+      "cell": "_PNET_H",
+      "addr": 1111,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Дополнительный байт для отображения мощности отбираемой от сети, в том числе на",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "Вт",
+      "scale": 100.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "дополнительный байт для отображения мощности отбираемой от сети, в том числе на заряд для"
+    },
+    {
+      "key": "culerspead",
+      "cell": "_CulerSpead",
+      "addr": 1112,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Текущая скорость вращения вентилятора",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 0,
+      "desc": "текущая скорость вращения вентилятора:",
+      "enum": {
+        "0": "не вращается, 1 – вращение на половинной скорости, 2 – вращение на полной скорости."
+      }
+    },
+    {
+      "key": "uakbcell_l_0",
+      "cell": "_UakbCell_L[0]",
+      "addr": 1152,
+      "width": 2,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Напряжение банок BMS",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "…",
+      "order": "lh"
+    },
+    {
+      "key": "uakbcell_l_31",
+      "cell": "_UakbCell_L[31]",
+      "addr": 1214,
+      "width": 2,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Напряжение банок BMS",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Напряжение банок, т.е. от BMS на соотв. банках в вольтах*100 (т.е. 2 знака после запятой, например, 342 соотв. 3,42В).",
+      "order": "lh"
+    },
+    {
+      "key": "takbcell_0",
+      "cell": "_TakbCell[0]",
+      "addr": 1216,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Температура банок BMS",
+      "group": "Температуры",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "…"
+    },
+    {
+      "key": "takbcell_31",
+      "cell": "_TakbCell[31]",
+      "addr": 1247,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Температура банок BMS",
+      "group": "Температуры",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "“250” и если не датчик не подключен то число равно 255 !!!."
+    },
+    {
+      "key": "q_cell_0",
+      "cell": "_Q_Cell[0]",
+      "addr": 1248,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Ток разряда банок BMS",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "…"
+    },
+    {
+      "key": "q_cell_31",
+      "cell": "_Q_Cell[31]",
+      "addr": 1279,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Ток разряда банок BMS",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "%",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Ток разряда банок. I=(Q_Cell/100)*(UakbCell/100). Т.е. если на банке 3,42В (значение 342), Q_Cell=50 (на 50% открыт транзистор разрядного тока BMS) то ток разряда равен I=50*342/10000=1,71А."
+    },
+    {
+      "key": "fl_uaccchbuf_24h",
+      "cell": "fl_UAccChBUF_24h",
+      "addr": 1302,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Флаг возникновения события “24ч”",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "флаг возникновения события “24ч”."
+    },
+    {
+      "key": "uacc_optim_vl",
+      "cell": "_UAcc_Optim_VL",
+      "addr": 1312,
+      "width": 2,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Оптимальное среднее напряжение АКБ",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "В",
+      "scale": 0.1,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "именно оно теперь сравнивается с порогом _LCD_UAccMin=0x13D.",
+      "order": "lh"
+    },
+    {
+      "key": "uacc_med_vs_100l",
+      "cell": "_UAcc_med_VS_100L",
+      "addr": 1314,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Альтернатива ячейкам_UAcc_med_VH, _UAcc_med_VL",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "В",
+      "scale": 0.01,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Альтернатива ячейкам_UAcc_med_VH, _UAcc_med_VL."
+    },
+    {
+      "key": "uacc_med_vs_100h",
+      "cell": "_UAcc_med_VS_100H",
+      "addr": 1315,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Альтернатива ячейкам_UAcc_med_VH, _UAcc_med_VL",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "В",
+      "scale": 0.01,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Альтернатива ячейкам_UAcc_med_VH, _UAcc_med_VL."
+    },
+    {
+      "key": "mppt_toch",
+      "cell": "_MPPT_toCh",
+      "addr": 1316,
+      "width": 1,
+      "kind": "ram",
+      "access": "rw",
+      "name": "Состояние MPPT контроллера",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 0,
+      "max": 3,
+      "desc": "Состояние MPPT контроллера(ов). Можно использовать для принудительного перевода MPPT в разные режимы:",
+      "enum": {
+        "0": "MPPT_toCh=MPPT_Ch_i - все MPPT в циклическом заряде",
+        "1": "MPPT_toCh=MPPT_Ch_v - все MPPT в Дозаряде",
+        "2": "MPPT_toCh=MPPT_Ch_b1 - все MPPT в буферном заряде 1",
+        "3": "MPPT_toCh=MPPT_Ch_b2 - все MPPT в буферном заряде 2"
+      }
+    },
+    {
+      "key": "flagunet2",
+      "cell": "_flagUnet2",
+      "addr": 1319,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Показывает состояние первого и второго входа 220В и какой вход активный в",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Показывает состояние первого и второго входа 220В и какой вход активный в данный момент (если включен режим двух входов) только в моделях с двумя входами сети 220В:",
+      "bits": [
+        {
+          "bit": 0,
+          "name": "активный второй вход – переключаемся на него и поддерживаем все алгоритмы по этому входу."
+        },
+        {
+          "bit": 1,
+          "name": "есть сеть на первом входе."
+        },
+        {
+          "bit": 2,
+          "name": "есть сеть на втором входе."
+        }
+      ]
+    },
+    {
+      "key": "i_akb_map_faz1l",
+      "cell": "_I_Akb_MAP_faz1L",
+      "addr": 1320,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Ток фаз по АКБ с точностью 0,1А, при отрицательных токах",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "А",
+      "scale": 0.1,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "ток фаз по АКБ с точностью 0,1А, при отрицательных токах (при заряде) добавляется верхний бит 0x80 в _I_Akb_MAP_faz1H."
+    },
+    {
+      "key": "i_akb_map_faz1h",
+      "cell": "_I_Akb_MAP_faz1H",
+      "addr": 1321,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Ток фаз по АКБ с точностью 0,1А, при отрицательных токах",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "А",
+      "scale": 0.1,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "ток фаз по АКБ с точностью 0,1А, при отрицательных токах (при заряде) добавляется верхний бит 0x80 в _I_Akb_MAP_faz1H."
+    },
+    {
+      "key": "i_akb_map_faz2l",
+      "cell": "_I_Akb_MAP_faz2L",
+      "addr": 1322,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Тоже для фазы2",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "тоже для фазы2"
+    },
+    {
+      "key": "i_akb_map_faz2h",
+      "cell": "_I_Akb_MAP_faz2H",
+      "addr": 1323,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Тоже для фазы2",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "тоже для фазы2"
+    },
+    {
+      "key": "i_akb_map_faz3l",
+      "cell": "_I_Akb_MAP_faz3L",
+      "addr": 1324,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Тоже для фазы3",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "тоже для фазы3"
+    },
+    {
+      "key": "i_akb_map_faz3h",
+      "cell": "_I_Akb_MAP_faz3H",
+      "addr": 1325,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Тоже для фазы3",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "тоже для фазы3"
+    },
+    {
+      "key": "t_accdisch",
+      "cell": "_T_AccDisch",
+      "addr": 1326,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Обратный отсчёт работы на низком напряжении АКБ",
+      "group": "Время и часы",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Аналогично предыдущим ячейкам состоит из двух байтов (не расписано, чтобы не путать с устаревшей ячейкой _T_AccDisch_L=0x40E)."
+    },
+    {
+      "key": "i_akb_mppt_l_0",
+      "cell": "_I_Akb_MPPT_L[0]",
+      "addr": 1328,
+      "width": 2,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Ток заряда параллельных MPPT",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "…",
+      "order": "lh"
+    },
+    {
+      "key": "i_akb_mppt_l_15",
+      "cell": "_I_Akb_MPPT_L[15]",
+      "addr": 1358,
+      "width": 2,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Ток заряда параллельных MPPT",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Ток заряда параллельных MPPT в амперах*16 (например, значение 600 соотв. 600/16=37,5А).",
+      "order": "lh"
+    },
+    {
+      "key": "takb_mppt_0",
+      "cell": "_Takb_MPPT[0]",
+      "addr": 1376,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Температура параллельных MPPT",
+      "group": "Температуры",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "…"
+    },
+    {
+      "key": "takb_mppt_15",
+      "cell": "_Takb_MPPT[15]",
+      "addr": 1391,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Температура параллельных MPPT",
+      "group": "Температуры",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "“250”. Если датчик не подключен, то число равно 0 (в отличии от BMS)."
+    },
+    {
+      "key": "tdizprofilact_day_cnt",
+      "cell": "_TdizProfilact_day_cnt",
+      "addr": 1410,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Счетчик времени для включения топливного генератора на 5-ти минутную",
+      "group": "Энергия и счётчики",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "счетчик времени для включения топливного генератора на 5-ти минутную провилактику. См. ячейку _TdizProfilact_day в EEProm задающую время для этого счетчика."
+    },
+    {
+      "key": "tcheco_ch",
+      "cell": "_TchEco_Ch",
+      "addr": 1411,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Счетчик времени полного заряда в часах*2",
+      "group": "Энергия и счётчики",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "счетчик времени полного заряда в часах*2 (т.е. прибавляем каждые два часа). Если напряжение АКБ не достигало напряжения полного заряда в течении _TchEco_14day (по умолчанию 14-ти дней (14*24часов/2)) запускается заряд от внешней сети 220В (если конечно, последняя присутствует)."
+    },
+    {
+      "key": "flag_neton_eco",
+      "cell": "_flag_NETON_ECO",
+      "addr": 1413,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Флаг ЭКО режима или тарифной сети",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": 1,
+      "max": 2,
+      "desc": "флаг ЭКО режима или тарифной сети.",
+      "enum": {
+        "1": "Напряжение упало ниже EE_LCD_UAccMinNetGen, необходимо выйти из принудительной генерации на трансляцию сети и возможно начать зарядку.",
+        "2": "Флаг того, что мы вступили в зону минимального тарифа, если конечно мы работаем с тарифами, выходим из принудительной генерации на трансляцию сети и заряд АКБ."
+      }
+    },
+    {
+      "key": "status_reledop",
+      "cell": "_Status_RELEdop",
+      "addr": 1414,
+      "width": 1,
+      "kind": "ram",
+      "access": "rw",
+      "name": "Состояние управления доп. реле",
+      "group": "Реле и внешние устройства",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Также в модели Титанатор - 4 старших бита этой ячейки показывают установлено ли соотв. реле в инверсное состояние.",
+      "bits": [
+        {
+          "bit": 1,
+          "name": "состояние управления реле1 (т.е. замкнуто или разомкнуто)"
+        },
+        {
+          "bit": 2,
+          "name": "состояние управления реле2"
+        },
+        {
+          "bit": 3,
+          "name": "состояние управления реле3 для модели Титанатор"
+        },
+        {
+          "bit": 4,
+          "name": "состояние управления реле4 для модели Титанатор. Это реле зарезервировано либо под силовое реле II входа сети (в спец. моделях) либо при установке внешней доп. платы с четвертым доп. реле."
+        }
+      ]
+    },
+    {
+      "key": "pnet_sign_p",
+      "cell": "_PNET_Sign_P",
+      "addr": 1415,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Знак мощности сети",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "знак мощности сети: 1 – положительная, 0 - отрицательная мощность (продажа)"
+    },
+    {
+      "key": "lcd_uaccchmax_s_temp",
+      "cell": "_LCD_UAccChMax_S_Temp",
+      "addr": 1416,
+      "width": 2,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Напряжение окончания заряда с коррекцией (×10)",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "полное умноженное на 10.",
+      "order": "lh"
+    },
+    {
+      "key": "lcd_uaccchbuf_s_temp",
+      "cell": "_LCD_UAccChBUF_S_Temp",
+      "addr": 1418,
+      "width": 2,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Напряжение поддержания заряда с коррекцией (×10)",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "полное умноженное на 10.",
+      "order": "lh"
+    },
+    {
+      "key": "pmax_on",
+      "cell": "_Pmax_On",
+      "addr": 1420,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Случился Pmax",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "случился Pmax, т.е. нагрузка превысила выставленную максимальную мощность сети.",
+      "bits": [
+        {
+          "bit": 0,
+          "name": "Зафиксирована нагрузка выше Pmax (при генерации, МАП не будет переходить на сеть 220в)"
+        },
+        {
+          "bit": 1,
+          "name": "Находимся в подкачке по Pmax"
+        }
+      ]
+    },
+    {
+      "key": "pmaxgendisch",
+      "cell": "_PmaxGenDisch",
+      "addr": 1421,
+      "width": 1,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Случился полный разряд по Pmax, переходим на сеть независимо от выставленной",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "случился полный разряд по Pmax, переходим на сеть независимо от выставленной максимальной мощности сети."
+    },
+    {
+      "key": "m_powhournet_sign",
+      "cell": "_M_POWhourNET_sign",
+      "addr": 1426,
+      "width": 2,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Знаковый счётчик энергии от сети",
+      "group": "Энергия и счётчики",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "кВт·ч",
+      "scale": 0.01,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "знаковый счетчик подсчета квт.ч от сети. Значение имеет тип signed long и состоит их 4 байтов.",
+      "order": "lh"
+    },
+    {
+      "key": "pnet_8",
+      "cell": "_PNET_8",
+      "addr": 1434,
+      "width": 2,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Текущая мощность сети (киловатты ×8)",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "текущая мощность сети в киловатах/10 и *8, знак определяется по PNET_Sign_P=0x587.",
+      "order": "lh"
+    },
+    {
+      "key": "pload_8",
+      "cell": "_PLoad_8",
+      "addr": 1438,
+      "width": 2,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Текущая мощность нагрузки (киловатты ×8)",
+      "group": "Нагрузка и мощность",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "текущая мощность нагрузки в киловатах/10 и *8",
+      "order": "lh"
+    },
+    {
+      "key": "uaccminnetgen_s",
+      "cell": "_UAccMinNetGen_S",
+      "addr": 1500,
+      "width": 2,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Реальное напряжение ЭКО с коррекцией",
+      "group": "Сеть",
+      "modes": [
+        "titanator",
+        "dominator"
+      ],
+      "unit": "",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Реальное напряжение ЭКО которое в отличии от соответствующей ячейки EEProm может быть скорректировано по Uбуф.",
+      "order": "lh"
+    },
+    {
+      "key": "soc",
+      "cell": "_SoC",
+      "addr": 1816,
+      "width": 2,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Текущая емкость батареи в % от полной емкости батареи",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "%",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Текущая емкость батареи в % от полной емкости батареи (с учетом SoH). Т.е. насколько разрядилась батарея под нагрузкой на данный момент. Параметр передается от литиевого блока батареи.",
+      "order": "lh"
+    },
+    {
+      "key": "soh",
+      "cell": "_SoH",
+      "addr": 1818,
+      "width": 2,
+      "kind": "ram",
+      "access": "ro",
+      "name": "Текущая полная емкость батареи в % от указанной в паспорте на батарею",
+      "group": "Батарея (АКБ)",
+      "modes": [
+        "titanator"
+      ],
+      "unit": "%",
+      "scale": 1.0,
+      "offset": 0.0,
+      "min": null,
+      "max": null,
+      "desc": "Текущая полная емкость батареи в % от указанной в паспорте на батарею. Т.е. указывает насколько батарея потеряла свою полную емкость на текущий момент. Параметр передается от литиевого блока батареи.",
+      "order": "lh"
+    }
+  ]
+}

@@ -1732,6 +1732,17 @@ func main() {
 		ShowCE308: ce308Cfg != nil,
 	}
 
+	// Адрес МАП по умолчанию для страницы «Настройки МАП»: Modbus TCP через
+	// mapgateway (порт 502). Клиент может переопределить IP/порт и сохранить у себя.
+	mapSettingsDef := mapSettingsTarget{mode: mapModeDominator, port: 502, unit: 1}
+	if mapSec != nil && (mapSec.Disabled == nil || !*mapSec.Disabled) && mapSec.RS485 != nil && mapSec.RS485.IP != "" {
+		mapSettingsDef.ip = mapSec.RS485.IP
+		if mapSec.RS485.Unit > 0 {
+			mapSettingsDef.unit = byte(mapSec.RS485.Unit)
+		}
+		dash.ShowMapSettings = true
+	}
+
 	// Сетевое реле SR-201 (лампы): управление по UDP, состояние поддерживает
 	// фоновый цикл runRelayControl. Контроллер создаётся сразу (новый экземпляр
 	// при старте переведёт реле в желаемые состояния из конфига/Redis), а ДОСТУП
@@ -1949,7 +1960,7 @@ func main() {
 	bgWg.Add(1)
 	go func() {
 		defer bgWg.Done()
-		serveDashboard(dashboardAddr, store, pg, relayCtl, stopCtx, dash, placementOrder(targets), placeByIP(targets), dashboardAuthUser, dashboardAuthPass)
+		serveDashboard(dashboardAddr, store, pg, relayCtl, stopCtx, dash, placementOrder(targets), placeByIP(targets), dashboardAuthUser, dashboardAuthPass, mapSettingsDef)
 	}()
 
 	// Windows-сборка сворачивается в трей (меню «Закрыть»); на POSIX (Linux)

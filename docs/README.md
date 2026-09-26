@@ -46,6 +46,7 @@ DDS238 (Modbus TCP), нормализует всё в единый контра�
 | **Шлюз Modbus TCP↔RTU** (`mapgateway/`, C) | Публикует последовательный порт МАП как Modbus TCP (:502) для пулера; systemd на ПАК «Малина» | [mapgateway/README.md](../mapgateway/README.md) |
 | **Уведомления в MAX** (`notify.go`) | Отправка событий мониторинга МАП (недоступен / нет напряжения сети) в мессенджер MAX через Bot API, с гистерезисом и дедупликацией | [modules/notify.md](modules/notify.md) |
 | **Сетевое реле SR-201** (`relay_control.go`) | Управление двойным реле по UDP (белая/красная лампы): поддержка состояния (вкл/выкл/мигание 2 Гц) + автоиндикаторы (отдача в сеть, наличие напряжения сети) | [relay_sr-201(2light).md](relay_sr-201(2light).md) |
+| **Настройки МАП** (`mapsettings*.go`, `map-settings/`) | Страница `/map-settings`: чтение/инспекция/запись ячеек МАП по Modbus TCP (mapgateway) — настройки, мониторинг, управляющие воздействия, отдельная форма времени; каталог из последней документации | [../map-settings/README.md](../map-settings/README.md) |
 | **Универсальный контракт `values`** | Набор общих тегов с одинаковыми именами/единицами для всех марок (PV, AC, фазы, энергия, МАП) | [universal-contract.md](universal-contract.md) |
 
 ## Что опрашивается
@@ -178,6 +179,9 @@ arm-linux-musleabihf -static` (статичный elf32 ARM), поэтому н�
 - [`modules/dashboard.md`](modules/dashboard.md) — веб-дашборд.
 - [`modules/map-mppt.md`](modules/map-mppt.md) — МАП + MPPT.
 - [`modules/ce308.md`](modules/ce308.md) — счётчик Энергомера CE308 (BLE).
+- [`../map-settings/README.md`](../map-settings/README.md) — страница «Настройки МАП»:
+  чтение/инспекция/запись ячеек МАП по Modbus TCP (mapgateway), управляющие
+  воздействия, форма времени (каталог — `protocol_MAP_cells_2026_07_15.doc`).
 - [`ce308-bluetooth/README.md`](ce308-bluetooth/README.md) — **историческое**
   описание проброса Bluetooth-адаптера по usbip с `.9` на `.253` (отключено
   2026-09-24; снимки конфигов хостов и порядок восстановления — в
