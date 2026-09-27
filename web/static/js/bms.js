@@ -91,6 +91,28 @@ async function load(){
 }
 // ---------- Графики (5-минутные средние из Redis) ----------
 Chart.register(ChartZoom);
+// Позиционер хинта BMS регистрируем под именем 'bmsSide' в Tooltip.positioners:
+// в Chart.js 4.4.1 options.plugins.tooltip.position принимает только СТРОКУ-ключ
+// из positioners (функцию напрямую он не поддерживает — Sa[fn] даёт undefined).
+// Возвращаем xAlign/yAlign — они используются (Ta берёт их из результата
+// позиционера с приоритетом над авто-выравниванием), а caretPadding задаёт зазор.
+function bmsTooltipPos(elements, eventPosition){
+  var x=(eventPosition&&isFinite(eventPosition.x))?eventPosition.x:0;
+  var y=(eventPosition&&isFinite(eventPosition.y))?eventPosition.y:0;
+  var xAlign='left';
+  var area=this&&this.chart&&this.chart.chartArea;
+  if(area&&x>=(area.left+area.right)/2) xAlign='right';
+  // yAlign 'center' — вертикально по центру точки: тогда зазор по X равен
+  // caretSize+caretPadding (а не только caretSize+cornerRadius, как при top/bottom).
+  return { x:x, y:y, xAlign:xAlign, yAlign:'center' };
+}
+(function(){
+  try{
+    var tp=Chart.registry&&Chart.registry.plugins&&Chart.registry.plugins.get('tooltip');
+    if(tp&&tp.positioners) tp.positioners.bmsSide=bmsTooltipPos;
+    else if(Chart.Tooltip&&Chart.Tooltip.positioners) Chart.Tooltip.positioners.bmsSide=bmsTooltipPos;
+  }catch(e){}
+})();
 var CHART_COLORS=['#428bca','#5cb85c','#f0ad4e','#d9534f','#5bc0de','#9463b8','#7f8fa6','#17a2b8','#c3b91c','#e91e63','#6d9ee8','#f7b32b','#4c9f70','#9c6bcf','#4db6ac','#8d6e63'];
 var BMS_CHART_IDS=['bmsCapChart','bmsVoltChart','bmsCurChart','bmsPwrChart','bmsCellsChart','bmsSpreadChart','bmsTempChart'];
 function mkBmsDs(label,color,data){ return { label:label, data:data, borderColor:color, backgroundColor:color, pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false }; }
@@ -213,23 +235,6 @@ function bmsNearestIndex(chart, t){
     var a=new Date(arr[hi].x).getTime(), b=new Date(arr[lo].x).getTime();
     return (t-a)<=(b-t)? hi : lo;
   }catch(e){ return -1; }
-}
-// bmsTooltipPos — позиционер хинта BMS: ставит подсказку сбоку от точки (справа,
-// а у правой половины графика — слева) с зазором BMS_TOOLTIP_GAP от неё, чтобы
-// хинт не перекрывал саму точку и область вокруг неё. Высокие хинты (напр.
-// «Напряжения ячеек» на 16 строк) при позиции по умолчанию ложились прямо на точку.
-var BMS_TOOLTIP_GAP=30; // ~1 см при 96 dpi
-function bmsTooltipPos(elements, eventPosition){
-  var x=(eventPosition&&isFinite(eventPosition.x))?eventPosition.x:0;
-  var y=(eventPosition&&isFinite(eventPosition.y))?eventPosition.y:0;
-  var xAlign='left';
-  var el=elements&&elements.length?elements[0].element:null;
-  var chart=el&&el.$context?el.$context.chart:null;
-  if(chart&&chart.chartArea){
-    var mid=(chart.chartArea.left+chart.chartArea.right)/2;
-    if(x>=mid) xAlign='right';
-  }
-  return { x:x+(xAlign==='left'?BMS_TOOLTIP_GAP:-BMS_TOOLTIP_GAP), y:y, xAlign:xAlign, yAlign:'center' };
 }
 // bmsSyncTooltips показывает хинты на ВСЕХ графиках BMS по общему срезу
 // времени: для каждого графика находится ближайшая точка, её (и одноимённые
@@ -390,7 +395,7 @@ function bmsRender(id, datasets, yTitle, legend, zero){
     animation:{ duration:200 },
     plugins:{
       legend: { display:false },
-      tooltip:{ position:bmsTooltipPos, caretPadding:0 },
+      tooltip:{ position:'bmsSide', caretPadding:30 },
       zoom:{
         pan:{ enabled:!SR_COARSE, mode:'x', onPanComplete:function(){ bmsWindowChanged(id); } },
         zoom:{ wheel:{ enabled:!SR_COARSE, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:!SR_COARSE }, mode:'x', onZoomComplete:function(){ bmsWindowChanged(id); } },
