@@ -214,6 +214,23 @@ function bmsNearestIndex(chart, t){
     return (t-a)<=(b-t)? hi : lo;
   }catch(e){ return -1; }
 }
+// bmsTooltipPos — позиционер хинта BMS: ставит подсказку сбоку от точки (справа,
+// а у правой половины графика — слева) с зазором BMS_TOOLTIP_GAP от неё, чтобы
+// хинт не перекрывал саму точку и область вокруг неё. Высокие хинты (напр.
+// «Напряжения ячеек» на 16 строк) при позиции по умолчанию ложились прямо на точку.
+var BMS_TOOLTIP_GAP=30; // ~1 см при 96 dpi
+function bmsTooltipPos(elements, eventPosition){
+  var x=(eventPosition&&isFinite(eventPosition.x))?eventPosition.x:0;
+  var y=(eventPosition&&isFinite(eventPosition.y))?eventPosition.y:0;
+  var xAlign='left';
+  var el=elements&&elements.length?elements[0].element:null;
+  var chart=el&&el.$context?el.$context.chart:null;
+  if(chart&&chart.chartArea){
+    var mid=(chart.chartArea.left+chart.chartArea.right)/2;
+    if(x>=mid) xAlign='right';
+  }
+  return { x:x+(xAlign==='left'?BMS_TOOLTIP_GAP:-BMS_TOOLTIP_GAP), y:y, xAlign:xAlign, yAlign:'center' };
+}
 // bmsSyncTooltips показывает хинты на ВСЕХ графиках BMS по общему срезу
 // времени: для каждого графика находится ближайшая точка, её (и одноимённые
 // по индексу точки остальных линий) помечаем активными через
@@ -373,6 +390,7 @@ function bmsRender(id, datasets, yTitle, legend, zero){
     animation:{ duration:200 },
     plugins:{
       legend: { display:false },
+      tooltip:{ position:bmsTooltipPos, caretPadding:0 },
       zoom:{
         pan:{ enabled:!SR_COARSE, mode:'x', onPanComplete:function(){ bmsWindowChanged(id); } },
         zoom:{ wheel:{ enabled:!SR_COARSE, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:!SR_COARSE }, mode:'x', onZoomComplete:function(){ bmsWindowChanged(id); } },
