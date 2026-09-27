@@ -227,12 +227,14 @@ func ensureCE308Known(mac string) error {
 // registerCE308Agent регистрирует BlueZ-агента с PIN (идемпотентно) на системной
 // шине и делает его агентом по умолчанию. Ошибка не фатальна: если счётчик уже
 // спарен, агент не требуется. pincode может быть строкой — приводим к uint32.
+//
+// Устойчиво к перезапуску bluetoothd: агент хранится в реестре демона, поэтому
+// после его рестарта регистрацию нужно выполнить заново. Если PIN уже
+// регистрировали, проверяем живость через RequestDefaultAgent и при ошибке
+// перерегистрируем (иначе сопряжение падало бы с "No agent available").
 func registerCE308Agent(pin string) error {
 	ce308RegMu.Lock()
 	defer ce308RegMu.Unlock()
-	if ce308RegPin == pin && ce308RegPin != "" {
-		return nil
-	}
 	n, err := strconv.ParseUint(pin, 10, 32)
 	if err != nil || pin == "" {
 		// n==0 допустим: корректный PIN «000000» парсится в 0.
@@ -244,16 +246,28 @@ func registerCE308Agent(pin string) error {
 	}
 	path := dbus.ObjectPath("/org/bluez/agentCE308")
 	manager := conn.Object("org.bluez", dbus.ObjectPath("/org/bluez"))
-	// Смена PIN: снимаем ранее зарегистрированного агента, иначе в BlueZ остался
-	// бы висеть старый обработчик со старым PIN.
-	if ce308RegPin != "" {
-		_ = manager.Call("org.bluez.AgentManager1.UnregisterAgent", 0, path).Err
+
+	// Уже регистрировали этот PIN — убеждаемся, что агент ещё жив в BlueZ
+	// (bluetoothd мог быть перезапущен, и его реестр агентов потерян).
+	if ce308RegPin == pin {
+		if call := manager.Call("org.bluez.AgentManager1.RequestDefaultAgent", 0, path); call.Err == nil {
+			return nil
+		}
+		logCE308("bluez agent: регистрация потеряна (возможно, перезапуск bluetoothd) — перерегистрируем")
 		ce308RegPin = ""
 	}
+	// Снимаем прежнего агента, если был (смена PIN или потеря регистрации).
+	_ = manager.Call("org.bluez.AgentManager1.UnregisterAgent", 0, path).Err
+
 	agent := &ce308BlueZAgent{pin: uint32(n)}
+	// Объект агента экспортируется на нашем (долгоживущем) D-Bus соединении; при
+	// повторном вызове Export вернёт "already exported" — это не ошибка.
 	if err := conn.Export(agent, path, "org.bluez.Agent1"); err != nil {
-		return fmt.Errorf("export agent: %w", err)
+		logCE308("bluez agent: export: %v", err)
 	}
+	// Снимаем возможную «мёртвую» регистрацию, чтобы RegisterAgent не вернул
+	// AlreadyExists после рестарта демона.
+	_ = manager.Call("org.bluez.AgentManager1.UnregisterAgent", 0, path).Err
 	if call := manager.Call("org.bluez.AgentManager1.RegisterAgent", 0, path, "KeyboardDisplay"); call.Err != nil {
 		return fmt.Errorf("register agent: %w", call.Err)
 	}
