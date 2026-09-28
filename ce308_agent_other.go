@@ -30,6 +30,9 @@ func ensureCE308Known(mac string) error {
 	return nil
 }
 
+// ce308ClearStuck — no-op вне Linux (нет BlueZ-состояния, которое нужно сбрасывать).
+func ce308ClearStuck(mac string) {}
+
 // ce308DeviceKnown — вне Linux считаем устройство известным (нет discovery; ОС-стек
 // Bluetooth подключается напрямую по MAC). Возвращает true.
 func ce308DeviceKnown(mac string) bool {

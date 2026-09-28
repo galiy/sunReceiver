@@ -159,6 +159,28 @@ func (a *ce308BlueZAgent) AuthorizeService(device dbus.ObjectPath, uuid string) 
 
 func (a *ce308BlueZAgent) Cancel() error { return nil }
 
+// ce308ClearStuck (Linux) сбрасывает «залипшее» состояние bluetoothd для заданного
+// устройства: останавливает возможное незавершённое discovery на адаптере и
+// разрывает возможное зависшее соединение с устройством. Вызывается перед повтором
+// Connect, когда тот вернул ошибку вида "Operation already in progress" — пока
+// зоопарк D-Bus-состояний bluetoothd не очищен, повторный Connect бессмыслен.
+// Best-effort: любые ошибки игнорируются, т.к. цель — лишь вычистить pending.
+func ce308ClearStuck(mac string) {
+	bus, err := dbus.SystemBus()
+	if err != nil {
+		return
+	}
+	id, err := ce308AdapterID()
+	if err != nil {
+		return
+	}
+	adapter := bus.Object("org.bluez", dbus.ObjectPath("/org/bluez/"+id))
+	_ = adapter.Call("org.bluez.Adapter1.StopDiscovery", 0).Err
+	devPath := dbus.ObjectPath("/org/bluez/" + id + "/dev_" + strings.Replace(strings.ToUpper(mac), ":", "_", -1))
+	_ = bus.Object("org.bluez", devPath).Call("org.bluez.Device1.Disconnect", 0).Err
+	logCE308("bluez: сброшено залипшее состояние %s (StopDiscovery+Disconnect)", mac)
+}
+
 // ce308DeviceKnown — true, если BlueZ «знает» объект устройства по MAC (объект
 // /org/bluez/<hci>/dev_* существует: устройство спарено/обнаружено ранее). Только
 // чтение, без discovery. Определяет, нужен ли fallback-discovery перед Connect.

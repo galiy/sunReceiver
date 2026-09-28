@@ -81,6 +81,31 @@ var ce308RxUUIDs = []string{
 	"b91b0114-8bef-45e2-97c3-1cd862d914df",
 }
 
+// isCE308ConnStuck — true, если ошибка подключения свидетельствует о «залипшем»
+// состоянии bluetoothd: зависшее предыдущее подключение/сканирование к устройству
+// (после внешней переинициализации USB-адаптера, напр. watchdog перезагрузил btusb,
+// BlueZ продолжает считать, что операция в процессе). Такие ошибки нельзя игнорировать
+// бэкоффом: пока bluetoothd держит pending-состояние, каждый новый Connect будет
+// возвращать ту же ошибку. Пулер должен сам сбросить это состояние (StopDiscovery +
+// Disconnect) и повторить попытку — см. ce308ClearStuck.
+func isCE308ConnStuck(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	for _, frag := range []string{
+		"already in progress",
+		"in progress",
+		"busy",
+		"operation already",
+	} {
+		if strings.Contains(s, frag) {
+			return true
+		}
+	}
+	return false
+}
+
 // ce308Meter — установленное BLE-соединение со счётчиком и обмен кадрами
 // IEC 61107-совместимыми ASCII-командами. Соединение НЕ закрывается между
 // опросами: поток держит его открытым и переустанавливает при обрыве.
@@ -130,6 +155,15 @@ func openCE308(mac string, pin string, ctx context.Context) (*ce308Meter, error)
 	m, err := connectCE308Bounded(mac, ctx)
 	if err == nil {
 		return m, nil
+	}
+	// «Залипшее» состояние bluetoothd (pending-соединение/сканирование после
+	// внешней переинициализации USB-адаптера): без очистки каждый повторный
+	// Connect возвращает ту же ошибку. Сбрасываем состояние и пробуем ещё раз.
+	if isCE308ConnStuck(err) {
+		ce308ClearStuck(mac)
+		if m2, err2 := connectCE308Bounded(mac, ctx); err2 == nil {
+			return m2, nil
+		}
 	}
 	// Устройство уже известно BlueZ — повторный Connect бессмыслен (именно эта
 	// ошибка и есть причина, напр. зависший радиоадаптер), возвращаем её.
