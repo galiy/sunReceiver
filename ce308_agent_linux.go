@@ -65,11 +65,20 @@ func ce308AdapterID() (string, error) {
 	return "", fmt.Errorf("BLE-адаптер BlueZ не найден (нет hci0..hci9)")
 }
 
-// btAdapterSetupMu сериализует настройку BLE-адаптера (ce308EnsurePowered) между
-// пулерами CE308 и EnBMS: оба переиспользуют её и оба могут переназначать
-// глобальный bluetooth.DefaultAdapter при переподключении — без блокировки это
-// гонка на глобале tinygo.
+// btAdapterSetupMu сериализует доступ к глобальному bluetooth.DefaultAdapter
+// между пулерами CE308 и EnBMS: оба переиспользуют настройку адаптера
+// (ce308EnsurePowered переназначает глобал при переподключении) и читают его.
+// Без блокировки чтение/запись глобала — гонка (ловится go test -race).
 var btAdapterSetupMu sync.Mutex
+
+// btDefaultAdapter возвращает текущий bluetooth.DefaultAdapter под мьютексом —
+// единая точка чтения глобала (запись — в ce308EnsurePowered под тем же
+// мьютексом). Возвращённый указатель используется для Enable/Connect.
+func btDefaultAdapter() *bluetooth.Adapter {
+	btAdapterSetupMu.Lock()
+	defer btAdapterSetupMu.Unlock()
+	return bluetooth.DefaultAdapter
+}
 
 // ce308EnsurePowered проверяет, что BLE-адаптер включён (Powered=true), и,
 // если нет, включает его через BlueZ (Properties.Set). Заодно перенацеливает

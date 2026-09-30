@@ -502,6 +502,43 @@ ORDER BY ts ASC`, start.UTC(), end.UTC())
 	return pts, nil
 }
 
+// EnBmsAveragesAll возвращает 5-минутные усреднённые точки EnBMS ВСЕХ устройств
+// за период [start, end] включительно, по возрастанию ts. Используется для
+// реставрации Redis-ряда sunreceiver:enbms:series из PG при полностью пустом
+// Redis (см. restoreRedisFromPG).
+func (s *pgStore) EnBmsAveragesAll(start, end time.Time) ([]enbmsSeriesPoint, error) {
+	rows, err := s.pool.Query(s.ctx, `
+SELECT name, ts, values
+FROM sunreceiver.enbms_averages
+WHERE ts >= $1 AND ts <= $2
+ORDER BY ts ASC`, start.UTC(), end.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("pg query enbms averages all: %w", err)
+	}
+	defer rows.Close()
+
+	pts := []enbmsSeriesPoint{}
+	for rows.Next() {
+		var name string
+		var ts time.Time
+		var vals json.RawMessage
+		if err := rows.Scan(&name, &ts, &vals); err != nil {
+			return nil, fmt.Errorf("pg scan enbms avg all: %w", err)
+		}
+		p := enbmsSeriesPoint{Name: name, Ts: ts.Format(time.RFC3339)}
+		if len(vals) > 0 {
+			if err := json.Unmarshal(vals, &p.enbmsAveraged); err != nil {
+				continue
+			}
+		}
+		pts = append(pts, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pg enbms averages all rows: %w", err)
+	}
+	return pts, nil
+}
+
 // DailyTariffsRange возвращает финализированные посуточные тарифы счётчика
 // (день/ночь × потребление/отдача, kWh) за период [start, end), отсортированные по
 // дню возрастанию. Дни без финализации (finalized IS NULL) пропускаются. start/end

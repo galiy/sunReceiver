@@ -203,6 +203,29 @@ func TestEnBmsParsedValidRejectsGarbage(t *testing.T) {
 	}
 }
 
+func TestEnBmsAccumulatorDrain(t *testing.T) {
+	start := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	acc := newEnBmsAccumulator()
+	snap := enbmsSnapshot{
+		Name: "BP00", MAC: "AA:BB:CC:DD:EE:00", Timestamp: start.Format(time.RFC3339),
+		CellCount: 1, CellsV: []float64{3.3}, TemperaturesC: []float64{25},
+		CurrentA: 1, Soc: 50, CapacityAh: 100, RemainingAh: 50, TotalVoltageV: 3.3,
+		MaxCellV: 3.3, MinCellV: 3.3, AvgCellV: 3.3,
+	}
+	acc.add(snap, start)
+	// Неполный бакет (до границы 5 мин) уходит только при drain (остановка).
+	if pts := acc.closed(start.Add(time.Minute)); len(pts) != 0 {
+		t.Fatalf("closed вернул незавершённый бакет: %+v", pts)
+	}
+	pts := acc.drain()
+	if len(pts) != 1 || pts[0].avg.Samples != 1 || pts[0].name != snap.MAC {
+		t.Fatalf("drain = %+v", pts)
+	}
+	if len(acc.drain()) != 0 {
+		t.Fatalf("повторный drain должен быть пуст")
+	}
+}
+
 func TestEnBmsConfigFromSection(t *testing.T) {
 	// nil-раздел.
 	if c, err := enBmsConfigFromSection(nil); err != nil || c != nil {

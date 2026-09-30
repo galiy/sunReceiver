@@ -2184,7 +2184,9 @@ func redisBMSDataPresent(store *redisStore) (bool, error) {
 //   - снимки инверторов/МАП/счётчика (pg.Averages) — SaveSnapshot в месячный
 //     ZSET ряда;
 //   - 5-минутные усреднённые точки ANT BMS (pg.BMSAveragesAll) — SaveBMSSeries
-//     в ряд sunreceiver:bms:series:<YYYY-MM>.
+//     в ряд sunreceiver:bms:series:<YYYY-MM>;
+//   - 5-минутные усреднённые точки EnBMS (pg.EnBmsAveragesAll) — SaveEnBmsSeries
+//     в ряд sunreceiver:enbms:series:<YYYY-MM>.
 func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, stop context.Context) {
 	end := time.Now()
 	start := recentCutoff(end)
@@ -2259,4 +2261,33 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, st
 		bmsRestored++
 	}
 	log.Printf("pg restore: BMS восстановлено точек: %d", bmsRestored)
+
+	// Ряд 5-минутных усреднённых точек EnBMS — из pg.enbms_averages в
+	// sunreceiver:enbms:series:<YYYY-MM> (то же окно удержания).
+	enbmsPts, err := pg.EnBmsAveragesAll(start, end)
+	if err != nil {
+		log.Printf("pg restore: enbms query: %v", err)
+		return
+	}
+	var enbmsRestored int
+	for _, p := range enbmsPts {
+		select {
+		case <-stop.Done():
+			log.Printf("pg restore: остановлено по сигналу (EnBMS восстановлено точек: %d)", enbmsRestored)
+			return
+		default:
+		}
+		ts, perr := time.Parse(time.RFC3339, p.Ts)
+		if perr != nil {
+			continue
+		}
+		// См. выше: ключ месяца (enbmsSeriesKey) приводим к локальной зоне, как живая запись.
+		ts = ts.In(time.Local)
+		if serr := store.SaveEnBmsSeries(p, ts); serr != nil {
+			log.Printf("pg restore: enbms save %s: %v", p.Name, serr)
+			continue
+		}
+		enbmsRestored++
+	}
+	log.Printf("pg restore: EnBMS восстановлено точек: %d", enbmsRestored)
 }

@@ -82,7 +82,7 @@ func openEnBms(mac string, ctx context.Context) (*enbmsConn, error) {
 	// Питание BLE-адаптера (и перенацеливание tinygo на реальный контроллер)
 	// переиспользуем из модуля CE308 — эти хелперы не CE308-специфичны.
 	_ = ce308EnsurePowered()
-	a := bluetooth.DefaultAdapter
+	a := btDefaultAdapter()
 	if err := a.Enable(); err != nil {
 		return nil, fmt.Errorf("включение BLE-адаптера: %w", err)
 	}
@@ -154,7 +154,7 @@ func connectEnBms(mac string, ctx context.Context) (c *enbmsConn, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	a := bluetooth.DefaultAdapter
+	a := btDefaultAdapter()
 	mac6, err := bluetooth.ParseMAC(mac)
 	if err != nil {
 		return nil, fmt.Errorf("неверный MAC %q: %w", mac, err)

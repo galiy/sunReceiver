@@ -146,7 +146,7 @@ func openCE308(mac string, pin string, ctx context.Context) (*ce308Meter, error)
 	// не фатальна: итоговая причина уйдёт в отчёт подключения (openCE308
 	// возвращает ошибку Enable/Connect), который логируется с троттлингом.
 	_ = ce308EnsurePowered()
-	a := bluetooth.DefaultAdapter
+	a := btDefaultAdapter()
 	if err := a.Enable(); err != nil {
 		return nil, fmt.Errorf("включение BLE-адаптера: %w", err)
 	}
@@ -242,7 +242,7 @@ func connectCE308(mac string, ctx context.Context) (m *ce308Meter, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	a := bluetooth.DefaultAdapter
+	a := btDefaultAdapter()
 	mac6, err := bluetooth.ParseMAC(mac)
 	if err != nil {
 		return nil, fmt.Errorf("неверный MAC %q: %w", mac, err)

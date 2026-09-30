@@ -498,11 +498,12 @@ func recentCutoff(t time.Time) time.Time {
 	return startOfToday.AddDate(0, 0, -1)
 }
 
-// PurgeOld удаляет из временных рядов Redis (месячные сегменты инверторов и
-// 5-минутных усреднённых точек BMS) все точки, timestamp которых строго
-// старше окна последних 2 календарных суток (recentCutoff). Пустые сегменты
-// удаляются целиком. Текущие HASH (current, sunreceiver:bms) не трогается —
-// последнее состояние устройств хранится всегда.
+// PurgeOld удаляет из временных рядов Redis (месячные сегменты инверторов,
+// 5-минутных усреднённых точек ANT BMS и EnBMS, мгновенных значений CE308) все
+// точки, timestamp которых строго старше окна последних 2 календарных суток
+// (recentCutoff). Пустые сегменты удаляются целиком. Текущие HASH (current,
+// sunreceiver:bms, sunreceiver:enbms:current) не трогаются — последнее
+// состояние устройств хранится всегда.
 // Вызывается фоновым процессом (см. runRedisCleanup).
 func (s *redisStore) PurgeOld(now time.Time) {
 	cutoff := recentCutoff(now)
@@ -524,6 +525,14 @@ func (s *redisStore) PurgeOld(now time.Time) {
 		log.Printf("redis cleanup ce308 keys: %v", err)
 	} else {
 		keys = append(keys, ce308Keys...)
+	}
+	// Ряд 5-минутных усреднённых точек EnBMS (то же окно 2 календарных суток;
+	// 40-суточный Expire — лишь страховка, эффективное окно задаёт PurgeOld).
+	enbmsKeys, err := s.scanPrefixKeys(redisEnBmsSeriesPrefix + "*")
+	if err != nil {
+		log.Printf("redis cleanup enbms keys: %v", err)
+	} else {
+		keys = append(keys, enbmsKeys...)
 	}
 	// Операцию выполняем так, чтобы «строго старше cutoff», т.е. ZRemRangeByScore
 	// убирает [ -inf ; cutoff-1 ], поэтому ровно cutoff остаётся в ряде.

@@ -49,6 +49,7 @@ type enbmsPollerDev struct {
 	reconnect   time.Duration
 	nextRetry   time.Time
 	lastFailLog time.Time
+	lastErrLog  time.Time
 	consecFails int
 }
 
@@ -138,6 +139,7 @@ func pollEnBmsDevice(store *redisStore, acc *enbmsAccumulator, d *enbmsPollerDev
 		d.conn = c
 		d.reconnect = enbmsReconnectDelay
 		d.consecFails = 0
+		d.lastErrLog = time.Time{}
 		logEnBms("подключено к %s (%s)", d.cfg.Name, d.cfg.MAC)
 	}
 
@@ -155,8 +157,12 @@ func pollEnBmsDevice(store *redisStore, acc *enbmsAccumulator, d *enbmsPollerDev
 			d.nextRetry = time.Now().Add(d.reconnect)
 			d.reconnect = enbmsBackoff(d.reconnect)
 		} else {
-			logEnBms("опрос %s: не удался (%d подряд): %v — соединение сохраняю",
-				d.cfg.MAC, d.consecFails, err)
+			// Троттлинг: при деградации канала не писать об ошибке каждый цикл.
+			if time.Since(d.lastErrLog) >= enbmsConnFailLogInterval {
+				logEnBms("опрос %s: не удался (%d подряд): %v — соединение сохраняю",
+					d.cfg.MAC, d.consecFails, err)
+				d.lastErrLog = time.Now()
+			}
 		}
 		return
 	}
@@ -175,6 +181,7 @@ func pollEnBmsDevice(store *redisStore, acc *enbmsAccumulator, d *enbmsPollerDev
 	if d.consecFails > 0 {
 		logEnBms("опрос %s: связь восстановлена (%d неудачных сброшены)", d.cfg.MAC, d.consecFails)
 		d.consecFails = 0
+		d.lastErrLog = time.Time{}
 	}
 
 	now := time.Now()

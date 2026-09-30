@@ -18,6 +18,14 @@
 
 package main
 
+import "tinygo.org/x/bluetooth"
+
+// btDefaultAdapter — вне Linux доступ к глобалу DefaultAdapter не требует
+// синхронизации с BlueZ-настройкой (её нет). Возвращает глобальный адаптер.
+func btDefaultAdapter() *bluetooth.Adapter {
+	return bluetooth.DefaultAdapter
+}
+
 // На платформах без BlueZ регистрация агента для PIN не нужна: предполагается,
 // что счётчик уже спарен с хостом (bonding сохранён в стеке ОС). Возвращает nil.
 func registerCE308Agent(pin string) error {
