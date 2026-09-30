@@ -181,6 +181,9 @@ func (s *redisStore) saveSnapshot(snap deviceSnapshot, ts time.Time, mergeMAP bo
 	}
 	if mergeMAP {
 		s.mapMu.Lock()
+		if s.mapWin == nil {
+			s.mapWin = map[string]mapWinMember{}
+		}
 		s.mapWin[snap.IP] = mapWinMember{window: ts.Unix(), member: string(b)}
 		s.mapMu.Unlock()
 	}
