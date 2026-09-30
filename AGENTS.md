@@ -30,6 +30,7 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 | Шлюз Modbus TCP↔RTU (`mapgateway/`, C) | [`mapgateway/README.md`](mapgateway/README.md) |
 | Уведомления в MAX | [`docs/modules/notify.md`](docs/modules/notify.md) |
 | Сетевое реле SR-201 (лампы-индикаторы) | [`docs/relay_sr-201(2light).md`](docs/relay_sr-201(2light).md) |
+| Windows-трей и логирование (`tray_*.go`, `logfile_*.go`) | [`docs/modules/tray-logging.md`](docs/modules/tray-logging.md) |
 | Протокол Solarman V5 (реверс) | [`docs/research/solarman-v5.md`](docs/research/solarman-v5.md) |
 | Регистры Sofar K-TLX | [`docs/research/sofar-registers.md`](docs/research/sofar-registers.md) |
 | Регистры Deye string | [`docs/research/deye-registers.md`](docs/research/deye-registers.md) |
@@ -158,6 +159,10 @@ legacy-файлом `dds238.json`). Счётчик Энергомера **CE308*
   и `runWhiteLampController` (белая — наличие напряжения сети). Данные — только
   из Redis, анализ не встроен в пулеры; состояния задаются из других модулей через
   `SetRelayLamp`. Полное описание — [`docs/relay_sr-201(2light).md`](docs/relay_sr-201(2light).md).
+- **Трей и логирование** — `tray_windows.go`/`tray_posix.go` (сворачивание в
+  системный трей на Windows, на POSIX — no-op) и `logfile_windows.go`/
+  `logfile_posix.go` (файловый журнал `sunReceiver.log` с ротацией на Windows, на
+  POSIX — no-op). Полное описание — [`docs/modules/tray-logging.md`](docs/modules/tray-logging.md).
 
 ### Универсальный контракт `values`
 
