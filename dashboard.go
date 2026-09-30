@@ -1992,157 +1992,154 @@ func meterSeries(snaps []deviceSnapshot, key string) []seriesPoint {
 const maxSeriesPoints = 1000
 
 // downsampleSeries усредняет серию, если в ней больше maxSeriesPoints точек.
-// Запрошенный диапазон [from, to] делится на n равных периодов: n = min(1000,
-// кол-во секунд диапазона) — для диапазона короче 1000 с по одному периоду на
-// секунду. Все точки, попавшие в один период, усредняются: среднее значение,
-// временная метка первой точки периода; пустые периоды пропускаются. Ряд
-// короче порога возвращается как есть. Точки ожидаются отсортированными по T
-// (RFC3339), как их собирают помощники apiSeries.
+// Прореживание — по ФАКТИЧЕСКОМУ числу точек: ряд делится на последовательные
+// группы по k = ceil(len(pts)/maxSeriesPoints) точек, каждая группа усредняется
+// (значение — среднее, метка времени — первая точка группы). Так гранулярность
+// следует за реальной плотностью данных: там, где точки идут часто (сырые
+// показания), сохраняется их шаг, а не «плановый» span/1000.
+//
+// ГИБРИД: группа не «сшивает» большой временной разрыв — если интервал между
+// соседними точками превышает ожидаемый шаг вывода (span/maxSeriesPoints),
+// группа закрывается, и разрежённые точки остаются как есть (не усредняются с
+// плотным участком). Ряд короче порога (≤ maxSeriesPoints) возвращается как есть.
+// Точки должны быть отсортированы по времени.
 func downsampleSeries(pts []seriesPoint, from, to time.Time) []seriesPoint {
 	if len(pts) <= maxSeriesPoints {
 		return pts
 	}
-	span := to.Sub(from).Seconds()
-	if span < 1 {
-		return pts
-	}
-	n := int(span)
-	if n > maxSeriesPoints {
-		n = maxSeriesPoints
-	}
-	binSec := span / float64(n)
-	type acc struct {
-		t     string
-		sum   float64
-		count int
-	}
-	bins := make([]acc, n)
-	for _, p := range pts {
-		t, err := time.Parse(time.RFC3339, p.T)
-		if err != nil {
-			continue
+	times := make([]time.Time, len(pts))
+	for i := range pts {
+		if t, err := time.Parse(time.RFC3339, pts[i].T); err == nil {
+			times[i] = t
 		}
-		i := int(t.Sub(from).Seconds() / binSec)
-		if i < 0 {
-			i = 0
-		} else if i >= n {
-			i = n - 1
-		}
-		if bins[i].count == 0 {
-			bins[i].t = p.T
-		}
-		bins[i].sum += p.V
-		bins[i].count++
 	}
-	out := make([]seriesPoint, 0, n)
-	for _, b := range bins {
-		if b.count == 0 {
-			continue
+	k := (len(pts) + maxSeriesPoints - 1) / maxSeriesPoints
+	gap := downsampleGapSeconds(from, to)
+	out := make([]seriesPoint, 0, maxSeriesPoints)
+	for _, g := range downsampleGroups(times, k, gap) {
+		seg := pts[g[0]:g[1]]
+		sum := 0.0
+		for _, p := range seg {
+			sum += p.V
 		}
-		out = append(out, seriesPoint{T: b.t, V: math.Round(b.sum/float64(b.count)*10) / 10})
+		out = append(out, seriesPoint{T: seg[0].T, V: math.Round(sum/float64(len(seg))*10) / 10})
 	}
 	return out
 }
 
-// downsampleBMSSeries — аналог downsampleSeries для МНОГОПОЛЕВОЙ BMS-серии: если
-// точек больше maxSeriesPoints, диапазон [from, to] делится на n равных бинов
-// (n = min(maxSeriesPoints, число секунд диапазона)); числовые поля усредняются,
-// массивы ячеек/температур усредняются ПО ИНДЕКСУ с учётом числа точек, где этот
-// индекс присутствовал (часть кадров может прийти с меньшим числом ячеек),
-// дискретные (MOS/балансировка/число ячеек/кадры) берутся из последней точки бина;
-// ts — первая точка бина. Ряд короче порога возвращается как есть. Применяется и
-// к ANT, и к EnBMS (/api/bms/<name>/series).
+// downsampleGapSeconds — ожидаемый шаг вывода span/maxSeriesPoints (сек); 0, если
+// диапазон вырожденный (тогда разрывы не разрывают группу — чистая группировка по
+// количеству).
+func downsampleGapSeconds(from, to time.Time) float64 {
+	if span := to.Sub(from).Seconds(); span >= 1 {
+		return span / float64(maxSeriesPoints)
+	}
+	return 0
+}
+
+// downsampleGroups разбивает индексы [0,len(times)) на последовательные группы:
+// не более k точек в группе и без «сшивания» разрыва больше gap (сек; 0 —
+// без ограничения по разрыву). Возвращает диапазоны [lo,hi).
+func downsampleGroups(times []time.Time, k int, gap float64) [][2]int {
+	if k < 1 {
+		k = 1
+	}
+	var groups [][2]int
+	for i := 0; i < len(times); {
+		j := i + 1
+		for j < len(times) && j-i < k {
+			if gap > 0 && !times[j].IsZero() && !times[j-1].IsZero() &&
+				times[j].Sub(times[j-1]).Seconds() > gap {
+				break
+			}
+			j++
+		}
+		groups = append(groups, [2]int{i, j})
+		i = j
+	}
+	return groups
+}
+
+// downsampleBMSSeries — аналог downsampleSeries для МНОГОПОЛЕВОЙ BMS-серии.
+// Прореживание — по ФАКТИЧЕСКОМУ числу точек, с тем же гибридным ограничением по
+// разрыву: группы по k = ceil(len(pts)/maxSeriesPoints), но без сшивания
+// интервалов больше span/maxSeriesPoints. Группа усредняется (averageBMSChunk).
+// Ряд короче порога возвращается как есть. Применяется и к ANT, и к EnBMS
+// (/api/bms/<name>/series).
 func downsampleBMSSeries(pts []bmsSeriesPoint, from, to time.Time) []bmsSeriesPoint {
 	if len(pts) <= maxSeriesPoints {
 		return pts
 	}
-	span := to.Sub(from).Seconds()
-	if span < 1 {
-		return pts
+	times := make([]time.Time, len(pts))
+	for i := range pts {
+		if t, err := time.Parse(time.RFC3339, pts[i].Ts); err == nil {
+			times[i] = t
+		}
 	}
-	n := int(span)
-	if n > maxSeriesPoints {
-		n = maxSeriesPoints
-	}
-	binSec := span / float64(n)
-	type bin struct {
-		name, display, t string
-		count            int
-		samples          int
-		cur, pwr         float64
-		soc, cap, rem    float64
-		maxV, minV, avgV float64
-		cells, temps     []float64
-		cellCnt, tempCnt []int
-		last             bmsSeriesPoint
-	}
-	bins := make([]bin, n)
-	for _, p := range pts {
-		t, err := time.Parse(time.RFC3339, p.Ts)
-		if err != nil {
-			continue
-		}
-		i := int(t.Sub(from).Seconds() / binSec)
-		if i < 0 {
-			i = 0
-		} else if i >= n {
-			i = n - 1
-		}
-		b := &bins[i]
-		if b.count == 0 {
-			b.name, b.display, b.t = p.Name, p.Display, p.Ts
-		}
-		b.cur += p.CurrentA
-		b.pwr += p.PowerW
-		b.soc += p.Soc
-		b.cap += p.CapacityAh
-		b.rem += p.RemainingAh
-		b.maxV += p.MaxCellV
-		b.minV += p.MinCellV
-		b.avgV += p.AvgCellV
-		b.cells = addFloatSlice(b.cells, p.CellsV)
-		b.cellCnt = addCounts(b.cellCnt, len(p.CellsV))
-		b.temps = addFloatSlice(b.temps, p.Temperatures)
-		b.tempCnt = addCounts(b.tempCnt, len(p.Temperatures))
-		b.samples += p.Samples
-		b.last = p
-		b.count++
-	}
-	out := make([]bmsSeriesPoint, 0, n)
-	for _, b := range bins {
-		if b.count == 0 {
-			continue
-		}
-		c := float64(b.count)
-		cells := divCountSlice(b.cells, b.cellCnt, 3)
-		// Число ячеек — максимум из заявленного последним кадром и фактически
-		// усреднённой длины массива (иначе фронт срежет часть ячеек).
-		cellCount := b.last.CellCount
-		if len(cells) > cellCount {
-			cellCount = len(cells)
-		}
-		sp := bmsSeriesPoint{Name: b.name, Display: b.display, Ts: b.t}
-		sp.bmsAveraged = bmsAveraged{
-			CurrentA:     roundN(b.cur/c, 1),
-			PowerW:       roundN(b.pwr/c, 1),
-			Soc:          roundN(b.soc/c, 1),
-			CapacityAh:   roundN(b.cap/c, 1),
-			RemainingAh:  roundN(b.rem/c, 1),
-			MaxCellV:     roundN(b.maxV/c, 3),
-			MinCellV:     roundN(b.minV/c, 3),
-			AvgCellV:     roundN(b.avgV/c, 3),
-			CellsV:       cells,
-			Temperatures: divCountSlice(b.temps, b.tempCnt, 1),
-			CellCount:    cellCount,
-			ChargeMos:    b.last.ChargeMos,
-			DischargeMos: b.last.DischargeMos,
-			Balancer:     b.last.Balancer,
-			Frames:       b.last.Frames,
-			Samples:      b.samples,
-		}
-		out = append(out, sp)
+	k := (len(pts) + maxSeriesPoints - 1) / maxSeriesPoints
+	gap := downsampleGapSeconds(from, to)
+	out := make([]bmsSeriesPoint, 0, maxSeriesPoints)
+	for _, g := range downsampleGroups(times, k, gap) {
+		out = append(out, averageBMSChunk(pts[g[0]:g[1]]))
 	}
 	return out
+}
+
+// averageBMSChunk усредняет последовательную группу BMS-точек: числовые поля —
+// среднее; массивы ячеек/температур — ПО ИНДЕКСУ с учётом числа точек, где этот
+// индекс присутствовал (часть кадров может прийти с меньшим числом ячеек);
+// дискретные (MOS/балансировка/число ячеек/кадры) — из последней точки; ts и
+// имя/отображение — из первой.
+func averageBMSChunk(chunk []bmsSeriesPoint) bmsSeriesPoint {
+	first := chunk[0]
+	last := chunk[len(chunk)-1]
+	var cur, pwr, soc, cap, rem, maxV, minV, avgV float64
+	var cells, temps []float64
+	var cellCnt, tempCnt []int
+	samples := 0
+	for _, p := range chunk {
+		cur += p.CurrentA
+		pwr += p.PowerW
+		soc += p.Soc
+		cap += p.CapacityAh
+		rem += p.RemainingAh
+		maxV += p.MaxCellV
+		minV += p.MinCellV
+		avgV += p.AvgCellV
+		cells = addFloatSlice(cells, p.CellsV)
+		cellCnt = addCounts(cellCnt, len(p.CellsV))
+		temps = addFloatSlice(temps, p.Temperatures)
+		tempCnt = addCounts(tempCnt, len(p.Temperatures))
+		samples += p.Samples
+	}
+	c := float64(len(chunk))
+	cellsAvg := divCountSlice(cells, cellCnt, 3)
+	// Число ячеек — максимум из заявленного последним кадром и фактически
+	// усреднённой длины массива (иначе фронт срежет часть ячеек).
+	cellCount := last.CellCount
+	if len(cellsAvg) > cellCount {
+		cellCount = len(cellsAvg)
+	}
+	sp := bmsSeriesPoint{Name: first.Name, Display: first.Display, Ts: first.Ts}
+	sp.bmsAveraged = bmsAveraged{
+		CurrentA:     roundN(cur/c, 1),
+		PowerW:       roundN(pwr/c, 1),
+		Soc:          roundN(soc/c, 1),
+		CapacityAh:   roundN(cap/c, 1),
+		RemainingAh:  roundN(rem/c, 1),
+		MaxCellV:     roundN(maxV/c, 3),
+		MinCellV:     roundN(minV/c, 3),
+		AvgCellV:     roundN(avgV/c, 3),
+		CellsV:       cellsAvg,
+		Temperatures: divCountSlice(temps, tempCnt, 1),
+		CellCount:    cellCount,
+		ChargeMos:    last.ChargeMos,
+		DischargeMos: last.DischargeMos,
+		Balancer:     last.Balancer,
+		Frames:       last.Frames,
+		Samples:      samples,
+	}
+	return sp
 }
 
 func roundN(v float64, digits int) float64 {

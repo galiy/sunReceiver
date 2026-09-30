@@ -84,7 +84,7 @@ func TestDownsampleBMSSeriesPerIndexCells(t *testing.T) {
 	from := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
 	to := from.Add(time.Second)
 	var pts []bmsSeriesPoint
-	for i := 0; i < 1200; i++ { // > maxSeriesPoints, но всё в одном бине
+	for i := 0; i < 1200; i++ { // > maxSeriesPoints
 		var cells []float64
 		if i%2 == 0 { // половина точек — без блока ячеек
 			cells = nil
@@ -96,14 +96,43 @@ func TestDownsampleBMSSeriesPerIndexCells(t *testing.T) {
 		pts = append(pts, sp)
 	}
 	out := downsampleBMSSeries(pts, from, to)
-	if len(out) != 1 {
-		t.Fatalf("ожидался 1 бин, got %d", len(out))
+	// k = ceil(1200/1000) = 2 → ~600 групп, в каждой одна точка с ячейками.
+	if len(out) != 600 {
+		t.Fatalf("групп %d, want 600 (k=2)", len(out))
 	}
 	if len(out[0].CellsV) != 2 || out[0].CellsV[0] != 3.0 || out[0].CellsV[1] != 3.1 {
 		t.Fatalf("ячейки усреднены неверно (разбавлены нулями?): %v", out[0].CellsV)
 	}
 	if out[0].CellCount < 2 {
 		t.Fatalf("CellCount=%d, want >=2", out[0].CellCount)
+	}
+}
+
+// TestDownsampleHybridSparsePreserved: разрежённые точки (шаг больше ожидаемого
+// span/maxSeriesPoints) не сшиваются в группы с соседями и сохраняются как есть,
+// даже если суммарно точек больше порога.
+func TestDownsampleHybridSparsePreserved(t *testing.T) {
+	from := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	to := from.Add(24 * time.Hour) // gap = 86400/1000 = 86.4 с
+	var pts []seriesPoint
+	for k := 0; k < 3; k++ { // разрежённые: шаг 300 с > 86.4
+		pts = append(pts, seriesPoint{T: from.Add(time.Duration(k) * 300 * time.Second).Format(time.RFC3339), V: 42})
+	}
+	for i := 0; i < 2000; i++ { // плотный ряд 1 с
+		pts = append(pts, seriesPoint{T: from.Add(time.Duration(1000+i) * time.Second).Format(time.RFC3339), V: 1})
+	}
+	out := downsampleSeries(pts, from, to)
+	if len(out) > maxSeriesPoints {
+		t.Fatalf("точек после прореживания %d > %d", len(out), maxSeriesPoints)
+	}
+	sparse := 0
+	for _, p := range out {
+		if p.V == 42 {
+			sparse++
+		}
+	}
+	if sparse != 3 {
+		t.Fatalf("разрежённые точки не сохранены поштучно: найдено %d, want 3", sparse)
 	}
 }
 
