@@ -86,6 +86,39 @@ func (s *redisStore) SaveEnBmsSeries(p enbmsSeriesPoint, ts time.Time) error {
 	return nil
 }
 
+// EnBmsCurrent возвращает текущие снимки EnBMS из HASH (поле = MAC).
+func (s *redisStore) EnBmsCurrent() (map[string]enbmsSnapshot, error) {
+	m, err := s.rdb.HGetAll(s.ctx, redisEnBmsCurrentKey).Result()
+	if err != nil {
+		return nil, fmt.Errorf("HGETALL %s: %w", redisEnBmsCurrentKey, err)
+	}
+	out := make(map[string]enbmsSnapshot, len(m))
+	for k, v := range m {
+		var snap enbmsSnapshot
+		if err := json.Unmarshal([]byte(v), &snap); err != nil {
+			continue
+		}
+		out[k] = snap
+	}
+	return out, nil
+}
+
+// EnBmsOne возвращает текущий снимок одного EnBMS по MAC; nil, если устройства нет.
+func (s *redisStore) EnBmsOne(mac string) (*enbmsSnapshot, error) {
+	b, err := s.rdb.HGet(s.ctx, redisEnBmsCurrentKey, mac).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var snap enbmsSnapshot
+	if err := json.Unmarshal(b, &snap); err != nil {
+		return nil, err
+	}
+	return &snap, nil
+}
+
 // QueryEnBmsSeries возвращает 5-минутные усреднённые точки одного устройства
 // (по MAC) за период [start, end] включительно, по возрастанию времени.
 func (s *redisStore) QueryEnBmsSeries(mac string, start, end time.Time) ([]enbmsSeriesPoint, error) {

@@ -1745,7 +1745,7 @@ func main() {
 	dash := dashFlags{
 		ShowMap:   mapSec != nil && (mapSec.Disabled == nil || !*mapSec.Disabled),
 		ShowMeter: meterCfg != nil,
-		ShowBMS:   bmsSite != nil,
+		ShowBMS:   bmsSite != nil || enBmsCfg != nil,
 		ShowRelay: relaySec != nil && (relaySec.Disabled == nil || !*relaySec.Disabled),
 		ShowCE308: ce308Cfg != nil,
 	}

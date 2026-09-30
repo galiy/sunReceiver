@@ -4,6 +4,10 @@ function esc(s){ return String(s).replace(/[&<>"]/g,function(c){ return {'&':'&a
 function fmtNum(n,digits){ return isFinite(n)? n.toLocaleString('ru-RU',{maximumFractionDigits:digits}) : '—'; }
 
 var NAME = decodeURIComponent(location.pathname.replace(/^\/bms\//,''));
+// Тип BMS: 'antbms' (read_bms.php) или 'enbms' (Enjie, BLE). Приходит из API
+// (поле kind); по умолчанию — ANT (обратная совместимость). Управляет подписями
+// и скрытием блоков, которых у EnBMS нет (мощностные ключи).
+var BMS_KIND = 'antbms';
 
 // Цвет заполнения ячейки: max — красная, min — синяя, остальные — зелёные.
 var CELL_COLOR={ max:'#d9534f', min:'#428bca', normal:'#37b24d' };
@@ -50,6 +54,8 @@ function renderCells(d){
 
 // Подписи каналов T1–T6 (реконструкция — см. docs/antbms/antbms-protocol-status-frame.md).
 var TEMP_NAMES=['Батарея 1','Батарея 2','Силовая плата','Плата управления','Резерв','Резерв'];
+// Для EnBMS соответствие каналов не восстанавливалось — нейтральные подписи.
+function tempName(i){ if(BMS_KIND==='enbms') return 'Датчик '+(i+1); return TEMP_NAMES[i]||('датчик '+(i+1)); }
 function renderTemps(d){
   var t=d.temperatures_c||[];
   var h='';
@@ -57,7 +63,7 @@ function renderTemps(d){
     var v=Number(t[i]);
     var w=Math.max(2,Math.min(100,v/60*100));
     var col= v<15?'#428bca':(v<=40?'#37b24d':(v<=55?'#f08c00':'#d9534f'));
-    var n=TEMP_NAMES[i]||('датчик '+(i+1));
+    var n=tempName(i);
     h+='<div class="trow"><span class="tname">T'+(i+1)+' · '+n+'</span>'
       +'<span class="tbar"><span class="tbar-fill" style="width:'+w+'%;background:'+col+';display:block"></span></span>'
       +'<span class="tval">'+fmtNum(v,0)+' &deg;C</span></div>';
@@ -66,8 +72,18 @@ function renderTemps(d){
 }
 
 function renderMos(d){
+  // У EnBMS блок Battery не содержит состояний ключей/балансировки — блок скрыт
+  // (см. load), а не показывается ложным «ВЫКЛ».
+  if(BMS_KIND==='enbms') return;
   function pill(label,on){ return '<span class="mos'+(on?' on':'')+'">'+label+': '+(on?'ВКЛ':'ВЫКЛ')+'</span>'; }
   document.getElementById('mosWrap').innerHTML=pill('Заряд',d.charge_mos===1)+pill('Разряд',d.discharge_mos===1)+pill('Балансировка',d.balancer===1);
+}
+
+// applyBmsKind показывает/скрывает блоки, зависящие от типа BMS.
+function applyBmsKind(){
+  var en = BMS_KIND==='enbms';
+  var mos=document.getElementById('bmsMosBlock'); if(mos) mos.style.display = en? 'none':'';
+  var tn=document.getElementById('bmsTnote'); if(tn) tn.style.display = en? 'none':'';
 }
 
 async function load(){
@@ -82,11 +98,21 @@ async function load(){
     }
     if(!r.ok) return;
     var d=await r.json();
+    BMS_KIND = d.kind || 'antbms';
+    applyBmsKind();
     document.title=d.deviceName+' — SunReceiver';
     document.getElementById('bmsTitle').textContent=d.deviceName;
-    document.getElementById('bmsSub').textContent='ANT BMS · порт '+d.port+' · актуально: '+d.time;
+    if(BMS_KIND==='enbms'){
+      document.getElementById('bmsSub').textContent='EnBMS (BLE) · актуально: '+(d.time||'—');
+    }else{
+      document.getElementById('bmsSub').textContent='ANT BMS · порт '+d.port+' · актуально: '+d.time;
+    }
     renderKPIs(d); renderCells(d); renderTemps(d); renderMos(d);
-    document.getElementById('bmsFoot').textContent='Порт: '+d.port+' · счётчик кадров: '+d.frames+' · обновляется каждую секунду';
+    if(BMS_KIND==='enbms'){
+      document.getElementById('bmsFoot').textContent='EnBMS (BLE, MAC '+d.key+') · обновляется каждую секунду';
+    }else{
+      document.getElementById('bmsFoot').textContent='Порт: '+d.port+' · счётчик кадров: '+d.frames+' · обновляется каждую секунду';
+    }
   }catch(e){}
 }
 // ---------- Графики (5-минутные средние из Redis) ----------
@@ -457,7 +483,7 @@ function buildBmsCharts(points){
     return {x:new Date(p.ts), y:(mx!==null && mn!==null? mx-mn : null)};
   }))],'V',false,false);
   // 7. Температуры: батарея (T1/T2), силовые ключи (T3), плата (T4)
-  var tnames=['T1 · Батарея 1','T2 · Батарея 2','T3 · Силовая плата','T4 · Плата управления'];
+  var tnames=[tempName(0),tempName(1),tempName(2),tempName(3)].map(function(n,i){ return 'T'+(i+1)+' · '+n; });
   var tcols=['#37b24d','#5cb85c','#f08c00','#9463b8'];
   var tds=[];
   for(var t=0;t<4;t++){
@@ -486,6 +512,7 @@ async function loadBmsCharts(){
     var r=await fetch(url);
     if(!r.ok) return;
     var data=await r.json();
+    if(data.kind) BMS_KIND = data.kind;
     bmsCaptureState();
     destroyBmsCharts();
     bmsRebuilding=true;

@@ -226,6 +226,48 @@ func TestEnBmsAccumulatorDrain(t *testing.T) {
 	}
 }
 
+func TestEnBmsMappingToBMSSeries(t *testing.T) {
+	snap := enbmsSnapshot{
+		Name: "BMS BP00", MAC: "AA:BB:CC:DD:EE:00",
+		Timestamp: "2026-09-30T19:34:22+03:00", CellCount: 2, CellsV: []float64{3.2, 3.3},
+		TemperaturesC: []float64{25, 26}, CurrentA: -10.5, PowerW: -545.4, Soc: 24.6,
+		CapacityAh: 314, RemainingAh: 78.4, TotalVoltageV: 51.9, PortVoltageV: 51.9,
+		Soh: 100, Cycles: 2, MaxCellIdx: 2, MaxCellV: 3.3, MinCellIdx: 1, MinCellV: 3.2, AvgCellV: 3.25,
+	}
+	d := bmsDeviceFromEnBms(snap)
+	if d.Kind != "enbms" || d.DeviceName != "BMS BP00" || d.Key != "AA:BB:CC:DD:EE:00" {
+		t.Fatalf("id: %+v", d)
+	}
+	if d.Soc != 25 { // округление 24.6 → 25
+		t.Fatalf("soc = %d, want 25", d.Soc)
+	}
+	if d.Time != "19:34:22" || d.Timestamp == 0 {
+		t.Fatalf("time/ts: %q %d", d.Time, d.Timestamp)
+	}
+	if d.CurrentA != -10.5 || d.PowerW != -545.4 || d.CellCount != 2 {
+		t.Fatalf("поля: %+v", d)
+	}
+	// Поля ANT, которых нет у EnBMS, остаются нулевыми (фронт их скрывает по kind).
+	if d.ChargeMos != 0 || d.DischargeMos != 0 || d.Balancer != 0 || d.Frames != 0 {
+		t.Fatalf("MOS/frames должны быть нулевыми: %+v", d)
+	}
+
+	sp := bmsSeriesPointFromEnBms(enbmsSeriesPoint{
+		Name: "AA:BB:CC:DD:EE:00", Display: "BMS BP00", Ts: "2026-09-30T19:30:00+03:00",
+		enbmsAveraged: enbmsAveraged{
+			CurrentA: -10, PowerW: -520, Soc: 25, CapacityAh: 314, RemainingAh: 79,
+			MaxCellV: 3.3, MinCellV: 3.2, AvgCellV: 3.25, CellsV: []float64{3.2, 3.3},
+			Temperatures: []float64{25}, CellCount: 2, Cycles: 2, Samples: 300,
+		},
+	})
+	if sp.Name != "AA:BB:CC:DD:EE:00" || sp.Display != "BMS BP00" || sp.Samples != 300 || sp.Soc != 25 {
+		t.Fatalf("series point: %+v", sp)
+	}
+	if sp.ChargeMos != 0 || sp.Frames != 0 {
+		t.Fatalf("MOS/frames в точке должны быть нулевыми: %+v", sp)
+	}
+}
+
 func TestEnBmsConfigFromSection(t *testing.T) {
 	// nil-раздел.
 	if c, err := enBmsConfigFromSection(nil); err != nil || c != nil {

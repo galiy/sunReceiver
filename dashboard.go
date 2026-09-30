@@ -468,8 +468,9 @@ func (h *dashboardHandler) energy(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// apiBMS отдаёт актуальное состояние всех ANT BMS (HASH sunreceiver:bms,
-// пулер bms_poller.go) для батареек на главной странице (обновление раз в минуту).
+// apiBMS отдаёт актуальное состояние всех BMS (ANT BMS HASH sunreceiver:bms и
+// EnBMS HASH sunreceiver:enbms:current) для батареек на главной странице
+// (обновление раз в минуту). EnBMS приводится к форме bmsDevice с kind="enbms".
 func (h *dashboardHandler) apiBMS(w http.ResponseWriter, r *http.Request) {
 	m, err := h.store.BMSCurrent()
 	if err != nil {
@@ -482,7 +483,16 @@ func (h *dashboardHandler) apiBMS(w http.ResponseWriter, r *http.Request) {
 		if err := json.Unmarshal([]byte(raw), &d); err != nil {
 			continue
 		}
+		d.Kind = "antbms"
 		devs = append(devs, d)
+	}
+	// EnBMS (BLE) — из отдельного ключа, в форме bmsDevice.
+	if ec, eerr := h.store.EnBmsCurrent(); eerr != nil {
+		log.Printf("dashboard: enbms current: %v", eerr)
+	} else {
+		for _, s := range ec {
+			devs = append(devs, bmsDeviceFromEnBms(s))
+		}
 	}
 	sort.Slice(devs, func(i, j int) bool { return bmsKey(devs[i]) < bmsKey(devs[j]) })
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -514,16 +524,27 @@ func (h *dashboardHandler) apiBMSOne(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if raw == "" {
+	if raw != "" {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusNotFound)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "BMS не найдена"})
+		_, _ = w.Write([]byte(raw))
+		return
+	}
+	// EnBMS (BLE): имя в URL — MAC устройства. Снимок приводим к форме bmsDevice
+	// (kind="enbms"), чтобы та же страница/JS отрисовали его.
+	if es, eerr := h.store.EnBmsOne(name); eerr != nil {
+		http.Error(w, eerr.Error(), http.StatusInternalServerError)
+		return
+	} else if es != nil {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(bmsDeviceFromEnBms(*es))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write([]byte(raw))
+	w.WriteHeader(http.StatusNotFound)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": "BMS не найдена"})
 }
 
 // apiBMSSeries отдаёт 5-минутные усреднённые точки BMS (/api/bms/<name>/series)
@@ -559,6 +580,50 @@ func (h *dashboardHandler) apiBMSSeries(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	cutoff := recentCutoff(now)
+	// EnBMS (BLE): имя в URL — MAC устройства (есть в enbms:current). Ряд читаем
+	// из pg.enbms_averages (старая часть) + Redis-ряда EnBMS и приводим к форме
+	// bmsSeriesPoint.
+	if es, eerr := h.store.EnBmsOne(name); eerr == nil && es != nil {
+		var epts []enbmsSeriesPoint
+		if h.pg != nil && from.Before(cutoff) {
+			pgEnd := cutoff.Add(-time.Second)
+			if to.Before(pgEnd) {
+				pgEnd = to
+			}
+			old, err := h.pg.EnBmsAverages(name, from, pgEnd)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			epts = append(epts, old...)
+		}
+		redisStart := from
+		if redisStart.Before(cutoff) {
+			redisStart = cutoff
+		}
+		if to.After(redisStart) {
+			recent, err := h.store.QueryEnBmsSeries(name, redisStart, to)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			epts = append(epts, recent...)
+		}
+		out := make([]bmsSeriesPoint, 0, len(epts))
+		for _, p := range epts {
+			out = append(out, bmsSeriesPointFromEnBms(p))
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"name":   name,
+			"kind":   "enbms",
+			"from":   from.Format(time.RFC3339),
+			"to":     to.Format(time.RFC3339),
+			"points": out,
+		})
+		return
+	}
 	var pts []bmsSeriesPoint
 	// Старая часть периода (до cutoff) — из PostgreSQL (вся история).
 	// pgEnd = cutoff-1с: точка с ts == cutoff — начало 5-минутного промежутка,
@@ -595,6 +660,7 @@ func (h *dashboardHandler) apiBMSSeries(w http.ResponseWriter, r *http.Request, 
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"name":   name,
+		"kind":   "antbms",
 		"from":   from.Format(time.RFC3339),
 		"to":     to.Format(time.RFC3339),
 		"points": pts,

@@ -435,3 +435,59 @@ func enbmsParsedValid(r enbmsParsed) bool {
 	}
 	return true
 }
+
+// bmsDeviceFromEnBms приводит снимок EnBMS к форме bmsDevice (ANT BMS) для
+// общего API/дашборда: фронт читает те же поля. Чего в блоке Battery нет
+// (MOS/балансировка, счётчик кадров) — остаётся нулевым, а kind="enbms" велит
+// фронту эти блоки не показывать.
+func bmsDeviceFromEnBms(s enbmsSnapshot) bmsDevice {
+	d := bmsDevice{
+		Kind:          "enbms",
+		DeviceName:    s.Name,
+		Key:           s.MAC,
+		Port:          "BLE",
+		CellCount:     s.CellCount,
+		CellsV:        s.CellsV,
+		CurrentA:      s.CurrentA,
+		Soc:           int(math.Round(s.Soc)),
+		CapacityAh:    s.CapacityAh,
+		RemainingAh:   s.RemainingAh,
+		TemperaturesC: s.TemperaturesC,
+		PowerW:        s.PowerW,
+		MaxCellIdx:    s.MaxCellIdx,
+		MaxCellV:      s.MaxCellV,
+		MinCellIdx:    s.MinCellIdx,
+		MinCellV:      s.MinCellV,
+		AvgCellV:      s.AvgCellV,
+	}
+	if ts, err := time.Parse(time.RFC3339, s.Timestamp); err == nil {
+		d.Timestamp = ts.Unix()
+		d.Time = ts.Format("15:04:05")
+	}
+	return d
+}
+
+// bmsSeriesPointFromEnBms приводит 5-минутную точку ряда EnBMS к форме ANT BMS
+// (bmsSeriesPoint): совпадающие поля переносятся 1:1, отсутствующие у EnBMS —
+// нулевые. Используется общим API /api/bms/<mac>/series и графиками страницы BMS.
+func bmsSeriesPointFromEnBms(p enbmsSeriesPoint) bmsSeriesPoint {
+	return bmsSeriesPoint{
+		Name:    p.Name,
+		Display: p.Display,
+		Ts:      p.Ts,
+		bmsAveraged: bmsAveraged{
+			CurrentA:     p.CurrentA,
+			PowerW:       p.PowerW,
+			Soc:          p.Soc,
+			CapacityAh:   p.CapacityAh,
+			RemainingAh:  p.RemainingAh,
+			MaxCellV:     p.MaxCellV,
+			MinCellV:     p.MinCellV,
+			AvgCellV:     p.AvgCellV,
+			CellsV:       p.CellsV,
+			Temperatures: p.Temperatures,
+			CellCount:    p.CellCount,
+			Samples:      p.Samples,
+		},
+	}
+}

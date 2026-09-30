@@ -31,6 +31,10 @@ import (
 // shm 2018 на ПАК «Малина»). Формат публикации — bmslistener/bmslistener.c
 // (publish_all); все поля присутствуют в ответе.
 type bmsDevice struct {
+	// Kind — тип BMS: "antbms" (read_bms.php) или "enbms" (BLE, Enjie). Пусто —
+	// читать как ANT (обратная совместимость записей без поля). Дашборд по нему
+	// скрывает поля, которых у EnBMS нет (MOS/балансировка, счётчик кадров).
+	Kind          string    `json:"kind,omitempty"`
 	DeviceName    string    `json:"deviceName"`     // "AntBms <ёмкость> A/h"
 	Port          string    `json:"port"`           // USB-порт адаптера (позиционный)
 	Key           string    `json:"key"`            // ключ устройства (bmsKey): deviceName или "deviceName@Port"; для запросов/URL
