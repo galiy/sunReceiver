@@ -18,8 +18,11 @@ HTTP-сервер — адрес из обязательного поля `dashb
   ряды МАП `map_grid_voltage`/`map_grid_power`/`map_battery_voltage`/`map_battery_power`,
   ряды счётчика `meter_*`. Применяется `downsampleSeries`.
 - `/api/tariffs?from=&to=` — `pgStore.DailyTariffsRange` (финализированные дни).
-- `/api/bms`, `/api/bms/<name>`, `/api/bms/<name>/series?from=&to=` — BMS (см.
-  [../antbms.md](../antbms.md)).
+- `/api/bms`, `/api/bms/<name>`, `/api/bms/<name>/series?from=&to=` — BMS. Отдают
+  и ANT BMS (см. [../antbms.md](../antbms.md)), и EnBMS (см. [enbms.md](enbms.md)):
+  EnBMS-снимки/точки приводятся к форме `bmsDevice`/`bmsSeriesPoint` с полем
+  `kind="enbms"` (у ANT — `kind="antbms"`); на странице `/bms/<name>` фронт по
+  `kind` скрывает блок мощностных ключей и правит подписи.
 - `/api/ce308/energy` (POST) и `/api/ce308/series?from=&to=` — счётчик Энергомера
   CE308 (см. [ce308.md](ce308.md)).
 - `/api/relay` — GET снимок ламп, POST смена состояния лампы SR-201.
