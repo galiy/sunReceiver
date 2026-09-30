@@ -52,7 +52,7 @@
   "enBms": {
     "disabled": false,
     "devices": [
-      { "name": "BMS BP00", "mac": "AA:BB:CC:11:22:33", "disabled": false }
+      { "name": "BMS EnBMS #1", "mac": "AA:BB:CC:11:22:33", "disabled": false }
     ]
   },
   "notify": {

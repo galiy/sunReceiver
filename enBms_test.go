@@ -312,7 +312,7 @@ func TestEnBmsConfigFromSection(t *testing.T) {
 	c2, _ := enBmsConfigFromSection(&enBmsSection{Devices: []enBmsDeviceSection{
 		{MAC: "AA:BB:CC:DD:EE:FF", Disabled: boolPtr(false)},
 	}})
-	if c2 == nil || c2.Devices[0].Name != "EnBMS AA:BB:CC:DD:EE:FF" {
+	if c2 == nil || c2.Devices[0].Name != "BMS AA:BB:CC:DD:EE:FF" {
 		t.Fatalf("default name = %v", c2)
 	}
 }

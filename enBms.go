@@ -121,7 +121,9 @@ func enBmsConfigFromSection(s *enBmsSection) (*enBmsConfig, error) {
 		seen[d.MAC] = d.Name
 		name := d.Name
 		if name == "" {
-			name = "EnBMS " + d.MAC
+			// Метка по умолчанию — только по MAC: заводское BLE-имя (BP00) у всех
+			// одинаково и как имя бесполезно.
+			name = "BMS " + d.MAC
 		}
 		devs = append(devs, enBmsDeviceConfig{Name: name, MAC: d.MAC})
 	}
