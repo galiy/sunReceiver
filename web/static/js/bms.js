@@ -429,7 +429,7 @@ function bmsRender(id, datasets, yTitle, legend, zero){
       }
     },
     scales:{
-      x:{ type:'time', time:{ unit:'hour', displayFormats:{ hour:'HH:mm' } }, ticks:{ maxRotation:0, autoSkipPadding:16 } },
+      x:{ type:'time', time:{ unit:'hour', displayFormats:{ hour:'HH:mm' }, tooltipFormat:'dd.MM.yyyy HH:mm:ss' }, ticks:{ maxRotation:0, autoSkipPadding:16 } },
       y:y
     }
   };
