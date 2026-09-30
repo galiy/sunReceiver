@@ -25,6 +25,7 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 | МАП + MPPT | [`docs/modules/map-mppt.md`](docs/modules/map-mppt.md) |
 | Счётчик DDS238 | [`docs/dds238-meter.md`](docs/dds238-meter.md) |
 | Счётчик Энергомера CE308 (BLE) | [`docs/modules/ce308.md`](docs/modules/ce308.md) |
+| BMS EnBMS (Enjie EMU110x, BLE) | [`docs/modules/enbms.md`](docs/modules/enbms.md) |
 | ANT BMS | [`docs/antbms.md`](docs/antbms.md) |
 | Шлюз Modbus TCP↔RTU (`mapgateway/`, C) | [`mapgateway/README.md`](mapgateway/README.md) |
 | Уведомления в MAX | [`docs/modules/notify.md`](docs/modules/notify.md) |
@@ -77,7 +78,12 @@ legacy-файлом `dds238.json`). Счётчик Энергомера **CE308*
 **`ce308`** `{"name", "mac", "pin"}` (**`disabled` — ОБЯЗАТЕЛЬНОЕ** поле: `false` —
 счётчик опрашивается, `true` — опрос CE308 отключён; `mac` — BD_ADDR счётчика,
 `pin` — BLE-PIN радиоинтерфейса для спаривания), полностью описан в
-[`docs/modules/ce308.md`](docs/modules/ce308.md). Уведомления в мессенджер MAX — раздел **`notify`**
+[`docs/modules/ce308.md`](docs/modules/ce308.md). BMS **EnBMS** (Enjie EMU110x,
+опрос по BLE) — раздел **`enBms`** `{"disabled", "devices": [{"name", "mac",
+"disabled"}]}` (**`disabled` — ОБЯЗАТЕЛЬНОЕ** поле на уровне раздела и у каждого
+устройства: `false` — опрашивается, `true` — отключён; `mac` обязателен для
+активного устройства, `name` — отображаемое имя), описан в
+[`docs/modules/enbms.md`](docs/modules/enbms.md). Уведомления в мессенджер MAX — раздел **`notify`**
 `{"token", "user_id", "chat_id", "disabled", "stable_window_sec", "map_undeclared_sec", "grid_voltage_low"}`
 (токен бота MAX обязателен; адресат `user_id`/`chat_id` — **необязателен**: если
 пуст, бот регистрирует первого подписчика по `bot_started`/`bot_added`/`message_created`
@@ -124,6 +130,12 @@ legacy-файлом `dds238.json`). Счётчик Энергомера **CE308*
   `ce308_accumulator.go` (усреднение до 1 записи за 10 с в PG),
   `ce308_store.go` (Redis: current/series/energy), `ce308_agent_linux.go` (BlueZ-агент PIN).
   Полное описание — [`docs/modules/ce308.md`](docs/modules/ce308.md).
+- **BMS EnBMS** (BLE) — `enBms.go`, `enBms_client.go`, `enBms_poller.go`,
+  `enBms_accumulator.go`, `enBms_store.go`: опрос BMS Enjie (EMU110x) по BLE —
+  только блок Battery (CID2 `0x61`), устройства последовательно, цикл не чаще
+  1 раза в секунду, постоянные соединения (структура BLE — из CE308, схема
+  хранения/усреднения — из ANT BMS). Полное описание —
+  [`docs/modules/enbms.md`](docs/modules/enbms.md).
 - **ANT BMS** — `bms_poller.go`, `bms_accumulator.go`, `bmslistener/`. Полное описание —
   [`docs/antbms.md`](docs/antbms.md). Демон bmslistener (установка на ПАК «Малина») —
   [`docs/modules/bms-listener.md`](docs/modules/bms-listener.md).

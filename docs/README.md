@@ -41,6 +41,7 @@ DDS238 (Modbus TCP), нормализует всё в единый контра�
 | **МАП + MPPT** (`mppt_api.go`, `modbusmap/`) | МАП (батарея/сеть) через Modbus TCP или веб-API; MPPT-контроллеры через `read_json.php?device=mppt` (динамический состав) | [modules/map-mppt.md](modules/map-mppt.md) |
 | **Счётчик DDS238** (`meter_*.go`) | Мгновенные значения `meter_*` + посуточные тарифы «День/Ночь» (`daily_tariffs`) с добором пропущенных границ | [dds238-meter.md](dds238-meter.md) |
 | **Счётчик Энергомера CE308** (`ce308_*.go`) | Опрос по BLE (2 с): напряжения/токи/мощности по фазам + разовый снимок накопленной энергии по сигналу; история усредняется до 1 записи за 10 с в PG | [modules/ce308.md](modules/ce308.md) |
+| **BMS EnBMS** (`enBms_*.go`) | Опрос BMS Enjie (EMU110x) по BLE: только блок Battery (CID2 `0x61`); устройства последовательно, цикл ≤ 1/с, постоянные соединения; 5-мин усреднение в Redis+PG | [modules/enbms.md](modules/enbms.md) |
 | **Проброс Bluetooth (usbip)** (вне кода, ОТКЛЮЧЕНО 2026-09-24) | Историческая схема: проброс BLE-контроллера MediaTek с `.9` на `.253` через usbip; на `.253` теперь физический USB-адаптер | [ce308-bluetooth/README.md](ce308-bluetooth/README.md) |
 | **ANT BMS** (`bms_poller.go`, `bmslistener/`) | Опрос батарей через `read_bms.php` → shm bmslistener; 5-мин усреднённые точки в Redis+PG | [antbms.md](antbms.md), [modules/bms-listener.md](modules/bms-listener.md) |
 | **Шлюз Modbus TCP↔RTU** (`mapgateway/`, C) | Публикует последовательный порт МАП как Modbus TCP (:502) для пулера; systemd на ПАК «Малина» | [mapgateway/README.md](../mapgateway/README.md) |
@@ -57,6 +58,7 @@ DDS238 (Modbus TCP), нормализует всё в единый контра�
 | MPPT-контроллеры «КЭС» | веб-API read_json.php (HTTP) | 1 с | PV панели, заряд АКБ, выработка за сутки |
 | Счётчик DDS238 | Modbus TCP (502) | 1 с | мгновенные значения + посуточные тарифы «День/Ночь» |
 | Счётчик Энергомера CE308 | BLE (Энергомера/IEC 61107) | 2 с | напряжения/токи/мощности по фазам + разовый снимок энергии |
+| BMS EnBMS (Enjie EMU110x) | BLE (EnBMS CID) | ≤ 1 с (последовательно) | ячейки, ток/напряжение, SOC/SOH, ёмкости, температуры |
 | ANT BMS | веб-API read_bms.php (HTTP) | 1 с | SOC, ячейки, ток/мощность, температуры, MOS |
 
 - **Инверторы** — раздел `invertors` конфига, нормализуются в контракт `values`

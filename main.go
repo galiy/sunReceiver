@@ -205,6 +205,7 @@ type configFile struct {
 	DB            *dbConfig        `json:"db"`
 	Meter         *meterSection    `json:"meter"`
 	Ce308         *ce308Section    `json:"ce308"`
+	EnBms         *enBmsSection    `json:"enBms"`
 	Notify        *notifySection   `json:"notify"`
 	Relay         *relaySection    `json:"relay"`          // сетевое реле SR-201 (лампы), управление по UDP
 	DashboardPort int              `json:"dashboard_port"` // порт веб-дашборда; обязательное поле (0 — ошибка загрузки конфига)
@@ -225,14 +226,14 @@ func configPath() string {
 
 // loadConfig читает и проверяет sunReceiver.json, возвращает список целей
 // (инверторы + МАП, без отключённых), настройки БД/счётчика/МАП-веб-API и порт дашборда.
-func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection, *relaySection, *ce308Config, int, error) {
+func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection, *relaySection, *ce308Config, *enBmsConfig, int, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("read config %s: %w", path, err)
+		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("read config %s: %w", path, err)
 	}
 	var cf configFile
 	if err := json.Unmarshal(b, &cf); err != nil {
-		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("parse config %s: %w", path, err)
+		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	targets := make([]invTarget, 0, len(cf.Invertors)+1)
 	nextOrder := 0                // порядок устройства на дашборде = позиция в конфиге (в порядке invertors, затем map)
@@ -241,7 +242,7 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	// Инверторы (Deye/Sofar) из invertors; отключённые (disabled=true) пропускаются.
 	for _, t := range cf.Invertors {
 		if t.Disabled == nil {
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: для %s (%s) не задано обязательное поле disabled (false/true)", path, t.Name, t.IP)
+			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: для %s (%s) не задано обязательное поле disabled (false/true)", path, t.Name, t.IP)
 		}
 		if *t.Disabled {
 			log.Printf("config: %s (%s) отключён (disabled=true) — не опрашивается", t.Name, t.IP)
@@ -258,22 +259,22 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 			log.Printf("config: тип %q для %s не ожидается в invertors (используйте раздел map/mppt) — пропущен", t.Type, t.IP)
 			continue
 		default:
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: неизвестный тип %q для %s", path, t.Type, t.IP)
+			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: неизвестный тип %q для %s", path, t.Type, t.IP)
 		}
 		if t.IP == "" {
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустой ip (type=%s)", path, t.Type)
+			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустой ip (type=%s)", path, t.Type)
 		}
 		if t.Name == "" {
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустое имя name для %s", path, t.IP)
+			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустое имя name для %s", path, t.IP)
 		}
 		// Deye/Sofar: без серийного номера логгера (logger_sn=0) логгер отвечает
 		// кодом 0x06 (heartbeat_only) — данные получать невозможно. Ловим при
 		// старте (fatal), а не маскируем вечным heartbeat_only с логами на poll.
 		if (kind == kindDeyeString || kind == kindSofar) && t.LoggerSN == 0 {
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %s (%s): не задан logger_sn — без SN логгера логгер отвечает кодом 0x06 и данные получать невозможно", path, t.Name, t.IP)
+			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %s (%s): не задан logger_sn — без SN логгера логгер отвечает кодом 0x06 и данные получать невозможно", path, t.Name, t.IP)
 		}
 		if prev, dup := seenIP[t.IP]; dup {
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: дублирующийся ip %s (%s и %s) — опрос одного IP двумя целями недопустим", path, t.IP, prev, t.Name)
+			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: дублирующийся ip %s (%s и %s) — опрос одного IP двумя целями недопустим", path, t.IP, prev, t.Name)
 		}
 		seenIP[t.IP] = t.Name
 		placement := t.Placement
@@ -291,46 +292,56 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	// map/mppt/bms) и bms_disabled (отключает только пулер ANT BMS).
 	if cf.Map != nil {
 		if cf.Map.Disabled == nil {
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано обязательное поле disabled (false/true)", path)
+			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано обязательное поле disabled (false/true)", path)
 		}
 		if cf.Map.BMSDisabled == nil {
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано обязательное поле bms_disabled (false/true)", path)
+			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано обязательное поле bms_disabled (false/true)", path)
 		}
 		if *cf.Map.Disabled {
 			log.Printf("config: map disabled=true — пулеры МАП, MPPT и BMS не запускаются")
 		}
 	}
 	if cf.Meter != nil && cf.Meter.Disabled == nil {
-		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе meter не задано обязательное поле disabled (false/true)", path)
+		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе meter не задано обязательное поле disabled (false/true)", path)
 	}
 	// Счётчик Энергомера CE308 (раздел "ce308"). Disabled обязателен; при
 	// отключённом — опрос не запускается (ce308Cfg = nil), при включённом —
 	// требуется mac и pin (BLE-PIN радиоинтерфейса).
 	if cf.Ce308 != nil && cf.Ce308.Disabled == nil {
-		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе ce308 не задано обязательное поле disabled (false/true)", path)
+		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе ce308 не задано обязательное поле disabled (false/true)", path)
 	}
 	ce308Cfg, err := ce308ConfigFromSection(cf.Ce308)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
+		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
+	}
+	// BMS EnBMS (раздел "enBms"): коллекция устройств опроса по BLE. Общий
+	// disabled обязателен; у каждого устройства disabled тоже обязателен, для
+	// активных нужен mac. Без активных устройств — пулер не запускается.
+	if cf.EnBms != nil && cf.EnBms.Disabled == nil {
+		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе enBms не задано обязательное поле disabled (false/true)", path)
+	}
+	enBmsCfg, err := enBmsConfigFromSection(cf.EnBms)
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
 	}
 	// Сетевое реле SR-201 (лампы) — раздел "relay". Disabled обязателен: true
 	// отключает контроллер ламп; false — запускает управление по UDP. IP обязателен
 	// только при активном контроллере.
 	if cf.Relay != nil {
 		if cf.Relay.Disabled == nil {
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе relay не задано обязательное поле disabled (false/true)", path)
+			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе relay не задано обязательное поле disabled (false/true)", path)
 		}
 		if !*cf.Relay.Disabled && cf.Relay.IP == "" {
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе relay не задан ip устройства relay-sr201-2l", path)
+			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе relay не задан ip устройства relay-sr201-2l", path)
 		}
 	}
 	if cf.Map != nil && cf.Map.RS485 != nil && !*cf.Map.Disabled {
 		rs485 := cf.Map.RS485
 		if rs485.Disabled == nil {
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в подразделе map.rs485 не задано обязательное поле disabled (false/true)", path)
+			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в подразделе map.rs485 не задано обязательное поле disabled (false/true)", path)
 		}
 		if rs485.IP == "" {
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустой ip в подразделе map.rs485", path)
+			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустой ip в подразделе map.rs485", path)
 		}
 		name := rs485.Name
 		if name == "" {
@@ -341,7 +352,7 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 			mapAPI = &mapAPISource{name: name, ip: rs485.IP, order: nextOrder}
 		} else {
 			if prev, dup := seenIP[rs485.IP]; dup {
-				return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: дублирующийся ip %s (%s и %s)", path, rs485.IP, prev, name)
+				return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: дублирующийся ip %s (%s и %s)", path, rs485.IP, prev, name)
 			}
 			seenIP[rs485.IP] = name
 			unit := byte(1)
@@ -361,12 +372,12 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 		mpptOk := cf.Map != nil && cf.Map.BaseURL != "" && cf.Map.MPPTPath != "" &&
 			cf.Map.Login != "" && cf.Map.Password != ""
 		if !mpptOk {
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: нет ни одного активного устройства", path)
+			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: нет ни одного активного устройства", path)
 		}
 	}
 	// Порт веб-дашборда — обязательное поле dashboard_port.
 	if cf.DashboardPort == 0 {
-		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: не задано обязательное поле dashboard_port (порт веб-дашборда)", path)
+		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: не задано обязательное поле dashboard_port (порт веб-дашборда)", path)
 	}
 	// Учётные данные HTTP Basic для `/api/*` дашборда (необязательны). Заданы обе —
 	// требовать авторизацию; иначе API открыт (доступ снаружи закрывает прокси).
@@ -381,10 +392,10 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 			log.Printf("config: notify disabled=true — уведомления в MAX выключены (раздел в конфиге, но без оповещений)")
 			notifyCfg = nil
 		} else if notifyCfg.Token == "" {
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе notify не задан token", path)
+			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе notify не задан token", path)
 		}
 	}
-	return targets, cf.DB, cf.Meter, cf.Map, cf.Relay, ce308Cfg, cf.DashboardPort, nil
+	return targets, cf.DB, cf.Meter, cf.Map, cf.Relay, ce308Cfg, enBmsCfg, cf.DashboardPort, nil
 }
 
 // placementOrder возвращает упорядоченный список размещений сетевых инверторов
@@ -1675,9 +1686,10 @@ func main() {
 	var mapSec *mapSection
 	var relaySec *relaySection
 	var ce308Cfg *ce308Config
+	var enBmsCfg *enBmsConfig
 	var dashPort int
 	var err error
-	targets, dbCfg, meterSec, mapSec, relaySec, ce308Cfg, dashPort, err = loadConfig(cfgPath)
+	targets, dbCfg, meterSec, mapSec, relaySec, ce308Cfg, enBmsCfg, dashPort, err = loadConfig(cfgPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1717,6 +1729,12 @@ func main() {
 		log.Printf("ce308: %s", desc)
 	} else {
 		log.Printf("ce308: не настроен (нет раздела ce308) — опрос CE308 отключён")
+	}
+	// BMS EnBMS — раздел "enBms" sunReceiver.json (опрос по BLE).
+	if desc := describeEnBmsConfig(enBmsCfg); desc != "" {
+		log.Printf("enbms: %s", desc)
+	} else {
+		log.Printf("enbms: не настроен (нет активных устройств в разделе enBms) — опрос отключён")
 	}
 
 	// Флаги видимости блоков дашборда, вычисленные из конфигурации:
@@ -1923,6 +1941,32 @@ func main() {
 		}()
 	}
 
+	// BMS EnBMS — отдельный цикл опроса по BLE (устройства опрашиваются
+	// последовательно, общий цикл не чаще 1 раза в секунду; соединения не рвутся
+	// между опросами). Данные — Redis current/series + PG enbms_averages, см.
+	// enBms_poller.go/enBms_accumulator.go. Перед запуском проверяем суммарное
+	// число BLE-устройств (enBms + CE308): реальный BLE-контроллер держит
+	// ограниченное число одновременных соединений; при превышении опрос EnBMS не
+	// запускается вовсе.
+	if enBmsCfg != nil {
+		ceCount := 0
+		if ce308Cfg != nil {
+			ceCount = 1
+		}
+		btCount := len(enBmsCfg.Devices) + ceCount
+		if btCount > enbmsMaxBTDevices {
+			log.Printf("enbms: суммарное число BLE-устройств %d (enBms %d + CE308 %d) превышает лимит %d — опрос EnBMS НЕ запускается",
+				btCount, len(enBmsCfg.Devices), ceCount, enbmsMaxBTDevices)
+		} else {
+			bgWg.Add(1)
+			go func() {
+				defer bgWg.Done()
+				runEnBmsPoll(store, pg, enBmsCfg, stopCtx)
+			}()
+			log.Printf("enbms: опрос %d устройств по BLE запущен", len(enBmsCfg.Devices))
+		}
+	}
+
 	if relayCtl != nil {
 		bgWg.Add(1)
 		go func() {
@@ -2107,23 +2151,30 @@ const redisRestoreLockKey = "sunreceiver:restore:lock"
 // работы (иначе «залипший» маркер навсегда заблокировал бы реставрацию).
 const restoreLockTTL = 30 * time.Minute
 
-// redisBMSDataPresent — true, если в Redis есть данные ANT BMS: хотя бы одно поле
-// в HASH sunreceiver:bms или хоть один месячный сегмент ряда
-// sunreceiver:bms:series:*. Отдельно от IsEmpty, т.к. тот учитывает только
-// инверторное current/series.
+// redisBMSDataPresent — true, если в Redis есть данные внешних BMS: ANT BMS
+// (HASH sunreceiver:bms или ряд sunreceiver:bms:series:*) либо EnBMS (HASH
+// sunreceiver:enbms:current или ряд sunreceiver:enbms:series:*). Отдельно от
+// IsEmpty, т.к. тот учитывает только инверторное current/series.
 func redisBMSDataPresent(store *redisStore) (bool, error) {
-	n, err := store.rdb.HLen(store.ctx, redisBMSKey).Result()
-	if err != nil {
-		return false, err
+	for _, key := range []string{redisBMSKey, redisEnBmsCurrentKey} {
+		n, err := store.rdb.HLen(store.ctx, key).Result()
+		if err != nil {
+			return false, err
+		}
+		if n > 0 {
+			return true, nil
+		}
 	}
-	if n > 0 {
-		return true, nil
+	for _, prefix := range []string{redisBMSSeriesPrefix + "*", redisEnBmsSeriesPrefix + "*"} {
+		keys, err := store.scanPrefixKeys(prefix)
+		if err != nil {
+			return false, err
+		}
+		if len(keys) > 0 {
+			return true, nil
+		}
 	}
-	keys, err := store.scanPrefixKeys(redisBMSSeriesPrefix + "*")
-	if err != nil {
-		return false, err
-	}
-	return len(keys) > 0, nil
+	return false, nil
 }
 
 // restoreRedisFromPG восстанавливает Redis из persistent-хранилища PostgreSQL

@@ -128,6 +128,17 @@ CREATE TABLE IF NOT EXISTS sunreceiver.ce308_averages (
 CREATE INDEX IF NOT EXISTS ce308_averages_ts_idx ON sunreceiver.ce308_averages (ts);`); err != nil {
 		return fmt.Errorf("pg ce308_averages schema: %w", err)
 	}
+	// Таблица 5-минутных усреднённых точек BMS EnBMS (name = MAC устройства).
+	if _, err := s.pool.Exec(s.ctx, `
+CREATE TABLE IF NOT EXISTS sunreceiver.enbms_averages (
+	name   text        NOT NULL,
+	ts     timestamptz NOT NULL,
+	values jsonb       NOT NULL DEFAULT '{}'::jsonb,
+	PRIMARY KEY (name, ts)
+);
+CREATE INDEX IF NOT EXISTS enbms_averages_ts_idx ON sunreceiver.enbms_averages (ts);`); err != nil {
+		return fmt.Errorf("pg enbms_averages schema: %w", err)
+	}
 	return nil
 }
 
@@ -354,6 +365,67 @@ ON CONFLICT (name, ts) DO UPDATE SET values = EXCLUDED.values
 		return fmt.Errorf("pg insert bms avg %s: %w", name, err)
 	}
 	return nil
+}
+
+// InsertEnBmsAveraged сохраняет одну усреднённую за 5 минут точку BMS EnBMS
+// (ts — начало промежутка). Sample-count guard — как у InsertBMSAveraged: более
+// полная запись (больше samples) не перетирается частичной.
+func (s *pgStore) InsertEnBmsAveraged(name string, ts time.Time, avg enbmsAveraged) error {
+	return insertEnBmsAveragedExec(s.pool, s.ctx, name, ts, avg)
+}
+
+// insertEnBmsAveragedExec — реализация вставки точки EnBMS; вызывается и на
+// пуле, и внутри транзакции (saveEnBmsClosedBuckets).
+func insertEnBmsAveragedExec(q pgExecer, ctx context.Context, name string, ts time.Time, avg enbmsAveraged) error {
+	vals, err := json.Marshal(avg)
+	if err != nil {
+		return fmt.Errorf("pg marshal enbms avg %s: %w", name, err)
+	}
+	_, err = q.Exec(ctx, `
+INSERT INTO sunreceiver.enbms_averages (name, ts, values)
+VALUES ($1, $2, $3)
+ON CONFLICT (name, ts) DO UPDATE SET values = EXCLUDED.values
+  WHERE sunreceiver.enbms_averages.values->>'samples' IS NULL
+     OR (EXCLUDED.values->>'samples')::int > (sunreceiver.enbms_averages.values->>'samples')::int`,
+		name, ts.UTC(), vals)
+	if err != nil {
+		return fmt.Errorf("pg insert enbms avg %s: %w", name, err)
+	}
+	return nil
+}
+
+// EnBmsAverages возвращает 5-минутные усреднённые точки одного устройства EnBMS
+// (name = MAC) за период [start, end] включительно, по возрастанию ts.
+func (s *pgStore) EnBmsAverages(name string, start, end time.Time) ([]enbmsSeriesPoint, error) {
+	rows, err := s.pool.Query(s.ctx, `
+SELECT ts, values
+FROM sunreceiver.enbms_averages
+WHERE name = $1 AND ts >= $2 AND ts <= $3
+ORDER BY ts ASC`, name, start.UTC(), end.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("pg query enbms averages: %w", err)
+	}
+	defer rows.Close()
+
+	pts := []enbmsSeriesPoint{}
+	for rows.Next() {
+		var ts time.Time
+		var vals json.RawMessage
+		if err := rows.Scan(&ts, &vals); err != nil {
+			return nil, fmt.Errorf("pg scan enbms avg: %w", err)
+		}
+		p := enbmsSeriesPoint{Name: name, Ts: ts.Format(time.RFC3339)}
+		if len(vals) > 0 {
+			if err := json.Unmarshal(vals, &p.enbmsAveraged); err != nil {
+				continue
+			}
+		}
+		pts = append(pts, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pg rows enbms avg: %w", err)
+	}
+	return pts, nil
 }
 
 // BMSAverages возвращает 5-минутные усреднённые точки одной BMS (по ключу

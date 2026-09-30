@@ -65,6 +65,12 @@ func ce308AdapterID() (string, error) {
 	return "", fmt.Errorf("BLE-адаптер BlueZ не найден (нет hci0..hci9)")
 }
 
+// btAdapterSetupMu сериализует настройку BLE-адаптера (ce308EnsurePowered) между
+// пулерами CE308 и EnBMS: оба переиспользуют её и оба могут переназначать
+// глобальный bluetooth.DefaultAdapter при переподключении — без блокировки это
+// гонка на глобале tinygo.
+var btAdapterSetupMu sync.Mutex
+
 // ce308EnsurePowered проверяет, что BLE-адаптер включён (Powered=true), и,
 // если нет, включает его через BlueZ (Properties.Set). Заодно перенацеливает
 // tinygo DefaultAdapter на реальный контроллер (см. ce308AdapterID) — причём
@@ -74,6 +80,8 @@ func ce308AdapterID() (string, error) {
 // недоступном агенте подключение всё равно пойдёт на DefaultAdapter, а ошибка
 // уйдёт в штатный отчёт подключения.
 func ce308EnsurePowered() error {
+	btAdapterSetupMu.Lock()
+	defer btAdapterSetupMu.Unlock()
 	id, err := ce308AdapterID()
 	if err != nil {
 		return err

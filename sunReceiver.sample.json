@@ -49,6 +49,12 @@
     "mac": "AA:BB:CC:DD:EE:FF",
     "pin": "CHANGE_ME_PIN"
   },
+  "enBms": {
+    "disabled": false,
+    "devices": [
+      { "name": "BMS BP00", "mac": "AA:BB:CC:11:22:33", "disabled": false }
+    ]
+  },
   "notify": {
     "token": "CHANGE_ME",
     "user_id": "",
