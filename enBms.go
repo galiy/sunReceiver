@@ -422,7 +422,11 @@ func enbmsParsedValid(r enbmsParsed) bool {
 		r.TotalVoltageV < 0 || r.TotalVoltageV > enbmsTotalVMax {
 		return false
 	}
-	if r.Soc < 0 || r.Soc > enbmsSocMax {
+	if math.IsNaN(r.PortVoltageV) || math.IsInf(r.PortVoltageV, 0) ||
+		r.PortVoltageV < 0 || r.PortVoltageV > enbmsTotalVMax {
+		return false
+	}
+	if r.Soc < 0 || r.Soc > enbmsSocMax || r.Soh < 0 || r.Soh > enbmsSocMax {
 		return false
 	}
 	if r.TotalCapacity < 0 || r.TotalCapacity > enbmsCapMaxAh ||
