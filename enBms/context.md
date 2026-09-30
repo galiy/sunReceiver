@@ -70,7 +70,7 @@
 - `go build ./...`, `go vet ./...`, `go test ./...` — зелёные.
 - Тесты: `enBms_test.go` (кадр/CRC/парсинг живого payload, реальный кадр
   устройства `TestEnBmsRealFrameFromDevice`, конфиг, аккумулятор).
-- Живая проверка на проде (192.168.0.x): после деплоя пулер подключается к
+- Живая проверка на проде (внутренний сервер): после деплоя пулер подключается к
   BP00, читает Battery ~1/с, пишет `sunreceiver:enbms:current`; по границе
   5 минут формируется усреднённая точка в `sunreceiver:enbms:series` и PG
   `sunreceiver.enbms_averages`.

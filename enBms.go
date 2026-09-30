@@ -285,7 +285,11 @@ func parseEnBmsBattery(p []byte) (enbmsParsed, error) {
 	if o+19 > len(p) {
 		return r, fmt.Errorf("payload Battery: не хватает телеметрии (o=%d, len=%d)", o, len(p))
 	}
-	r.CurrentA = enbmsRound(float64(int16(u16be(p, o)))*0.01, 2)
+	// chargecurrent (s16): в протоколе EnBMS «минус = разряд». Принятое в
+	// проекте соглашение — разряд положительный, заряд отрицательный (как у ANT
+	// BMS), поэтому знак инвертируем. Мощность ниже считается как U·I, поэтому
+	// знак мощности согласуется автоматически.
+	r.CurrentA = enbmsRound(-float64(int16(u16be(p, o)))*0.01, 2)
 	o += 2
 	r.TotalVoltageV = enbmsRound(float64(u16be(p, o))*0.01, 2)
 	o += 2

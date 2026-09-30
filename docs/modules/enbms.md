@@ -17,7 +17,7 @@
 "enBms": {
   "disabled": false,
   "devices": [
-    { "name": "BMS EnBMS #1", "mac": "AA:BB:CC:DD:EE:FF", "disabled": false }
+    { "name": "BMS EnBMS #1", "mac": "AA:BB:CC:11:22:33", "disabled": false }
   ]
 }
 ```
@@ -67,6 +67,11 @@ remaining(u16, 0.01 А·ч) customerp(u8) totalCap(u16, 0.01 А·ч) soc(u16, 0.
 ratedCap(u16, 0.01 А·ч) cycles(u16) soh(u16, 0.1 %) portV(u16, 0.01 В) warnings…`
 
 Мощность протоколом отдельно не отдаётся — считается `P = totalV × current`.
+
+**Знак тока/мощности.** В протоколе EnBMS поле `chargecurrent` (`s16`) имеет
+семантику «минус = разряд». В проекте принято обратное соглашение — **разряд
+положительный, заряд отрицательный** (как у ANT BMS), поэтому знак тока
+инвертируется при разборе; мощность (`U·I`) наследует правильный знак.
 
 ## Принципы работы (по образцу CE308 и ANT BMS)
 

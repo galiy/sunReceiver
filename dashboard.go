@@ -502,6 +502,21 @@ func (h *dashboardHandler) apiBMS(w http.ResponseWriter, r *http.Request) {
 		}
 		return bmsKey(devs[i]) < bmsKey(devs[j])
 	})
+	// Плитка AGM (свинцово-кислотный АКБ) — всегда последней, после всех BMS.
+	// SOC считается по фиксированной таблице AGM от напряжения батареи МАП
+	// (текущее значение из HASH sunreceiver:current, ip="map").
+	agmSOCVal := 0
+	if snap, serr := h.store.CurrentOne("map"); serr == nil {
+		if v, ok := snapFloat(snap.Values, "battery_voltage"); ok {
+			agmSOCVal = agmSOC(v)
+		}
+	}
+	devs = append(devs, bmsDevice{
+		Kind:       "agm",
+		DeviceName: "AGM 200 A/h",
+		Key:        "agm",
+		Soc:        agmSOCVal,
+	})
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -672,6 +687,17 @@ func (h *dashboardHandler) bmsDetail(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if err := webTemplates.ExecuteTemplate(w, "bms.html", map[string]any{"active": "home", "flags": h.flags, "CacheBust": webCacheBust}); err != nil {
 		log.Printf("dashboard: render /bms: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}
+}
+
+// agmPage — страница свинцово-кислотного (AGM) АКБ (/agm): только графики тока
+// и мощности (расчёт на бэкенде), период/зум/хинты — как на странице BMS.
+func (h *dashboardHandler) agmPage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if err := webTemplates.ExecuteTemplate(w, "agm.html", map[string]any{"active": "home", "flags": h.flags, "CacheBust": webCacheBust}); err != nil {
+		log.Printf("dashboard: render /agm: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
 }
@@ -2189,6 +2215,350 @@ func divCountSlice(src []float64, cnt []int, digits int) []float64 {
 	return out
 }
 
+// ---------- AGM (свинцово-кислотный АКБ) ----------
+//
+// Отдельного датчика у свинцового АКБ нет. На общей шине МАП измеряет суммарный
+// ток/мощность батареи, а три BMS (ANT 160, ANT 320, EnBMS) покрывают часть.
+// Остаток относится к свинцовому АКБ: AGM = МАП − Σ BMS. Соглашение то же, что у
+// BMS: разряд положительный, заряд отрицательный (у МАП battery_power и у BMS
+// после нормализации знака уже в этом соглашении). Расчёт полностью на бэкенде;
+// прореживание — как у остальных графиков.
+
+// apiAGMCurrent — GET /api/agm: мгновенные значения AGM для плашек на странице.
+// Напряжение — с шины МАП (`battery_voltage`); ток и мощность — МАП минус Σ BMS
+// (та же формула, что на графике, но по текущим значениям); SOC — по таблице AGM
+// от напряжения; ёмкость — фиксированная (200 А·ч).
+func (h *dashboardHandler) apiAGMCurrent(w http.ResponseWriter, r *http.Request) {
+	const capacity = 200.0
+	var voltage, agmCur, agmPwr float64
+	if snap, err := h.store.CurrentOne("map"); err == nil {
+		if u, ok := snapFloat(snap.Values, "battery_voltage"); ok {
+			voltage = u
+		}
+		if pw, ok := snapFloat(snap.Values, "battery_power"); ok {
+			agmPwr = pw
+			if voltage > 0 {
+				agmCur = pw / voltage
+			}
+		}
+	}
+	if m, err := h.store.BMSCurrent(); err == nil {
+		for _, raw := range m {
+			var d bmsDevice
+			if json.Unmarshal([]byte(raw), &d) == nil {
+				agmCur -= d.CurrentA
+				agmPwr -= d.PowerW
+			}
+		}
+	}
+	if m, err := h.store.EnBmsCurrent(); err == nil {
+		for _, s := range m {
+			agmCur -= s.CurrentA
+			agmPwr -= s.PowerW
+		}
+	}
+	soc := 0
+	if voltage > 0 {
+		soc = agmSOC(voltage)
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"voltage":      roundN(voltage, 2),
+		"current_a":    roundN(agmCur, 2),
+		"power_w":      roundN(agmPwr, 1),
+		"soc":          soc,
+		"capacity_ah":  capacity,
+		"remaining_ah": roundN(capacity*float64(soc)/100, 1),
+	})
+}
+
+// agmSOC возвращает оценку уровня заряда (%) свинцово-кислотного АКБ (AGM) по
+// напряжению сборки: фиксированная таблица «напряжение покоя → %» (пересчёт
+// 4×12 В на 48-В сборку), линейная интерполяция, кламп 0..100.
+//
+// ВАЖНО: напряжение берётся с общей шины МАП под нагрузкой/зарядом, а таблица —
+// для напряжения покоя, поэтому оценка грубая (поверхностный заряд/просадка).
+var agmSOCTable = []struct{ v, soc float64 }{
+	{12.85 * 4, 100}, // 51.40
+	{12.75 * 4, 90},  // 51.00
+	{12.65 * 4, 80},  // 50.60
+	{12.55 * 4, 70},  // 50.20
+	{12.45 * 4, 60},  // 49.80
+	{12.35 * 4, 50},  // 49.40
+	{12.25 * 4, 40},  // 49.00
+	{12.15 * 4, 30},  // 48.60
+	{12.05 * 4, 20},  // 48.20
+	{11.95 * 4, 10},  // 47.80
+	{11.80 * 4, 0},   // 47.20
+}
+
+func agmSOC(v float64) int {
+	if v <= 0 {
+		return 0
+	}
+	if v >= agmSOCTable[0].v {
+		return 100
+	}
+	last := agmSOCTable[len(agmSOCTable)-1]
+	if v <= last.v {
+		return 0
+	}
+	for i := 0; i < len(agmSOCTable)-1; i++ {
+		hi, lo := agmSOCTable[i], agmSOCTable[i+1]
+		if v <= hi.v && v >= lo.v {
+			frac := (v - lo.v) / (hi.v - lo.v)
+			return int(math.Round(lo.soc + frac*(hi.soc-lo.soc)))
+		}
+	}
+	return 0
+}
+
+// agmSeriesPoint — точка ряда AGM: напряжение (с шины МАП, В), ток (A) и
+// мощность (W).
+type agmSeriesPoint struct {
+	Ts       string  `json:"ts"`
+	VoltageV float64 `json:"voltage_v"`
+	CurrentA float64 `json:"current_a"`
+	PowerW   float64 `json:"power_w"`
+}
+
+// agmDevValues — временной ряд одного BMS-устройства (для выравнивания с МАП).
+type agmDevValues struct {
+	ts []time.Time
+	i  []float64
+	p  []float64
+}
+
+// apiAGMSeries — GET /api/agm/series?from&to: ряд свинцово-кислотного (AGM) АКБ.
+// Ток/мощность = МАП (battery_power/battery_voltage) минус сумма трёх BMS.
+// Парсинг/кламп периода — как у apiBMSSeries; прореживание — гибридное.
+func (h *dashboardHandler) apiAGMSeries(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	to := now
+	if s := r.URL.Query().Get("to"); s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			to = t
+		}
+	}
+	from := to.Add(-24 * time.Hour)
+	if s := r.URL.Query().Get("from"); s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			from = t
+		}
+	}
+	if to.After(now) {
+		to = now
+	}
+	if minFrom := recentCutoff(now).AddDate(0, 0, -400); from.Before(minFrom) {
+		from = minFrom
+	}
+	if !from.Before(to) {
+		http.Error(w, "from >= to", http.StatusBadRequest)
+		return
+	}
+	pts := h.agmSeries(from, to, now)
+	pts = downsampleAGMSeries(pts, from, to)
+	if pts == nil {
+		pts = []agmSeriesPoint{}
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"from":   from.Format(time.RFC3339),
+		"to":     to.Format(time.RFC3339),
+		"points": pts,
+	})
+}
+
+// agmSeries вычисляет ряд AGM за [from, to]: для каждой точки МАП берётся
+// ближайшее по времени значение каждого BMS-устройства (в пределах допуска) и
+// вычитается. Точки возвращаются по возрастанию времени.
+func (h *dashboardHandler) agmSeries(from, to, now time.Time) []agmSeriesPoint {
+	cutoff := recentCutoff(now)
+	snaps, err := h.loadRange(from, to, now)
+	if err != nil {
+		log.Printf("dashboard: agm loadRange: %v", err)
+		return nil
+	}
+	type mapPt struct {
+		t    time.Time
+		volt float64
+		cur  float64
+		pwr  float64
+	}
+	var maps []mapPt
+	for _, s := range snaps {
+		if s.IP != "map" { // МАП-устройство (battery_voltage/battery_power)
+			continue
+		}
+		u, okU := snapFloat(s.Values, "battery_voltage")
+		pw, okP := snapFloat(s.Values, "battery_power")
+		if !okU || !okP || !(u > 0) {
+			continue
+		}
+		t, perr := time.Parse(time.RFC3339, s.Timestamp)
+		if perr != nil {
+			continue
+		}
+		maps = append(maps, mapPt{t: t, volt: u, cur: pw / u, pwr: pw})
+	}
+	if len(maps) == 0 {
+		return nil
+	}
+	sort.Slice(maps, func(i, j int) bool { return maps[i].t.Before(maps[j].t) })
+
+	devs := h.agmLoadBMS(from, to, cutoff)
+	// Допуск выравнивания: свежий Redis-ряд идёт с секундной/несколькосекундной
+	// кадентностью, PG-часть — 5-минутные точки, совпадающие по ts у МАП и BMS
+	// ровно; 90 с заведомо покрывают оба случая.
+	const tol = 90 * time.Second
+	out := make([]agmSeriesPoint, 0, len(maps))
+	for _, m := range maps {
+		var sumI, sumP float64
+		for di := range devs {
+			d := &devs[di]
+			j := nearestIdx(d.ts, m.t)
+			if j < 0 {
+				continue
+			}
+			if diff := d.ts[j].Sub(m.t); diff > tol || diff < -tol {
+				continue
+			}
+			sumI += d.i[j]
+			sumP += d.p[j]
+		}
+		out = append(out, agmSeriesPoint{
+			Ts:       m.t.Format(time.RFC3339),
+			VoltageV: roundN(m.volt, 2),
+			CurrentA: roundN(m.cur-sumI, 2),
+			PowerW:   roundN(m.pwr-sumP, 1),
+		})
+	}
+	return out
+}
+
+// agmLoadBMS собирает ряды (ток, мощность) всех BMS-устройств (ANT + EnBMS) за
+// [from, to]: старая часть — из PG (5-мин средние), свежая — из Redis (сырьё);
+// границы — общий seamWindows. Знак EnBMS нормализован к «разряд +» в хранилище.
+func (h *dashboardHandler) agmLoadBMS(from, to, cutoff time.Time) []agmDevValues {
+	pgStart, pgEnd, pgOK, rStart, rEnd, rOK := seamWindows(from, to, cutoff)
+	var devs []agmDevValues
+	add := func(d *agmDevValues, ts string, cur, pwr float64) {
+		t, err := time.Parse(time.RFC3339, ts)
+		if err != nil {
+			return
+		}
+		d.ts = append(d.ts, t)
+		d.i = append(d.i, cur)
+		d.p = append(d.p, pwr)
+	}
+	// ANT BMS — все устройства из текущего HASH.
+	if m, err := h.store.BMSCurrent(); err == nil {
+		for name := range m {
+			var d agmDevValues
+			if h.pg != nil && pgOK {
+				if pts, err := h.pg.BMSAverages(name, pgStart, pgEnd); err == nil {
+					for _, p := range pts {
+						add(&d, p.Ts, p.CurrentA, p.PowerW)
+					}
+				}
+			}
+			if rOK {
+				if pts, err := h.store.QueryBMSSeries(name, rStart, rEnd); err == nil {
+					for _, p := range pts {
+						add(&d, p.Ts, p.CurrentA, p.PowerW)
+					}
+				}
+			}
+			if len(d.ts) > 0 {
+				devs = append(devs, d)
+			}
+		}
+	}
+	// EnBMS — все устройства по MAC.
+	if m, err := h.store.EnBmsCurrent(); err == nil {
+		for mac := range m {
+			var d agmDevValues
+			if h.pg != nil && pgOK {
+				if pts, err := h.pg.EnBmsAverages(mac, pgStart, pgEnd); err == nil {
+					for _, p := range pts {
+						add(&d, p.Ts, p.CurrentA, p.PowerW)
+					}
+				}
+			}
+			if rOK {
+				if pts, err := h.store.QueryEnBmsSeries(mac, rStart, rEnd); err == nil {
+					for _, p := range pts {
+						add(&d, p.Ts, p.CurrentA, p.PowerW)
+					}
+				}
+			}
+			if len(d.ts) > 0 {
+				devs = append(devs, d)
+			}
+		}
+	}
+	return devs
+}
+
+// nearestIdx возвращает индекс ближайшего по времени элемента в отсортированном
+// срезе ts к моменту t, либо -1 для пустого среза.
+func nearestIdx(ts []time.Time, t time.Time) int {
+	if len(ts) == 0 {
+		return -1
+	}
+	i := sort.Search(len(ts), func(k int) bool { return !ts[k].Before(t) })
+	best, bestD := -1, time.Duration(1<<62)
+	for _, j := range []int{i - 1, i} {
+		if j < 0 || j >= len(ts) {
+			continue
+		}
+		d := ts[j].Sub(t)
+		if d < 0 {
+			d = -d
+		}
+		if d < bestD {
+			bestD, best = d, j
+		}
+	}
+	return best
+}
+
+// downsampleAGMSeries — гибридное прореживание ряда AGM (по фактическому числу
+// точек, без сшивания больших разрывов), как у остальных графиков.
+func downsampleAGMSeries(pts []agmSeriesPoint, from, to time.Time) []agmSeriesPoint {
+	if len(pts) <= maxSeriesPoints {
+		return pts
+	}
+	times := make([]time.Time, len(pts))
+	for i := range pts {
+		if t, err := time.Parse(time.RFC3339, pts[i].Ts); err == nil {
+			times[i] = t
+		}
+	}
+	k := (len(pts) + maxSeriesPoints - 1) / maxSeriesPoints
+	gap := downsampleGapSeconds(from, to)
+	out := make([]agmSeriesPoint, 0, maxSeriesPoints)
+	for _, g := range downsampleGroups(times, k, gap) {
+		seg := pts[g[0]:g[1]]
+		var sv, si, sp float64
+		for _, p := range seg {
+			sv += p.VoltageV
+			si += p.CurrentA
+			sp += p.PowerW
+		}
+		n := float64(len(seg))
+		out = append(out, agmSeriesPoint{
+			Ts:       seg[0].Ts,
+			VoltageV: roundN(sv/n, 2),
+			CurrentA: roundN(si/n, 2),
+			PowerW:   roundN(sp/n, 1),
+		})
+	}
+	return out
+}
+
 // loadRange возвращает снимки за период [start, end]. Точки старше окна
 // последних 2 календарных суток берутся из PostgreSQL (5-минутные средние),
 // точки внутри окна — из Redis (полное разрешение). Если PG отключено,
@@ -2613,6 +2983,7 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayCon
 		"/charts": h.charts,
 		"/energy": h.energy,
 		"/bms/":   h.bmsDetail,
+		"/agm":    h.agmPage,
 	}
 	api := map[string]http.HandlerFunc{
 		"/current":       h.apiCurrent,
@@ -2621,6 +2992,8 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayCon
 		"/animation":     h.apiAnimation,
 		"/bms":           h.apiBMS,
 		"/bms/":          h.apiBMSOne,
+		"/agm":           h.apiAGMCurrent,
+		"/agm/series":    h.apiAGMSeries,
 		"/ce308/current": h.apiCE308Current,
 		"/ce308/energy":  h.apiCE308Energy,
 		"/ce308/series":  h.apiCE308Series,

@@ -136,6 +136,65 @@ func TestDownsampleHybridSparsePreserved(t *testing.T) {
 	}
 }
 
+func TestAGMSOC(t *testing.T) {
+	cases := []struct {
+		v    float64
+		want int
+	}{
+		{60, 100}, {51.4, 100}, {50.2, 70}, {49.4, 50}, {47.2, 0}, {40, 0}, {0, 0},
+	}
+	for _, c := range cases {
+		if got := agmSOC(c.v); got != c.want {
+			t.Fatalf("agmSOC(%v)=%d, want %d", c.v, got, c.want)
+		}
+	}
+	// Монотонность: больше напряжение — не меньше заряд.
+	prev := -1
+	for v := 46.0; v <= 53.0; v += 0.1 {
+		s := agmSOC(v)
+		if s < prev {
+			t.Fatalf("немонотонно при %v: %d < %d", v, s, prev)
+		}
+		prev = s
+	}
+}
+
+func TestNearestIdx(t *testing.T) {
+	t0 := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	ts := []time.Time{t0, t0.Add(10 * time.Second), t0.Add(20 * time.Second)}
+	if nearestIdx(nil, t0) != -1 {
+		t.Fatalf("пустой срез → -1")
+	}
+	if got := nearestIdx(ts, t0.Add(4*time.Second)); got != 0 {
+		t.Fatalf("nearest=%d, want 0", got)
+	}
+	if got := nearestIdx(ts, t0.Add(16*time.Second)); got != 2 {
+		t.Fatalf("nearest=%d, want 2", got)
+	}
+}
+
+// TestDownsampleAGMSeries: гибридное прореживание двухполевого ряда AGM.
+func TestDownsampleAGMSeries(t *testing.T) {
+	from := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	to := from.Add(24 * time.Hour)
+	var pts []agmSeriesPoint
+	for i := 0; i < 24*3600; i++ {
+		pts = append(pts, agmSeriesPoint{Ts: from.Add(time.Duration(i) * time.Second).Format(time.RFC3339), CurrentA: 5, PowerW: 260})
+	}
+	out := downsampleAGMSeries(pts, from, to)
+	if len(out) == 0 || len(out) > maxSeriesPoints {
+		t.Fatalf("после прореживания точек %d, want 1..%d", len(out), maxSeriesPoints)
+	}
+	if out[0].CurrentA != 5 || out[0].PowerW != 260 {
+		t.Fatalf("значения бина: %+v", out[0])
+	}
+	// Короче порога — как есть.
+	short := pts[:7]
+	if got := downsampleAGMSeries(short, from, to); len(got) != 7 {
+		t.Fatalf("короткий ряд изменён: %d", len(got))
+	}
+}
+
 func TestDownsampleBMSSeries(t *testing.T) {
 	from := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
 	to := from.Add(24 * time.Hour)

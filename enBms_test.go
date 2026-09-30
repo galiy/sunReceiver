@@ -115,8 +115,8 @@ func TestEnBmsParseBatteryLiveFrame(t *testing.T) {
 	if len(r.TemperaturesC) != 6 || r.TemperaturesC[0] != 24.8 {
 		t.Fatalf("температуры: %v", r.TemperaturesC)
 	}
-	if r.CurrentA != -12.34 {
-		t.Fatalf("ток = %v, want -12.34", r.CurrentA)
+	if r.CurrentA != 12.34 {
+		t.Fatalf("ток = %v, want 12.34 (разряд положительный)", r.CurrentA)
 	}
 	if r.TotalVoltageV != 52.14 {
 		t.Fatalf("напряжение сборки = %v, want 52.14", r.TotalVoltageV)
@@ -155,7 +155,7 @@ func TestEnBmsParseBatteryLiveFrame(t *testing.T) {
 	if snap.MAC != cfg.MAC || snap.CellCount != 16 {
 		t.Fatalf("снимок: mac=%q cellcount=%d", snap.MAC, snap.CellCount)
 	}
-	if want := -643.4; snap.PowerW != want {
+	if want := 643.4; snap.PowerW != want {
 		t.Fatalf("мощность = %v, want %v", snap.PowerW, want)
 	}
 }
@@ -185,7 +185,7 @@ func TestEnBmsRealFrameFromDevice(t *testing.T) {
 	if len(r.TemperaturesC) != 6 || r.TemperaturesC[0] != 24.6 {
 		t.Fatalf("температуры: %v", r.TemperaturesC)
 	}
-	if r.CurrentA != -10.43 || r.TotalVoltageV != 51.99 || r.RemainingAh != 86.76 {
+	if r.CurrentA != 10.43 || r.TotalVoltageV != 51.99 || r.RemainingAh != 86.76 {
 		t.Fatalf("ток/напряжение/остаток: %v/%v/%v", r.CurrentA, r.TotalVoltageV, r.RemainingAh)
 	}
 	if r.Soc != 27.6 || r.Soh != 100.0 || r.Cycles != 2 || r.PortVoltageV != 52.01 {

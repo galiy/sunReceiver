@@ -476,7 +476,10 @@ async function tickBMS(){
     for(var i=0;i<list.length;i++){
       var d=list[i];
       var soc=Math.max(0,Math.min(100,Number(d.soc)||0));
-      h+='<a class="bms-btn" href="/bms/'+encodeURIComponent(d.key||d.deviceName)+'" title="Порт: '+esc(d.port)+'">'
+      var isAGM=(d.kind==='agm');
+      var href=isAGM? '/agm' : '/bms/'+encodeURIComponent(d.key||d.deviceName);
+      var title=isAGM? 'Свинцово-кислотный АКБ (AGM) — графики тока и мощности' : ('Порт: '+esc(d.port));
+      h+='<a class="bms-btn" href="'+href+'" title="'+title+'">'
         +'<div class="bms-batt">'
         +'<div class="bms-batt-fill" style="width:'+Math.max(4,soc)+'%;background:'+bmsSocColor(soc)+'"></div>'
         +'<span class="bms-batt-soc">'+soc+'%</span>'

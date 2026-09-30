@@ -69,3 +69,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#e
 .lg-chip.lg-all { background:#428bca; border-color:#428bca; color:#fff; }
 .lg-hint { font-size:11px; color:#6b7785; margin:0 0 10px; }
 .missing { color:#6b7785; font-style:italic; }
+
+/* AGM: три графика столбиком (один под другим) на всех разрешениях. */
+.agm-charts { flex-direction: column; }
+.agm-charts .card { flex: 1 1 100%; min-width: 100%; }
