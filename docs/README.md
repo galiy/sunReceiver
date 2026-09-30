@@ -36,8 +36,9 @@ DDS238 (Modbus TCP), нормализует всё в единый контра�
 |---|---|---|
 | **solarman/** | Клиент протокола Solarman V5: сборка кадра (Sofar/Deye), разбор ответа, CRC/checksum, чтение регистров, коды ошибок логгера | [modules/solarman-client.md](modules/solarman-client.md) |
 | **Poller инверторов** (`main.go`) | Опрос Deye/Sofar раз в 10 с в независимых циклах, маппинг регистров в `values` (Sofar/Deye), серийные номера, чистое завершение | [modules/inverter-poller.md](modules/inverter-poller.md) |
-| **Хранение** (`redis_store.go`, `pg_store.go`, `accumulator.go`, `bms_accumulator.go`) | Redis (2 суток, live) + PG (5-мин средние, вечно), фоновые аккумулятор/очистка, реставрация Redis из PG при пустом старте | [modules/storage.md](modules/storage.md) |
+| **Хранение** (`redis_store.go`, `pg_store.go`, `accumulator.go`, `bms_accumulator.go`, `enBms_accumulator.go`, `ce308_accumulator.go`) | Redis (2 суток, live) + PG (5-мин средние, вечно), фоновые аккумуляторы/очистка, реставрация Redis из PG при пустом старте | [modules/storage.md](modules/storage.md) |
 | **Веб-дашборд** (`dashboard.go`) | HTML + JSON API (`/`, `/charts`, `/energy`, `/bms/<name>`) поверх Redis/PG, зум/панорама, offline-индикация, mobile-раскладка | [modules/dashboard.md](modules/dashboard.md) |
+| **Веб-ассеты дашборда** (`web/`, `go:embed`) | HTML-шаблоны и статика (JS/CSS) дашборда, встраиваются в бинарник (см. `web/templates`, `web/static/js`) | [modules/dashboard.md](modules/dashboard.md) |
 | **МАП + MPPT** (`mppt_api.go`, `modbusmap/`) | МАП (батарея/сеть) через Modbus TCP или веб-API; MPPT-контроллеры через `read_json.php?device=mppt` (динамический состав) | [modules/map-mppt.md](modules/map-mppt.md) |
 | **Счётчик DDS238** (`meter_*.go`) | Мгновенные значения `meter_*` + посуточные тарифы «День/Ночь» (`daily_tariffs`) с добором пропущенных границ | [dds238-meter.md](dds238-meter.md) |
 | **Счётчик Энергомера CE308** (`ce308_*.go`) | Опрос по BLE (2 с): напряжения/токи/мощности по фазам + разовый снимок накопленной энергии по сигналу; в Redis — каждое показание (~2 с), в PG — 5-мин средние | [modules/ce308.md](modules/ce308.md) |
@@ -47,6 +48,7 @@ DDS238 (Modbus TCP), нормализует всё в единый контра�
 | **Шлюз Modbus TCP↔RTU** (`mapgateway/`, C) | Публикует последовательный порт МАП как Modbus TCP (:502) для пулера; systemd на ПАК «Малина» | [mapgateway/README.md](../mapgateway/README.md) |
 | **Уведомления в MAX** (`notify.go`) | Отправка событий мониторинга МАП (недоступен / нет напряжения сети) в мессенджер MAX через Bot API, с гистерезисом и дедупликацией | [modules/notify.md](modules/notify.md) |
 | **Сетевое реле SR-201** (`relay_control.go`) | Управление двойным реле по UDP (белая/красная лампы): поддержка состояния (вкл/выкл/мигание 2 Гц) + автоиндикаторы (отдача в сеть, наличие напряжения сети) | [relay_sr-201(2light).md](relay_sr-201(2light).md) |
+| **Windows-трей и логирование** (`tray_*.go`, `logfile_*.go`) | Сворачивание в системный трей (`fyne.io/systray`) и запись лога в `sunReceiver.log` рядом с exe; на POSIX `runTray`/`setupLogging` — no-op | [Сборка, запуск, деплой](#сборка-запуск-деплой) |
 | **Универсальный контракт `values`** | Набор общих тегов с одинаковыми именами/единицами для всех марок (PV, AC, фазы, энергия, МАП) | [universal-contract.md](universal-contract.md) |
 
 ## Что опрашивается

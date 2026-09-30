@@ -12,9 +12,13 @@
 | МАП + MPPT | [map-mppt.md](map-mppt.md) | `mppt_api.go`, `modbusmap/` |
 | Счётчик DDS238 | [../dds238-meter.md](../dds238-meter.md) | `meter_*.go` |
 | Счётчик Энергомера CE308 (BLE) | [ce308.md](ce308.md) | `ce308_*.go` |
+| BMS EnBMS (Enjie EMU110x, BLE) | [enbms.md](enbms.md) | `enBms_*.go` |
 | ANT BMS | [../antbms.md](../antbms.md) | `bms_poller.go`, `bmslistener/` |
 | bmslistener (демон) | [bms-listener.md](bms-listener.md) | `bmslistener/` (C + systemd, установка) |
 | Шлюз Modbus TCP↔RTU | [../../mapgateway/README.md](../../mapgateway/README.md) | `mapgateway/` (C + systemd) |
 | Уведомления в MAX | [notify.md](notify.md) | `notify.go` |
+| Сетевое реле SR-201 (лампы) | [../relay_sr-201(2light).md](../relay_sr-201(2light).md) | `relay_control.go` |
 | Проброс Bluetooth (usbip) — исторически, отключено | [../ce308-bluetooth/README.md](../ce308-bluetooth/README.md) | `.9` → `.253`, watchdog, systemd |
 | Универсальный контракт `values` | [../universal-contract.md](../universal-contract.md) | `main.go`, `commonContractTags` |
+| Веб-ассеты дашборда | [dashboard.md](dashboard.md) | `web/` (templates/static, `go:embed`) |
+| Windows-трей и логирование | [../README.md](../README.md#сборка-запуск-деплой) | `tray_*.go`, `logfile_*.go` |
