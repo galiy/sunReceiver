@@ -66,8 +66,8 @@ func (d *enbmsPollerDev) closeConn() {
 // runEnBmsPoll — отдельный цикл опроса BMS EnBMS по BLE. Устройства
 // опрашиваются последовательно один за другим; общий цикл — не чаще 1 раза в
 // секунду; соединение с каждым устройством не рвётся между опросами (см.
-// enbmsPollerDev). Каждое успешное чтение пишет снимок в Redis (current +
-// history) и кормит in-memory аккумулятор 5-минутных усреднённых точек (Redis
+// enbmsPollerDev). Каждое успешное чтение пишет текущий снимок в Redis (HASH
+// current) и кормит in-memory аккумулятор 5-минутных усреднённых точек (Redis
 // series + PG enbms_averages), как в модуле ANT BMS.
 func runEnBmsPoll(store *redisStore, pg *pgStore, cfg *enBmsConfig, ctx context.Context) {
 	if cfg == nil || len(cfg.Devices) == 0 {
@@ -179,11 +179,11 @@ func pollEnBmsDevice(store *redisStore, acc *enbmsAccumulator, d *enbmsPollerDev
 
 	now := time.Now()
 	snap := enbmsSnapshotFromParsed(d.cfg, parsed, now)
+	// Текущее состояние — в HASH (перезапись). Историю в Redis/PG формирует
+	// аккумулятор 5-минутными усреднёнными точками (как ANT BMS): отдельного
+	// per-second ряда, как у CE308, здесь нет.
 	if err := store.SaveEnBmsCurrent(snap); err != nil {
 		logEnBms("redis current %s: %v", d.cfg.MAC, err)
-	}
-	if err := store.SaveEnBmsHistory(snap, now); err != nil {
-		logEnBms("redis history %s: %v", d.cfg.MAC, err)
 	}
 	acc.add(snap, now)
 }

@@ -51,41 +51,6 @@ func (s *redisStore) SaveEnBmsCurrent(snap enbmsSnapshot) error {
 	return s.rdb.HSet(s.ctx, redisEnBmsCurrentKey, snap.MAC, b).Err()
 }
 
-// SaveEnBmsHistory кладёт снимок во временной ряд EnBMS (score = Unix-секунды),
-// удаляя прежнюю версию того же устройства на том же score (без дублей).
-func (s *redisStore) SaveEnBmsHistory(snap enbmsSnapshot, ts time.Time) error {
-	b, err := json.Marshal(snap)
-	if err != nil {
-		return fmt.Errorf("marshal enbms history %s: %w", snap.MAC, err)
-	}
-	key := enbmsSeriesKey(ts)
-	score := strconv.FormatInt(ts.Unix(), 10)
-	old, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: score, Max: score}).Result()
-	if err != nil {
-		return fmt.Errorf("enbms history dedup %s: %w", snap.MAC, err)
-	}
-	var stale []any
-	for _, m := range old {
-		var q enbmsSnapshot
-		if json.Unmarshal([]byte(m), &q) != nil {
-			continue
-		}
-		if q.MAC == snap.MAC {
-			stale = append(stale, m)
-		}
-	}
-	pipe := s.rdb.TxPipeline()
-	if len(stale) > 0 {
-		pipe.ZRem(s.ctx, key, stale...)
-	}
-	pipe.ZAdd(s.ctx, key, redis.Z{Score: float64(ts.Unix()), Member: string(b)})
-	pipe.Expire(s.ctx, key, 40*24*time.Hour)
-	if _, err := pipe.Exec(s.ctx); err != nil {
-		return fmt.Errorf("save enbms history %s: %w", snap.MAC, err)
-	}
-	return nil
-}
-
 // SaveEnBmsSeries кладёт 5-минутную усреднённую точку в месячный ZSET ряда EnBMS
 // (дедупликация по (имя, score) — как SaveBMSSeries).
 func (s *redisStore) SaveEnBmsSeries(p enbmsSeriesPoint, ts time.Time) error {
