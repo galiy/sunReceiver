@@ -76,11 +76,10 @@ const (
 	enBmsCID1 = 0x46
 	// enBmsCID2Battery — команда чтения телеметрии (Battery).
 	enBmsCID2Battery = 0x61
-	// enBmsFrameOverhead — служебные байты кадра запроса/ответа:
-	// SOI+VER+ADR+CID2+LEN(2)+CHKSUM(2)+EOI. Полная длина = overhead + LENID.
-	// (В запросе на месте CID2 стоит CID1=0x46 и CID2 в следующем байте — это
-	// даёт те же 9 байт служебных; ответ короче ровно на байт CID1.)
-	enBmsFrameOverhead = 9
+	// enBmsFrameOverhead — служебные байты кадра: SOI+VER+ADR+CID2+RTN+LEN(2)+
+	// CHKSUM(2)+EOI. Полная длина кадра = overhead + LENID (проверено по живым
+	// кадрам Battery/BasicInfo: LEN в байтах 5–6, INFO с байта 7).
+	enBmsFrameOverhead = 10
 )
 
 // enbmsMaxBTDevices — предельное суммарное число BLE-устройств (EnBMS + CE308),
@@ -191,9 +190,10 @@ func crc16Valid(frame []byte) bool {
 }
 
 // extractEnBmsFrame ищет в буфере первый полный валидный кадр ОТВЕТА.
-// Формат ответа: 7E 14 ADR CID2 LEN(2) INFO CHKSUM(2) 0D — LEN по смещению 4,
-// INFO с 6, полная длина = 9 + LENID. Сборка — строго ПО ДЛИНЕ, а не по 0x0D:
-// байт 0x0D встречается внутри payload (подтверждено на ReadBMSParams).
+// Формат ответа: 7E 14 ADR CID2 RTN LEN(2) INFO CHKSUM(2) 0D — LEN по смещению
+// 5, INFO с 7, полная длина = 10 + LENID (проверено по живым кадрам Battery и
+// BasicInfo). Сборка — строго ПО ДЛИНЕ, а не по 0x0D: байт 0x0D встречается
+// внутри payload.
 // Возвращает:
 //   - frame, rest, true  — найден полный кадр; rest — остаток буфера;
 //   - nil, rest, false   — кадра нет, но rest нужно сохранить (неполный кадр);
@@ -205,10 +205,10 @@ func extractEnBmsFrame(buf []byte) (frame []byte, rest []byte, ok bool) {
 			return nil, nil, false
 		}
 		buf = buf[s:]
-		if len(buf) < 6 {
+		if len(buf) < 7 {
 			return nil, buf, false
 		}
-		lenid := int(buf[4])<<8 | int(buf[5])
+		lenid := int(buf[5])<<8 | int(buf[6])
 		total := enBmsFrameOverhead + lenid
 		if total < enBmsFrameOverhead || total > 2048 {
 			buf = buf[1:]

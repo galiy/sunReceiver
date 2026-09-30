@@ -287,11 +287,11 @@ func (c *enbmsConn) request(cid2 byte, info []byte) ([]byte, error) {
 			if fr[3] != cid2 {
 				continue // чужой/запоздалый кадр — ждём нужный
 			}
-			// Формат ответа: 7E 14 ADR CID2 LEN(2) INFO … — LEN по смещению 4,
-			// INFO с 6.
-			lenid := int(fr[4])<<8 | int(fr[5])
+			// Формат ответа: 7E 14 ADR CID2 RTN LEN(2) INFO … — LEN по смещению
+			// 5, INFO с 7 (проверено по живым кадрам).
+			lenid := int(fr[5])<<8 | int(fr[6])
 			out := make([]byte, lenid)
-			copy(out, fr[6:6+lenid])
+			copy(out, fr[7:7+lenid])
 			return out, nil
 		}
 		select {

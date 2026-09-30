@@ -23,16 +23,14 @@ import (
 	"time"
 )
 
-// Живой payload Battery (0x61), 106 Б, устройства BP00 (MAC заменён на плейсхолдер)
-// из /home/sasha/src/energybms/DEVICE_SNAPSHOT.md. Кадр ответа собирается в
-// тесте (в документе полный кадр приведён с несовпадающим CRC — вероятна
-// опечатка при копировании; декодированные значения payload совпадают).
+// Живой payload Battery (0x61), 106 Б (значения из DEVICE_SNAPSHOT.md; MAC
+// устройства заменён на плейсхолдер). Кадр ответа собирается в тесте.
 const enbmsLiveBatteryPayload = "00 00 10 0c bd 0c bb 0c bb 0c bb 0c bb 0c ba 0c bb 0c bc 0c b8 0c ba 0c ba 0c bb 0c ba 0c bc 0c bb 0c bb 06 0b a3 0b 9b 0b 98 0b a5 0b cb 0b ad fb 2e 14 5e 27 f6 06 7a a8 01 45 7a a8 00 02 03 e8 14 61 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 01 03 08 00 00 00 00 00 00 00 00 00 00 00"
 
-// enbmsResponseFrame собирает кадр ОТВЕТА BMS (7E 14 ADR CID2 LEN(2) INFO
+// enbmsResponseFrame собирает кадр ОТВЕТА BMS (7E 14 ADR CID2 RTN LEN(2) INFO
 // CHKSUM(2) 0D) с корректным CRC-16/CCITT — для тестов.
 func enbmsResponseFrame(cid2 byte, payload []byte) []byte {
-	body := []byte{0x14, 0x00, cid2, byte(len(payload) >> 8), byte(len(payload))}
+	body := []byte{0x14, 0x00, cid2, 0x00, byte(len(payload) >> 8), byte(len(payload))}
 	body = append(body, payload...)
 	crc := crc16CCITT(body)
 	fr := append([]byte{0x7e}, body...)
@@ -96,7 +94,7 @@ func TestEnBmsParseBatteryLiveFrame(t *testing.T) {
 	if !crc16Valid(frame) {
 		t.Fatalf("CRC тестового кадра неверен")
 	}
-	if lenid := int(frame[4])<<8 | int(frame[5]); lenid != 106 {
+	if lenid := int(frame[5])<<8 | int(frame[6]); lenid != 106 {
 		t.Fatalf("LENID = %d, want 106", lenid)
 	}
 	// Кадр должен извлекаться из потока notify-фрагментов по длине.
@@ -159,6 +157,42 @@ func TestEnBmsParseBatteryLiveFrame(t *testing.T) {
 	}
 	if want := -643.4; snap.PowerW != want {
 		t.Fatalf("мощность = %v, want %v", snap.PowerW, want)
+	}
+}
+
+func TestEnBmsRealFrameFromDevice(t *testing.T) {
+	// Реальный кадр ответа Battery, снятый с устройства BP00 живым опросом
+	// (BlueZ/bleak через сервер .253): подтверждает формат
+	// 7E 14 ADR CID2 RTN LEN(2) INFO(с 7) CHKSUM 0D, total = 10 + LENID.
+	const real = "7e 14 00 61 00 00 6a 00 00 10 0c b2 0c b1 0c b2 0c b2 0c b1 0c b1 0c b1 0c b3 0c ae 0c b1 0c b2 0c b1 0c af 0c b2 0c b1 0c b2 06 0b a1 0b 99 0b 96 0b a2 0b c6 0b a6 fb ed 14 4f 21 e4 06 7a a8 01 14 7a a8 00 02 03 e8 14 51 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 01 03 08 00 00 00 00 00 00 00 00 00 00 00 00 ea ff 0d"
+	frame := mustHex(t, real)
+	if !crc16Valid(frame) {
+		t.Fatalf("CRC реального кадра неверен")
+	}
+	fr, _, ok := extractEnBmsFrame(frame)
+	if !ok {
+		t.Fatalf("реальный кадр не извлечён")
+	}
+	lenid := int(fr[5])<<8 | int(fr[6])
+	payload := fr[7 : 7+lenid]
+	r, err := parseEnBmsBattery(payload)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if r.BatteryNum != 16 || r.CellsV[0] != 3.250 {
+		t.Fatalf("ячейки: n=%d first=%v", r.BatteryNum, r.CellsV[0])
+	}
+	if len(r.TemperaturesC) != 6 || r.TemperaturesC[0] != 24.6 {
+		t.Fatalf("температуры: %v", r.TemperaturesC)
+	}
+	if r.CurrentA != -10.43 || r.TotalVoltageV != 51.99 || r.RemainingAh != 86.76 {
+		t.Fatalf("ток/напряжение/остаток: %v/%v/%v", r.CurrentA, r.TotalVoltageV, r.RemainingAh)
+	}
+	if r.Soc != 27.6 || r.Soh != 100.0 || r.Cycles != 2 || r.PortVoltageV != 52.01 {
+		t.Fatalf("soc/soh/cycles/port: %v/%v/%d/%v", r.Soc, r.Soh, r.Cycles, r.PortVoltageV)
+	}
+	if !enbmsParsedValid(r) {
+		t.Fatalf("реальные показания признаны невалидными")
 	}
 }
 
