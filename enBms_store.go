@@ -32,8 +32,10 @@ const (
 	// redisEnBmsCurrentKey — HASH текущего снимка EnBMS: поле = MAC,
 	// значение = JSON enbmsSnapshot. Перезаписывается после каждого опроса.
 	redisEnBmsCurrentKey = "sunreceiver:enbms:current"
-	// redisEnBmsSeriesPrefix — месячный ряд 5-минутных усреднённых точек:
-	// ключи sunreceiver:enbms:series:<YYYY-MM>, ZSET (score = Unix сек).
+	// redisEnBmsSeriesPrefix — месячный ряд МГНОВЕННЫХ (каждое снятое показание)
+	// точек EnBMS: ключи sunreceiver:enbms:series:<YYYY-MM>, ZSET (score = Unix
+	// сек. снятия, member = JSON enbmsSeriesPoint, samples=1). 5-минутные средние
+	// для PG считает enBms_accumulator.go.
 	redisEnBmsSeriesPrefix = "sunreceiver:enbms:series:"
 )
 
@@ -154,45 +156,39 @@ func (s *redisStore) QueryEnBmsSeries(mac string, start, end time.Time) ([]enbms
 	return all, nil
 }
 
-// saveEnBmsClosedBuckets пишет готовые 5-минутные точки EnBMS в Redis (ряд,
-// окно 40 суток) и в PG (вечно). partial=true (остановка) — только в Redis.
-func saveEnBmsClosedBuckets(store *redisStore, pg *pgStore, pts []enbmsAvgPoint, partial bool) {
+// saveEnBmsClosedBuckets пишет готовые 5-минутные усреднённые точки EnBMS в PG
+// (sunreceiver.enbms_averages) — гранулярность PG = 1 запись / 5 минут. В
+// Redis-ряд 5-минутные средние НЕ пишутся: там сырые показания (saveEnBmsReading).
+func saveEnBmsClosedBuckets(pg *pgStore, pts []enbmsAvgPoint) {
+	if pg == nil {
+		return
+	}
 	type row struct {
 		name    string
 		display string
 		start   time.Time
 		avg     enbmsAveraged
 	}
-	var pgRows []row
+	pgRows := make([]row, 0, len(pts))
 	for _, p := range pts {
 		if p.avg.Samples == 0 {
 			continue
 		}
-		sp := enbmsSeriesPoint{Name: p.name, Display: p.display, Ts: p.start.Format(time.RFC3339)}
-		sp.enbmsAveraged = p.avg
-		if err := store.SaveEnBmsSeries(sp, p.start); err != nil {
-			logEnBms("avg redis %s %s: %v", p.name, p.start.Format(time.RFC3339), err)
-		}
-		if pg != nil && !partial {
-			pgRows = append(pgRows, row{name: p.name, display: p.display, start: p.start, avg: p.avg})
-		}
-		if partial {
-			logEnBms("avg: дописан неполный 5-минутный промежуток %s %s (снимков: %d)",
-				p.name, p.start.Format(time.RFC3339), p.avg.Samples)
-		}
+		pgRows = append(pgRows, row{name: p.name, display: p.display, start: p.start, avg: p.avg})
 	}
-	if pg != nil && len(pgRows) > 0 {
-		if err := retryPg(func() error {
-			return pg.withTx(func(q pgExecer) error {
-				for _, r := range pgRows {
-					if err := insertEnBmsAveragedExec(q, pg.ctx, r.name, r.start, r.avg); err != nil {
-						return err
-					}
+	if len(pgRows) == 0 {
+		return
+	}
+	if err := retryPg(func() error {
+		return pg.withTx(func(q pgExecer) error {
+			for _, r := range pgRows {
+				if err := insertEnBmsAveragedExec(q, pg.ctx, r.name, r.start, r.avg); err != nil {
+					return err
 				}
-				return nil
-			})
-		}, 3); err != nil {
-			logEnBms("avg pg: %v", err)
-		}
+			}
+			return nil
+		})
+	}, 3); err != nil {
+		logEnBms("avg pg: %v", err)
 	}
 }

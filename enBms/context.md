@@ -33,9 +33,15 @@
 6. **Последовательный опрос**, цикл ≤ 1/с.
 7. **Лимит BT-устройств** `enbmsMaxBTDevices = 5` (EnBMS + CE308); при превышении
    опрос EnBMS не стартует. Значение подлежит уточнению на конкретном адаптере.
-8. **Хранение**: Redis `sunreceiver:enbms:current` (HASH) + ряд
-   `sunreceiver:enbms:series:<YYYY-MM>` (5-мин точки); PG `sunreceiver.enbms_averages`.
-   Неполный промежуток при остановке — только в Redis.
+8. **Хранение** (обновлено 2026-09-30): **Redis — каждое снятое показание**
+   (`sunreceiver:enbms:series:<YYYY-MM>`, score = секунда, samples=1; окно 2 суток);
+   **PG — `sunreceiver.enbms_averages`, 1 запись / 5 минут** (единая гранулярность PG
+   для всех рядов). Та же схема распространена на инверторы/МАП/MPPT/DDS238/CE308/ANT BMS.
+9. **Стык PG/Redis** во всех series-API — общий helper `seamWindows`
+   (`dashboard.go`): PG `[start, cutoff−1с]`, Redis `[cutoff, end]` (cutoff = 00:00
+   вчера). Без дубля на cutoff и без разрыва; проверено тестом `TestSeamWindows`.
+10. **Даунсэмплинг на стороне API** — для всех графиков: `downsampleSeries`
+    (однополевые) и `downsampleBMSSeries` (BMS, многополевой).
 
 ## Открытые вопросы / TODO на будущее
 

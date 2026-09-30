@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 	"testing"
 	"time"
@@ -209,34 +210,66 @@ func TestRedisStoreBMSSeriesReplace(t *testing.T) {
 	}
 }
 
-// TestSaveSnapshotWindowReplace: две записи одного IP в одном 10-секундном окне —
-// в ZSET ряда остаётся ровно ОДИН member со score окна (вторая запись заменяет
-// первую). Покрывает дубль точки из-за mapWin, обновляемого до Exec (п. 2.5).
-func TestSaveSnapshotWindowReplace(t *testing.T) {
+// TestSaveSnapshotMAPPerReading: SaveSnapshotMAP пишет КАЖДОЕ показание (каждая
+// секунда — отдельный member ZSET); повтор в ту же секунду заменяет (dedup), а
+// недостающие МАП-теги дополняются из предыдущего снимка того же устройства.
+func TestSaveSnapshotMAPPerReading(t *testing.T) {
 	s := testStore(t)
 	cleanTestKeys(t, s)
 	t.Cleanup(func() { cleanTestKeys(t, s) })
 
 	now := time.Now()
-	win := now.Truncate(10 * time.Second)
+	t1 := now.Add(-6 * time.Second).Truncate(time.Second)
+	t2 := t1.Add(3 * time.Second)
 	ip := "192.0.2.74"
-	sp1 := snap("MAP", ip, win.Add(2*time.Second), valuesContract{"grid_voltage": 230.0})
-	sp2 := snap("MAP", ip, win.Add(7*time.Second), valuesContract{"grid_voltage": 231.0})
-	if err := s.SaveSnapshotWindow(sp1, win.Add(2*time.Second)); err != nil {
-		t.Fatalf("SaveSnapshotWindow #1: %v", err)
-	}
-	if err := s.SaveSnapshotWindow(sp2, win.Add(7*time.Second)); err != nil {
-		t.Fatalf("SaveSnapshotWindow #2: %v", err)
-	}
+	// isMAPDevice требует battery_voltage — иначе merge не включается.
+	sp1 := snap("MAP", ip, t1, valuesContract{"battery_voltage": 52.0, "grid_voltage": 230.0})
+	sp2 := snap("MAP", ip, t2, valuesContract{"battery_voltage": 52.1, "grid_voltage": 231.0})
 
-	key := redisSeriesKey(win)
-	score := strconv.FormatInt(win.Unix(), 10)
-	members, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: score, Max: score}).Result()
-	if err != nil {
-		t.Fatalf("ZRangeByScore: %v", err)
+	if err := s.SaveSnapshotMAP(sp1, t1); err != nil {
+		t.Fatalf("SaveSnapshotMAP #1: %v", err)
 	}
-	if len(members) != 1 {
-		t.Fatalf("members со score окна=%d, want 1 (замена в 10-с окне): %v", len(members), members)
+	if err := s.SaveSnapshotMAP(sp2, t2); err != nil {
+		t.Fatalf("SaveSnapshotMAP #2: %v", err)
+	}
+	key := redisSeriesKey(t1)
+	countAt := func(ts time.Time) int {
+		members, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{
+			Min: strconv.FormatInt(ts.Unix(), 10), Max: strconv.FormatInt(ts.Unix(), 10)}).Result()
+		if err != nil {
+			t.Fatalf("ZRangeByScore: %v", err)
+		}
+		return len(members)
+	}
+	// Каждое показание сохранено отдельно (не схлопнуто в окно).
+	if n := countAt(t1); n != 1 {
+		t.Fatalf("members на t1=%d, want 1", n)
+	}
+	if n := countAt(t2); n != 1 {
+		t.Fatalf("members на t2=%d, want 1", n)
+	}
+	// Повторная запись в ту же секунду — замена, не дубль.
+	if err := s.SaveSnapshotMAP(snap("MAP", ip, t1, valuesContract{"battery_voltage": 52.2}), t1); err != nil {
+		t.Fatalf("SaveSnapshotMAP повтор: %v", err)
+	}
+	if n := countAt(t1); n != 1 {
+		t.Fatalf("после повтора members на t1=%d, want 1", n)
+	}
+	// MAP-merge: снимок без grid_voltage получает последнее известное значение.
+	t3 := t2.Add(3 * time.Second)
+	if err := s.SaveSnapshotMAP(snap("MAP", ip, t3, valuesContract{"battery_voltage": 52.3}), t3); err != nil {
+		t.Fatalf("SaveSnapshotMAP #3: %v", err)
+	}
+	raw, err := s.rdb.HGet(s.ctx, redisCurrentKey, ip).Result()
+	if err != nil {
+		t.Fatalf("HGET current: %v", err)
+	}
+	var got deviceSnapshot
+	if err := json.Unmarshal([]byte(raw), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := got.Values["grid_voltage"]; !ok {
+		t.Fatalf("merge не дополнил grid_voltage: %+v", got.Values)
 	}
 }
 

@@ -68,8 +68,9 @@ func (d *enbmsPollerDev) closeConn() {
 // опрашиваются последовательно один за другим; общий цикл — не чаще 1 раза в
 // секунду; соединение с каждым устройством не рвётся между опросами (см.
 // enbmsPollerDev). Каждое успешное чтение пишет текущий снимок в Redis (HASH
-// current) и кормит in-memory аккумулятор 5-минутных усреднённых точек (Redis
-// series + PG enbms_averages), как в модуле ANT BMS.
+// current) и СЫРОЕ показание в Redis-ряд; in-memory аккумулятор считает
+// 5-минутные усреднённые точки для PG (enbms_averages) — гранулярность PG =
+// 1 запись / 5 минут.
 func runEnBmsPoll(store *redisStore, pg *pgStore, cfg *enBmsConfig, ctx context.Context) {
 	if cfg == nil || len(cfg.Devices) == 0 {
 		return
@@ -82,8 +83,8 @@ func runEnBmsPoll(store *redisStore, pg *pgStore, cfg *enBmsConfig, ctx context.
 	logEnBms("avg: накопление 5-минутных усреднённых точек (в памяти процесса; PG %v)", pg != nil)
 
 	shutdown := func() {
-		// Неполный 5-минутный промежуток дописываем ТОЛЬКО в Redis (partial=true).
-		saveEnBmsClosedBuckets(store, pg, acc.drain(), true)
+		// Неполный 5-минутный промежуток в PG не пишем (только полные бакеты); в
+		// Redis он не нужен — каждое показание уже записано сырым (saveEnBmsReading).
 		for _, d := range devs {
 			d.closeConn()
 		}
@@ -97,7 +98,7 @@ func runEnBmsPoll(store *redisStore, pg *pgStore, cfg *enBmsConfig, ctx context.
 			}
 			pollEnBmsDevice(store, acc, d, ctx)
 		}
-		saveEnBmsClosedBuckets(store, pg, acc.closed(time.Now()), false)
+		saveEnBmsClosedBuckets(pg, acc.closed(time.Now()))
 		if ctx.Err() != nil {
 			shutdown()
 			return
@@ -186,13 +187,42 @@ func pollEnBmsDevice(store *redisStore, acc *enbmsAccumulator, d *enbmsPollerDev
 
 	now := time.Now()
 	snap := enbmsSnapshotFromParsed(d.cfg, parsed, now)
-	// Текущее состояние — в HASH (перезапись). Историю в Redis/PG формирует
-	// аккумулятор 5-минутными усреднёнными точками (как ANT BMS): отдельного
-	// per-second ряда, как у CE308, здесь нет.
+	// Текущее состояние — в HASH (перезапись); каждое снятое показание — в
+	// Redis-ряд (сырое, samples=1). 5-минутные средние для PG накапливает
+	// аккумулятор (как ANT BMS).
 	if err := store.SaveEnBmsCurrent(snap); err != nil {
 		logEnBms("redis current %s: %v", d.cfg.MAC, err)
 	}
+	saveEnBmsReading(store, snap, now)
 	acc.add(snap, now)
+}
+
+// saveEnBmsReading пишет МГНОВЕННОЕ (одно снятое) показание EnBMS в Redis-ряд
+// (month ZSET, score = секунда, samples=1). 5-минутные средние для PG считает
+// enBms_accumulator.go; в Redis-ряду средних нет — только сырые показания.
+func saveEnBmsReading(store *redisStore, s enbmsSnapshot, ts time.Time) {
+	sp := enbmsSeriesPoint{Name: s.MAC, Display: s.Name, Ts: ts.Format(time.RFC3339)}
+	sp.enbmsAveraged = enbmsAveraged{
+		CurrentA:      s.CurrentA,
+		PowerW:        s.PowerW,
+		Soc:           s.Soc,
+		CapacityAh:    s.CapacityAh,
+		RemainingAh:   s.RemainingAh,
+		TotalVoltageV: s.TotalVoltageV,
+		PortVoltageV:  s.PortVoltageV,
+		Soh:           s.Soh,
+		MaxCellV:      s.MaxCellV,
+		MinCellV:      s.MinCellV,
+		AvgCellV:      s.AvgCellV,
+		CellsV:        s.CellsV,
+		Temperatures:  s.TemperaturesC,
+		CellCount:     s.CellCount,
+		Cycles:        s.Cycles,
+		Samples:       1,
+	}
+	if err := store.SaveEnBmsSeries(sp, ts); err != nil {
+		logEnBms("redis series %s: %v", s.MAC, err)
+	}
 }
 
 // readWithRetries читает Battery, повторяя только таймаут ответа (транзиентный

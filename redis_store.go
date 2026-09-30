@@ -48,11 +48,12 @@ const (
 	// BMS-пулером 1 раз в секунду (bms_poller.go), чистится при исчезновении
 	// устройства из коллекции.
 	redisBMSKey = "sunreceiver:bms"
-	// redisBMSSeriesPrefix — временной ряд 5-минутных усреднённых точек ANT BMS
-	// (bms_accumulator.go). Ключи вида sunreceiver:bms:series:<YYYY-MM>, каждый —
-	// ZSET: score=Unix (сек., начало 5-минутного промежутка), member=JSON
-	// bmsSeriesPoint (name + ts + значения). Хранятся последние 2 календарных
-	// суток (чистка PurgeOld), как и ряд инверторов.
+	// redisBMSSeriesPrefix — временной ряд МГНОВЕННЫХ (каждое снятое показание)
+	// точек ANT BMS. Ключи вида sunreceiver:bms:series:<YYYY-MM>, каждый — ZSET:
+	// score=Unix (сек. снятия), member=JSON bmsSeriesPoint (name + ts + значения,
+	// samples=1). Пишется каждым опросом (~1/с). Хранятся последние 2 календарных
+	// суток (чистка PurgeOld), как и ряд инверторов. 5-минутные средние для PG
+	// считает bms_accumulator.go.
 	redisBMSSeriesPrefix = "sunreceiver:bms:series:"
 )
 
@@ -61,16 +62,16 @@ type redisStore struct {
 	rdb *redis.Client
 	ctx context.Context
 
-	// mapWin помнит последнюю точку временного ряда каждого МАП-инвертора и её
-	// 10-секундное окно, чтобы в пределах одного окна заменять её (см. SaveSnapshotWindow),
-	// а не плодить дубли: в Redis остаётся ровно одна строка МАП за каждые 10 секунд.
+	// mapWin помнит последний member ряда каждого МАП-устройства: нужен, чтобы
+	// дополнить недостающие МАП-теги из предыдущего снимка (mergeMAPSnap) — гейт
+	// МАП нестабильно отдаёт блоки. Запись каждого показания не подавляется.
 	mapMu  sync.Mutex
 	mapWin map[string]mapWinMember
 }
 
 type mapWinMember struct {
-	window int64  // Unix-начало 10-секундного окна
-	member string // JSON-снапшот (member ZSET)
+	window int64  // Unix-время последней записи (диагностика)
+	member string // JSON-снапшот (member ZSET) — источник mergeMAPSnap
 }
 
 // openRedis создаёт клиент Redis. Retry-логику оставляем библиотеке go-redis.
@@ -116,12 +117,35 @@ func bmsSeriesKey(ts time.Time) string {
 //   - обновляет текущее значение (HASH current[ip]);
 //   - кладёт точку в месячный ZSET временного ряда (score = Unix-секунды).
 //
-// Тот же (устройство, секунда) может записываться дважды: при повторном опросе
-// в пределах секунды (пулер не обязан укладываться в целые секунды). Голый ZADD
-// оставил бы в ZSET два member с одинаковым score — две точки в один момент
-// времени. Поэтому перед записью удаляются старые версии того же устройства на
-// этом score: в Redis остаётся ровно одна точка на (устройство, секунда).
+// Хранится КАЖДОЕ снятое показание (окно удержания — 2 календарных суток).
+// Тот же (устройство, секунда) может записываться дважды (повторный опрос в
+// пределах секунды): голый ZADD оставил бы два member с одинаковым score,
+// поэтому перед записью удаляются старые версии того же устройства на этом
+// score — остаётся ровно одна точка на (устройство, секунда).
 func (s *redisStore) SaveSnapshot(snap deviceSnapshot, ts time.Time) error {
+	return s.saveSnapshot(snap, ts, false)
+}
+
+// SaveSnapshotMAP — как SaveSnapshot, но для целей МАП/MPPT: недостающие МАП-теги
+// (grid_voltage/grid_power/battery_voltage/battery_power) дополняются из
+// предыдущего снимка того же устройства (гейт МАП нестабильно отдаёт блоки).
+// Пишется каждое снятое показание (без 10-секундного окна).
+func (s *redisStore) SaveSnapshotMAP(snap deviceSnapshot, ts time.Time) error {
+	return s.saveSnapshot(snap, ts, true)
+}
+
+// saveSnapshot — общая реализация записи. mergeMAP=true — дополнить МАП-теги из
+// предыдущего снимка и запомнить member как источник для следующего merge.
+func (s *redisStore) saveSnapshot(snap deviceSnapshot, ts time.Time, mergeMAP bool) error {
+	if mergeMAP && isMAPDevice(snap.Values) {
+		prevMember := ""
+		s.mapMu.Lock()
+		if p, had := s.mapWin[snap.IP]; had {
+			prevMember = p.member
+		}
+		s.mapMu.Unlock()
+		snap = mergeMAPSnap(snap, prevMember)
+	}
 	b, err := json.Marshal(snap)
 	if err != nil {
 		return fmt.Errorf("marshal snapshot %s: %w", snap.IP, err)
@@ -150,11 +174,15 @@ func (s *redisStore) SaveSnapshot(snap deviceSnapshot, ts time.Time) error {
 		pipe.ZRem(s.ctx, key, stale...)
 	}
 	pipe.ZAdd(s.ctx, key, redis.Z{Score: float64(ts.Unix()), Member: string(b)})
-	// Держим хоть один месяц истории; при смене месяца эта строка оставить ключ живым.
+	// Держим хоть один месяц истории; при смене месяца эта строка оставит ключ живым.
 	pipe.Expire(s.ctx, key, 40*24*time.Hour)
-	_, err = pipe.Exec(s.ctx)
-	if err != nil {
+	if _, err := pipe.Exec(s.ctx); err != nil {
 		return fmt.Errorf("save %s: %w", snap.IP, err)
+	}
+	if mergeMAP {
+		s.mapMu.Lock()
+		s.mapWin[snap.IP] = mapWinMember{window: ts.Unix(), member: string(b)}
+		s.mapMu.Unlock()
 	}
 	return nil
 }
@@ -185,69 +213,6 @@ func mergeMAPSnap(snap deviceSnapshot, prevMember string) deviceSnapshot {
 	}
 	snap.Values = out
 	return snap
-}
-
-// SaveSnapshotWindow — специальная запись для целей kindMAP: снимок пишется с
-// score = начало 10-секундного окна (ts.Truncate(10s)), а не с точной секундой.
-// В пределах одного окна каждая новая запись ЗАМЕНЯЕТ предыдущую точку этого же
-// окна (ZREM старого member + ZADD нового), поэтому в Redis по каждому МАП
-// остаётся ровно одна строка за 10 секунд. Текущее значение (HASH current)
-// обновляется всегда — на каждый опрос.
-func (s *redisStore) SaveSnapshotWindow(snap deviceSnapshot, ts time.Time) error {
-	window := ts.Truncate(10 * time.Second)
-	winUnix := window.Unix()
-
-	// Для устройства МАП (kindMAP) недостающие МАП-теги (grid_voltage, grid_power,
-	// battery_voltage, battery_power) дополняем из предыдущего снимка этого же
-	// устройства: гейт МАП нестабильно отдаёт блоки, поэтому последнее известное
-	// значение сохраняется, а на плашках/графиках дашборда не бывает прочерка.
-	merged := snap
-	if isMAPDevice(snap.Values) {
-		prevMember := ""
-		s.mapMu.Lock()
-		if p, had := s.mapWin[snap.IP]; had {
-			prevMember = p.member
-		}
-		s.mapMu.Unlock()
-		merged = mergeMAPSnap(snap, prevMember)
-	}
-
-	b, err := json.Marshal(merged)
-	if err != nil {
-		return fmt.Errorf("marshal snapshot %s: %w", snap.IP, err)
-	}
-	member := string(b)
-	key := redisSeriesKey(window)
-
-	var prev mapWinMember
-	had := false
-	s.mapMu.Lock()
-	if s.mapWin == nil {
-		s.mapWin = map[string]mapWinMember{}
-	}
-	prev, had = s.mapWin[snap.IP]
-	s.mapMu.Unlock()
-
-	pipe := s.rdb.TxPipeline()
-	if had && prev.window == winUnix {
-		// то же 10-секундное окно — стираем предыдущую точку и заменяем на актуальную
-		pipe.ZRem(s.ctx, key, prev.member)
-	}
-	pipe.ZAdd(s.ctx, key, redis.Z{Score: float64(winUnix), Member: member})
-	pipe.HSet(s.ctx, redisCurrentKey, snap.IP, b)
-	pipe.Expire(s.ctx, key, 40*24*time.Hour)
-	if _, err := pipe.Exec(s.ctx); err != nil {
-		// mapWin НЕ обновляем: в памяти prev.member остался старый (совпадает с
-		// тем, что реально в Redis), следующая запись корректно ZRem-ит его.
-		// При обновлении до Exec при сбое Redis в памяти был бы новый member, а в
-		// Redis — старый → дубль точки (ZRem нового = no-op + ZAdd старого).
-		return fmt.Errorf("save window %s: %w", snap.IP, err)
-	}
-	// mapWin обновляем только после успешного Exec (prev для следующей замены).
-	s.mapMu.Lock()
-	s.mapWin[snap.IP] = mapWinMember{window: winUnix, member: member}
-	s.mapMu.Unlock()
-	return nil
 }
 
 // PruneMPPT удаляет из HASH current все MPPT-ключи (содержащие "#mppt"), которых
@@ -498,12 +463,12 @@ func recentCutoff(t time.Time) time.Time {
 	return startOfToday.AddDate(0, 0, -1)
 }
 
-// PurgeOld удаляет из временных рядов Redis (месячные сегменты инверторов,
-// 5-минутных усреднённых точек ANT BMS и EnBMS, мгновенных значений CE308) все
-// точки, timestamp которых строго старше окна последних 2 календарных суток
-// (recentCutoff). Пустые сегменты удаляются целиком. Текущие HASH (current,
-// sunreceiver:bms, sunreceiver:enbms:current) не трогаются — последнее
-// состояние устройств хранится всегда.
+// PurgeOld удаляет из временных рядов Redis (месячные сегменты инверторов и
+// сырых показаний ANT BMS/EnBMS, мгновенных значений CE308) все точки, timestamp
+// которых строго старше окна последних 2 календарных суток (recentCutoff).
+// Пустые сегменты удаляются целиком. Текущие HASH (current, sunreceiver:bms,
+// sunreceiver:enbms:current) не трогаются — последнее состояние устройств
+// хранится всегда.
 // Вызывается фоновым процессом (см. runRedisCleanup).
 func (s *redisStore) PurgeOld(now time.Time) {
 	cutoff := recentCutoff(now)

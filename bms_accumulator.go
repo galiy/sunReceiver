@@ -23,12 +23,11 @@ import (
 )
 
 // bmsAveraged — одна усреднённая за 5 минут (avgStep) точка ANT BMS.
-// Хранится в PostgreSQL (sunreceiver.bms_averages.values, jsonb) и в Redis
-// (месячные ZSET sunreceiver:bms:series:<YYYY-MM>, окно 2 календарных суток).
-// Мгновенные параметры (ток/мощность/SOC/ёмкости/ячейки/температуры)
-// усредняются за промежуток; дискретные флаги (MOS/балансировка/число ячеек)
-// и счётчик кадров — по последнему значению в промежутке (усреднение для них
-// неприменимо).
+// Хранится в PostgreSQL (sunreceiver.bms_averages.values, jsonb). В Redis-ряду
+// лежат СЫРЫЕ показания (saveBMSReading), не эти средние. Мгновенные параметры
+// (ток/мощность/SOC/ёмкости/ячейки/температуры) усредняются за промежуток;
+// дискретные флаги (MOS/балансировка/число ячеек) и счётчик кадров — по
+// последнему значению в промежутке (усреднение для них неприменимо).
 type bmsAveraged struct {
 	CurrentA     float64   `json:"current_a"`      // A, среднее (знаковый)
 	PowerW       float64   `json:"power_w"`        // W, среднее (знаковая)
@@ -48,12 +47,13 @@ type bmsAveraged struct {
 	Samples      int       `json:"samples"`        // сколько 1-секундных снимков вошло в точку
 }
 
-// bmsSeriesPoint — точка BMS-ряда: ключ устройства, время (начало
-// 5-минутного промежутка, RFC3339) и усреднённые значения.
+// bmsSeriesPoint — точка BMS-ряда: ключ устройства, время (RFC3339) и значения.
+// В Redis-ряду это сырое показание (ts = секунда снятия, Samples=1); та же форма
+// используется API для точек PG (ts = начало 5-минутного промежутка).
 type bmsSeriesPoint struct {
 	Name    string `json:"name"`    // ключ (bmsKey), напр. "AntBms 320 A/h@/dev/ttyUSB0"
 	Display string `json:"display"` // отображаемое имя (DeviceName), напр. "AntBms 320 A/h"
-	Ts      string `json:"ts"`      // начало 5-минутного промежутка (RFC3339)
+	Ts      string `json:"ts"`      // время точки (RFC3339)
 	bmsAveraged
 }
 

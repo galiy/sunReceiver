@@ -22,8 +22,8 @@ import (
 )
 
 // enbmsAveraged — одна усреднённая за 5 минут (avgStep) точка BMS EnBMS.
-// Хранится в PostgreSQL (sunreceiver.enbms_averages.values, jsonb) и в Redis
-// (месячные ZSET sunreceiver:enbms:series:<YYYY-MM>). Мгновенные параметры
+// Хранится в PostgreSQL (sunreceiver.enbms_averages.values, jsonb). В Redis-ряду
+// лежат СЫРЫЕ показания (saveEnBmsReading), не эти средние. Мгновенные параметры
 // (ток/мощность/SOC/ёмкости/напряжения ячеек/температуры) усредняются за
 // промежуток; дискретные (число ячеек, циклы) — по последнему значению.
 type enbmsAveraged struct {
@@ -45,12 +45,13 @@ type enbmsAveraged struct {
 	Samples       int       `json:"samples"`         // сколько снимков вошло в точку
 }
 
-// enbmsSeriesPoint — точка ряда EnBMS: ключ устройства (MAC), отображаемое имя,
-// время (начало 5-минутного промежутка, RFC3339) и усреднённые значения.
+// enbmsSeriesPoint — точка ряда EnBMS: ключ (MAC), отображаемое имя, время
+// (RFC3339). В Redis-ряду это сырое показание (ts = секунда снятия, Samples=1);
+// та же форма используется API для точек PG (ts = начало 5-минутного промежутка).
 type enbmsSeriesPoint struct {
 	Name    string `json:"name"`    // ключ (MAC)
 	Display string `json:"display"` // отображаемое имя
-	Ts      string `json:"ts"`      // начало 5-минутного промежутка (RFC3339)
+	Ts      string `json:"ts"`      // время точки (RFC3339)
 	enbmsAveraged
 }
 

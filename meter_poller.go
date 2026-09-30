@@ -142,7 +142,7 @@ func pollMeter(ctx context.Context, c *meterClient, cfg *meterConfig) (valuesCon
 
 // runMeterPoll — фоновый 1-секундный цикл опроса электросчётчика DDS238:
 //   - каждую секунду читает регистры и пишет снимок в Redis через
-//     SaveSnapshotWindow (одна строка за 10 с + актуальное current) —
+//     SaveSnapshot (каждое снятое показание + актуальное current) —
 //     так же, как МАП/MPPT (см. runMapPoll). Из Redis усреднение в PG
 //     (5-минутные агрегаты) делает общий аккумулятор (accumulator.go);
 //   - на каждой границе тарифного дня (00:00, 07:00, 23:00) захватывает
@@ -189,7 +189,7 @@ func runMeterPoll(store *redisStore, pg *pgStore, cfg *meterConfig, ctx context.
 				Timestamp: now.Format(time.RFC3339),
 				Values:    vals,
 			}
-			if err := store.SaveSnapshotWindow(snap, now); err != nil {
+			if err := store.SaveSnapshot(snap, now); err != nil {
 				log.Printf("redis meter save %s: %v", cfg.IP, err)
 			}
 			if capture != nil {

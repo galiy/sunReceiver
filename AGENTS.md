@@ -96,8 +96,9 @@ legacy-файлом `dds238.json`). Счётчик Энергомера **CE308*
 (**`disabled` — ОБЯЗАТЕЛЬНОЕ** поле: `false` — модуль включён, `true` — модуля нет, лампы не
 управляются; `ip` обязателен при `disabled=false`), полностью описан в
 [`docs/relay_sr-201(2light).md`](docs/relay_sr-201(2light).md). Опрос Deye/Sofar — раз в 10 секунд; МАП и MPPT — 1 раз
-в секунду (с сохранением 1 точки за 10 с); BMS — 1 раз в секунду; CE308 — раз в 2 секунды
-(мгновенные значения в Redis ~1 точка за 2 с, в PG — усреднённые точки за 10 с).
+в секунду; BMS — 1 раз в секунду; CE308 — раз в 2 секунды. **В Redis пишется КАЖДОЕ
+снятое показание** (окно 2 календарных суток), **в PG все ряды усредняются до 1 записи
+за 5 минут** (инверторы, МАП/MPPT, DDS238, CE308, ANT BMS, EnBMS).
 
 **Шаблон `sunReceiver.sample.json`** (в git) — публичный пример структуры конфига.
 **Всегда** обновлять его при любом изменении структуры/содержимого `sunReceiver.json`
@@ -129,14 +130,15 @@ legacy-файлом `dds238.json`). Счётчик Энергомера **CE308*
   [`docs/dds238-meter.md`](docs/dds238-meter.md).
 - **Счётчик Энергомера CE308** (BLE) — `ce308_*.go`: `ce308_client.go` (BLE-транспорт),
   `ce308.go` (маппинг/энергоснимок), `ce308_poller.go` (2-сек цикл, реконнект),
-  `ce308_accumulator.go` (усреднение до 1 записи за 10 с в PG),
+  `ce308_accumulator.go` (усреднение до 1 записи за 5 мин в PG),
   `ce308_store.go` (Redis: current/series/energy), `ce308_agent_linux.go` (BlueZ-агент PIN).
   Полное описание — [`docs/modules/ce308.md`](docs/modules/ce308.md).
 - **BMS EnBMS** (BLE) — `enBms.go`, `enBms_client.go`, `enBms_poller.go`,
   `enBms_accumulator.go`, `enBms_store.go`: опрос BMS Enjie (EMU110x) по BLE —
   только блок Battery (CID2 `0x61`), устройства последовательно, цикл не чаще
   1 раза в секунду, постоянные соединения (структура BLE — из CE308, схема
-  хранения/усреднения — из ANT BMS). Полное описание —
+  хранения/усреднения — из ANT BMS). Redis: current + каждое снятое показание;
+  PG: 5-минутные средние. Полное описание —
   [`docs/modules/enbms.md`](docs/modules/enbms.md).
 - **ANT BMS** — `bms_poller.go`, `bms_accumulator.go`, `bmslistener/`. Полное описание —
   [`docs/antbms.md`](docs/antbms.md). Демон bmslistener (установка на ПАК «Малина») —

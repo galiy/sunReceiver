@@ -49,7 +49,7 @@ const tariffCacheTTL = 60 * time.Second
 // активная мощность подставляется в формулу «Мощность дома» вместо grid_power МАП.
 // В этом окне счётчик считается «измерением того же момента»; если он старше —
 // формула берёт мощность сети МАП. 20 с перекрывают кадентность хранения
-// снапшотов (одна точка на 10-секундное окно SaveSnapshotWindow), чтобы источник
+// снапшотов (счётчик пишется каждую секунду, см. SaveSnapshot), чтобы источник
 // на графике не «пилил» между счётчиком и МАП.
 const meterGridMaxAge = 20 * time.Second
 
@@ -554,12 +554,13 @@ func (h *dashboardHandler) apiBMSOne(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": "BMS не найдена"})
 }
 
-// apiBMSSeries отдаёт 5-минутные усреднённые точки BMS (/api/bms/<name>/series)
-// за период [from, to] (RFC3339; по умолч. — последние 24 часа). Часть периода
-// вне окна удержания Redis (старше 2 календарных суток) — из PostgreSQL
-// (sunreceiver.bms_averages, вся история), рецентная часть — из Redis-ряда;
-// сшивка по recentCutoff (как loadRange для инверторов). Точки — bmsSeriesPoint:
-// ts + усреднённые параметры (см. bms_accumulator.go).
+// apiBMSSeries отдаёт точки BMS (/api/bms/<name>/series) за период [from, to]
+// (RFC3339; по умолч. — последние 24 часа). Часть периода вне окна удержания
+// Redis (старше 2 календарных суток) — из PostgreSQL (sunreceiver.*_averages,
+// 5-минутные средние), рецентная часть — из Redis-ряда (сырые показания);
+// сшивка по recentCutoff (как loadRange для инверторов). Готовый ряд
+// прореживается downsampleBMSSeries (порог maxSeriesPoints, усреднение) — как
+// и остальные графики. Точки — bmsSeriesPoint.
 func (h *dashboardHandler) apiBMSSeries(w http.ResponseWriter, r *http.Request, name string) {
 	now := time.Now()
 	to := now
@@ -592,24 +593,17 @@ func (h *dashboardHandler) apiBMSSeries(w http.ResponseWriter, r *http.Request, 
 	// bmsSeriesPoint.
 	if es, eerr := h.store.EnBmsOne(name); eerr == nil && es != nil {
 		var epts []enbmsSeriesPoint
-		if h.pg != nil && from.Before(cutoff) {
-			pgEnd := cutoff.Add(-time.Second)
-			if to.Before(pgEnd) {
-				pgEnd = to
-			}
-			old, err := h.pg.EnBmsAverages(name, from, pgEnd)
+		pgStart, pgEnd, pgOK, rStart, rEnd, rOK := seamWindows(from, to, cutoff)
+		if h.pg != nil && pgOK {
+			old, err := h.pg.EnBmsAverages(name, pgStart, pgEnd)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 			epts = append(epts, old...)
 		}
-		redisStart := from
-		if redisStart.Before(cutoff) {
-			redisStart = cutoff
-		}
-		if to.After(redisStart) {
-			recent, err := h.store.QueryEnBmsSeries(name, redisStart, to)
+		if rOK {
+			recent, err := h.store.QueryEnBmsSeries(name, rStart, rEnd)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -619,6 +613,10 @@ func (h *dashboardHandler) apiBMSSeries(w http.ResponseWriter, r *http.Request, 
 		out := make([]bmsSeriesPoint, 0, len(epts))
 		for _, p := range epts {
 			out = append(out, bmsSeriesPointFromEnBms(p))
+		}
+		out = downsampleBMSSeries(out, from, to)
+		if out == nil {
+			out = []bmsSeriesPoint{}
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
@@ -632,34 +630,26 @@ func (h *dashboardHandler) apiBMSSeries(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	var pts []bmsSeriesPoint
-	// Старая часть периода (до cutoff) — из PostgreSQL (вся история).
-	// pgEnd = cutoff-1с: точка с ts == cutoff — начало 5-минутного промежутка,
-	// который уже в окне Redis, и дубль от обоих источников исключается.
-	if h.pg != nil && from.Before(cutoff) {
-		pgEnd := cutoff.Add(-time.Second)
-		if to.Before(pgEnd) {
-			pgEnd = to
-		}
-		old, err := h.pg.BMSAverages(name, from, pgEnd)
+	// Старая часть периода (старше cutoff) — из PostgreSQL (5-мин средние);
+	// рецентная — из Redis-ряда (сырые показания). Границы — общий seamWindows.
+	pgStart, pgEnd, pgOK, rStart, rEnd, rOK := seamWindows(from, to, cutoff)
+	if h.pg != nil && pgOK {
+		old, err := h.pg.BMSAverages(name, pgStart, pgEnd)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		pts = append(pts, old...)
 	}
-	// Рецентная часть (в пределах окна удержания) — из Redis-ряда.
-	redisStart := from
-	if redisStart.Before(cutoff) {
-		redisStart = cutoff
-	}
-	if to.After(redisStart) {
-		recent, err := h.store.QueryBMSSeries(name, redisStart, to)
+	if rOK {
+		recent, err := h.store.QueryBMSSeries(name, rStart, rEnd)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		pts = append(pts, recent...)
 	}
+	pts = downsampleBMSSeries(pts, from, to)
 	if pts == nil {
 		pts = []bmsSeriesPoint{}
 	}
@@ -1482,6 +1472,40 @@ func temperatureSeries(snaps []deviceSnapshot) []deviceSeries {
 // По умолчанию (без параметров или при ошибке парсинга) — текущие календарные сутки.
 // Часть периода, попадающая в последние 2 календарных суток, читается из Redis
 // (полное разрешение), более старая часть — из PostgreSQL (5-минутные средние).
+// seamWindows делит запрошенный диапазон [start, end] на часть из PostgreSQL
+// (строго старше cutoff) и часть из Redis (cutoff и новее). Единая точка стыка
+// для ВСЕХ рядов (инверторы/МАП/счётчик, BMS, CE308):
+//
+//	PG:    [start, min(end, cutoff-1s)] — если start < cutoff;
+//	Redis: [max(start, cutoff), end]    — если end > cutoff.
+//
+// PG-часть намеренно исключает точку ровно на cutoff (cutoff-1s): эта точка
+// принадлежит Redis-окну, иначе на стыке был бы дубль (одинаковый ts) —
+// «шторка»/удвоение на графике. Redis начинается ровно с cutoff, поэтому
+// разрыва нет. cutoff = 00:00 вчера (recentCutoff) — граница 5-минутного
+// промежутка PG, так что последняя PG-точка (cutoff−5 мин) покрывает интервал
+// [cutoff−5 мин, cutoff); со стороны Redis его продолжает сырое показание на
+// cutoff — стык непрерывный. ok=false — соответствующая часть пуста.
+func seamWindows(start, end, cutoff time.Time) (pgStart, pgEnd time.Time, pgOK bool, redisStart, redisEnd time.Time, redisOK bool) {
+	if start.Before(cutoff) {
+		pgStart = start
+		pgEnd = cutoff.Add(-time.Second)
+		if end.Before(pgEnd) {
+			pgEnd = end
+		}
+		pgOK = !pgStart.After(pgEnd)
+	}
+	if end.After(cutoff) {
+		redisStart = start
+		if redisStart.Before(cutoff) {
+			redisStart = cutoff
+		}
+		redisEnd = end
+		redisOK = redisStart.Before(redisEnd)
+	}
+	return
+}
+
 func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	loc := time.Local
@@ -1900,7 +1924,7 @@ func housePowerSeries(snaps []deviceSnapshot, placeByIP map[string]string) (hous
 // только у kindMAP-устройства). Снимки других устройств (Deye/Sofar/MPPT) отбрасываются:
 // фильтр по наличию battery_voltage исключает случайные теги с тем же именем
 // (например, grid_power). Точки сортируются по времени; дубли с одинаковым временем
-// схлопываются (в пределах окна SaveSnapshotWindow остаётся одна точка).
+// схлопываются (в пределах одной секунды остаётся одна точка).
 func singleMetricSeries(snaps []deviceSnapshot, key string) []seriesPoint {
 	var pts []seriesPoint
 	for _, sn := range snaps {
@@ -2017,6 +2041,122 @@ func downsampleSeries(pts []seriesPoint, from, to time.Time) []seriesPoint {
 	return out
 }
 
+// downsampleBMSSeries — аналог downsampleSeries для МНОГОПОЛЕВОЙ BMS-серии: если
+// точек больше maxSeriesPoints, диапазон [from, to] делится на n равных бинов
+// (n = min(maxSeriesPoints, число секунд диапазона)), числовые поля и массивы
+// ячеек/температур усредняются, дискретные (MOS/балансировка/число ячеек/кадры)
+// берутся из последней точки бина; ts — первая точка бина. Ряд короче порога
+// возвращается как есть. Применяется и к ANT, и к EnBMS (/api/bms/<name>/series).
+func downsampleBMSSeries(pts []bmsSeriesPoint, from, to time.Time) []bmsSeriesPoint {
+	if len(pts) <= maxSeriesPoints {
+		return pts
+	}
+	span := to.Sub(from).Seconds()
+	if span < 1 {
+		return pts
+	}
+	n := int(span)
+	if n > maxSeriesPoints {
+		n = maxSeriesPoints
+	}
+	binSec := span / float64(n)
+	type bin struct {
+		name, display, t string
+		count            int
+		cur, pwr         float64
+		soc, cap, rem    float64
+		maxV, minV, avgV float64
+		cells, temps     []float64
+		last             bmsSeriesPoint
+	}
+	bins := make([]bin, n)
+	for _, p := range pts {
+		t, err := time.Parse(time.RFC3339, p.Ts)
+		if err != nil {
+			continue
+		}
+		i := int(t.Sub(from).Seconds() / binSec)
+		if i < 0 {
+			i = 0
+		} else if i >= n {
+			i = n - 1
+		}
+		b := &bins[i]
+		if b.count == 0 {
+			b.name, b.display, b.t = p.Name, p.Display, p.Ts
+		}
+		b.cur += p.CurrentA
+		b.pwr += p.PowerW
+		b.soc += p.Soc
+		b.cap += p.CapacityAh
+		b.rem += p.RemainingAh
+		b.maxV += p.MaxCellV
+		b.minV += p.MinCellV
+		b.avgV += p.AvgCellV
+		b.cells = addFloatSlice(b.cells, p.CellsV)
+		b.temps = addFloatSlice(b.temps, p.Temperatures)
+		b.last = p
+		b.count++
+	}
+	out := make([]bmsSeriesPoint, 0, n)
+	for _, b := range bins {
+		if b.count == 0 {
+			continue
+		}
+		c := float64(b.count)
+		sp := bmsSeriesPoint{Name: b.name, Display: b.display, Ts: b.t}
+		sp.bmsAveraged = bmsAveraged{
+			CurrentA:     roundN(b.cur/c, 1),
+			PowerW:       roundN(b.pwr/c, 1),
+			Soc:          roundN(b.soc/c, 1),
+			CapacityAh:   roundN(b.cap/c, 1),
+			RemainingAh:  roundN(b.rem/c, 1),
+			MaxCellV:     roundN(b.maxV/c, 3),
+			MinCellV:     roundN(b.minV/c, 3),
+			AvgCellV:     roundN(b.avgV/c, 3),
+			CellsV:       divFloatSlice(b.cells, c, 3),
+			Temperatures: divFloatSlice(b.temps, c, 1),
+			CellCount:    b.last.CellCount,
+			ChargeMos:    b.last.ChargeMos,
+			DischargeMos: b.last.DischargeMos,
+			Balancer:     b.last.Balancer,
+			Frames:       b.last.Frames,
+			Samples:      b.last.Samples,
+		}
+		out = append(out, sp)
+	}
+	return out
+}
+
+func roundN(v float64, digits int) float64 {
+	m := math.Pow10(digits)
+	return math.Round(v*m) / m
+}
+
+// addFloatSlice поэлементно прибавляет src к dst (dst при необходимости
+// расширяется нулями).
+func addFloatSlice(dst, src []float64) []float64 {
+	for len(dst) < len(src) {
+		dst = append(dst, 0)
+	}
+	for i, v := range src {
+		dst[i] += v
+	}
+	return dst
+}
+
+// divFloatSlice делит каждый элемент на n с округлением до digits знаков.
+func divFloatSlice(src []float64, n float64, digits int) []float64 {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]float64, len(src))
+	for i, v := range src {
+		out[i] = roundN(v/n, digits)
+	}
+	return out
+}
+
 // loadRange возвращает снимки за период [start, end]. Точки старше окна
 // последних 2 календарных суток берутся из PostgreSQL (5-минутные средние),
 // точки внутри окна — из Redis (полное разрешение). Если PG отключено,
@@ -2055,40 +2195,28 @@ func (h *dashboardHandler) loadRange(start, end time.Time, now time.Time) ([]dev
 // loadRangeUncached — реальное чтение из PG (старая часть) и Redis (рецентная часть).
 func (h *dashboardHandler) loadRangeUncached(start, end time.Time, now time.Time) ([]deviceSnapshot, error) {
 	cutoff := recentCutoff(now)
+	pgStart, pgEnd, pgOK, rStart, rEnd, rOK := seamWindows(start, end, cutoff)
 	var all []deviceSnapshot
-	// Старая часть периода (до cutoff) — из PostgreSQL.
-	// oldEnd = cutoff−1с (аналог BMS-ветки apiBMSSeries): cutoff = 00:00 вчера —
-	// граница 5-минутного промежутка; если бы PG читал [start, cutoff] включительно,
-	// 5-мин точка ровно на cutoff и сырой снимок Redis на cutoff дали бы дубль точки
-	// (одинаковый T) в поинверторном ряду byIP (нет dedup) — «шторка» на графике.
-	// Сырые снимки Redis на [cutoff, …] закрывают шов — лап не будет.
-	if h.pg != nil && start.Before(cutoff) {
-		oldEnd := cutoff.Add(-time.Second)
-		if end.Before(oldEnd) {
-			oldEnd = end
-		}
-		pgSnaps, err := h.pg.Averages(start, oldEnd)
+	// Старая часть периода (старше cutoff) — из PostgreSQL (5-мин средние).
+	if h.pg != nil && pgOK {
+		pgSnaps, err := h.pg.Averages(pgStart, pgEnd)
 		if err != nil {
 			return nil, err
 		}
 		all = append(all, pgSnaps...)
 	}
-	// Рецентная часть периода (от cutoff) — из Redis (полное разрешение ~10 с).
+	// Рецентная часть периода (от cutoff) — из Redis (каждое показание).
 	// Если в Redis снимков нет (их потеряли, например при сбое Redis или пока был
 	// выключен пулер, а реставрация из PG срабатывает только при полностью пустом
 	// Redis) — дополняем окно 5-минутными средними из PG, чтобы график не остался
 	// пустым, а показал хотя бы усреднённую историю за период.
-	if end.After(cutoff) {
-		rStart := start
-		if rStart.Before(cutoff) {
-			rStart = cutoff
-		}
-		redisSnaps, err := h.store.QuerySeries(rStart, end)
+	if rOK {
+		redisSnaps, err := h.store.QuerySeries(rStart, rEnd)
 		if err != nil {
 			return nil, err
 		}
 		if len(redisSnaps) == 0 && h.pg != nil {
-			pgSnaps, perr := h.pg.Averages(rStart, end)
+			pgSnaps, perr := h.pg.Averages(rStart, rEnd)
 			if perr != nil {
 				return nil, perr
 			}
@@ -2318,13 +2446,11 @@ func (h *dashboardHandler) apiCE308Series(w http.ResponseWriter, r *http.Request
 	}
 	cutoff := recentCutoff(now)
 	var pts []seriesPoint
-	// Старая часть периода (до cutoff) — из PostgreSQL (вся история 10-сек точек).
-	if h.pg != nil && from.Before(cutoff) {
-		pgEnd := cutoff.Add(-time.Second)
-		if to.Before(pgEnd) {
-			pgEnd = to
-		}
-		old, err := h.pg.QueryCE308Averages(name, from, pgEnd)
+	// Старая часть — из PostgreSQL (5-мин средние), рецентная — из Redis-ряда
+	// (сырые показания). Границы — общий seamWindows.
+	pgStart, pgEnd, pgOK, rStart, rEnd, rOK := seamWindows(from, to, cutoff)
+	if h.pg != nil && pgOK {
+		old, err := h.pg.QueryCE308Averages(name, pgStart, pgEnd)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -2333,13 +2459,8 @@ func (h *dashboardHandler) apiCE308Series(w http.ResponseWriter, r *http.Request
 			pts = append(pts, ce308SeriesPoint(p))
 		}
 	}
-	// Рецентная часть (в пределах окна удержания) — из Redis-ряда.
-	redisStart := from
-	if redisStart.Before(cutoff) {
-		redisStart = cutoff
-	}
-	if to.After(redisStart) {
-		recent, err := h.store.QueryCE308Series(redisStart, to)
+	if rOK {
+		recent, err := h.store.QueryCE308Series(rStart, rEnd)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -2391,13 +2512,11 @@ func (h *dashboardHandler) ce308SeriesRange(from, to time.Time, now time.Time) (
 	}
 	var recs []rec
 	cutoff := recentCutoff(now)
-	// Старая часть периода (до cutoff) — из PostgreSQL (10-сек точки).
-	if h.pg != nil && from.Before(cutoff) {
-		pgEnd := cutoff.Add(-time.Second)
-		if to.Before(pgEnd) {
-			pgEnd = to
-		}
-		old, err := h.pg.QueryCE308Averages(name, from, pgEnd)
+	// Старая часть — из PostgreSQL (5-мин средние), рецентная — из Redis-ряда
+	// (сырые показания). Границы — общий seamWindows.
+	pgStart, pgEnd, pgOK, rStart, rEnd, rOK := seamWindows(from, to, cutoff)
+	if h.pg != nil && pgOK {
+		old, err := h.pg.QueryCE308Averages(name, pgStart, pgEnd)
 		if err != nil {
 			return nil, err
 		}
@@ -2405,13 +2524,8 @@ func (h *dashboardHandler) ce308SeriesRange(from, to time.Time, now time.Time) (
 			recs = append(recs, rec{ts: p.TS, vals: p.Values})
 		}
 	}
-	// Рецентная часть (в пределах окна удержания) — из Redis-ряда.
-	redisStart := from
-	if redisStart.Before(cutoff) {
-		redisStart = cutoff
-	}
-	if to.After(redisStart) {
-		recent, err := h.store.QueryCE308Series(redisStart, to)
+	if rOK {
+		recent, err := h.store.QueryCE308Series(rStart, rEnd)
 		if err != nil {
 			return nil, err
 		}

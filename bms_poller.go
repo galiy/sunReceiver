@@ -161,15 +161,17 @@ func (s *bmsApiClient) fetch(ctx context.Context) (*bmsCollection, error) {
 }
 
 // runBmsPoll — отдельный 1-секундный цикл опроса ANT BMS (read_bms.php на
-// ПАК «Малина»; данные — C-демон bmslistener, shm 2018) и записи актуального
-// состояния в отдельный Redis-ключ (HASH sunreceiver:bms). В общем снимке
-// sunreceiver:current BMS не участвует (нет универсального контракта values).
+// ПАК «Малина»; данные — C-демон bmslistener, shm 2018).
 //
-// Параллельно 1-секундные снимки накапливаются в памяти (bmsAccumulator) в
-// 5-минутные усреднённые точки: по завершении каждого промежутка точка
-// пишется в Redis (месячный ZSET sunreceiver:bms:series, окно 2 календарных
-// суток) и в PostgreSQL (sunreceiver.bms_averages, вечно). При остановке
-// пулера накопленный (возможно неполный) промежуток дописывается.
+//   - актуальное состояние пишется в Redis-ключ (HASH sunreceiver:bms);
+//   - КАЖДОЕ снятое показание пишется в Redis-ряд (месячный ZSET
+//     sunreceiver:bms:series, окно 2 календарных суток; см. saveBMSReading);
+//   - параллельно 1-секундные снимки накапливаются в памяти (bmsAccumulator) в
+//     5-минутные усреднённые точки и пишутся в PostgreSQL
+//     (sunreceiver.bms_averages) — гранулярность PG = 1 запись / 5 минут.
+//
+// В общем снимке sunreceiver:current BMS не участвует (нет универсального
+// контракта values).
 func runBmsPoll(store *redisStore, pg *pgStore, ctx context.Context) {
 	const pollEvery = time.Second
 	ticker := time.NewTicker(pollEvery)
@@ -183,19 +185,47 @@ func runBmsPoll(store *redisStore, pg *pgStore, ctx context.Context) {
 			if col != nil {
 				now := time.Now()
 				for i := range col.Devices {
-					acc.add(col.Devices[i], now)
+					d := col.Devices[i]
+					acc.add(d, now)
+					saveBMSReading(store, d, now)
 				}
 			}
-			saveBMSClosedBuckets(store, pg, acc.closed(time.Now()), false)
+			saveBMSClosedBuckets(pg, acc.closed(time.Now()))
 		case <-ctx.Done():
-			// Drain неполного 5-минутного промежутка ТОЛЬКО в Redis (partial=true —
-			// в PG не пишем, там остаются только полные бакеты). В комментарии
-			// saveBMSClosedBuckets эффект раскрыт. main() ждёт завершение этой
-			// горутины (bgWg) ДО закрытия пулов Redis/PG, поэтому записи не
-			// гоняются с закрытыми пулами.
-			saveBMSClosedBuckets(store, pg, acc.drain(), true)
+			// Неполный 5-минутный промежуток в PG не пишем (там только полные
+			// бакеты); в Redis он не нужен — каждое показание уже записано живым
+			// опросом (saveBMSReading). main() ждёт завершение этой горутины (bgWg)
+			// ДО закрытия пулов Redis/PG.
 			return
 		}
+	}
+}
+
+// saveBMSReading пишет МГНОВЕННОЕ (одно снятое) показание ANT BMS в Redis-ряд
+// (month ZSET, score = секунда, samples=1). 5-минутные средние для PG считает
+// bms_accumulator.go; в Redis-ряду средних больше нет — только сырые показания.
+func saveBMSReading(store *redisStore, d bmsDevice, ts time.Time) {
+	sp := bmsSeriesPoint{Name: bmsKey(d), Display: d.DeviceName, Ts: ts.Format(time.RFC3339)}
+	sp.bmsAveraged = bmsAveraged{
+		CurrentA:     d.CurrentA,
+		PowerW:       d.PowerW,
+		Soc:          float64(d.Soc),
+		CapacityAh:   d.CapacityAh,
+		RemainingAh:  d.RemainingAh,
+		MaxCellV:     d.MaxCellV,
+		MinCellV:     d.MinCellV,
+		AvgCellV:     d.AvgCellV,
+		CellsV:       d.CellsV,
+		Temperatures: d.TemperaturesC,
+		CellCount:    d.CellCount,
+		ChargeMos:    d.ChargeMos,
+		DischargeMos: d.DischargeMos,
+		Balancer:     d.Balancer,
+		Frames:       d.Frames,
+		Samples:      1,
+	}
+	if err := store.SaveBMSSeries(sp, ts); err != nil {
+		log.Printf("bms redis series %s: %v", bmsKey(d), err)
 	}
 }
 
@@ -208,51 +238,43 @@ var bmsEmptyTolerance = 3
 // временный сбой shm) не должна стирать весь дашборд батарей.
 var bmsEmptyStreak int
 
-// saveBMSClosedBuckets пишет готовые 5-минутные точки BMS в Redis (месячный
-// ZSET, окно удержания 2 календарных суток — чистка PurgeOld) и в PG (вечно).
-// partial=true — промежутки выгружаются при остановке (неполные): такие пишутся
-// ТОЛЬКО в Redis (единственное представление «момента остановки»), в PG не
-// попадают — там остаются только полные 5-минутные бакеты (K3).
-func saveBMSClosedBuckets(store *redisStore, pg *pgStore, pts []bmsAvgPoint, partial bool) {
+// saveBMSClosedBuckets пишет готовые 5-минутные усреднённые точки BMS в PG
+// (sunreceiver.bms_averages, вечно) — гранулярность PG = 1 запись / 5 минут.
+// В Redis-ряд 5-минутные средние НЕ пишутся: там лежат сырые показания, которые
+// пулер пишет сам (saveBMSReading).
+func saveBMSClosedBuckets(pg *pgStore, pts []bmsAvgPoint) {
+	if pg == nil {
+		return
+	}
 	type row struct {
 		name  string
 		start time.Time
 		avg   bmsAveraged
 	}
-	var pgRows []row
+	pgRows := make([]row, 0, len(pts))
 	for _, p := range pts {
 		if p.avg.Samples == 0 {
 			continue
 		}
-		sp := bmsSeriesPoint{Name: p.name, Display: p.display, Ts: p.start.Format(time.RFC3339)}
-		sp.bmsAveraged = p.avg
-		if err := store.SaveBMSSeries(sp, p.start); err != nil {
-			log.Printf("bms avg redis %s %s: %v", p.name, p.start.Format(time.RFC3339), err)
-		}
-		if pg != nil && !partial {
-			pgRows = append(pgRows, row{name: p.name, start: p.start, avg: p.avg})
-		}
-		if partial {
-			log.Printf("bms avg: дописан неполный 5-минутный промежуток %s %s (снимков: %d)",
-				p.name, p.start.Format(time.RFC3339), p.avg.Samples)
-		}
+		pgRows = append(pgRows, row{name: p.name, start: p.start, avg: p.avg})
+	}
+	if len(pgRows) == 0 {
+		return
 	}
 	// Набор точек одного вызова пишем ОДНОЙ транзакцией с ограниченным retry:
 	// кратковременный сбой PG не должен оставлять «дыру» в 5-минутном ряде BMS
 	// (для BMS история восстанавливается только живым опросом — потеря необратима).
-	if pg != nil && len(pgRows) > 0 {
-		if err := retryPg(func() error {
-			return pg.withTx(func(q pgExecer) error {
-				for _, r := range pgRows {
-					if err := insertBMSAveragedExec(q, pg.ctx, r.name, r.start, r.avg); err != nil {
-						return err
-					}
+	if err := retryPg(func() error {
+		return pg.withTx(func(q pgExecer) error {
+			for _, r := range pgRows {
+				if err := insertBMSAveragedExec(q, pg.ctx, r.name, r.start, r.avg); err != nil {
+					return err
 				}
-				return nil
-			})
-		}, 3); err != nil {
-			log.Printf("bms avg pg: %v", err)
-		}
+			}
+			return nil
+		})
+	}, 3); err != nil {
+		log.Printf("bms avg pg: %v", err)
 	}
 }
 

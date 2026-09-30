@@ -1538,10 +1538,10 @@ func pollMPPTFromArr(t invTarget, arr []mpptRaw) DeviceResult {
 }
 
 // runMapPoll — отдельный 1-секундный цикл опроса быстрых целей — МАП (kindMAP,
-// Modbus TCP) и MPPT-контроллеров (веб-API ПАК «Малина») — и записи в Redis через
-// SaveSnapshotWindow: в пределах каждого 10-секундного окна остаётся ровно одна
-// (последняя) строка на устройство. МАП-цели исключены из 10-сек циклов инверторов
-// (см. runInverterPoll); MPPT не регистрируются в конфиге вовсе (см. pollAndSaveMap).
+// Modbus TCP) и MPPT-контроллеров (веб-API ПАК «Малина») — и записи в Redis
+// каждого снятого показания (Score = секунда снятия; см. SaveSnapshotMAP).
+// МАП-цели исключены из 10-сек циклов инверторов (см. runInverterPoll); MPPT не
+// регистрируются в конфиге вовсе (см. pollAndSaveMap).
 func runMapPoll(store *redisStore, stop context.Context) {
 	const pollEvery = time.Second
 	ticker := time.NewTicker(pollEvery)
@@ -1557,8 +1557,9 @@ func runMapPoll(store *redisStore, stop context.Context) {
 	}
 }
 
-// pollAndSaveMap опрашивает быстрые источники параллельно и пишет в Redis через
-// SaveSnapshotWindow (одна строка за каждые 10 секунд + актуальное current):
+// pollAndSaveMap опрашивает быстрые источники параллельно и пишет в Redis
+// КАЖДОЕ снятое показание (Score = секунда снятия; + актуальное current) через
+// SaveSnapshotMAP:
 //   - МАП (kindMAP, Modbus TCP) — цели из targets;
 //   - MPPT-контроллеры — ДИНАМИЧЕСКИ: состав определяется фактически подключёнными
 //     к ПАК «Малина» контроллерами из ответа read_json.php?device=mppt, а не из
@@ -1567,7 +1568,7 @@ func runMapPoll(store *redisStore, stop context.Context) {
 //     «актуальной».
 //
 // saveWindowSnapshot складывает результат опроса в deviceSnapshot (ts = res.Time
-// при наличии, иначе now) и пишет в Redis через SaveSnapshotWindow. Общий для
+// при наличии, иначе now) и пишет в Redis через SaveSnapshotMAP. Общий для
 // МАП- и MPPT-веток pollAndSaveMap.
 func saveWindowSnapshot(store *redisStore, t invTarget, res DeviceResult, now time.Time) {
 	if !res.OK || !res.HasData {
@@ -1589,7 +1590,7 @@ func saveWindowSnapshot(store *redisStore, t invTarget, res DeviceResult, now ti
 		Kind:       invKindName(t.Kind),
 		Values:     res.Values,
 	}
-	if err := store.SaveSnapshotWindow(snap, ts); err != nil {
+	if err := store.SaveSnapshotMAP(snap, ts); err != nil {
 		log.Printf("redis save %s: %v", devKey(t), err)
 	}
 }
@@ -1860,8 +1861,8 @@ func main() {
 		runRedisCleanup(store, stopCtx)
 	}()
 	// МАП («КЭС», Modbus TCP) и MPPT-контроллеры (веб-API ПАК «Малина»)
-	// опрашиваются отдельно, 1 раз в секунду, и пишутся в Redis со специальной
-	// логикой «одна строка за 10 с» (см. SaveSnapshotWindow). Быстрый 1-сек цикл
+	// опрашиваются отдельно, 1 раз в секунду, и пишутся в Redis каждым снятым
+	// показанием (см. SaveSnapshotMAP). Быстрый 1-сек цикл
 	// запускается только если есть хоть один источник МАП/MPPT: при map.disabled=true
 	// (или отсутствии источников) горутина не стартует вовсе.
 	hasMapSource := mapAPI != nil || mppt != nil
