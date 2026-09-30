@@ -235,7 +235,7 @@ func TestEnBmsMappingToBMSSeries(t *testing.T) {
 		Soh: 100, Cycles: 2, MaxCellIdx: 2, MaxCellV: 3.3, MinCellIdx: 1, MinCellV: 3.2, AvgCellV: 3.25,
 	}
 	d := bmsDeviceFromEnBms(snap)
-	if d.Kind != "enbms" || d.DeviceName != "BMS BP00" || d.Key != "AA:BB:CC:DD:EE:00" {
+	if d.Kind != "enbms" || d.DeviceName != "BMS BP00 AA:BB:CC:DD:EE:00" || d.Key != "AA:BB:CC:DD:EE:00" {
 		t.Fatalf("id: %+v", d)
 	}
 	if d.Soc != 25 { // округление 24.6 → 25

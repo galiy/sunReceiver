@@ -494,7 +494,14 @@ func (h *dashboardHandler) apiBMS(w http.ResponseWriter, r *http.Request) {
 			devs = append(devs, bmsDeviceFromEnBms(s))
 		}
 	}
-	sort.Slice(devs, func(i, j int) bool { return bmsKey(devs[i]) < bmsKey(devs[j]) })
+	// Сортировка батареек на главной — по отображаемому имени; при равенстве —
+	// по ключу (bmsKey), для стабильного порядка.
+	sort.Slice(devs, func(i, j int) bool {
+		if devs[i].DeviceName != devs[j].DeviceName {
+			return devs[i].DeviceName < devs[j].DeviceName
+		}
+		return bmsKey(devs[i]) < bmsKey(devs[j])
+	})
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{

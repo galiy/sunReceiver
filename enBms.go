@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strings"
 	"time"
 )
 
@@ -441,9 +442,15 @@ func enbmsParsedValid(r enbmsParsed) bool {
 // (MOS/балансировка, счётчик кадров) — остаётся нулевым, а kind="enbms" велит
 // фронту эти блоки не показывать.
 func bmsDeviceFromEnBms(s enbmsSnapshot) bmsDevice {
+	// Отображаемое имя — имя + MAC: у EnBMS заводское BLE-имя не уникально,
+	// MAC однозначно идентифицирует устройство (видно и на главной, и на /bms/<mac>).
+	name := s.Name
+	if s.MAC != "" && !strings.Contains(name, s.MAC) {
+		name = strings.TrimSpace(name + " " + s.MAC)
+	}
 	d := bmsDevice{
 		Kind:          "enbms",
-		DeviceName:    s.Name,
+		DeviceName:    name,
 		Key:           s.MAC,
 		Port:          "BLE",
 		CellCount:     s.CellCount,
