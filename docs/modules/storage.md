@@ -56,6 +56,14 @@ snap)` (PIPELINE/TxPipeline). `SaveSnapshot` пишет **каждое** сня�
 (`pg.BMSAveragesAll` → `sunreceiver:bms:series:<YYYY-MM>`) и ряд EnBMS
 (`pg.EnBmsAveragesAll` → `sunreceiver:enbms:series:<YYYY-MM>`), после чего persist их
 сохраняет. Ряд CE308 из PG не восстанавливается (только живой опрос).
+**Нюанс**: штатный Redis-ряд BMS — сырые показания (`samples=1`), а восстановленный
+из PG участок представлен 5-минутными средними (`samples>1`) — до первых новых
+опросов ряд смешанный (маркер — поле `samples`).
+
+**Объём Redis**: с 2026-09-30 ряды хранят КАЖДОЕ показание (окно 2 суток): инверторы
+~10 с, МАП/MPPT/счётчик/ANT BMS — каждый опрос, EnBMS ~1 с, CE308 ~2 с. Для BMS это
+до ~86 400 точек/сутки на устройство (JSON с массивами ячеек). При росте памяти
+следить за `INFO memory`/размером ключей `sunreceiver:*series*`.
 
 ## PostgreSQL (`pg_store.go`)
 

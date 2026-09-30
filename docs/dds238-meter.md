@@ -162,7 +162,7 @@ export_night = (Export(07:00) - Export(00:00)) + (Export(00:00 след.дня) 
 - `meter_client.go` — Modbus-TCP клиент (holding registers, `[]uint16`, big-endian),
   переиспользуемое соединение.
 - `meter_config.go` — чтение `dds238.json`.
-- `meter_poller.go` — 1-сек цикл опроса + запись в Redis (`SaveSnapshotWindow`) и вызов
+- `meter_poller.go` — 1-сек цикл опроса + запись в Redis (`SaveSnapshot`) и вызов
   тарифного захвата.
 - `meter_tariff.go` — захват граничных показаний, финализация дня, методы PG
   (`StoreMeterBoundary`, `finalizeMeterDay`, `ensureMeterTariffSchema`).

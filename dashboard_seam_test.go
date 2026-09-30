@@ -77,6 +77,36 @@ func mkBmsPt(ts time.Time, cur float64, cells []float64) bmsSeriesPoint {
 
 // TestDownsampleBMSSeries проверяет, что длинная BMS-серия прореживается до
 // порога с усреднением полей и сохранением ячеек.
+// TestDownsampleBMSSeriesPerIndexCells: при разной длине cells_v у точек
+// усреднение идёт по счётчику на индекс — отсутствующие элементы не разбавляют
+// среднее нулями. Все точки попадают в один бин (span = 1 с).
+func TestDownsampleBMSSeriesPerIndexCells(t *testing.T) {
+	from := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	to := from.Add(time.Second)
+	var pts []bmsSeriesPoint
+	for i := 0; i < 1200; i++ { // > maxSeriesPoints, но всё в одном бине
+		var cells []float64
+		if i%2 == 0 { // половина точек — без блока ячеек
+			cells = nil
+		} else {
+			cells = []float64{3.0, 3.1}
+		}
+		sp := mkBmsPt(from, 1, cells)
+		sp.CellCount = len(cells)
+		pts = append(pts, sp)
+	}
+	out := downsampleBMSSeries(pts, from, to)
+	if len(out) != 1 {
+		t.Fatalf("ожидался 1 бин, got %d", len(out))
+	}
+	if len(out[0].CellsV) != 2 || out[0].CellsV[0] != 3.0 || out[0].CellsV[1] != 3.1 {
+		t.Fatalf("ячейки усреднены неверно (разбавлены нулями?): %v", out[0].CellsV)
+	}
+	if out[0].CellCount < 2 {
+		t.Fatalf("CellCount=%d, want >=2", out[0].CellCount)
+	}
+}
+
 func TestDownsampleBMSSeries(t *testing.T) {
 	from := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
 	to := from.Add(24 * time.Hour)

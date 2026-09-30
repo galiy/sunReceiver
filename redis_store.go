@@ -70,7 +70,6 @@ type redisStore struct {
 }
 
 type mapWinMember struct {
-	window int64  // Unix-время последней записи (диагностика)
 	member string // JSON-снапшот (member ZSET) — источник mergeMAPSnap
 }
 
@@ -107,8 +106,8 @@ func redisSeriesKey(ts time.Time) string {
 	return redisSeriesPrefix + ts.Format("2006-01")
 }
 
-// bmsSeriesKey возвращает ключ месячного сегмента ряда 5-минутных усреднённых
-// точек BMS для ts.
+// bmsSeriesKey возвращает ключ месячного сегмента ряда мгновенных (сырых)
+// показаний BMS для ts.
 func bmsSeriesKey(ts time.Time) string {
 	return redisBMSSeriesPrefix + ts.Format("2006-01")
 }
@@ -184,7 +183,7 @@ func (s *redisStore) saveSnapshot(snap deviceSnapshot, ts time.Time, mergeMAP bo
 		if s.mapWin == nil {
 			s.mapWin = map[string]mapWinMember{}
 		}
-		s.mapWin[snap.IP] = mapWinMember{window: ts.Unix(), member: string(b)}
+		s.mapWin[snap.IP] = mapWinMember{member: string(b)}
 		s.mapMu.Unlock()
 	}
 	return nil
@@ -301,18 +300,16 @@ func (s *redisStore) BMSOne(name string) (string, error) {
 	return v, err
 }
 
-// SaveBMSSeries кладёт одну 5-минутную усреднённую точку BMS в месячный ZSET
-// ряда (score = Unix-секунды начала промежутка). Хранение — последние 2
-// календарных суток (чистка PurgeOld), как и ряд инверторов.
+// SaveBMSSeries кладёт МГНОВЕННУЮ (сырую) точку ANT BMS в месячный ZSET ряда
+// (score = Unix-секунды снятия). Хранение — последние 2 календарных суток
+// (чистка PurgeOld), как и ряд инверторов. 5-минутные средние для PG считает
+// bms_accumulator.go — в Redis-ряду их нет.
 //
-// Тот же (устройство, промежуток) может записываться дважды: при остановке
-// пулера дописывается неполный промежуток (drain), а новый процесс пишет
-// продолжение того же промежутка. Голый ZADD оставил бы в ZSET два разных
-// member с одинаковым score — две точки в один и тот же момент времени на
-// графике («ступенька»). Поэтому перед записью удаляются старые версии того
-// же устройства на этом score: в Redis остаётся ровно одна точка на
-// (устройство, 5-минутный промежуток), last-write-wins — поздняя запись
-// побеждает (независимо от полноты; см. InsertBMSAveraged).
+// Тот же (устройство, секунда) может записываться дважды (повторный опрос в
+// пределах секунды). Голый ZADD оставил бы в ZSET два разных member с
+// одинаковым score — две точки в один и тот же момент времени на графике
+// («ступенька»). Поэтому перед записью удаляются старые версии того же
+// устройства на этом score: остаётся ровно одна точка на (устройство, секунда).
 func (s *redisStore) SaveBMSSeries(p bmsSeriesPoint, ts time.Time) error {
 	b, err := json.Marshal(p)
 	if err != nil {
@@ -349,11 +346,10 @@ func (s *redisStore) SaveBMSSeries(p bmsSeriesPoint, ts time.Time) error {
 	return nil
 }
 
-// QueryBMSSeries возвращает 5-минутные усреднённые точки одной BMS (по ключу
-// bmsKey) за период [start, end] включительно из Redis-ряда, по
-// возрастанию времени. Читает месячные сегменты ZRANGEBYSCORE (в пределах
-// окна удержания 2 календарных суток); отфильтрованные по имени точки —
-// точный срез для графиков конкретной BMS.
+// QueryBMSSeries возвращает сырые показания одной BMS (по ключу bmsKey) за
+// период [start, end] включительно из Redis-ряда, по возрастанию времени.
+// Читает месячные сегменты ZRANGEBYSCORE (в пределах окна удержания 2
+// календарных суток); отфильтрованные по имени точки — точный срез для графиков.
 func (s *redisStore) QueryBMSSeries(name string, start, end time.Time) ([]bmsSeriesPoint, error) {
 	if start.After(end) {
 		return nil, errors.New("start after end")
@@ -480,7 +476,7 @@ func (s *redisStore) PurgeOld(now time.Time) {
 		log.Printf("redis cleanup keys: %v", err)
 		return
 	}
-	// Ряд 5-минутных усреднённых точек BMS чистится тем же окном.
+	// Ряд сырых показаний BMS чистится тем же окном.
 	bmsKeys, err := s.scanPrefixKeys(redisBMSSeriesPrefix + "*")
 	if err != nil {
 		log.Printf("redis cleanup bms keys: %v", err)
@@ -494,7 +490,7 @@ func (s *redisStore) PurgeOld(now time.Time) {
 	} else {
 		keys = append(keys, ce308Keys...)
 	}
-	// Ряд 5-минутных усреднённых точек EnBMS (то же окно 2 календарных суток;
+	// Ряд сырых показаний EnBMS (то же окно 2 календарных суток;
 	// 40-суточный Expire — лишь страховка, эффективное окно задаёт PurgeOld).
 	enbmsKeys, err := s.scanPrefixKeys(redisEnBmsSeriesPrefix + "*")
 	if err != nil {

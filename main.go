@@ -1783,7 +1783,7 @@ func main() {
 	stopCtx, stopCancel := context.WithCancel(context.Background())
 	defer stopCancel()
 	// storeCtx — контекст операций Redis/PG. Отдельный от stopCtx: циклы пулеров
-	// останавливаются по stopCtx, но финальные записи при shutdown (BMS-drain,
+	// останавливаются по stopCtx, но финальные записи при shutdown (averageBucket,
 	// averageBucket) должны выполняться с ЖИВЫМ контекстом — иначе go-redis
 	// вернёт "context canceled", и неполный бакет при остановке теряется (N16).
 	// storeCtx отменяется после bgWg.Wait() и до закрытия пулов.
@@ -1792,7 +1792,7 @@ func main() {
 	store.SetCtx(storeCtx)
 	// bgWg — все фоновые горутины, пишущие в Redis/PG: при завершении main
 	// отменяет stopCtx, ЖДЁТ их (bgWg.Wait()) и только потом defer'ы закрывают
-	// пулы rdb/pg — записи при остановке (BMS-drain, averageBucket) не гоняются
+	// пулы rdb/pg — записи при остановке (averageBucket) не гоняются
 	// с закрытыми пулами.
 	var bgWg sync.WaitGroup
 	var pg *pgStore
@@ -1926,7 +1926,7 @@ func main() {
 	}
 
 	// Счётчик Энергомера CE308 — отдельный 2-сек цикл опроса по BLE (текущие
-	// значения + история в Redis, усреднение до 1 записи за 10 с в PG), см.
+	// значения + история в Redis (каждое показание), усреднение до 1 записи за 5 мин в PG), см.
 	// ce308_poller.go и ce308_accumulator.go. Разовый снимок энергии — по сигналу.
 	// Раздел ce308 независим от счётчика DDS238 (meter) и запускается даже без него.
 	if ce308Cfg != nil {
@@ -2025,7 +2025,7 @@ func main() {
 	// ждёт медленный логгер.
 	stopCancel()
 	// Ждём завершения фоновых горутин (их завершающие записи в Redis/PG:
-	// BMS-drain, averageBucket), ПОСЛЕ чего defer'ы закрывают пулы — гонки
+	// averageBucket), ПОСЛЕ чего defer-ы закрывают пулы — гонки
 	// «запись в закрытый пул» нет. storeCtx отменяем только теперь, чтобы
 	// завершающие записи не упали с "context canceled".
 	bgWg.Wait()
@@ -2184,10 +2184,14 @@ func redisBMSDataPresent(store *redisStore) (bool, error) {
 // Запускается в фоне при пустом Redis. Восстанавливаются ОБА ряда:
 //   - снимки инверторов/МАП/счётчика (pg.Averages) — SaveSnapshot в месячный
 //     ZSET ряда;
-//   - 5-минутные усреднённые точки ANT BMS (pg.BMSAveragesAll) — SaveBMSSeries
-//     в ряд sunreceiver:bms:series:<YYYY-MM>;
-//   - 5-минутные усреднённые точки EnBMS (pg.EnBmsAveragesAll) — SaveEnBmsSeries
-//     в ряд sunreceiver:enbms:series:<YYYY-MM>.
+//   - точки ANT BMS (pg.BMSAveragesAll) — SaveBMSSeries в ряд
+//     sunreceiver:bms:series:<YYYY-MM>;
+//   - точки EnBMS (pg.EnBmsAveragesAll) — SaveEnBmsSeries в ряд
+//     sunreceiver:enbms:series:<YYYY-MM>.
+//
+// Замечание: штатно Redis-ряд BMS — сырые показания (samples=1), а
+// восстановленный из PG участок представлен 5-минутными средними (samples>1);
+// после первых новых опросов он дополняется сырыми точками.
 func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, stop context.Context) {
 	end := time.Now()
 	start := recentCutoff(end)
@@ -2234,7 +2238,7 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, st
 	}
 	log.Printf("pg restore: завершено, восстановлено точек: %d", restored)
 
-	// Ряд 5-минутных усреднённых точек ANT BMS — из pg.bms_averages в
+	// Ряд ANT BMS — из pg.bms_averages (5-мин средние) в
 	// sunreceiver:bms:series:<YYYY-MM> (то же окно удержания).
 	bmsPts, err := pg.BMSAveragesAll(start, end)
 	if err != nil {
@@ -2263,7 +2267,7 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, st
 	}
 	log.Printf("pg restore: BMS восстановлено точек: %d", bmsRestored)
 
-	// Ряд 5-минутных усреднённых точек EnBMS — из pg.enbms_averages в
+	// Ряд EnBMS — из pg.enbms_averages (5-мин средние) в
 	// sunreceiver:enbms:series:<YYYY-MM> (то же окно удержания).
 	enbmsPts, err := pg.EnBmsAveragesAll(start, end)
 	if err != nil {

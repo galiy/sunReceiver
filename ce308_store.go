@@ -36,7 +36,7 @@ const (
 	// redisCE308SeriesPrefix — временной ряд мгновенных значений CE308.
 	// Ключи вида sunreceiver:ce308:series:<YYYY-MM>, каждый — ZSET: score = Unix
 	// (сек.), member = JSON deviceSnapshot. Пишется после каждого успешного опроса
-	// (~1 точка за 2 с); усреднение до 1 записи за 10 с — в PG (ce308_accumulator).
+	// (~1 точка за 2 с); усреднение до 1 записи за 5 мин — в PG (ce308_accumulator).
 	redisCE308SeriesPrefix = "sunreceiver:ce308:series:"
 	// redisCE308EnergyKey — разовый снимок накопленной электроэнергии CE308
 	// (JSON ce308EnergySnapshot). Один ключ, история по энергии не ведётся.

@@ -214,7 +214,8 @@ func (a *enbmsAccumulator) closed(now time.Time) []enbmsAvgPoint {
 	return out
 }
 
-// drain возвращает все оставшиеся (возможно неполные) промежутки при остановке.
+// drain возвращает все оставшиеся (возможно неполные) промежутки. Пулерами НЕ
+// вызывается (неполный промежуток в PG не нужен) — оставлен только для тестов.
 func (a *enbmsAccumulator) drain() []enbmsAvgPoint {
 	var out []enbmsAvgPoint
 	for key, b := range a.buckets {

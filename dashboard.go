@@ -514,8 +514,8 @@ func (h *dashboardHandler) apiBMS(w http.ResponseWriter, r *http.Request) {
 // (/api/bms/<name>) для страницы деталей (обновление раз в секунду). name в URL —
 // ключ устройства (deviceName или "deviceName@Port", см. bmsKey); отображаемое имя
 // берётся из поля deviceName самого JSON.
-// /api/bms/<name>/series — временной ряд 5-минутных усреднённых точек
-// (см. apiBMSSeries).
+// /api/bms/<name>/series — временной ряд показаний BMS (Redis — сырые,
+// PG — 5-мин средние; см. apiBMSSeries).
 func (h *dashboardHandler) apiBMSOne(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/api/bms/")
 	if name == "" {
@@ -1486,6 +1486,9 @@ func temperatureSeries(snaps []deviceSnapshot) []deviceSeries {
 // промежутка PG, так что последняя PG-точка (cutoff−5 мин) покрывает интервал
 // [cutoff−5 мин, cutoff); со стороны Redis его продолжает сырое показание на
 // cutoff — стык непрерывный. ok=false — соответствующая часть пуста.
+// Крайний случай end == cutoff: единственная точка ровно на cutoff не входит ни в
+// PG (там cutoff−1с), ни в Redis (там строго end > cutoff) — практического
+// влияния нет (таких запросов фронт не формирует).
 func seamWindows(start, end, cutoff time.Time) (pgStart, pgEnd time.Time, pgOK bool, redisStart, redisEnd time.Time, redisOK bool) {
 	if start.Before(cutoff) {
 		pgStart = start
@@ -2043,10 +2046,12 @@ func downsampleSeries(pts []seriesPoint, from, to time.Time) []seriesPoint {
 
 // downsampleBMSSeries — аналог downsampleSeries для МНОГОПОЛЕВОЙ BMS-серии: если
 // точек больше maxSeriesPoints, диапазон [from, to] делится на n равных бинов
-// (n = min(maxSeriesPoints, число секунд диапазона)), числовые поля и массивы
-// ячеек/температур усредняются, дискретные (MOS/балансировка/число ячеек/кадры)
-// берутся из последней точки бина; ts — первая точка бина. Ряд короче порога
-// возвращается как есть. Применяется и к ANT, и к EnBMS (/api/bms/<name>/series).
+// (n = min(maxSeriesPoints, число секунд диапазона)); числовые поля усредняются,
+// массивы ячеек/температур усредняются ПО ИНДЕКСУ с учётом числа точек, где этот
+// индекс присутствовал (часть кадров может прийти с меньшим числом ячеек),
+// дискретные (MOS/балансировка/число ячеек/кадры) берутся из последней точки бина;
+// ts — первая точка бина. Ряд короче порога возвращается как есть. Применяется и
+// к ANT, и к EnBMS (/api/bms/<name>/series).
 func downsampleBMSSeries(pts []bmsSeriesPoint, from, to time.Time) []bmsSeriesPoint {
 	if len(pts) <= maxSeriesPoints {
 		return pts
@@ -2063,10 +2068,12 @@ func downsampleBMSSeries(pts []bmsSeriesPoint, from, to time.Time) []bmsSeriesPo
 	type bin struct {
 		name, display, t string
 		count            int
+		samples          int
 		cur, pwr         float64
 		soc, cap, rem    float64
 		maxV, minV, avgV float64
 		cells, temps     []float64
+		cellCnt, tempCnt []int
 		last             bmsSeriesPoint
 	}
 	bins := make([]bin, n)
@@ -2094,7 +2101,10 @@ func downsampleBMSSeries(pts []bmsSeriesPoint, from, to time.Time) []bmsSeriesPo
 		b.minV += p.MinCellV
 		b.avgV += p.AvgCellV
 		b.cells = addFloatSlice(b.cells, p.CellsV)
+		b.cellCnt = addCounts(b.cellCnt, len(p.CellsV))
 		b.temps = addFloatSlice(b.temps, p.Temperatures)
+		b.tempCnt = addCounts(b.tempCnt, len(p.Temperatures))
+		b.samples += p.Samples
 		b.last = p
 		b.count++
 	}
@@ -2104,6 +2114,13 @@ func downsampleBMSSeries(pts []bmsSeriesPoint, from, to time.Time) []bmsSeriesPo
 			continue
 		}
 		c := float64(b.count)
+		cells := divCountSlice(b.cells, b.cellCnt, 3)
+		// Число ячеек — максимум из заявленного последним кадром и фактически
+		// усреднённой длины массива (иначе фронт срежет часть ячеек).
+		cellCount := b.last.CellCount
+		if len(cells) > cellCount {
+			cellCount = len(cells)
+		}
 		sp := bmsSeriesPoint{Name: b.name, Display: b.display, Ts: b.t}
 		sp.bmsAveraged = bmsAveraged{
 			CurrentA:     roundN(b.cur/c, 1),
@@ -2114,14 +2131,14 @@ func downsampleBMSSeries(pts []bmsSeriesPoint, from, to time.Time) []bmsSeriesPo
 			MaxCellV:     roundN(b.maxV/c, 3),
 			MinCellV:     roundN(b.minV/c, 3),
 			AvgCellV:     roundN(b.avgV/c, 3),
-			CellsV:       divFloatSlice(b.cells, c, 3),
-			Temperatures: divFloatSlice(b.temps, c, 1),
-			CellCount:    b.last.CellCount,
+			CellsV:       cells,
+			Temperatures: divCountSlice(b.temps, b.tempCnt, 1),
+			CellCount:    cellCount,
 			ChargeMos:    b.last.ChargeMos,
 			DischargeMos: b.last.DischargeMos,
 			Balancer:     b.last.Balancer,
 			Frames:       b.last.Frames,
-			Samples:      b.last.Samples,
+			Samples:      b.samples,
 		}
 		out = append(out, sp)
 	}
@@ -2145,14 +2162,32 @@ func addFloatSlice(dst, src []float64) []float64 {
 	return dst
 }
 
-// divFloatSlice делит каждый элемент на n с округлением до digits знаков.
-func divFloatSlice(src []float64, n float64, digits int) []float64 {
+// addCounts увеличивает счётчик попаданий по каждому индексу 0..n-1 (нужно для
+// корректного деления массивов ячеек/температур, когда часть точек пришла с
+// меньшей длиной — отсутствующие элементы не должны учитываться в знаменателе).
+func addCounts(cnt []int, n int) []int {
+	for len(cnt) < n {
+		cnt = append(cnt, 0)
+	}
+	for i := 0; i < n; i++ {
+		cnt[i]++
+	}
+	return cnt
+}
+
+// divCountSlice делит каждый индекс на его собственный счётчик (roundN до digits);
+// индексы без данных пропускаются (не должны возникать — длина cnt = число
+// слагаемых).
+func divCountSlice(src []float64, cnt []int, digits int) []float64 {
 	if len(src) == 0 {
 		return nil
 	}
 	out := make([]float64, len(src))
 	for i, v := range src {
-		out[i] = roundN(v/n, digits)
+		if i >= len(cnt) || cnt[i] == 0 {
+			continue
+		}
+		out[i] = roundN(v/float64(cnt[i]), digits)
 	}
 	return out
 }

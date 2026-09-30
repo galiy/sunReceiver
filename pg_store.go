@@ -31,7 +31,7 @@ import (
 
 // pgStore — persistent-хранилище исторических данных в PostgreSQL.
 //
-// Хранит ТОЛЬКО усреднённые 5-минутные точки (avgStep): сырые 10-секундные
+// Хранит ТОЛЬКО усреднённые 5-минутные точки (avgStep): сырые
 // снимки живут в Redis (за последние 2 календарных суток), а в PG пишутся
 // накопленные за каждые 5 минут средние (см. accumulator.go). Данные старше
 // двух календарных суток хранятся в PG вечно и читаются дашбордом, когда
@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS sunreceiver.bms_averages (
 CREATE INDEX IF NOT EXISTS bms_averages_ts_idx ON sunreceiver.bms_averages (ts);`); err != nil {
 		return fmt.Errorf("pg bms_averages schema: %w", err)
 	}
-	// Таблица 10-секундных усреднённых точек счётчика Энергомера CE308.
+	// Таблица 5-минутных усреднённых точек счётчика Энергомера CE308.
 	// PK (name, ts) — эффективная выборка «CE308 за диапазон времени» (узкий
 	// индексный range-scan по первичному ключу); опциональный индекс по ts для
 	// выборок по времени без фильтра по устройству.
@@ -224,7 +224,7 @@ ON CONFLICT (ip, ts) DO UPDATE
 	return nil
 }
 
-// InsertCe308Average сохраняет одну усреднённую за 10 секунд точку CE308
+// InsertCe308Average сохраняет одну усреднённую за 5 минут точку CE308
 // (ts — начало промежутка). Идемпотентна по (name, ts), повторная запись
 // ОБНОВЛЯЕТ строку (last-write-wins), как в InsertAveraged.
 func (s *pgStore) InsertCe308Average(name string, ts time.Time, vc map[string]float64) error {
@@ -244,7 +244,7 @@ ON CONFLICT (name, ts) DO UPDATE
 	return nil
 }
 
-// ce308PGPoint — усреднённая точка CE308 из PostgreSQL (ts — начало 10-сек
+// ce308PGPoint — усреднённая точка CE308 из PostgreSQL (ts — начало 5-мин
 // промежутка, Values — усреднённые мгновенные значения).
 type ce308PGPoint struct {
 	Name   string
@@ -252,7 +252,7 @@ type ce308PGPoint struct {
 	Values map[string]float64
 }
 
-// QueryCE308Averages возвращает усреднённые 10-сек точки CE308 за период
+// QueryCE308Averages возвращает усреднённые 5-мин точки CE308 за период
 // [start, end] включительно. PK (name, ts) даёт эффективный range-scan
 // «устройство за период времени».
 func (s *pgStore) QueryCE308Averages(name string, start, end time.Time) ([]ce308PGPoint, error) {

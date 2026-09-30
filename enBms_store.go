@@ -53,8 +53,8 @@ func (s *redisStore) SaveEnBmsCurrent(snap enbmsSnapshot) error {
 	return s.rdb.HSet(s.ctx, redisEnBmsCurrentKey, snap.MAC, b).Err()
 }
 
-// SaveEnBmsSeries кладёт 5-минутную усреднённую точку в месячный ZSET ряда EnBMS
-// (дедупликация по (имя, score) — как SaveBMSSeries).
+// SaveEnBmsSeries кладёт МГНОВЕННУЮ (сырую) точку в месячный ZSET ряда EnBMS
+// (score = секунда снятия; дедупликация по (имя, score) — как SaveBMSSeries).
 func (s *redisStore) SaveEnBmsSeries(p enbmsSeriesPoint, ts time.Time) error {
 	b, err := json.Marshal(p)
 	if err != nil {
@@ -121,8 +121,8 @@ func (s *redisStore) EnBmsOne(mac string) (*enbmsSnapshot, error) {
 	return &snap, nil
 }
 
-// QueryEnBmsSeries возвращает 5-минутные усреднённые точки одного устройства
-// (по MAC) за период [start, end] включительно, по возрастанию времени.
+// QueryEnBmsSeries возвращает сырые показания одного устройства (по MAC) за
+// период [start, end] включительно, по возрастанию времени.
 func (s *redisStore) QueryEnBmsSeries(mac string, start, end time.Time) ([]enbmsSeriesPoint, error) {
 	if start.After(end) {
 		return nil, errors.New("start after end")
@@ -164,17 +164,16 @@ func saveEnBmsClosedBuckets(pg *pgStore, pts []enbmsAvgPoint) {
 		return
 	}
 	type row struct {
-		name    string
-		display string
-		start   time.Time
-		avg     enbmsAveraged
+		name  string
+		start time.Time
+		avg   enbmsAveraged
 	}
 	pgRows := make([]row, 0, len(pts))
 	for _, p := range pts {
 		if p.avg.Samples == 0 {
 			continue
 		}
-		pgRows = append(pgRows, row{name: p.name, display: p.display, start: p.start, avg: p.avg})
+		pgRows = append(pgRows, row{name: p.name, start: p.start, avg: p.avg})
 	}
 	if len(pgRows) == 0 {
 		return

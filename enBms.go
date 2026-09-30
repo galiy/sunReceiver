@@ -476,7 +476,7 @@ func bmsDeviceFromEnBms(s enbmsSnapshot) bmsDevice {
 	return d
 }
 
-// bmsSeriesPointFromEnBms приводит 5-минутную точку ряда EnBMS к форме ANT BMS
+// bmsSeriesPointFromEnBms приводит точку ряда EnBMS к форме ANT BMS
 // (bmsSeriesPoint): совпадающие поля переносятся 1:1, отсутствующие у EnBMS —
 // нулевые. Используется общим API /api/bms/<mac>/series и графиками страницы BMS.
 func bmsSeriesPointFromEnBms(p enbmsSeriesPoint) bmsSeriesPoint {

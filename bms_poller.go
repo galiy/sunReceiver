@@ -205,6 +205,11 @@ func runBmsPoll(store *redisStore, pg *pgStore, ctx context.Context) {
 // (month ZSET, score = секунда, samples=1). 5-минутные средние для PG считает
 // bms_accumulator.go; в Redis-ряду средних больше нет — только сырые показания.
 func saveBMSReading(store *redisStore, d bmsDevice, ts time.Time) {
+	// Устройства без DeviceName (пустая запись) в ряд не пишем — их же
+	// пропускает и аккумулятор (bmsAccumulator.add).
+	if d.DeviceName == "" {
+		return
+	}
 	sp := bmsSeriesPoint{Name: bmsKey(d), Display: d.DeviceName, Ts: ts.Format(time.RFC3339)}
 	sp.bmsAveraged = bmsAveraged{
 		CurrentA:     d.CurrentA,
