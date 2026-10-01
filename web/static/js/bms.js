@@ -115,7 +115,7 @@ async function load(){
     }
   }catch(e){}
 }
-// ---------- Графики (5-минутные средние из Redis) ----------
+// ---------- Графики (Redis — сырые показания, PG — 5-мин средние) ----------
 Chart.register(ChartZoom);
 // Позиционер хинта BMS регистрируем под именем 'bmsSide' в Tooltip.positioners:
 // в Chart.js 4.4.1 options.plugins.tooltip.position принимает только СТРОКУ-ключ

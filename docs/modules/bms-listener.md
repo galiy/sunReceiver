@@ -112,5 +112,5 @@ systemctl status bmslistener.service   # active (running)
 ## Связка в системе
 
 `bmslistener` (shm 2018, на Малине) → `read_bms.php` (отдаёт JSON) → `bms_poller.go`
-(модуль ANT BMS в sunReceiver) → 5-мин усреднённые точки в Redis + PG (см.
-[`storage.md`](storage.md)).
+(модуль ANT BMS в sunReceiver) → каждое показание в Redis (окно 2 суток) + 5-мин
+средние в PG (см. [`storage.md`](storage.md)).
