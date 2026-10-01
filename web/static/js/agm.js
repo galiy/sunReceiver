@@ -55,7 +55,7 @@ function agmTooltipPos(elements, eventPosition){
 })();
 
 var AGM_CHART_IDS=['agmVoltChart','agmCurChart','agmPwrChart'];
-function mkDs(label,color,data){ return { label:label, data:data, borderColor:color, backgroundColor:color, pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false }; }
+function mkDs(label,color,data){ return { label:label, data:data, borderColor:color, backgroundColor:color, pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false, spanGaps:false }; }
 function setAgmRangeLabels(){
   var txt='Диапазон: '+fmtDate(selRange.from)+' — '+fmtDate(selRange.to);
   AGM_CHART_IDS.forEach(function(id){ var el=document.getElementById(id+'Range'); if(el) el.textContent=txt; });
@@ -250,7 +250,7 @@ function agmRender(id, datasets, yTitle, zero){
       }
     },
     scales:{
-      x:{ type:'time', time:{ unit:'hour', displayFormats:{ hour:'HH:mm' }, tooltipFormat:'dd.MM.yyyy HH:mm:ss' }, ticks:{ maxRotation:0, autoSkipPadding:16 } },
+      x:{ type:'time', time:{ displayFormats:{ millisecond:'HH:mm:ss.SSS', second:'HH:mm:ss', minute:'HH:mm', hour:'HH:mm', day:'dd.MM.yyyy', week:'dd.MM.yyyy', month:'MM.yyyy', quarter:'MM.yyyy', year:'yyyy' }, tooltipFormat:'dd.MM.yyyy HH:mm:ss' }, ticks:{ maxRotation:0, autoSkipPadding:16 } },
       y:y
     }
   };
@@ -259,10 +259,13 @@ function agmRender(id, datasets, yTitle, zero){
   if(!el.__srMLBound){ el.__srMLBound=true; el.addEventListener('mouseleave',function(){ if(agmCursor.active){ agmCursor.active=false; agmSyncTooltips(null); agmUpdateAllCharts(); } }); }
   if(SR_COARSE || window.__srTouched){ AGM_CHARTS[id].options.plugins.tooltip.enabled=false; }
 }
-function buildAgmCharts(points){
-  agmRender('agmVoltChart',[mkDs('Напряжение','#f0ad4e',points.map(function(p){ return {x:new Date(p.ts), y:p.voltage_v}; }))],'V',false);
-  agmRender('agmCurChart',[mkDs('Ток','#5bc0de',points.map(function(p){ return {x:new Date(p.ts), y:p.current_a}; }))],'A',true);
-  agmRender('agmPwrChart',[mkDs('Мощность','#d9534f',points.map(function(p){ return {x:new Date(p.ts), y:p.power_w}; }))],'W',true);
+function buildAgmCharts(points, voltage){
+  // Точки с break=true — разрыв линии: y=null, spanGaps:false.
+  function ds(src,label,color,field){ return mkDs(label,color,src.map(function(p){ return {x:new Date(p.ts), y:(p['break']? null : p[field])}; })); }
+  // Напряжение — только по данным МАП (разрывы BMS на него не влияют).
+  agmRender('agmVoltChart',[ds(voltage||[],'Напряжение','#f0ad4e','voltage_v')],'V',false);
+  agmRender('agmCurChart',[ds(points,'Ток','#5bc0de','current_a')],'A',true);
+  agmRender('agmPwrChart',[ds(points,'Мощность','#d9534f','power_w')],'W',true);
 }
 function destroyAgmCharts(){
   Object.keys(AGM_CHARTS).forEach(function(id){ AGM_CHARTS[id].destroy(); delete AGM_CHARTS[id]; });
@@ -279,7 +282,7 @@ async function loadAgmCharts(){
     agmRebuilding=true;
     try{
       lastXWindow={};
-      buildAgmCharts(data.points||[]);
+      buildAgmCharts(data.points||[], data.voltage||[]);
     }finally{ agmRebuilding=false; }
     setAgmRangeLabels();
     var foot=document.getElementById('agmFoot');

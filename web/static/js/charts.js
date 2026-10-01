@@ -266,7 +266,7 @@ function chartOpts(withLegend,yTitle,extra){
 			}
 		},
 		scales:{
-			x:{ type:'time', time:{ unit:'hour', displayFormats:{ hour:'HH:mm' }, tooltipFormat:'yyyy-MM-dd HH:mm:ss' }, ticks:{ maxRotation:0, autoSkipPadding:20 } },
+			x:{ type:'time', time:{ displayFormats:{ millisecond:'HH:mm:ss.SSS', second:'HH:mm:ss', minute:'HH:mm', hour:'HH:mm', day:'dd.MM.yyyy', week:'dd.MM.yyyy', month:'MM.yyyy', quarter:'MM.yyyy', year:'yyyy' }, tooltipFormat:'yyyy-MM-dd HH:mm:ss' }, ticks:{ maxRotation:0, autoSkipPadding:20 } },
 			y:{ beginAtZero:true, title:{ display:yTitle, text:yTitle||'' } }
 		}
 	};

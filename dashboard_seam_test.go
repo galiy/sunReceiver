@@ -159,6 +159,79 @@ func TestAGMSOC(t *testing.T) {
 	}
 }
 
+// TestCollapseFrozenSeries: ≥2 подряд полностью идентичных снимка сворачиваются в
+// один в середине интервала; одиночные и различающиеся сохраняются.
+func TestCollapseFrozenSeries(t *testing.T) {
+	t0 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	var d agmDevValues
+	// run из 5 идентичных (t0..t0+4), затем смена значения.
+	for i := 0; i < 5; i++ {
+		d.ts = append(d.ts, t0.Add(time.Duration(i)*time.Second))
+		d.i = append(d.i, 5)
+		d.p = append(d.p, 50)
+	}
+	d.ts = append(d.ts, t0.Add(5*time.Second))
+	d.i = append(d.i, 6)
+	d.p = append(d.p, 60)
+	out := collapseFrozenSeries(d)
+	if len(out.ts) != 2 {
+		t.Fatalf("после свёртки точек %d, want 2 (%v)", len(out.ts), out.ts)
+	}
+	// Первая — ПЕРВЫЙ снимок интервала t0..t0+4 → t0.
+	if !out.ts[0].Equal(t0) || out.i[0] != 5 {
+		t.Fatalf("первый снимок интервала: %v i=%v", out.ts[0], out.i[0])
+	}
+	if !out.ts[1].Equal(t0.Add(5*time.Second)) || out.i[1] != 6 {
+		t.Fatalf("вторая точка: %v i=%v", out.ts[1], out.i[1])
+	}
+}
+
+func TestSortDev(t *testing.T) {
+	t0 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	d := agmDevValues{
+		ts: []time.Time{t0.Add(2 * time.Second), t0, t0.Add(time.Second)},
+		i:  []float64{2, 0, 1},
+		p:  []float64{20, 0, 10},
+		u:  []float64{2, 0, 1},
+	}
+	sortDev(&d)
+	for k := 0; k < 3; k++ {
+		if !d.ts[k].Equal(t0.Add(time.Duration(k) * time.Second)) {
+			t.Fatalf("ts[%d]=%v", k, d.ts[k])
+		}
+		if d.i[k] != float64(k) || d.p[k] != float64(k)*10 || d.u[k] != float64(k) {
+			t.Fatalf("рассинхрон столбцов на %d: i=%v p=%v u=%v", k, d.i, d.p, d.u)
+		}
+	}
+}
+
+// TestDownsampleAGMSeriesBreak: маркеры разрыва сохраняются и не усредняются.
+func TestDownsampleAGMSeriesBreak(t *testing.T) {
+	from := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	to := from.Add(24 * time.Hour)
+	var pts []agmSeriesPoint
+	for i := 0; i < 3000; i++ {
+		if i == 1500 {
+			pts = append(pts, agmSeriesPoint{Ts: from.Add(time.Duration(i) * time.Second).Format(time.RFC3339), Break: true})
+			continue
+		}
+		pts = append(pts, agmSeriesPoint{Ts: from.Add(time.Duration(i) * time.Second).Format(time.RFC3339), VoltageV: 51, CurrentA: 1, PowerW: 50})
+	}
+	out := downsampleAGMSeries(pts, from, to)
+	breaks := 0
+	for _, p := range out {
+		if p.Break {
+			breaks++
+		}
+	}
+	if breaks != 1 {
+		t.Fatalf("маркеров разрыва %d, want 1", breaks)
+	}
+	if len(out) > maxSeriesPoints+1 {
+		t.Fatalf("точек %d, want <=%d (+разрыв)", len(out), maxSeriesPoints)
+	}
+}
+
 func TestNearestIdx(t *testing.T) {
 	t0 := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
 	ts := []time.Time{t0, t0.Add(10 * time.Second), t0.Add(20 * time.Second)}

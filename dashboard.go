@@ -2315,19 +2315,34 @@ func agmSOC(v float64) int {
 }
 
 // agmSeriesPoint — точка ряда AGM: напряжение (с шины МАП, В), ток (A) и
-// мощность (W).
+// мощность (W). Break=true — маркер разрыва линии (нет данных от источника
+// дольше agmGapLimit); в этом случае значения не определены (фронт рисует пропуск).
 type agmSeriesPoint struct {
 	Ts       string  `json:"ts"`
 	VoltageV float64 `json:"voltage_v"`
 	CurrentA float64 `json:"current_a"`
 	PowerW   float64 `json:"power_w"`
+	Break    bool    `json:"break,omitempty"`
 }
 
-// agmDevValues — временной ряд одного BMS-устройства (для выравнивания с МАП).
+// Пороги согласования источников AGM:
+//   - agmFreshWindow — насколько «свежим» (по времени) должно быть значение
+//     каждого источника (МАП и все BMS), чтобы точка AGM считалась валидной;
+//   - agmGapLimit — полное отсутствие снимков от источника дольше этого времени
+//     означает пропуск всего интервала (разрыв); короткие пропуски — соединение.
+const (
+	agmFreshWindow = 2 * time.Second
+	agmGapLimit    = 30 * time.Second
+)
+
+// agmDevValues — временной ряд одного источника (МАП или BMS) для выравнивания.
+// u (напряжение) заполняется только для МАП.
 type agmDevValues struct {
-	ts []time.Time
-	i  []float64
-	p  []float64
+	ts  []time.Time
+	i   []float64
+	p   []float64
+	u   []float64
+	sig []string // подпись ВСЕГО снимка (для сверки «заморозки»)
 }
 
 // apiAGMSeries — GET /api/agm/series?from&to: ряд свинцово-кислотного (AGM) АКБ.
@@ -2357,39 +2372,47 @@ func (h *dashboardHandler) apiAGMSeries(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "from >= to", http.StatusBadRequest)
 		return
 	}
-	pts := h.agmSeries(from, to, now)
+	pts, volt := h.agmSeries(from, to, now)
 	pts = downsampleAGMSeries(pts, from, to)
+	volt = downsampleAGMSeries(volt, from, to)
 	if pts == nil {
 		pts = []agmSeriesPoint{}
+	}
+	if volt == nil {
+		volt = []agmSeriesPoint{}
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"from":   from.Format(time.RFC3339),
-		"to":     to.Format(time.RFC3339),
-		"points": pts,
+		"from":    from.Format(time.RFC3339),
+		"to":      to.Format(time.RFC3339),
+		"points":  pts,
+		"voltage": volt,
 	})
 }
 
-// agmSeries вычисляет ряд AGM за [from, to]: для каждой точки МАП берётся
-// ближайшее по времени значение каждого BMS-устройства (в пределах допуска) и
-// вычитается. Точки возвращаются по возрастанию времени.
-func (h *dashboardHandler) agmSeries(from, to, now time.Time) []agmSeriesPoint {
+// agmSeries вычисляет ряд AGM за [from, to] с учётом СВЕЖЕСТИ источников:
+//   - точка считается только если у КАЖДОГО источника (МАП + все BMS) есть
+//     значение в пределах ±agmFreshWindow (±2 с) — иначе точка пропускается;
+//   - если какой-то источник молчит дольше agmGapLimit (>30 с), ставится маркер
+//     разрыва (Break) — линия рвётся; при пропуске ≤30 с разрыв не ставится, и
+//     линия соединяет соседние точки;
+//   - «заморозка» значения (неизменно дольше agmFreezeLimit при активной системе)
+//     учитывается ТОЛЬКО для EnBMS; у МАП ноль — легитимный режим, ANT не проверяем.
+//
+// Кандидатные моменты — объединение таймстемпов всех источников. Ток AGM =
+// МАП − Σ BMS; МАП=0 трактуется как реальное значение (не гард).
+func (h *dashboardHandler) agmSeries(from, to, now time.Time) ([]agmSeriesPoint, []agmSeriesPoint) {
 	cutoff := recentCutoff(now)
 	snaps, err := h.loadRange(from, to, now)
 	if err != nil {
 		log.Printf("dashboard: agm loadRange: %v", err)
-		return nil
+		return nil, nil
 	}
-	type mapPt struct {
-		t    time.Time
-		volt float64
-		cur  float64
-		pwr  float64
-	}
-	var maps []mapPt
+	// Источник 0 — МАП (нужен также для напряжения).
+	var mapDev agmDevValues
 	for _, s := range snaps {
-		if s.IP != "map" { // МАП-устройство (battery_voltage/battery_power)
+		if s.IP != "map" {
 			continue
 		}
 		u, okU := snapFloat(s.Values, "battery_voltage")
@@ -2401,39 +2424,247 @@ func (h *dashboardHandler) agmSeries(from, to, now time.Time) []agmSeriesPoint {
 		if perr != nil {
 			continue
 		}
-		maps = append(maps, mapPt{t: t, volt: u, cur: pw / u, pwr: pw})
+		mapDev.ts = append(mapDev.ts, t)
+		mapDev.u = append(mapDev.u, u)
+		mapDev.i = append(mapDev.i, pw/u)
+		mapDev.p = append(mapDev.p, pw)
+		mapDev.sig = append(mapDev.sig, valuesSignature(s.Values))
 	}
-	if len(maps) == 0 {
+	if len(mapDev.ts) == 0 {
+		return nil, nil
+	}
+	sortDev(&mapDev)
+	// Сырые ряды источников: 0 — МАП, далее — BMS.
+	raw := []agmDevValues{mapDev}
+	for _, bd := range h.agmLoadBMS(from, to, cutoff) {
+		sortDev(&bd)
+		raw = append(raw, bd)
+	}
+	// Этап 1 (для расчёта тока/мощности AGM): убрать «замороженные» снимки —
+	// если снимок полностью идентичен предыдущему, он выбрасывается (остаётся
+	// первый). Этап 2: интервалы пропуска считаются по СЫРЫМ данным (а не после
+	// сворачивания), чтобы сворачивание не создавало ложных «пропусков».
+	srcs := make([]agmDevValues, len(raw))
+	for si := range raw {
+		srcs[si] = collapseFrozenSeries(raw[si])
+	}
+	// Ряд напряжения — по СЫРЫМ данным МАП (постоянное напряжение — валидные данные).
+	volt := buildAgmVoltageSeries(raw[0])
+
+	// Кандидатные моменты — объединение таймстемпов СЫРЫХ рядов (по секундам).
+	seen := map[int64]struct{}{}
+	var times []time.Time
+	for si := range raw {
+		for _, t := range raw[si].ts {
+			k := t.Unix()
+			if _, ok := seen[k]; ok {
+				continue
+			}
+			seen[k] = struct{}{}
+			times = append(times, t)
+		}
+	}
+	sort.Slice(times, func(i, j int) bool { return times[i].Before(times[j]) })
+
+	out := make([]agmSeriesPoint, 0, len(times))
+	prevBreak := false
+	nSrc := len(srcs)
+	idx := make([]int, nSrc)
+	for _, t := range times {
+		fresh := true
+		var maxRawAge time.Duration // отсутствие данных по СЫРОМУ ряду → разрыв
+		for si := 0; si < nSrc; si++ {
+			// Сырой ряд — для «пропуска» (разрыва).
+			rd := &raw[si]
+			jr := nearestIdx(rd.ts, t)
+			if jr < 0 {
+				if maxRawAge <= agmGapLimit {
+					maxRawAge = agmGapLimit + time.Second
+				}
+			} else {
+				ra := rd.ts[jr].Sub(t)
+				if ra < 0 {
+					ra = -ra
+				}
+				if ra > maxRawAge {
+					maxRawAge = ra
+				}
+			}
+			// Свёрнутый ряд — источник значения. Если ближайший снимок далеко
+			// (значение «заморожено» и выброшено) — точку не считаем, но разрыв
+			// не ставим (линия соединится).
+			cd := &srcs[si]
+			jc := nearestIdx(cd.ts, t)
+			idx[si] = jc
+			if jc < 0 {
+				fresh = false
+				continue
+			}
+			ca := cd.ts[jc].Sub(t)
+			if ca < 0 {
+				ca = -ca
+			}
+			if ca > agmFreshWindow {
+				fresh = false
+			}
+		}
+		if fresh {
+			var volt, sumI, sumP float64
+			for si := 0; si < nSrc; si++ {
+				j := idx[si]
+				if j < 0 {
+					continue
+				}
+				d := &srcs[si]
+				if si == 0 {
+					volt = d.u[j]
+					sumI += d.i[j]
+					sumP += d.p[j]
+				} else {
+					sumI -= d.i[j]
+					sumP -= d.p[j]
+				}
+			}
+			out = append(out, agmSeriesPoint{
+				Ts:       t.Format(time.RFC3339),
+				VoltageV: roundN(volt, 2),
+				CurrentA: roundN(sumI, 2),
+				PowerW:   roundN(sumP, 1),
+			})
+			prevBreak = false
+		} else if maxRawAge > agmGapLimit {
+			if !prevBreak { // один маркер на разрыв, не спамим
+				out = append(out, agmSeriesPoint{Ts: t.Format(time.RFC3339), Break: true})
+				prevBreak = true
+			}
+		}
+		// пропуск ≤ agmGapLimit: точку не пишем, линия соединится с соседними
+	}
+	return out, volt
+}
+
+// valuesSignature — детерминированная подпись содержимого снимка (карты тегов):
+// ключи сортируются, значения приводятся к строке. Нужна для сравнения «заморозки».
+func valuesSignature(v valuesContract) string {
+	if len(v) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(v))
+	for k := range v {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, k := range keys {
+		fmt.Fprintf(&b, "%s=%v;", k, v[k])
+	}
+	return b.String()
+}
+
+// buildAgmVoltageSeries — ряд напряжения AGM по данным одного МАП: точка на каждый
+// снимок МАП; разрыв — только при пропуске данных МАП > agmGapLimit.
+func buildAgmVoltageSeries(d agmDevValues) []agmSeriesPoint {
+	n := len(d.ts)
+	if n == 0 || len(d.u) != n {
 		return nil
 	}
-	sort.Slice(maps, func(i, j int) bool { return maps[i].t.Before(maps[j].t) })
-
-	devs := h.agmLoadBMS(from, to, cutoff)
-	// Допуск выравнивания: свежий Redis-ряд идёт с секундной/несколькосекундной
-	// кадентностью, PG-часть — 5-минутные точки, совпадающие по ts у МАП и BMS
-	// ровно; 90 с заведомо покрывают оба случая.
-	const tol = 90 * time.Second
-	out := make([]agmSeriesPoint, 0, len(maps))
-	for _, m := range maps {
-		var sumI, sumP float64
-		for di := range devs {
-			d := &devs[di]
-			j := nearestIdx(d.ts, m.t)
-			if j < 0 {
-				continue
+	out := make([]agmSeriesPoint, 0, n+8)
+	prev := -1
+	for i := 0; i < n; i++ {
+		if prev >= 0 {
+			if gap := d.ts[i].Sub(d.ts[prev]); gap > agmGapLimit {
+				out = append(out, agmSeriesPoint{Ts: d.ts[prev].Add(gap / 2).Format(time.RFC3339), Break: true})
 			}
-			if diff := d.ts[j].Sub(m.t); diff > tol || diff < -tol {
-				continue
-			}
-			sumI += d.i[j]
-			sumP += d.p[j]
 		}
-		out = append(out, agmSeriesPoint{
-			Ts:       m.t.Format(time.RFC3339),
-			VoltageV: roundN(m.volt, 2),
-			CurrentA: roundN(m.cur-sumI, 2),
-			PowerW:   roundN(m.pwr-sumP, 1),
-		})
+		out = append(out, agmSeriesPoint{Ts: d.ts[i].Format(time.RFC3339), VoltageV: roundN(d.u[i], 2)})
+		prev = i
+	}
+	return out
+}
+
+// sortDev сортирует временной ряд источника по времени (по возрастанию),
+// синхронно переставляя столбцы i/p (и u). Если длины не согласованы — ничего не
+// делает (не должно случаться: столбцы заполняются вместе).
+func sortDev(d *agmDevValues) {
+	n := len(d.ts)
+	if n == 0 || len(d.i) != n || len(d.p) != n {
+		return
+	}
+	idx := make([]int, n)
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.SliceStable(idx, func(a, b int) bool { return d.ts[idx[a]].Before(d.ts[idx[b]]) })
+	ts := make([]time.Time, n)
+	ii := make([]float64, n)
+	pp := make([]float64, n)
+	for k, id := range idx {
+		ts[k] = d.ts[id]
+		ii[k] = d.i[id]
+		pp[k] = d.p[id]
+	}
+	d.ts, d.i, d.p = ts, ii, pp
+	if len(d.u) == n {
+		uu := make([]float64, n)
+		for k, id := range idx {
+			uu[k] = d.u[id]
+		}
+		d.u = uu
+	} else {
+		d.u = nil
+	}
+}
+
+// collapseFrozenSeries убирает «замороженные» снимки источника (Этап 1),
+// однопроходно: идём по ряду и сравниваем каждый следующий снимок с предыдущим —
+// сначала быстро меняющиеся поля (время при наличии, ток, напряжение), затем
+// остальное содержимое. Если снимок полностью совпал с предыдущим — выбрасываем,
+// иначе оставляем. Позиционное время записи в сравнении не участвует.
+func collapseFrozenSeries(d agmDevValues) agmDevValues {
+	n := len(d.ts)
+	if n == 0 || len(d.i) != n || len(d.p) != n {
+		return d
+	}
+	hasU := len(d.u) == n
+	sigOK := len(d.sig) == n
+	// Полная сверка содержимого снимка: если есть подпись всего снимка (sig) —
+	// сверяем её (учитывает ВСЕ поля); иначе — ток/мощность(/напряжение).
+	fullSame := func(a, b int) bool {
+		if sigOK {
+			return d.sig[a] == d.sig[b]
+		}
+		if d.i[a] != d.i[b] || d.p[a] != d.p[b] {
+			return false
+		}
+		return !hasU || d.u[a] == d.u[b]
+	}
+	out := agmDevValues{}
+	appendAt := func(idx int) {
+		out.ts = append(out.ts, d.ts[idx])
+		out.i = append(out.i, d.i[idx])
+		out.p = append(out.p, d.p[idx])
+		if hasU {
+			out.u = append(out.u, d.u[idx])
+		}
+		if sigOK {
+			out.sig = append(out.sig, d.sig[idx])
+		}
+	}
+	appendAt(0)
+	last := 0 // индекс в d последнего ОСТАВЛЕННОГО снимка
+	for i := 1; i < n; i++ {
+		// Сначала быстро меняющиеся поля (ток, напряжение)…
+		if d.i[last] == d.i[i] && (!hasU || d.u[last] == d.u[i]) {
+			// …затем полная сверка содержимого снимка.
+			if fullSame(last, i) {
+				continue // полный дубль предыдущего — выбрасываем
+			}
+		}
+		appendAt(i)
+		last = i
+	}
+	if !hasU {
+		out.u = nil
 	}
 	return out
 }
@@ -2444,12 +2675,13 @@ func (h *dashboardHandler) agmSeries(from, to, now time.Time) []agmSeriesPoint {
 func (h *dashboardHandler) agmLoadBMS(from, to, cutoff time.Time) []agmDevValues {
 	pgStart, pgEnd, pgOK, rStart, rEnd, rOK := seamWindows(from, to, cutoff)
 	var devs []agmDevValues
-	add := func(d *agmDevValues, ts string, cur, pwr float64) {
+	add := func(d *agmDevValues, ts, sig string, cur, pwr float64) {
 		t, err := time.Parse(time.RFC3339, ts)
 		if err != nil {
 			return
 		}
 		d.ts = append(d.ts, t)
+		d.sig = append(d.sig, sig)
 		d.i = append(d.i, cur)
 		d.p = append(d.p, pwr)
 	}
@@ -2460,14 +2692,14 @@ func (h *dashboardHandler) agmLoadBMS(from, to, cutoff time.Time) []agmDevValues
 			if h.pg != nil && pgOK {
 				if pts, err := h.pg.BMSAverages(name, pgStart, pgEnd); err == nil {
 					for _, p := range pts {
-						add(&d, p.Ts, p.CurrentA, p.PowerW)
+						add(&d, p.Ts, fmt.Sprintf("%+v", p.bmsAveraged), p.CurrentA, p.PowerW)
 					}
 				}
 			}
 			if rOK {
 				if pts, err := h.store.QueryBMSSeries(name, rStart, rEnd); err == nil {
 					for _, p := range pts {
-						add(&d, p.Ts, p.CurrentA, p.PowerW)
+						add(&d, p.Ts, fmt.Sprintf("%+v", p.bmsAveraged), p.CurrentA, p.PowerW)
 					}
 				}
 			}
@@ -2476,21 +2708,21 @@ func (h *dashboardHandler) agmLoadBMS(from, to, cutoff time.Time) []agmDevValues
 			}
 		}
 	}
-	// EnBMS — все устройства по MAC.
+	// EnBMS — все устройства по MAC (заморозку значения проверяем только тут).
 	if m, err := h.store.EnBmsCurrent(); err == nil {
 		for mac := range m {
 			var d agmDevValues
 			if h.pg != nil && pgOK {
 				if pts, err := h.pg.EnBmsAverages(mac, pgStart, pgEnd); err == nil {
 					for _, p := range pts {
-						add(&d, p.Ts, p.CurrentA, p.PowerW)
+						add(&d, p.Ts, fmt.Sprintf("%+v", p.enbmsAveraged), p.CurrentA, p.PowerW)
 					}
 				}
 			}
 			if rOK {
 				if pts, err := h.store.QueryEnBmsSeries(mac, rStart, rEnd); err == nil {
 					for _, p := range pts {
-						add(&d, p.Ts, p.CurrentA, p.PowerW)
+						add(&d, p.Ts, fmt.Sprintf("%+v", p.enbmsAveraged), p.CurrentA, p.PowerW)
 					}
 				}
 			}
@@ -2526,36 +2758,63 @@ func nearestIdx(ts []time.Time, t time.Time) int {
 }
 
 // downsampleAGMSeries — гибридное прореживание ряда AGM (по фактическому числу
-// точек, без сшивания больших разрывов), как у остальных графиков.
+// точек, без сшивания больших разрывов), как у остальных графиков. Маркеры
+// разрыва (Break) сохраняются и не усредняются; прореживается каждый непрерывный
+// участок отдельно.
 func downsampleAGMSeries(pts []agmSeriesPoint, from, to time.Time) []agmSeriesPoint {
 	if len(pts) <= maxSeriesPoints {
 		return pts
 	}
-	times := make([]time.Time, len(pts))
-	for i := range pts {
-		if t, err := time.Parse(time.RFC3339, pts[i].Ts); err == nil {
-			times[i] = t
+	valid := 0
+	for _, p := range pts {
+		if !p.Break {
+			valid++
 		}
 	}
-	k := (len(pts) + maxSeriesPoints - 1) / maxSeriesPoints
+	if valid <= maxSeriesPoints {
+		return pts
+	}
+	k := (valid + maxSeriesPoints - 1) / maxSeriesPoints
 	gap := downsampleGapSeconds(from, to)
 	out := make([]agmSeriesPoint, 0, maxSeriesPoints)
-	for _, g := range downsampleGroups(times, k, gap) {
-		seg := pts[g[0]:g[1]]
-		var sv, si, sp float64
-		for _, p := range seg {
-			sv += p.VoltageV
-			si += p.CurrentA
-			sp += p.PowerW
+	var seg []agmSeriesPoint
+	flush := func() {
+		if len(seg) == 0 {
+			return
 		}
-		n := float64(len(seg))
-		out = append(out, agmSeriesPoint{
-			Ts:       seg[0].Ts,
-			VoltageV: roundN(sv/n, 2),
-			CurrentA: roundN(si/n, 2),
-			PowerW:   roundN(sp/n, 1),
-		})
+		times := make([]time.Time, len(seg))
+		for i := range seg {
+			if t, err := time.Parse(time.RFC3339, seg[i].Ts); err == nil {
+				times[i] = t
+			}
+		}
+		for _, g := range downsampleGroups(times, k, gap) {
+			s := seg[g[0]:g[1]]
+			var sv, si, sp float64
+			for _, p := range s {
+				sv += p.VoltageV
+				si += p.CurrentA
+				sp += p.PowerW
+			}
+			n := float64(len(s))
+			out = append(out, agmSeriesPoint{
+				Ts:       s[0].Ts,
+				VoltageV: roundN(sv/n, 2),
+				CurrentA: roundN(si/n, 2),
+				PowerW:   roundN(sp/n, 1),
+			})
+		}
+		seg = seg[:0]
 	}
+	for _, p := range pts {
+		if p.Break {
+			flush()
+			out = append(out, p)
+			continue
+		}
+		seg = append(seg, p)
+	}
+	flush()
 	return out
 }
 

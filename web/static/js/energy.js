@@ -87,7 +87,7 @@ function energyOpts(unit, minRange){
 			}
 		},
 		scales:{
-			x:{ type:'time', time:{ unit:unit, displayFormats:{ day:'dd.MM', week:'dd.MM', month:'MM.yy', year:'yyyy' } }, ticks:{ maxRotation:0, autoSkip:true, maxTicksLimit:24 } },
+			x:{ type:'time', time:{ displayFormats:{ hour:'HH:mm', day:'dd.MM', week:'dd.MM', month:'MM.yy', quarter:'MM.yy', year:'yyyy' } }, ticks:{ maxRotation:0, autoSkip:true, maxTicksLimit:24 } },
 			y:{ beginAtZero:true, title:{ display:true, text:'kWh' } }
 		}
 	};
