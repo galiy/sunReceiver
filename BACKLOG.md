@@ -117,3 +117,48 @@ bit→fault нет ни там, ни в `kbialek/deye-inverter-mqtt`.
 
 **Осталось:** при `status=3 (FAULT)` сопоставить биты Alert с авариями, завести
 таблицу имён и включить decode появлений в `device_errors` (kind=device).
+
+## План чистки истории git (зафиксирован 2026-10-01)
+
+Инвентаризация по всей истории (`git rev-list --all`, 362 ревизии). **В HEAD
+текущее дерево чистое** (реальной подсети нет), но приватные данные остались в
+истории.
+
+### Что найдено в истории
+- **Реальные IP `192.168.0.x` и серийники логгеров** — во множестве файлов и
+  коммитов: `sunReceiver.json` (до `3116449`), `config.json` (`c8601b9`),
+  `AGENTS.md`, `docs/*` (malina-web-api, read_json, dds238-meter, antbms,
+  modules/*, universal-contract, README), `main.go`, `mppt_api.go`,
+  `mapgateway/*`, `mapsettings/*`, тесты (`*_test.go`), `review.md` и др.
+- **Приватные файлы в истории:** `sunReceiver.json`, `config.json`, `review.md`
+  (`494d206`), `.kilo/kilo.json` (`bd463b7`), `.kilo/plans/…review…` (`2707118`),
+  каталоги `docs/ce308-bluetooth/*`, `realtek-bluetooth/*`, `map-settings/*`,
+  `mapsettings/*`.
+- **В HEAD остаются трекаемыми (нарушение правила `.kilo/` в gitignore):**
+  `.kilo/kilo.json`, `.kilo/plans/…review…`. Требуют `git rm --cached`.
+- **Не найдено:** `gtnhjdbx`, `postgresql://`/`password=` (DSN в историю не попал —
+  `db`-раздел добавлен уже после исключения файла), внешний IP/duckdns.
+- `energybms` — отдельно проверить (реальный MAC/серийник в DEVICE_SNAPSHOT).
+
+### План (порядок)
+0. Решить: репозиторий публичный/приватный и форкался ли; **секреты всё равно
+   ротировать**.
+1. Бэкап: `git clone --mirror` репо в `/tmp`.
+2. Немедленно (без перезаписи): `git rm --cached .kilo/kilo.json
+   .kilo/plans/…review…`, коммит; убедиться, что `.gitignore` содержит `.kilo/`.
+3. Ротация секретов (обязательно): пароль PG, пароль МАП, SSH-пароли прод/Малины,
+   токен MAX; обновить в `.kilo/` и прод-конфиге.
+4. Перезапись истории `git filter-repo`:
+   - удалить пути: `sunReceiver.json`, `config.json`, `review.md`, `.kilo/`,
+     `docs/ce308-bluetooth/`, `realtek-bluetooth/`, `map-settings/`,
+     `mapsettings/` (`--invert-paths`);
+   - заменить текстовые секреты `--replace-text`: `192\.168\.13\.[0-9]+` →
+     `192.168.0.x`; длинные 10-значные SN → `##########`.
+5. Прунинг: `git reflog expire --expire=now --all && git gc --prune=now`.
+6. `git push --force --all` и `--tags`; учесть кэш/форки GitHub (объекты живут до GC).
+7. Верификация: `git log -p -G'192\.168\.13\.'` и `git grep` по всем ревизиям —
+   пусто; secret scanning на GitHub.
+8. Повторить п.1–7 для `energybms`.
+
+> Перед force-push — предупредить (невозвратно); работать только от зеркала.
+> Если репо публичный/клонировался — считать утёкшее скомпрометированным.
