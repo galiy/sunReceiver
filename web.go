@@ -69,6 +69,7 @@ var webTemplates = template.Must(template.ParseFS(webFS,
 	"web/templates/energy.html",
 	"web/templates/bms.html",
 	"web/templates/agm.html",
+	"web/templates/errors.html",
 ))
 
 // staticFiles отдаёт файлы из web/static по префиксу /static/ с длинным

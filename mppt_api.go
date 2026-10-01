@@ -590,3 +590,53 @@ func pollMAPAPI(ctx context.Context) DeviceResult {
 	mapTracker.trackOK("api", now, hasGrid, grid)
 	return res
 }
+
+// FetchMemory читает набор байт-ячеек RAM МАП через read_memory.php (offset, count)
+// и возвращает карту offset→значение. offset/count — десятичные (адрес ячейки =
+// offset). Используется пулером ошибок МАП (web-API путь).
+func (s *mpptSite) FetchMemory(ctx context.Context, offset, count int) (map[int]int, error) {
+	u := fmt.Sprintf("%s/read_memory.php?offset=%d&count=%d", s.BaseURL, offset, count)
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	rctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	req = req.WithContext(rctx)
+	req.Header.Set("Authorization", s.authHdr)
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("read_memory status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMPPTBody))
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil, fmt.Errorf("read_memory parse json: %w", err)
+	}
+	out := map[int]int{}
+	for k, raw := range m {
+		i, e := strconv.Atoi(k)
+		if e != nil {
+			continue
+		}
+		var n int
+		if json.Unmarshal(raw, &n) == nil {
+			out[i] = n
+			continue
+		}
+		var str string
+		if json.Unmarshal(raw, &str) == nil {
+			if v, e2 := strconv.Atoi(str); e2 == nil {
+				out[i] = v
+			}
+		}
+	}
+	return out, nil
+}

@@ -78,9 +78,10 @@
 }
 
 
-/* Переключатель языка (правый верхний угол). */
-.lang-switch { margin-left: auto; align-self: flex-start; }
+/* Переключатель языка (правый верхний угол) — выделен жирной красной рамкой. */
+.lang-switch { margin-left: auto; align-self: flex-start; padding: 2px; border: 2px solid #d9534f; border-radius: 8px; background: #fff5f5; }
 .lang-switch select {
-  background: #ffffff; color: #2b3238; border: 1px solid #d0d6de;
-  border-radius: 6px; padding: 4px 8px; font-size: 13px; color-scheme: light;
+  background: #ffffff; color: #c9302c; border: 2px solid #d9534f;
+  border-radius: 6px; padding: 4px 8px; font-size: 13px; font-weight: 700; color-scheme: light;
+  box-shadow: 0 0 0 2px rgba(217,83,79,0.15);
 }

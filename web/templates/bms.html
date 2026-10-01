@@ -43,6 +43,21 @@
   </div>
 </div>
 
+<div class="card">
+  <h2>Алармы</h2>
+  <div id="bmsAlarms"><span class="ok">—</span></div>
+</div>
+
+<div class="card">
+  <h2>История ошибок</h2>
+  <div class="chart-toolbar">
+    <span>С</span><input type="datetime-local" id="errFrom">
+    <span>по</span><input type="datetime-local" id="errTo">
+    <button id="errApply" type="button">Показать</button>
+  </div>
+  <div id="bmsErrors"><span class="missing">—</span></div>
+</div>
+
 <h2 class="bms-charts-title">Графики (Redis — сырые показания, PG — 5-мин средние)</h2>
 <div class="period-panel">
   <button id="btnToday">Сегодня</button>

@@ -46,5 +46,38 @@
 ## Серийный номер инвертора (`inverter_sn`)
 
 `inverter_sn` — ASCII-строка в регистрах **0x0003–0x0007** (10 цифр, проверено:
-.70=`##########`, .79=`##########`, .91=`##########`, .92=`##########`,
-.93=`##########`). Сборка строки — `asciiFromRegisters`.
+инверторы `<ip-суффикс>`=`##########`). Сборка строки — `asciiFromRegisters`.
+(реальные серийные номера и адреса — приватно, вне git.)
+## Alert-регистры Deye (аварии) — найдено 2026-10-01
+
+В апстриме `StephanJoubert/home_assistant_solarman` есть отдельная группа **Alert**
+(rule 6 — битфилд, 6 регистров по 16 бит), но **без имён битов** и отдельно для
+разных семейств:
+
+| Семейство (yaml) | Регистры Alert |
+|---|---|
+| `deye_hybrid.yaml` (1-фазный hybrid) | `0x0065..0x006A` |
+| `deye_sg04lp3.yaml` (3-фазный hybrid) | `0x0229..0x022E` |
+| `deye_string.yaml` (grid-tie/string) | **Alert отсутствует** |
+
+`parser.py` для rule 6 просто возвращает список hex-значений регистров — карты
+bit→fault в апстриме нет. В `kbialek/deye-inverter-mqtt` (`deye_events.py`,
+`metric_group_string.md`) аварии также не декодируются, есть только статус
+(`Running Status`, рег. `0x003B`: 0 standby, 1 self-checking, 2 normal, 3 FAULT).
+
+**Что сделано в sunReceiver:** наш блок опроса Deye расширен до `0x3B..0x74`
+(ранее `0x3C..0x74`) — теперь читается и `Running Status` (`0x3B`), и кандидатные
+Alert-регистры `0x65..0x6A`. Значения логируются сырыми при изменении (и раз в
+10 мин) строкой:
+
+```
+deye alert <ip>: status(0x3B)=N regs 0x65-0x6A = 0x<24 hex>
+```
+
+Живая базовая линия (2026-10-01, все 5 инверторов .70/.79/.91/.92/.93):
+`status=2`, Alert = `0x000000000000000000000000` — регистры действительно нулевые
+в норме. Декод битов включим после кадра при `status=3 (FAULT)`.
+
+**Ссылки-источники:** `github.com/StephanJoubert/home_assistant_solarman`
+(`inverter_definitions/deye_*.yaml`, `parser.py`),
+`github.com/kbialek/deye-inverter-mqtt` (`docs/metric_group_string.md`).

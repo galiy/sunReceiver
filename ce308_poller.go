@@ -80,6 +80,7 @@ func runCe308Poll(store *redisStore, pg *pgStore, cfg *ce308Config, ctx context.
 	defer setCE308TriggerChan(nil)
 
 	var lastFailLog time.Time
+	var wasErr bool // история ошибок: переход «норма → ошибка»
 	reconnect := ce308ReconnectDelay
 	for {
 		// Внешняя переинициализация контроллера (watchdog перезагружает драйвер
@@ -94,6 +95,14 @@ func runCe308Poll(store *redisStore, pg *pgStore, cfg *ce308Config, ctx context.
 				logCE308("подключение к %s не удалось: %v", cfg.MAC, err)
 				lastFailLog = time.Now()
 			}
+			if !wasErr {
+				wasErr = true
+				if pg != nil {
+					if e := pg.InsertDeviceError(cfg.Name, "ce308", "comm", err.Error(), time.Now()); e != nil {
+						logCE308("error pg: %v", e)
+					}
+				}
+			}
 			if !waitCtx(ctx, reconnect) {
 				return
 			}
@@ -103,6 +112,7 @@ func runCe308Poll(store *redisStore, pg *pgStore, cfg *ce308Config, ctx context.
 		}
 		// Успешное подключение сбрасывает бэкофф к базовой паузе.
 		reconnect = ce308ReconnectDelay
+		wasErr = false
 		logCE308("подключено к %s", cfg.MAC)
 		err = ce308PollConnected(store, cfg, m, trig, ctx)
 		// Закрытие соединения: фиксируем результат (неуспешный Disconnect при

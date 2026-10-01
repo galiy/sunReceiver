@@ -308,3 +308,8 @@ func (c *enbmsConn) request(cid2 byte, info []byte) ([]byte, error) {
 func (c *enbmsConn) readEnBmsBattery() ([]byte, error) {
 	return c.request(enBmsCID2Battery, []byte{0x00})
 }
+
+// readEnBmsBasicInfo читает блок BasicInfo (CID2 0x51): модель/активный протокол.
+func (c *enbmsConn) readEnBmsBasicInfo() ([]byte, error) {
+	return c.request(0x51, nil)
+}

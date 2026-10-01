@@ -169,6 +169,8 @@ typedef struct {
     int           cell_count;
     int           charge_mos, discharge_mos, balancer;
     double        power_w;
+    uint32_t      balance_mask;      /* маска балансируемых ячеек (addr 132) */
+    double        cycle_ah;          /* суммарная цикловая ёмкость, Ah (addr 83) */
     int           max_cell_idx, ecmin_idx;
     double        max_cell_v, min_cell_v, avg_cell_v;
     uint16_t      checksum;             /* расчётная CRC кадра */
@@ -349,7 +351,8 @@ static int bms_parse_frame(bmsdev_t *d, const unsigned char *f) {
     d->soc = f[74];
     d->capacity_ah   = rd32be(f, 75) / 1000000.0;  /* ua -> Ah */
     d->remaining_ah   = rd32be(f, 79) / 1000000.0;
-    /* цикл (83) не публикуем */
+    d->cycle_ah       = rd32be(f, 83) / 1000.0;   /* Total cycle capacity, Ah (×0.001) */
+    d->balance_mask   = rd32be(f, 132);           /* бит 0 = ячейка 1 */
 
     for (int i = 0; i < 6; i++) {
         int off = 91 + i * 2;
@@ -520,10 +523,11 @@ static void publish_all(bmsdev_t *devs, int n) {
             "\"power_w\":%.1f,"
             "\"max_cell_idx\":%d,\"max_cell_v\":%.3f,"
             "\"min_cell_idx\":%d,\"min_cell_v\":%.3f,"
-            "\"avg_cell_v\":%.3f,\"frames\":%u",
+            "\"avg_cell_v\":%.3f,\"frames\":%u,"
+            "\"balance_mask\":%u,\"cycle_ah\":%.1f",
             d->charge_mos, d->discharge_mos, d->balancer, d->power_w,
             d->max_cell_idx, d->max_cell_v, d->ecmin_idx, d->min_cell_v,
-            d->avg_cell_v, d->frames_ok);
+            d->avg_cell_v, d->frames_ok, d->balance_mask, d->cycle_ah);
         BUFADD("}");
         cnt++;
     }

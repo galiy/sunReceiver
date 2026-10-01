@@ -66,7 +66,7 @@ PDU в payload — поиск `01 03 <vlen>`, а не по фиксирован�
   datafield для Deye).
 - **0x06** — "Logger Serial Number does not match" (неверный SN даталоггера).
 
-Проверено: inverter SN (напр. ########## для .70) даёт 0x06, logger SN проходил и
+Проверено: inverter SN (напр. `##########`) даёт 0x06, logger SN проходил и
 данные читались.
 
 ## Поведение живых логгеров

@@ -772,6 +772,7 @@ type DeviceResult struct {
 	InverterSN string // серийный номер инвертора (строка; для Sofar это ASCII-строка HW-регистров)
 	ErrCode    byte   // код ошибки heartbeat Deye/Sofar (0x00 — нет ошибки), см. DeyeErrorCode
 	Values     valuesContract
+	Faults     []string  // аварии самого устройства (из профильных регистров; НЕ в Values)
 	Time       time.Time // время актуальности данных (для MPPT API — timestamp ответа)
 }
 
@@ -985,6 +986,47 @@ func probableSofarBlock(r map[uint16]uint16) bool {
 
 	return true
 }
+
+// deyeAlertState — последнее залогированное значение Alert-регистров Deye по IP
+// (для лога изменений и троттлинга heartbeat).
+var (
+	deyeAlertMu   sync.Mutex
+	deyeAlertLast = map[string]string{}
+)
+
+// logDeyeRawAlert пишет СЫРЫЕ Alert-регистры Deye (0x65–0x6A, 6×16 бит) в журнал
+// с временем снятия — для калибровки карты аварий. По нормам апстрима Alert
+// находится именно здесь (single-phase hybrid), для string-модели официальной
+// карты нет. Логируем при изменении и не реже 10 минут.
+func logDeyeRawAlert(ip string, status int, hexA, hexB string) {
+	key := hexA + "|" + hexB + "|" + fmt.Sprint(status)
+	deyeAlertMu.Lock()
+	defer deyeAlertMu.Unlock()
+	now := time.Now()
+	if last, ok := deyeAlertLast[ip]; ok && last == key && now.Sub(lastDeyeAlertLog[ip]) < 10*time.Minute {
+		return
+	}
+	deyeAlertLast[ip] = key
+	lastDeyeAlertLog[ip] = now
+	log.Printf("deye alert %s: status(0x3B)=%d regs 0x65-0x6A=0x%s regs 0x229-0x22E=0x%s (имена битов калибруются)",
+		ip, status, hexA, hexB)
+}
+
+// deyeRegsHex собирает hex-строку из count регистров, начиная с addr, из карты.
+// Если регистры не читались — пустая строка.
+func deyeRegsHex(regs map[uint16]uint16, addr, count uint16) string {
+	var b strings.Builder
+	for i := uint16(0); i < count; i++ {
+		v, ok := regs[addr+i]
+		if !ok {
+			return ""
+		}
+		fmt.Fprintf(&b, "%04x", v)
+	}
+	return b.String()
+}
+
+var lastDeyeAlertLog = map[string]time.Time{}
 
 // deyeSensor — маппинг регистра Deye string/grid-tie инвертора
 // (из kbialek/deye-inverter-mqtt, диапазоны 0x3C-0x74 и 0xC6-0xD2).
@@ -1308,7 +1350,9 @@ func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 		// Читаем ТОЛЬКО диапазон 0x3C–0x74 (ядро контракта). Второй диапазон
 		// 0xC6–0xD2 (energy_load/sold/bought) не входит в commonContractTags и
 		// отбрасывался MarshalJSON — чтение лишь замедляло опрос.
-		const deyeStart, deyeCount uint16 = 0x3C, 0x39
+		// 0x3B — Running Status (0=standby,1=self-check,2=normal,3=FAULT): включаем
+		// в блок для калибровки аварий (сопоставление Alert-битов со статусом FAULT).
+		const deyeStart, deyeCount uint16 = 0x3B, 0x3A
 		pdus, fr, err := client.ReadRegistersDeye(ctx, deyeStart, deyeCount, 1)
 		if err != nil {
 			// Сеть/логгер недоступны: это offline, а не «heartbeat без данных»
@@ -1326,6 +1370,22 @@ func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 			}
 		}
 		if len(result) > 0 {
+			// Alert-кандидаты: 1-фазный hybrid (0x65-0x6A) и 3-фазный (0x229-0x22E).
+			// Значения логируем сырыми для калибровки (имена битов неизвестны).
+			alertB := ""
+			if pdus2, _, err2 := client.ReadRegistersDeye(ctx, 0x0229, 0x0006, 1); err2 == nil {
+				m2 := map[uint16]uint16{}
+				for _, p := range pdus2 {
+					if p.CRC != p.CRCCalc {
+						continue
+					}
+					for k := 0; k < len(p.Values); k++ {
+						m2[0x0229+uint16(k)] = p.Values[k]
+					}
+				}
+				alertB = deyeRegsHex(m2, 0x0229, 6)
+			}
+			logDeyeRawAlert(t.IP, int(result[0x3B]), deyeRegsHex(result, 0x65, 6), alertB)
 			res.Values = mapDeyeRegisters(result)
 			// Ядро (ac_active_power, рег. 0x56/0x57) обязано быть: без него values после
 			// фильтра commonContractTags пуст, а снимок со свежим timestamp показывает
@@ -1335,7 +1395,7 @@ func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 			}
 		}
 		// Серийный номер инвертора Deye — ASCII-строка в регистрах 0x0003-0x0007
-		// (10 цифр; проверено на живых .70/.79/.91/.92/.93, напр. .70 = "##########").
+		// (10 цифр; проверено на живых инверторах, напр. "##########").
 		// Если серийник уже известен (кэш в runInverterPoll) — не читаем заново:
 		// он постоянен, а чтение с 3 ретраями лишнее на каждый опрос.
 		if t.InverterSN != "" {
@@ -1399,6 +1459,7 @@ func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 		if len(result) > 0 {
 			res.HasData = true
 			res.Values = mapSofarRegisters(result)
+			res.Faults = decodeSofarFaults(result)
 		}
 		// Серийный номер инвертора Sofar — ASCII-строка HW-диапазона 0x2000-0x200D
 		// (func 04; первые 2 байта = длина строки, затем ASCII на 2 байта/регистр).
@@ -1542,15 +1603,16 @@ func pollMPPTFromArr(t invTarget, arr []mpptRaw) DeviceResult {
 // каждого снятого показания (Score = секунда снятия; см. SaveSnapshotMAP).
 // МАП-цели исключены из 10-сек циклов инверторов (см. runInverterPoll); MPPT не
 // регистрируются в конфиге вовсе (см. pollAndSaveMap).
-func runMapPoll(store *redisStore, stop context.Context) {
+func runMapPoll(store *redisStore, pg *pgStore, stop context.Context) {
 	const pollEvery = time.Second
 	ticker := time.NewTicker(pollEvery)
 	defer ticker.Stop()
 	state := newMPPTPollState()
+	errState := map[string]bool{} // app-ошибки по устройствам МАП/MPPT (для истории)
 	for {
 		select {
 		case <-ticker.C:
-			pollAndSaveMap(stop, store, time.Now(), state)
+			pollAndSaveMap(stop, store, pg, time.Now(), state, errState)
 		case <-stop.Done():
 			return
 		}
@@ -1570,10 +1632,29 @@ func runMapPoll(store *redisStore, stop context.Context) {
 // saveWindowSnapshot складывает результат опроса в deviceSnapshot (ts = res.Time
 // при наличии, иначе now) и пишет в Redis через SaveSnapshotMAP. Общий для
 // МАП- и MPPT-веток pollAndSaveMap.
-func saveWindowSnapshot(store *redisStore, t invTarget, res DeviceResult, now time.Time) {
+func saveWindowSnapshot(store *redisStore, pg *pgStore, t invTarget, res DeviceResult, now time.Time, errState map[string]bool) {
+	key := devKey(t)
 	if !res.OK || !res.HasData {
 		log.Printf("%s: %s %s", t.IP, t.Kind, describeResult(res))
+		if pg != nil && errState != nil && !errState[key] {
+			errState[key] = true
+			kind := "map"
+			if t.Kind == kindMPPT {
+				kind = "mppt"
+			}
+			code, desc := "no_data", "нет данных"
+			if res.ErrCode != 0 {
+				code = fmt.Sprintf("0x%02X", res.ErrCode)
+				desc = deyeErrCodeName(res.ErrCode)
+			}
+			if e := pg.InsertDeviceError(key, kind, code, desc, now); e != nil {
+				log.Printf("error pg %s: %v", key, e)
+			}
+		}
 		return
+	}
+	if errState != nil {
+		errState[key] = false
 	}
 	ts := now
 	if !res.Time.IsZero() {
@@ -1595,7 +1676,7 @@ func saveWindowSnapshot(store *redisStore, t invTarget, res DeviceResult, now ti
 	}
 }
 
-func pollAndSaveMap(ctx context.Context, store *redisStore, now time.Time, state *mpptPollState) {
+func pollAndSaveMap(ctx context.Context, store *redisStore, pg *pgStore, now time.Time, state *mpptPollState, errState map[string]bool) {
 	var wg sync.WaitGroup
 	activeMPPT := map[string]struct{}{}
 	pruneMPPT := false // MPPT-состав чистим из current только по решению state.shouldPrune
@@ -1608,7 +1689,7 @@ func pollAndSaveMap(ctx context.Context, store *redisStore, now time.Time, state
 		wg.Add(1)
 		go func(t invTarget) {
 			defer wg.Done()
-			saveWindowSnapshot(store, t, pollDevice(ctx, t), now)
+			saveWindowSnapshot(store, pg, t, pollDevice(ctx, t), now, errState)
 		}(t)
 	}
 	// МАП через веб-API (map.disabled=true): Modbus-пулер не запущен (цели kindMAP в
@@ -1618,7 +1699,7 @@ func pollAndSaveMap(ctx context.Context, store *redisStore, now time.Time, state
 		go func() {
 			defer wg.Done()
 			t := invTarget{IP: mapAPI.ip, Name: mapAPI.name, Kind: kindMAP, Slot: -1, Order: mapAPI.order}
-			saveWindowSnapshot(store, t, pollMAPAPI(ctx), now)
+			saveWindowSnapshot(store, pg, t, pollMAPAPI(ctx), now, errState)
 		}()
 	}
 	// MPPT-контроллеры — по факту подключённых из API. Состав определяется
@@ -1651,7 +1732,7 @@ func pollAndSaveMap(ctx context.Context, store *redisStore, now time.Time, state
 				wg.Add(1)
 				go func(t invTarget) {
 					defer wg.Done()
-					saveWindowSnapshot(store, t, pollMPPTFromArr(t, arr), now)
+					saveWindowSnapshot(store, pg, t, pollMPPTFromArr(t, arr), now, errState)
 				}(t)
 			}
 			// Прунинг — только по устойчивой пустоте (несколько пустых ответов подряд).
@@ -1878,8 +1959,24 @@ func main() {
 		bgWg.Add(1)
 		go func() {
 			defer bgWg.Done()
-			runMapPoll(store, stopCtx)
+			runMapPoll(store, pg, stopCtx)
 		}()
+		// Отдельный пулер ОШИБОК МАП (не чаще 1/30 с): сырые ячейки ошибок через
+		// Modbus или read_memory.php, запись появления в PG device_errors.
+		var mapErrTarget *invTarget
+		for i := range targets {
+			if targets[i].Kind == kindMAP {
+				mapErrTarget = &targets[i]
+				break
+			}
+		}
+		if pg != nil && (mapErrTarget != nil || mppt != nil) {
+			bgWg.Add(1)
+			go func() {
+				defer bgWg.Done()
+				runMapErrorPoll(pg, mapErrTarget, stopCtx)
+			}()
+		}
 	} else {
 		log.Printf("map/mppt: опрос отключён (map.disabled=true или нет источников МАП/MPPT)")
 	}
@@ -2014,7 +2111,7 @@ func main() {
 		bgWg.Add(1)
 		go func(t invTarget) {
 			defer bgWg.Done()
-			runInverterPoll(store, t, stopCtx)
+			runInverterPoll(store, pg, t, stopCtx)
 		}(t)
 	}
 
@@ -2045,11 +2142,13 @@ func main() {
 // этот IP используется только из этой горутины (инвариант «один IP — один
 // опрос», см. clientsByKey). Останавливается по отмене ctx (stop): незавершённый
 // опрос (pollDevice) прерывается сразу, а не до конца таймаута медленного логгера.
-func runInverterPoll(store *redisStore, t invTarget, stop context.Context) {
+func runInverterPoll(store *redisStore, pg *pgStore, t invTarget, stop context.Context) {
 	ticker := time.NewTicker(pollPeriod)
 	defer ticker.Stop()
 	var lastErrCode byte
 	var lastErrAt time.Time
+	lastErrCodeLog := ""            // история ошибок: код, записанный в прошлом чтении (пусто — ошибки не было)
+	lastFaults := map[string]bool{} // активные аварии устройства (из регистров), для истории
 	for {
 		select {
 		case <-ticker.C:
@@ -2078,7 +2177,37 @@ func runInverterPoll(store *redisStore, t invTarget, stop context.Context) {
 			log.Printf("%s: %s (%s)", t.IP, describeResult(res), now.Sub(t0).Round(time.Millisecond))
 			if !res.OK || !res.HasData {
 				// heartbeat_only / no data / ошибка — снимок не сохраняем
+				code, desc := "no_data", "нет данных"
+				if res.ErrCode != 0 {
+					code = fmt.Sprintf("0x%02X", res.ErrCode)
+					desc = deyeErrCodeName(res.ErrCode)
+				}
+				// Правило истории: пишем только если этой ошибки НЕ было в прошлом
+				// чтении (сравнение по коду), дубли на каждом чтении не создаются.
+				// «Нет данных» (no_data) — не авария устройства, в историю не пишем.
+				if pg != nil && code != lastErrCodeLog && code != "no_data" {
+					if e := pg.InsertDeviceError(t.IP, "inverter", code, desc, now); e != nil {
+						log.Printf("error pg %s: %v", t.IP, e)
+					}
+				}
+				lastErrCodeLog = code
 				continue
+			}
+			lastErrCodeLog = ""
+			// Аварии устройства (Sofar fault-регистры и т.п.): пишем только появление.
+			if pg != nil {
+				cur := map[string]bool{}
+				for _, f := range res.Faults {
+					cur[f] = true
+				}
+				for f := range cur {
+					if !lastFaults[f] {
+						if e := pg.InsertDeviceError(t.IP, "inverter", f, f, now); e != nil {
+							log.Printf("error pg %s: %v", t.IP, e)
+						}
+					}
+				}
+				lastFaults = cur
 			}
 			// Аппаратные серийные номера постоянны: если в этом цикле не удалось их
 			// прочитать (инвертор выключился на закате, регистры/диапазон HW не
@@ -2133,6 +2262,35 @@ func describeResult(res DeviceResult) string {
 
 // deyeErrCodeName — человекочитаемое имя кода ошибки heartbeat Deye/Sofar
 // (см. DeyeErrorCode в solarman/frame.go).
+// sofarFaultBits — битовая маска аварий Sofar (регистры 0x0001–0x0005, func 03).
+var sofarFaultBits = []struct {
+	bit uint16
+	id  string
+}{
+	{1, "ID01 Grid OV"}, {2, "ID02 Grid UV"}, {4, "ID03 Grid OF"}, {8, "ID04 Grid UF"},
+	{16, "ID05 PV UV"}, {32, "ID06 LVRT"}, {256, "ID09 PV OV"}, {512, "ID10 PV current unbalanced"},
+	{1024, "ID11"}, {2048, "ID12 GFCI"}, {4096, "ID13 phase sequence"}, {8192, "ID14 boost OC"},
+	{16384, "ID15 AC OC"}, {32768, "ID16 grid current high"},
+}
+
+// decodeSofarFaults декодирует аварии Sofar из сырых регистров (0x0001–0x0005).
+// Возвращает список ID активных аварий; сырые регистры в телеметрию не попадают.
+func decodeSofarFaults(regs map[uint16]uint16) []string {
+	var out []string
+	for off := uint16(0x0001); off <= 0x0005; off++ {
+		v := regs[off]
+		if v == 0 {
+			continue
+		}
+		for _, fb := range sofarFaultBits {
+			if v&fb.bit != 0 {
+				out = append(out, fb.id)
+			}
+		}
+	}
+	return out
+}
+
 func deyeErrCodeName(code byte) string {
 	switch code {
 	case 0x05:

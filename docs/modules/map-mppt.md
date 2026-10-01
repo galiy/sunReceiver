@@ -100,3 +100,44 @@
   все PHP-эндпоинты.
 - `docs/map/` — байт-карты/Modbus-регистры МАП (справочные материалы реверса).
 - [Дашборд](dashboard.md) — плашки/графики МАП.
+## Ошибки МАП (правило, к реализации)
+
+Ошибки МАП читать **только «сырыми»**, в зависимости от выбранного в конфиге
+способа мониторинга (`map.rs485.disabled`):
+
+- `map.rs485.disabled=false` — по **Modbus** (Modbus TCP/RTU через `mapgateway`);
+- `map.rs485.disabled=true` — из Малины через **`read_memory.php?offset=<байт>&count=<n>`**
+  (RAM МАП, байт-ячейки 0x000..0x7FF, тот же хост/Basic-auth, что у MPPT).
+
+Никаких агрегирующих эндпоинтов с готовыми текстами (`map_errors.php` и т.п.) не
+использовать. Запись — в `device_errors` по устройству «МАП», по правилу истории
+(только появление ошибки, без дублей на каждом чтении).
+
+## Реверс логирования ошибок МАП на Малине (2026-10-01)
+
+На Малине (`/settings/html`) ошибки МАП/MPPT обслуживают PHP-скрипты
+`map_errors.php`, `mppt_errors.php`, `*_errors_history.php`, `errors_counter.php`;
+сами ошибки пишет `mapd` в CSV-логи `/settings/logs/map_errors.log` (только при
+СМЕНЕ значений, 2553 строки на 2026-10-01) и `mppt_errors.log`.
+
+Формат строки `map_errors.log` (поля по порядку):
+`date, time, _RSErrSis, _RSErrJobM, _RSErrJob, _RSWarning, _I2C_Err, _RSErrDop,
+_F_Acc_Over, _F_Net_Over, _TFNET_Limit, _UNET_Limit`.
+Тексты битов — в `locale/RU|EN/local.inc` (`$data_map[...]`).
+
+Ячейки-ошибки МАП (RAM, из `protocol_MAP_cells_2026_07_15.doc`):
+| Ячейка | Имя | Смысл |
+|---|---|---|
+| 0x41C | `_F_AccOver` | отключения по перегрузкам АКБ (8 бит) |
+| 0x41D | `_F_NETOver` | отключения по перегрузкам сети (биты 0,1,3) |
+| 0x42A | `_RSErrSis` | критические системные ошибки |
+| 0x42B | `_RSErrJobM` | аварии АКБ/сети/выхода |
+| 0x42C | `_RSErrJob` | перегрузки/перегрев/вентилятор |
+| 0x42D | `_RSWarning` | рабочие предупреждения |
+| 0x447 | `_RSErrDop` | 3-фазные/параллельные/I2C/BMS/MPPT |
+| 0x448 | `_I2C_Err` | ошибки I2C (Ack/Sum/Size/Protocol) — адрес **предположительный** |
+
+Наш пулер ошибок (`map_errors.go`) читает эти ячейки **сырыми** отдельным циклом
+(≤1/30 с): через Modbus (`map.rs485.disabled=false`, блок 0x41C..0x449) либо через
+`read_memory.php` (web-API). Пишет появление ошибок в `device_errors`
+(device=`map`), телеметрию не трогает.

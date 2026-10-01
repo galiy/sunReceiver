@@ -244,6 +244,7 @@ type enbmsParsed struct {
 	Cycles        int
 	PortVoltageV  float64
 	CustomerP     int
+	Tail          enbmsTail // сигнальный хвост Battery (защиты/Ext_Bit/баланс/режим)
 }
 
 // parseEnBmsBattery декодирует payload блока Battery (PROTOCOL.md §5.1).
@@ -308,6 +309,11 @@ func parseEnBmsBattery(p []byte) (enbmsParsed, error) {
 	r.Soh = enbmsRound(float64(u16be(p, o))*0.1, 1)
 	o += 2
 	r.PortVoltageV = enbmsRound(float64(u16be(p, o))*0.01, 2)
+	// Сигнальный хвост (защиты ячеек/датчиков, Ext_Bit, балансировка, режим).
+	// Раскладка из приложения (16S_V20_ADDR_EN.xml, teleSignal_Group): хвост =
+	// 16+6+2+14+1 = 39 байт. Смещение Ext_Bit подтверждается живым кадром лишь
+	// косвенно (см. BACKLOG) — возможны ложные срабатывания, калибруем по сырому логу.
+	r.Tail = parseEnBmsTail(p)
 	return r, nil
 }
 
@@ -348,6 +354,8 @@ type enbmsSnapshot struct {
 	MinCellIdx    int       `json:"min_cell_idx"`
 	MinCellV      float64   `json:"min_cell_v"`
 	AvgCellV      float64   `json:"avg_cell_v"`
+	Model         string    `json:"model,omitempty"`  // модель/протокол (BasicInfo 0x51)
+	Alarms        []string  `json:"alarms,omitempty"` // активные защиты/предупреждения
 }
 
 // enbmsSnapshotFromParsed строит снимок из декодированного Battery: мощности
@@ -389,7 +397,91 @@ func enbmsSnapshotFromParsed(cfg enBmsDeviceConfig, r enbmsParsed, now time.Time
 		s.MinCellV = r.CellsV[minIdx]
 		s.AvgCellV = enbmsRound(sum/float64(len(r.CellsV)), 3)
 	}
+	// Warn-область Battery (раскладка из APK, см. parseEnBmsTail и PROTOCOL §5.1.1);
+	// на здоровом кадре пуста. Балансировка/режим пока не декодируются.
+	s.Alarms = append(s.Alarms, r.Tail.Alarms...)
 	return s
+}
+
+// enbmsTail — декодированный хвост Battery. Раскладка восстановлена из APK
+// (`parseBody_Battery`, BmsMsgUtil.dart 0x3f3a18; порядок имён — `toJson`
+// 0x3def6c): после телеметрии идут warn-списки, затем статусы:
+//   [0..15]  список по ячейкам (batterynum=16 байт)
+//   [16..19] список по температурам (tempnum-2=4 байта)
+//   [20] envtempwarn, [21] powertempwarn, [22] chargecurrentwarn
+//   [23] customerwarnp, далее статусы (ключи/баланс/режим) — в норме ненулевые.
+// На ЗДОРОВОМ кадре warn-область (0..23) нулевая; ненулевые байты 25..27 —
+// статусы, не аварии (см. PROTOCOL.md energybms §5.1.1).
+type enbmsTail struct {
+	BatWarn    []int // предупреждения по ячейкам (nonzero = активное)
+	TempWarn   []int // предупреждения по температурам
+	EnvWarn    int
+	PowerWarn  int
+	ChargeWarn int
+	Alarms     []string
+}
+
+// parseEnBmsTail декодирует warn-область хвоста Battery (последние 39 байт).
+// Безопасно при коротком payload. Статусы (ключи/баланс/режим) не декодируются —
+// их смещения не подтверждены.
+func parseEnBmsTail(p []byte) enbmsTail {
+	var t enbmsTail
+	if len(p) < 39 {
+		return t
+	}
+	o := len(p) - 39
+	t.BatWarn = make([]int, 16)
+	for i := 0; i < 16; i++ {
+		t.BatWarn[i] = int(p[o+i])
+	}
+	t.TempWarn = make([]int, 4)
+	for i := 0; i < 4; i++ {
+		t.TempWarn[i] = int(p[o+16+i])
+	}
+	t.EnvWarn = int(p[o+20])
+	t.PowerWarn = int(p[o+21])
+	t.ChargeWarn = int(p[o+22])
+	for i, v := range t.BatWarn {
+		if v != 0 {
+			t.Alarms = append(t.Alarms, fmt.Sprintf("Ячейка: предупреждение (%d, 0x%02x)", i+1, v))
+		}
+	}
+	for i, v := range t.TempWarn {
+		if v != 0 {
+			t.Alarms = append(t.Alarms, fmt.Sprintf("Датчик: предупреждение (%d, 0x%02x)", i+1, v))
+		}
+	}
+	if t.EnvWarn != 0 {
+		t.Alarms = append(t.Alarms, fmt.Sprintf("Температура среды: предупреждение (0x%02x)", t.EnvWarn))
+	}
+	if t.PowerWarn != 0 {
+		t.Alarms = append(t.Alarms, fmt.Sprintf("Силовая часть: предупреждение (0x%02x)", t.PowerWarn))
+	}
+	if t.ChargeWarn != 0 {
+		t.Alarms = append(t.Alarms, fmt.Sprintf("Ток заряда: предупреждение (0x%02x)", t.ChargeWarn))
+	}
+	return t
+}
+
+// parseEnBmsModel извлекает читаемую модель/протокол из payload BasicInfo (0x51):
+// первые ~30 байт — ASCII-строка, дополненная пробелами (далее — служебные байты).
+func parseEnBmsModel(p []byte) string {
+	if len(p) == 0 {
+		return ""
+	}
+	n := len(p)
+	if n > 30 {
+		n = 30
+	}
+	b := make([]byte, 0, n)
+	for _, c := range p[:n] {
+		if c >= 0x20 && c < 0x7f {
+			b = append(b, c)
+		} else if c == 0 {
+			break
+		}
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // Грубые границы валидности показаний EnBMS: отбрасываем очевидный мусор
@@ -472,6 +564,10 @@ func bmsDeviceFromEnBms(s enbmsSnapshot) bmsDevice {
 		MinCellIdx:    s.MinCellIdx,
 		MinCellV:      s.MinCellV,
 		AvgCellV:      s.AvgCellV,
+		Soh:           s.Soh,
+		Cycles:        s.Cycles,
+		Model:         s.Model,
+		Alarms:        s.Alarms,
 	}
 	if ts, err := time.Parse(time.RFC3339, s.Timestamp); err == nil {
 		d.Timestamp = ts.Unix()

@@ -702,6 +702,56 @@ func (h *dashboardHandler) agmPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// apiErrors — GET /api/errors?from&to&kind&device: история появления ошибок
+// устройств из PG (device_errors). По умолчанию — последние 7 суток.
+func (h *dashboardHandler) apiErrors(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	to := now
+	if s := r.URL.Query().Get("to"); s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			to = t
+		}
+	}
+	from := to.AddDate(0, 0, -7)
+	if s := r.URL.Query().Get("from"); s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			from = t
+		}
+	}
+	if to.After(now) {
+		to = now
+	}
+	kind := r.URL.Query().Get("kind")
+	device := r.URL.Query().Get("device")
+	rows := []DeviceErrorRow{}
+	if h.pg != nil && !from.After(to) {
+		if r2, err := h.pg.DeviceErrors(from, to, kind, device); err != nil {
+			log.Printf("dashboard: errors: %v", err)
+		} else if r2 != nil {
+			rows = r2
+		}
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"from":   from.Format(time.RFC3339),
+		"to":     to.Format(time.RFC3339),
+		"kind":   kind,
+		"device": device,
+		"errors": rows,
+	})
+}
+
+// errorsPage — отдельная страница истории ошибок всех устройств.
+func (h *dashboardHandler) errorsPage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if err := webTemplates.ExecuteTemplate(w, "errors.html", map[string]any{"active": "errors", "flags": h.flags, "CacheBust": webCacheBust}); err != nil {
+		log.Printf("dashboard: render /errors: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}
+}
+
 func (h *dashboardHandler) index(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -3243,6 +3293,7 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayCon
 		"/energy": h.energy,
 		"/bms/":   h.bmsDetail,
 		"/agm":    h.agmPage,
+		"/errors": h.errorsPage,
 	}
 	api := map[string]http.HandlerFunc{
 		"/current":       h.apiCurrent,
@@ -3253,6 +3304,7 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayCon
 		"/bms/":          h.apiBMSOne,
 		"/agm":           h.apiAGMCurrent,
 		"/agm/series":    h.apiAGMSeries,
+		"/errors":        h.apiErrors,
 		"/ce308/current": h.apiCE308Current,
 		"/ce308/energy":  h.apiCE308Energy,
 		"/ce308/series":  h.apiCE308Series,

@@ -139,6 +139,20 @@ CREATE TABLE IF NOT EXISTS sunreceiver.enbms_averages (
 CREATE INDEX IF NOT EXISTS enbms_averages_ts_idx ON sunreceiver.enbms_averages (ts);`); err != nil {
 		return fmt.Errorf("pg enbms_averages schema: %w", err)
 	}
+	// История ошибок ВСЕХ устройств (инверторы/МАП/счётчик/CE308/BMS): запись —
+	// только при ПОЯВЛЕНИИ ошибки (переход «не было → есть»), без дублей.
+	if _, err := s.pool.Exec(s.ctx, `
+CREATE TABLE IF NOT EXISTS sunreceiver.device_errors (
+	device text        NOT NULL,
+	kind   text        NOT NULL DEFAULT '',
+	code   text        NOT NULL DEFAULT '',
+	msg    text        NOT NULL DEFAULT '',
+	ts     timestamptz NOT NULL DEFAULT now(),
+	PRIMARY KEY (device, kind, code, ts)
+);
+CREATE INDEX IF NOT EXISTS device_errors_ts_idx ON sunreceiver.device_errors (ts);`); err != nil {
+		return fmt.Errorf("pg device_errors schema: %w", err)
+	}
 	return nil
 }
 
@@ -392,6 +406,63 @@ ON CONFLICT (name, ts) DO UPDATE SET values = EXCLUDED.values
 		return fmt.Errorf("pg insert enbms avg %s: %w", name, err)
 	}
 	return nil
+}
+
+// DeviceErrorRow — одна запись истории ошибок устройства.
+type DeviceErrorRow struct {
+	Device string    `json:"device"`
+	Kind   string    `json:"kind"`
+	Code   string    `json:"code"`
+	Msg    string    `json:"msg"`
+	TS     time.Time `json:"ts"`
+}
+
+// InsertDeviceError записывает появление ошибки устройства (history of appearance):
+// device — ключ устройства, kind — тип ("inverter"/"map"/"meter"/"ce308"/"antbms"/
+// "enbms"), code — код/категория, msg — текст. Вызывается только на переходе
+// «ошибки не было → появилась»; PK (device,kind,code,ts) страхует от повторов.
+func (s *pgStore) InsertDeviceError(device, kind, code, msg string, ts time.Time) error {
+	_, err := s.pool.Exec(s.ctx, `
+INSERT INTO sunreceiver.device_errors (device, kind, code, msg, ts)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (device, kind, code, ts) DO NOTHING`, device, kind, code, msg, ts.UTC())
+	if err != nil {
+		return fmt.Errorf("pg insert device error %s: %w", device, err)
+	}
+	return nil
+}
+
+// DeviceErrors возвращает историю ошибок за период [from,to] с необязательными
+// фильтрами по типу (kind) и устройству (device, точное совпадение), по возрастанию ts.
+func (s *pgStore) DeviceErrors(from, to time.Time, kind, device string) ([]DeviceErrorRow, error) {
+	q := `SELECT device, kind, code, msg, ts FROM sunreceiver.device_errors WHERE ts >= $1 AND ts <= $2`
+	args := []any{from.UTC(), to.UTC()}
+	if kind != "" {
+		args = append(args, kind)
+		q += fmt.Sprintf(" AND kind = $%d", len(args))
+	}
+	if device != "" {
+		args = append(args, device)
+		q += fmt.Sprintf(" AND device = $%d", len(args))
+	}
+	q += " ORDER BY ts ASC"
+	rows, err := s.pool.Query(s.ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("pg query device errors: %w", err)
+	}
+	defer rows.Close()
+	var out []DeviceErrorRow
+	for rows.Next() {
+		var r DeviceErrorRow
+		if err := rows.Scan(&r.Device, &r.Kind, &r.Code, &r.Msg, &r.TS); err != nil {
+			return nil, fmt.Errorf("pg scan device error: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pg rows device errors: %w", err)
+	}
+	return out, nil
 }
 
 // EnBmsAverages возвращает 5-минутные усреднённые точки одного устройства EnBMS

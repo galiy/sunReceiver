@@ -57,6 +57,13 @@ type bmsDevice struct {
 	MinCellV      float64   `json:"min_cell_v"`     // напряжение минимальной ячейки, V
 	AvgCellV      float64   `json:"avg_cell_v"`     // среднее напряжение ячейки, V
 	Frames        uint32    `json:"frames"`         // счётчик валидных кадров с запуска слушателя
+	// Дополнительно (по типам BMS):
+	Soh         float64  `json:"soh,omitempty"`          // SOH, % (EnBMS)
+	Cycles      int      `json:"cycles,omitempty"`       // число циклов (EnBMS)
+	BalanceMask uint32   `json:"balance_mask,omitempty"` // маска балансируемых ячеек (ANT, addr 132)
+	CycleAh     float64  `json:"cycle_ah,omitempty"`     // суммарная цикловая ёмкость, А·ч (ANT, addr 83)
+	Model       string   `json:"model,omitempty"`        // модель/протокол устройства (EnBMS BasicInfo)
+	Alarms      []string `json:"alarms,omitempty"`       // активные алармы/защиты (человекочитаемо)
 }
 
 // bmsKey — ключ BMS-устройства для HASH sunreceiver:bms, Redis-ряда, PG (name)
@@ -177,6 +184,7 @@ func runBmsPoll(store *redisStore, pg *pgStore, ctx context.Context) {
 	ticker := time.NewTicker(pollEvery)
 	defer ticker.Stop()
 	acc := newBmsAccumulator()
+	lastAlarms := map[string]map[string]bool{} // device key -> активные алармы (для истории)
 	log.Printf("bms avg: накопление 5-минутных усреднённых точек (в памяти процесса; PG %v)", pg != nil)
 	for {
 		select {
@@ -188,6 +196,23 @@ func runBmsPoll(store *redisStore, pg *pgStore, ctx context.Context) {
 					d := col.Devices[i]
 					acc.add(d, now)
 					saveBMSReading(store, d, now)
+					// История ошибок: пишем только появление нового аларма.
+					if pg != nil {
+						key := bmsKey(d)
+						cur := map[string]bool{}
+						for _, a := range d.Alarms {
+							cur[a] = true
+						}
+						prev := lastAlarms[key]
+						for a := range cur {
+							if prev == nil || !prev[a] {
+								if err := pg.InsertDeviceError(key, "antbms", a, a, now); err != nil {
+									log.Printf("bms error pg %s: %v", key, err)
+								}
+							}
+						}
+						lastAlarms[key] = cur
+					}
 				}
 			}
 			saveBMSClosedBuckets(pg, acc.closed(time.Now()))
@@ -315,6 +340,34 @@ func recomputeMinMaxCells(d *bmsDevice) {
 // (возвращается nil). Валидно-пустой ответ (updated>0, devices=[]) чистит
 // дашборд только при устойчивой пустоте (bmsEmptyTolerance подряд) — одиночный
 // всплеск пустоты (перезапуск bmslistener, сбой shm) коллекцию не трогает.
+// decodeAntAlarms расшифровывает коды состояния MOSFET и балансировки ANT BMS
+// (протокол 0x55) в список активных алармов/защит. Коды 0/1 — норма (выкл/вкл).
+func decodeAntAlarms(d bmsDevice) []string {
+	charge := map[int]string{
+		2: "Overvoltage protection", 3: "Over current protection", 5: "Total overpressure",
+		6: "Battery overtemperature", 7: "Power overtemperature", 8: "Abnormal current",
+		9: "Balanced line dropped", 10: "Motherboard overtemperature", 13: "Discharge tube abnormality",
+	}
+	disch := map[int]string{
+		2: "Over-discharge protection", 3: "Over current protection", 5: "Total undervoltage",
+		6: "Battery overtemperature", 7: "Power overtemperature", 8: "Abnormal current",
+		9: "Balanced line dropped", 10: "Motherboard overtemperature", 12: "Short circuit protection",
+		13: "Discharge tube abnormality", 14: "Start exception",
+	}
+	bal := map[int]string{3: "Balance overtemperature", 10: "Motherboard overtemperature"}
+	var out []string
+	if s, ok := charge[d.ChargeMos]; ok {
+		out = append(out, "Charge: "+s)
+	}
+	if s, ok := disch[d.DischargeMos]; ok {
+		out = append(out, "Discharge: "+s)
+	}
+	if s, ok := bal[d.Balancer]; ok {
+		out = append(out, "Balance: "+s)
+	}
+	return out
+}
+
 func pollAndSaveBMS(ctx context.Context, store *redisStore) *bmsCollection {
 	col, err := bmsSite.fetch(ctx)
 	if err != nil {
@@ -353,6 +406,7 @@ func pollAndSaveBMS(ctx context.Context, store *redisStore) *bmsCollection {
 	// напряжениям (см. recomputeMinMaxCells).
 	for i := range col.Devices {
 		recomputeMinMaxCells(&col.Devices[i])
+		col.Devices[i].Alarms = decodeAntAlarms(col.Devices[i])
 	}
 	// Проверяем коллизию имён в пределах коллекции: если два устройства имеют
 	// одинаковый DeviceName, их ключи разводятся по USB-порту (resolveBMSKey).

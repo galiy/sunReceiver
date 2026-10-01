@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+{{template "head" .}}
+<title>Ошибки — SunReceiver</title>
+<link rel="stylesheet" href="/static/css/site.css?v={{.CacheBust}}">
+<link rel="stylesheet" href="/static/css/dashboard.css?v={{.CacheBust}}">
+</head>
+<body>
+<div class="top-nav">
+  <div>
+    <h1 class="ttl">История ошибок</h1>
+    <p class="sub">Появление ошибок устройств (инверторы, МАП, счётчик, CE308, BMS)</p>
+  </div>
+  {{template "mnav" .}}
+  {{template "refreshToggle" .}}
+</div>
+
+<div class="period-panel">
+  <span class="lbl">Тип</span>
+  <select id="errKind">
+    <option value="">Все</option>
+    <option value="inverter">Инверторы</option>
+    <option value="map">МАП</option>
+    <option value="mppt">MPPT</option>
+    <option value="meter">Счётчик</option>
+    <option value="ce308">CE308</option>
+    <option value="antbms">ANT BMS</option>
+    <option value="enbms">EnBMS</option>
+  </select>
+  <span class="lbl">Устройство</span>
+  <input type="text" id="errDevice" placeholder="IP / ключ">
+  <span class="lbl">С</span>
+  <input type="datetime-local" id="errFrom">
+  <span class="lbl">по</span>
+  <input type="datetime-local" id="errTo">
+  <button id="errApply">Применить</button>
+</div>
+
+<div class="groups-row">
+  <div class="group">
+    <div class="group-title">Ошибки</div>
+    <div class="group-body" id="errBody"><span class="missing">Загрузка...</span></div>
+  </div>
+</div>
+
+<script>window.CACHE_BUST='{{.CacheBust}}';</script>
+<script src="/static/js/common.js?v={{.CacheBust}}"></script>
+<script src="/static/js/errors.js?v={{.CacheBust}}"></script>
+</body>
+</html>

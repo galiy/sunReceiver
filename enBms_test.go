@@ -46,6 +46,34 @@ func mustHex(t *testing.T, s string) []byte {
 	return b
 }
 
+func TestDecodeAntAlarms(t *testing.T) {
+	d := bmsDevice{ChargeMos: 2, DischargeMos: 12, Balancer: 3}
+	got := decodeAntAlarms(d)
+	if len(got) != 3 {
+		t.Fatalf("alarms=%v", got)
+	}
+	ok := bmsDevice{ChargeMos: 1, DischargeMos: 1, Balancer: 0}
+	if len(decodeAntAlarms(ok)) != 0 {
+		t.Fatalf("норма дала алармы: %v", decodeAntAlarms(ok))
+	}
+}
+
+func TestParseEnBmsModel(t *testing.T) {
+	p := make([]byte, 36)
+	s := "CAN:PNG_DYE_Luxp_TBB1101-XO17"
+	copy(p, []byte(s))
+	for i := 30; i < 36; i++ {
+		p[i] = 0x10
+	}
+	want := s
+	if len(want) > 30 {
+		want = want[:30]
+	}
+	if got := parseEnBmsModel(p); got != want {
+		t.Fatalf("model=%q want %q", got, want)
+	}
+}
+
 func TestEnBmsBuildRequestFrame(t *testing.T) {
 	got := buildEnBmsFrame(enBmsCID2Battery, []byte{0x00})
 	want := "7e 10 00 46 61 00 01 00 f7 c1 0d"

@@ -33,15 +33,22 @@ function renderKPIs(d){
   h+='<div class="kpi"><div class="lbl">Ток</div><div class="val '+iCls+'">'+fmtNum(d.current_a,1)+'<span class="unit">A</span></div></div>';
   h+='<div class="kpi"><div class="lbl">Мощность</div><div class="val '+pCls+'">'+fmtNum(d.power_w,1)+'<span class="unit">W</span></div></div>';
   h+='<div class="kpi"><div class="lbl">Ёмкость</div><div class="val">'+fmtNum(d.capacity_ah,0)+'<span class="unit">А·ч</span></div></div>';
+  h+='<div class="kpi"><div class="lbl">Мин. ячейка</div><div class="val">'+fmtNum(d.min_cell_v,3)+'<span class="unit">V</span></div><div class="sub">№ '+d.min_cell_idx+'</div></div>';
+  h+='<div class="kpi"><div class="lbl">Макс. ячейка</div><div class="val">'+fmtNum(d.max_cell_v,3)+'<span class="unit">V</span></div><div class="sub">№ '+d.max_cell_idx+'</div></div>';
+  h+='<div class="kpi"><div class="lbl">Δ ячеек</div><div class="val">'+fmtNum((d.max_cell_v-d.min_cell_v),3)+'<span class="unit">V</span></div></div>';
+  if(Number(d.soh)>0){ h+='<div class="kpi"><div class="lbl">SOH</div><div class="val">'+fmtNum(d.soh,1)+'<span class="unit">%</span></div></div>'; }
+  if(Number(d.cycles)>0){ h+='<div class="kpi"><div class="lbl">Циклы</div><div class="val">'+d.cycles+'</div></div>'; }
   document.getElementById('kpiRow').innerHTML=h;
 }
 
 function renderCells(d){
   var cells=(d.cells_v||[]).slice(0,d.cell_count);
   var h='';
+  var bal=Number(d.balance_mask)||0;
   for(var i=0;i<cells.length;i++){
     var c=cellColor(d,i);
-    h+='<div class="cell '+c+'">'
+    var isBal=((bal>>>i)&1)===1;
+    h+='<div class="cell '+c+(isBal?' bal':'')+'">'
       +'<div class="cell-batt"><div class="cell-fill" style="height:'+cellFillPct(cells[i])+'%;background:'+CELL_COLOR[c]+'"></div></div>'
       +'<div class="mv">'+cells[i].toFixed(3)+'</div>'
       +'<div class="idx">'+(i+1)+'</div>'
@@ -72,11 +79,23 @@ function renderTemps(d){
 }
 
 function renderMos(d){
-  // У EnBMS блок Battery не содержит состояний ключей/балансировки — блок скрыт
-  // (см. load), а не показывается ложным «ВЫКЛ».
+  // У EnBMS блок Battery не содержит состояний ключей/балансировки — блок скрыт.
   if(BMS_KIND==='enbms') return;
-  function pill(label,on){ return '<span class="mos'+(on?' on':'')+'">'+label+': '+(on?'ВКЛ':'ВЫКЛ')+'</span>'; }
-  document.getElementById('mosWrap').innerHTML=pill('Заряд',d.charge_mos===1)+pill('Разряд',d.discharge_mos===1)+pill('Балансировка',d.balancer===1);
+  var ch={2:'Overvoltage protection',3:'Over current protection',5:'Total overpressure',6:'Battery overtemperature',7:'Power overtemperature',8:'Abnormal current',9:'Balanced line dropped',10:'Motherboard overtemperature',13:'Discharge tube abnormality'};
+  var di={2:'Over-discharge protection',3:'Over current protection',5:'Total undervoltage',6:'Battery overtemperature',7:'Power overtemperature',8:'Abnormal current',9:'Balanced line dropped',10:'Motherboard overtemperature',12:'Short circuit protection',13:'Discharge tube abnormality',14:'Start exception'};
+  var ba={0:'ВЫКЛ',1:'Exceeds limit',2:'Charge differential balance',3:'Balanced overtemperature',4:'Auto equalization',10:'Motherboard overtemperature'};
+  function pill(label,code,map){ var t=(code===1)?'ВКЛ':(map[code]||('code '+code)); var on=(code===1); return '<span class="mos'+(on?' on':'')+'">'+label+': '+t+'</span>'; }
+  var bc=Number(d.balancer)||0;
+  document.getElementById('mosWrap').innerHTML=pill('Заряд',Number(d.charge_mos)||0,ch)+pill('Разряд',Number(d.discharge_mos)||0,di)
+    +'<span class="mos'+(bc!==0?' on':'')+'">Балансировка: '+(ba[bc]||('code '+bc))+'</span>';
+}
+
+function renderAlarms(d){
+  var box=document.getElementById('bmsAlarms'); if(!box) return;
+  var a=d.alarms||[];
+  if(!a.length){ box.innerHTML='<span class="ok">Нет активных алармов</span>'; return; }
+  var h='<ul class="alarm-list">'; for(var i=0;i<a.length;i++) h+='<li>'+esc((typeof SR_descOf==='function')?SR_descOf(a[i],''):a[i])+'</li>'; h+='</ul>';
+  box.innerHTML=h;
 }
 
 // applyBmsKind показывает/скрывает блоки, зависящие от типа BMS.
@@ -103,11 +122,11 @@ async function load(){
     document.title=d.deviceName+' — SunReceiver';
     document.getElementById('bmsTitle').textContent=d.deviceName;
     if(BMS_KIND==='enbms'){
-      document.getElementById('bmsSub').textContent='EnBMS (BLE) · актуально: '+(d.time||'—');
+      document.getElementById('bmsSub').textContent='EnBMS (BLE)'+(d.model?' · '+d.model:'')+' · актуально: '+(d.time||'—');
     }else{
       document.getElementById('bmsSub').textContent='ANT BMS · порт '+d.port+' · актуально: '+d.time;
     }
-    renderKPIs(d); renderCells(d); renderTemps(d); renderMos(d);
+    renderKPIs(d); renderCells(d); renderTemps(d); renderMos(d); renderAlarms(d);
     if(BMS_KIND==='enbms'){
       document.getElementById('bmsFoot').textContent='EnBMS (BLE, MAC '+d.key+') · обновляется каждую секунду';
     }else{
@@ -482,13 +501,16 @@ function buildBmsCharts(points){
     for(var i=0;i<c.length;i++){ var v=c[i]; if(!isFinite(v)) continue; if(mx===null||v>mx)mx=v; if(mn===null||v<mn)mn=v; }
     return {x:new Date(p.ts), y:(mx!==null && mn!==null? mx-mn : null)};
   }))],'V',false,false);
-  // 7. Температуры: батарея (T1/T2), силовые ключи (T3), плата (T4)
-  var tnames=[tempName(0),tempName(1),tempName(2),tempName(3)].map(function(n,i){ return 'T'+(i+1)+' · '+n; });
-  var tcols=['#37b24d','#5cb85c','#f08c00','#9463b8'];
+  // 7. Температуры: число каналов динамическое (у EnBMS датчиков больше, чем у ANT).
+  var nt=0;
+  for(var k=0;k<points.length;k++){ var ta=points[k].temperatures_c||[]; if(ta.length>nt) nt=ta.length; }
+  if(nt<1) nt=1;
+  var tcols=['#37b24d','#5cb85c','#f08c00','#9463b8','#20a4f3','#e05a2b','#c0392b','#7d3c98'];
   var tds=[];
-  for(var t=0;t<4;t++){
+  for(var t=0;t<nt;t++){
     (function(t){
-      tds.push(mkBmsDs(tnames[t],tcols[t],points.map(function(p){
+      var label='T'+(t+1)+' · '+tempName(t);
+      tds.push(mkBmsDs(label,tcols[t%tcols.length],points.map(function(p){
         var arr=p.temperatures_c||[]; return {x:new Date(p.ts), y:(t<arr.length? arr[t] : null)};
       })));
     })(t);
@@ -643,3 +665,34 @@ document.querySelectorAll('.bms-charts .ord-left').forEach(function(b){ b.addEve
 document.querySelectorAll('.bms-charts .ord-right').forEach(function(b){ b.addEventListener('click',function(){ bmsMoveCard(this,'right'); }); });
 bmsLoadOrder();
 bmsRefreshOrderBtns();
+
+// История ошибок BMS за период (из PG device_errors). device = NAME (ключ в URL).
+function bmsPad(x){ return (x<10?'0':'')+x; }
+function bmsToInput(d){ return d.getFullYear()+'-'+bmsPad(d.getMonth()+1)+'-'+bmsPad(d.getDate())+'T'+bmsPad(d.getHours())+':'+bmsPad(d.getMinutes()); }
+function bmsFmtTs(s){ var d=new Date(s); if(isNaN(d)) return s; return d.getFullYear()+'-'+bmsPad(d.getMonth()+1)+'-'+bmsPad(d.getDate())+' '+bmsPad(d.getHours())+':'+bmsPad(d.getMinutes())+':'+bmsPad(d.getSeconds()); }
+async function loadBmsErrors(){
+  var box=document.getElementById('bmsErrors'); if(!box) return;
+  var f=document.getElementById('errFrom'), t=document.getElementById('errTo');
+  var q=['device='+encodeURIComponent(NAME)];
+  if(f&&f.value) q.push('from='+encodeURIComponent(new Date(f.value).toISOString()));
+  if(t&&t.value) q.push('to='+encodeURIComponent(new Date(t.value).toISOString()));
+  try{
+    var r=await fetch('/api/errors?'+q.join('&'));
+    if(!r.ok){ box.innerHTML='<span class="missing">ошибка запроса</span>'; return; }
+    var d=await r.json(); var rows=d.errors||[];
+    if(!rows.length){ box.innerHTML='<span class="missing">Нет ошибок за период</span>'; return; }
+    var h='<table class="pivot-table"><thead><tr><th>Время</th><th>Код</th><th>Описание</th></tr></thead><tbody>';
+    for(var i=0;i<rows.length;i++){
+      var x=rows[i]; var desc=(typeof SR_descOf==='function')?SR_descOf(x.code,x.msg):x.code;
+      if(x.msg&&desc!==x.msg) desc=desc+' · '+x.msg;
+      h+='<tr><td>'+esc(bmsFmtTs(x.ts))+'</td><td>'+esc(x.code)+'</td><td>'+esc(desc)+'</td></tr>';
+    }
+    h+='</tbody></table>'; box.innerHTML=h;
+  }catch(e){ box.innerHTML='<span class="missing">ошибка запроса</span>'; }
+}
+(function(){ var to=new Date(), from=new Date(); from.setDate(from.getDate()-7);
+  var f=document.getElementById('errFrom'), t=document.getElementById('errTo');
+  if(f) f.value=bmsToInput(from); if(t) t.value=bmsToInput(to);
+  var b=document.getElementById('errApply'); if(b) b.addEventListener('click', loadBmsErrors);
+  loadBmsErrors();
+})();

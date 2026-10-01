@@ -192,3 +192,49 @@ document.querySelectorAll('.chart-toolbar span').forEach(function(s){
   if(!s.id && /зум/i.test(s.textContent)) s.textContent='Щипок — зум · свайп — сдвиг · двойной тап — сброс';
 });
 })();
+
+// Расшифровки кодов ошибок/алармов (англ. технический код → русская фраза).
+// Сама локализация ru/en/zh выполняется словарём i18n.js (ключ = русская фраза).
+var SR_ALARM_RU = {
+  'Charge: Overvoltage protection':'Перезаряд: защита по напряжению',
+  'Charge: Over current protection':'Заряд: защита по току',
+  'Charge: Total overpressure':'Заряд: общее перенапряжение',
+  'Charge: Battery overtemperature':'Заряд: перегрев батареи',
+  'Charge: Power overtemperature':'Заряд: перегрев силовой части',
+  'Charge: Abnormal current':'Заряд: аномальный ток',
+  'Charge: Balanced line dropped':'Заряд: обрыв балансировочной линии',
+  'Charge: Motherboard overtemperature':'Заряд: перегрев платы управления',
+  'Charge: Discharge tube abnormality':'Заряд: неисправность разрядного ключа',
+  'Discharge: Over-discharge protection':'Разряд: защита от глубокого разряда',
+  'Discharge: Over current protection':'Разряд: защита по току',
+  'Discharge: Total undervoltage':'Разряд: общее пониженное напряжение',
+  'Discharge: Battery overtemperature':'Разряд: перегрев батареи',
+  'Discharge: Power overtemperature':'Разряд: перегрев силовой части',
+  'Discharge: Abnormal current':'Разряд: аномальный ток',
+  'Discharge: Balanced line dropped':'Разряд: обрыв балансировочной линии',
+  'Discharge: Motherboard overtemperature':'Разряд: перегрев платы управления',
+  'Discharge: Short circuit protection':'Разряд: защита от короткого замыкания',
+  'Discharge: Discharge tube abnormality':'Разряд: неисправность разрядного ключа',
+  'Discharge: Start exception':'Разряд: ошибка запуска',
+  'Balance: Balance overtemperature':'Балансировка: перегрев',
+  'Balance: Motherboard overtemperature':'Балансировка: перегрев платы управления',
+  'comm':'Нет связи с устройством',
+  'no_data':'Нет данных от устройства',
+  'неверный Modbus-адрес устройства':'Неверный Modbus-адрес устройства',
+  'SN логгера не совпадает':'Серийный номер логгера не совпадает',
+  'ID01 Grid OV':'Сеть: превышение напряжения','ID02 Grid UV':'Сеть: пониженное напряжение',
+  'ID03 Grid OF':'Сеть: повышение частоты','ID04 Grid UF':'Сеть: понижение частоты',
+  'ID05 PV UV':'PV: пониженное напряжение','ID06 LVRT':'LVRT (просадка сети)',
+  'ID09 PV OV':'PV: превышение напряжения','ID10 PV current unbalanced':'PV: разбаланс тока',
+  'ID11':'ID11','ID12 GFCI':'GFCI (утечка на землю)','ID13 phase sequence':'Чередование фаз',
+  'ID14 boost OC':'Boost: перегрузка по току','ID15 AC OC':'AC: перегрузка по току','ID16 grid current high':'Сеть: высокий ток'
+};
+
+function SR_descOf(code, msg){
+  if(code && SR_ALARM_RU[code]) return SR_ALARM_RU[code];
+  if(code==='неизвестный' ) return msg||code;
+  if(msg && /[\u0400-\u04FF]/.test(msg)) return msg;
+  if(code && /^0x[0-9A-Fa-f]+$/.test(code)) return 'Неизвестный код ' + code;
+  if(msg) return msg;
+  return code || '';
+}

@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"time"
 )
 
@@ -38,6 +39,17 @@ const (
 	enbmsConsecutiveFailLimit = 3
 	// enbmsConnFailLogInterval — троттлинг логов о неудачных подключениях.
 	enbmsConnFailLogInterval = 10 * time.Minute
+	// enbmsRawLogInterval — минимальный интервал фонового (heartbeat) лога сырого
+	// payload Battery: пишем при каждом изменении хвоста (сигналы/аварии) и не
+	// реже одного раза в этот интервал. Нужен для калибровки раскладки хвоста.
+	enbmsRawLogInterval = 60 * time.Second
+	// enbmsRawTailLen — длина сигнального хвоста Battery (см. parseEnBmsTail).
+	enbmsRawTailLen = 39
+	// enbmsAlarmHistory — писать ли алармы EnBMS в device_errors. ВЫКЛЮЧЕНО:
+	// смещение Ext_Bit ещё не подтверждено кадром с реальной аварией и на здоровом
+	// кадре даёт ложные срабатывания (см. BACKLOG/docs). Алармы показываются на
+	// дашборде, но в историю не пишутся до калибровки.
+	enbmsAlarmHistory = false
 )
 
 // enbmsPollerDev — состояние опроса одного устройства EnBMS. Соединение
@@ -51,6 +63,28 @@ type enbmsPollerDev struct {
 	lastFailLog time.Time
 	lastErrLog  time.Time
 	consecFails int
+	model       string          // модель/протокол из BasicInfo (читается один раз)
+	lastAlarms  map[string]bool // активные алармы (для истории появления)
+	commErr     bool            // была ли зафиксирована ошибка связи
+	lastTail    string          // hex сигнального хвоста прошлого кадра (для лога изменений)
+	lastRawLog  time.Time       // время последнего сырого лога (heartbeat)
+}
+
+// logEnBmsRaw пишет СЫРОЙ payload Battery в журнал с таймстампом снятия:
+// при изменении сигнального хвоста (появились/сменились сигналы/аварии) либо не
+// реже enbmsRawLogInterval. Нужен для последующей калибровки раскладки хвоста.
+func (d *enbmsPollerDev) logEnBmsRaw(payload []byte, ts time.Time) {
+	var tailHex string
+	if len(payload) >= enbmsRawTailLen {
+		tailHex = hex.EncodeToString(payload[len(payload)-enbmsRawTailLen:])
+	}
+	if tailHex == d.lastTail && time.Since(d.lastRawLog) < enbmsRawLogInterval {
+		return
+	}
+	d.lastTail = tailHex
+	d.lastRawLog = ts
+	logEnBms("RAW %s (%s) ts=%s tail=%s payload=%s",
+		d.cfg.Name, d.cfg.MAC, ts.Format(time.RFC3339), tailHex, hex.EncodeToString(payload))
 }
 
 // closeConn закрывает текущее соединение (если есть).
@@ -96,7 +130,7 @@ func runEnBmsPoll(store *redisStore, pg *pgStore, cfg *enBmsConfig, ctx context.
 			if ctx.Err() != nil {
 				break
 			}
-			pollEnBmsDevice(store, acc, d, ctx)
+			pollEnBmsDevice(pg, store, acc, d, ctx)
 		}
 		saveEnBmsClosedBuckets(pg, acc.closed(time.Now()))
 		if ctx.Err() != nil {
@@ -115,7 +149,7 @@ func runEnBmsPoll(store *redisStore, pg *pgStore, cfg *enBmsConfig, ctx context.
 // pollEnBmsDevice выполняет один опрос одного устройства: при необходимости
 // подключается (неблокирующе, по nextRetry), читает Battery с ретраями таймаута,
 // сохраняет снимок и кормит аккумулятор.
-func pollEnBmsDevice(store *redisStore, acc *enbmsAccumulator, d *enbmsPollerDev, ctx context.Context) {
+func pollEnBmsDevice(pg *pgStore, store *redisStore, acc *enbmsAccumulator, d *enbmsPollerDev, ctx context.Context) {
 	if d.conn == nil {
 		if time.Now().Before(d.nextRetry) {
 			return
@@ -133,6 +167,12 @@ func pollEnBmsDevice(store *redisStore, acc *enbmsAccumulator, d *enbmsPollerDev
 				logEnBms("подключение к %s (%s) не удалось: %v", d.cfg.Name, d.cfg.MAC, err)
 				d.lastFailLog = time.Now()
 			}
+			if pg != nil && !d.commErr {
+				d.commErr = true
+				if e := pg.InsertDeviceError(d.cfg.MAC, "enbms", "comm", err.Error(), time.Now()); e != nil {
+					logEnBms("error pg %s: %v", d.cfg.MAC, e)
+				}
+			}
 			d.nextRetry = time.Now().Add(d.reconnect)
 			d.reconnect = enbmsBackoff(d.reconnect)
 			return
@@ -141,7 +181,16 @@ func pollEnBmsDevice(store *redisStore, acc *enbmsAccumulator, d *enbmsPollerDev
 		d.reconnect = enbmsReconnectDelay
 		d.consecFails = 0
 		d.lastErrLog = time.Time{}
+		d.commErr = false
 		logEnBms("подключено к %s (%s)", d.cfg.Name, d.cfg.MAC)
+		if d.model == "" {
+			if bi, serr := c.readEnBmsBasicInfo(); serr == nil {
+				if m := parseEnBmsModel(bi); m != "" {
+					d.model = m
+					logEnBms("модель %s (%s): %s", d.cfg.Name, d.cfg.MAC, m)
+				}
+			}
+		}
 	}
 
 	payload, err := d.readWithRetries()
@@ -186,7 +235,9 @@ func pollEnBmsDevice(store *redisStore, acc *enbmsAccumulator, d *enbmsPollerDev
 	}
 
 	now := time.Now()
+	d.logEnBmsRaw(payload, now)
 	snap := enbmsSnapshotFromParsed(d.cfg, parsed, now)
+	snap.Model = d.model
 	// Текущее состояние — в HASH (перезапись); каждое снятое показание — в
 	// Redis-ряд (сырое, samples=1). 5-минутные средние для PG накапливает
 	// аккумулятор (как ANT BMS).
@@ -195,6 +246,22 @@ func pollEnBmsDevice(store *redisStore, acc *enbmsAccumulator, d *enbmsPollerDev
 	}
 	saveEnBmsReading(store, snap, now)
 	acc.add(snap, now)
+	// История ошибок: появление новых алармов. Пока enbmsAlarmHistory=false —
+	// раскладка Ext_Bit не откалибрована (ложные срабатывания на здоровом кадре).
+	if pg != nil && enbmsAlarmHistory {
+		cur := map[string]bool{}
+		for _, a := range snap.Alarms {
+			cur[a] = true
+		}
+		for a := range cur {
+			if d.lastAlarms == nil || !d.lastAlarms[a] {
+				if e := pg.InsertDeviceError(d.cfg.MAC, "enbms", a, a, now); e != nil {
+					logEnBms("error pg %s: %v", d.cfg.MAC, e)
+				}
+			}
+		}
+		d.lastAlarms = cur
+	}
 }
 
 // saveEnBmsReading пишет МГНОВЕННОЕ (одно снятое) показание EnBMS в Redis-ряд
