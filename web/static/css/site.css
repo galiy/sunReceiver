@@ -77,3 +77,10 @@
   .foot { font-size:11px; }
 }
 
+
+/* Переключатель языка (правый верхний угол). */
+.lang-switch { margin-left: auto; align-self: flex-start; }
+.lang-switch select {
+  background: #ffffff; color: #2b3238; border: 1px solid #d0d6de;
+  border-radius: 6px; padding: 4px 8px; font-size: 13px; color-scheme: light;
+}

@@ -202,7 +202,8 @@ function initEnergyPanel(cfg){
 	return p;
 }
 
-// График 1 — по дням, по умолчанию текущий месяц.
+// График 1 — по дням, по умолчанию последние 30 дней (текущий месяц в начале
+// месяца ещё пуст, т.к. сутки финализируются по завершении).
 initEnergyPanel({
 	canvasId:'dailyTariffChart', statusId:'s1', fromEl:'d1From', toEl:'d1To', applyBtn:'d1Apply', isMonthly:false,
 	presets:[
@@ -212,7 +213,8 @@ initEnergyPanel({
 		{ btn:'d1Week', range:function(){ var to=new Date(); var from=new Date(); from.setDate(from.getDate()-6); from.setHours(0,0,0,0); return { from:from, to:endOfDay(to) }; } },
 		{ btn:'d1Days30', range:function(){ var to=new Date(); var from=new Date(); from.setDate(from.getDate()-29); from.setHours(0,0,0,0); return { from:from, to:endOfDay(to) }; } }
 	],
-	defaultFrom:startOfMonth, defaultTo:endOfMonth
+	defaultFrom:function(){ var from=new Date(); from.setDate(from.getDate()-29); from.setHours(0,0,0,0); return from; },
+	defaultTo:function(){ return endOfDay(new Date()); }
 });
 
 // График 2 — по месяцам, по умолчанию текущий год.
