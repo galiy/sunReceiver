@@ -22,12 +22,9 @@ import (
 	"time"
 )
 
-// ce308PollInterval — целевой период опроса мгновенных значений CE308.
-// Фактический период ограничен временем последовательного чтения команд BLE
-// (VOLTA/CURRE/POWEP/POWEQ ≈ 4-5 с), поэтому цикл не успевает за 2 с — он
-// просто не блокируется ожиданием следующего таймера (ticker буферизует один
-// тик и сбрасывает лишние).
-const ce308PollInterval = 2 * time.Second
+// ce308PollInterval — период опроса мгновенных значений CE308 (настраивается
+// через "poll.ce308", по умолчанию 5 с). Ticker буферизует один тик и сбрасывает
+// лишние, поэтому при более длинном чтении BLE цикл не накапливает опоздания.
 
 // ce308EnergyInterval — период АВТОНОМНОГО снимка накопленной энергии: раз в
 // 30 минут пулер сам (без внешнего HTTP-запроса) перечитывает END01..END04 и
@@ -54,9 +51,14 @@ const ce308ReadRetries = 2
 const ce308ConsecutiveFailLimit = 3
 
 // ce308ConnFailLogInterval — порог логирования неудачных подключений:
-// первый сбой — сразу, далее не чаще раза в 10 минут (при длительном отсутствии
-// связи журнал не засоряется).
+	// первый сбой — сразу, далее не чаще раза в 10 минут (при длительном отсутствии
+	// связи журнал не засоряется).
 const ce308ConnFailLogInterval = 10 * time.Minute
+
+// ce308CommErrPersist — сколько «нет связи» должно держаться непрерывно (без
+// успешного подключения), прежде чем попасть в историю ошибок (антишум: частые
+// le-connection-abort-by-local не пишем).
+const ce308CommErrPersist = time.Hour
 
 // runCe308Poll — отдельный поток опроса счётчика Энергомера CE308 по BLE:
 //   - держит BLE-соединение постоянно (не закрывает между опросами);
@@ -80,7 +82,10 @@ func runCe308Poll(store *redisStore, pg *pgStore, cfg *ce308Config, ctx context.
 	defer setCE308TriggerChan(nil)
 
 	var lastFailLog time.Time
-	var wasErr bool // история ошибок: переход «норма → ошибка»
+	// История ошибок: пишем «нет связи» только если держится ≥ ce308CommErrPersist
+	// без успешного подключения (иначе частые блипы BLE засоряют историю).
+	var commErrSince time.Time
+	var commErrLogged bool
 	reconnect := ce308ReconnectDelay
 	for {
 		// Внешняя переинициализация контроллера (watchdog перезагружает драйвер
@@ -95,13 +100,15 @@ func runCe308Poll(store *redisStore, pg *pgStore, cfg *ce308Config, ctx context.
 				logCE308("подключение к %s не удалось: %v", cfg.MAC, err)
 				lastFailLog = time.Now()
 			}
-			if !wasErr {
-				wasErr = true
-				if pg != nil {
-					if e := pg.InsertDeviceError(cfg.Name, "ce308", "comm", err.Error(), time.Now()); e != nil {
-						logCE308("error pg: %v", e)
-					}
+			now := time.Now()
+			if commErrSince.IsZero() {
+				commErrSince = now
+			}
+			if pg != nil && !commErrLogged && now.Sub(commErrSince) >= ce308CommErrPersist {
+				if e := pg.InsertDeviceError(cfg.Name, "ce308", "comm", err.Error(), now); e != nil {
+					logCE308("error pg: %v", e)
 				}
+				commErrLogged = true
 			}
 			if !waitCtx(ctx, reconnect) {
 				return
@@ -110,9 +117,10 @@ func runCe308Poll(store *redisStore, pg *pgStore, cfg *ce308Config, ctx context.
 			reconnect = ce308Backoff(reconnect)
 			continue
 		}
-		// Успешное подключение сбрасывает бэкофф к базовой паузе.
+		// Успешное подключение сбрасывает бэкофф к базовой паузе и историю ошибки.
 		reconnect = ce308ReconnectDelay
-		wasErr = false
+		commErrSince = time.Time{}
+		commErrLogged = false
 		logCE308("подключено к %s", cfg.MAC)
 		err = ce308PollConnected(store, cfg, m, trig, ctx)
 		// Закрытие соединения: фиксируем результат (неуспешный Disconnect при

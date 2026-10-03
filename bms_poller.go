@@ -180,8 +180,7 @@ func (s *bmsApiClient) fetch(ctx context.Context) (*bmsCollection, error) {
 // В общем снимке sunreceiver:current BMS не участвует (нет универсального
 // контракта values).
 func runBmsPoll(store *redisStore, pg *pgStore, ctx context.Context) {
-	const pollEvery = time.Second
-	ticker := time.NewTicker(pollEvery)
+	ticker := time.NewTicker(bmsPollInterval)
 	defer ticker.Stop()
 	acc := newBmsAccumulator()
 	lastAlarms := map[string]map[string]bool{} // device key -> активные алармы (для истории)

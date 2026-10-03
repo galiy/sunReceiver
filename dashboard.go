@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -723,12 +724,35 @@ func (h *dashboardHandler) apiErrors(w http.ResponseWriter, r *http.Request) {
 	}
 	kind := r.URL.Query().Get("kind")
 	device := r.URL.Query().Get("device")
+	// Пагинация: limit/offset — числа; нечисловые/выходящие за границы значения
+	// заменяются безопасными (SQL-инъекция невозможна: параметры передаются через $n).
+	limit := 100
+	if s := r.URL.Query().Get("limit"); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v > 0 {
+			limit = v
+		}
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	offset := 0
+	if s := r.URL.Query().Get("offset"); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v > 0 {
+			offset = v
+		}
+	}
 	rows := []DeviceErrorRow{}
+	total := 0
 	if h.pg != nil && !from.After(to) {
-		if r2, err := h.pg.DeviceErrors(from, to, kind, device); err != nil {
+		if r2, err := h.pg.DeviceErrors(from, to, kind, device, limit, offset); err != nil {
 			log.Printf("dashboard: errors: %v", err)
 		} else if r2 != nil {
 			rows = r2
+		}
+		if n, err := h.pg.DeviceErrorsCount(from, to, kind, device); err == nil {
+			total = n
+		} else {
+			log.Printf("dashboard: errors count: %v", err)
 		}
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -738,6 +762,9 @@ func (h *dashboardHandler) apiErrors(w http.ResponseWriter, r *http.Request) {
 		"to":     to.Format(time.RFC3339),
 		"kind":   kind,
 		"device": device,
+		"limit":  limit,
+		"offset": offset,
+		"total":  total,
 		"errors": rows,
 	})
 }

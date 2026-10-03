@@ -81,3 +81,34 @@ deye alert <ip>: status(0x3B)=N regs 0x65-0x6A = 0x<24 hex>
 **Ссылки-источники:** `github.com/StephanJoubert/home_assistant_solarman`
 (`inverter_definitions/deye_*.yaml`, `parser.py`),
 `github.com/kbialek/deye-inverter-mqtt` (`docs/metric_group_string.md`).
+
+## Декод аварий Deye (F1–F64) — реализовано 2026-10-02
+
+Источник карты: проект `github.com/pbix/HA-solark-PV` (Sol-Ark/Deye, те же
+регистры): `FAULT_INFO_RAW` = holding R103–R106 = `0x67–0x6A`, тип UINT64,
+wordorder LSW-first (младшее слово — первый регистр). **Бит N−1 = код F(N)**:
+
+```
+bitmap = reg[0x67] | reg[0x68]<<16 | reg[0x69]<<32 | reg[0x6A]<<48
+```
+
+Проверено на живом событии (2026-10-02, отключение 220В у трёх grid-tie Bineos
+`.91/.92/.93`): Alert = `0000 0000 0000 0000 0004 0000` → `0x69.2` → bit34 →
+**F35 AC_NoUtility** («нет сети»), статус `0x3B`: 2 normal → 4 → 1 self-checking → 2.
+Регистры `0x65`/`0x66` при этом всегда нулевые (Sol-Ark их не использует).
+
+В `sunReceiver` добавлена таблица имён `deyeFaultNames` (F1–F64, RU) и
+`decodeDeyeFaults`; активные коды пишутся в `device_errors` (device=IP,
+kind=`inverter`) только появлением. Сырой лог Alert (`deye alert …`) сохранён.
+
+Ссылки-источники: `HA-solark-PV` (`const.py` FAULT_TABLE, `fault_info.py`,
+`solark_register_map.py`), invertererrorcodes.com/deye, solaranalytica.com.
+
+### Предупреждения W1–W32 (2026-10-02)
+
+Источник: сохранённая страница Inversol «Deye error codes W1–W32 F1–F64»
+(`~/Загрузки/deye/1/…Inversol.html`). Регистры предупреждений — `0x65/0x66`
+(32 бита, LSW-first), бит N−1 = W(N). В `sunReceiver` — `deyeWarnNames` (W1–W32, RU)
+и `decodeDeyeWarnings`; предупреждения **не пишутся в историю** (не аварии), а
+декодируются в сыром логе `deye alert …` (поле `warns=[ … ]`). Локализация ru/en/zh
+в `web/static/js/i18n.js`.

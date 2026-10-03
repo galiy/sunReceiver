@@ -36,9 +36,22 @@ import (
 	"github.com/galiy/sunReceiver/solarman"
 )
 
+// Периоды опроса устройств (секунды в конфиге, раздел "poll"). Значения по
+// умолчанию; переопределяются из sunReceiver.json при загрузке (см. applyPollConfig).
+var (
+	pollPeriod        = 10 * time.Second // инверторы (Deye/Sofar)
+	mapPollInterval   = time.Second      // МАП + MPPT
+	meterPollInterval = time.Second      // счётчик DDS238
+	ce308PollInterval = 5 * time.Second  // счётчик CE308 (BLE)
+	bmsPollInterval   = time.Second      // ANT BMS
+	enbmsPollInterval = 3 * time.Second  // EnBMS (BLE)
+)
+
 const (
-	port       = "8899"
-	pollPeriod = 10 * time.Second
+	port = "8899"
+	// inverterModbusErrPersist — сколько «неверный Modbus-адрес» (ErrCode 0x05)
+	// должен держаться непрерывно, прежде чем попасть в историю ошибок (антишум).
+	inverterModbusErrPersist = 10 * time.Minute
 	timeout    = 15 * time.Second
 	// defaultIdleWindow — «тишина» между байтами ответа (Deye): паузы < 4 с.
 	defaultIdleWindow = 4 * time.Second
@@ -199,8 +212,20 @@ type mapSection struct {
 	BMSDisabled *bool            `json:"bms_disabled"`
 }
 
+// pollSection — периоды опроса устройств в СЕКУНДАХ (обязательный раздел "poll").
+// Все поля обязательны и должны быть > 0 (отсутствие = ошибка загрузки конфига).
+type pollSection struct {
+	Inverter int `json:"inverter"` // инверторы Deye/Sofar
+	Map      int `json:"map"`      // МАП + MPPT
+	Meter    int `json:"meter"`    // счётчик DDS238
+	Ce308    int `json:"ce308"`    // счётчик CE308 (BLE)
+	AntBms   int `json:"antbms"`   // ANT BMS
+	EnBms    int `json:"enbms"`    // EnBMS (BLE)
+}
+
 type configFile struct {
 	Invertors     []configInverter `json:"invertors"`
+	Poll          *pollSection     `json:"poll"`
 	Map           *mapSection      `json:"map"`
 	DB            *dbConfig        `json:"db"`
 	Meter         *meterSection    `json:"meter"`
@@ -213,6 +238,38 @@ type configFile struct {
 	// пусты — API открыт (обратный прокси закрывает доступ снаружи сам).
 	DashboardUser     string `json:"dashboard_user,omitempty"`
 	DashboardPassword string `json:"dashboard_password,omitempty"`
+}
+
+// applyPollConfig проверяет и применяет периоды опроса (в секундах) из
+// обязательного раздела "poll". Любое отсутствующее/нулевое/отрицательное поле —
+// ошибка загрузки конфига.
+func applyPollConfig(p *pollSection) error {
+	if p == nil {
+		return fmt.Errorf("не задан обязательный раздел poll (периоды опроса устройств, секунды)")
+	}
+	fields := []struct {
+		name string
+		val  int
+	}{
+		{"inverter", p.Inverter},
+		{"map", p.Map},
+		{"meter", p.Meter},
+		{"ce308", p.Ce308},
+		{"antbms", p.AntBms},
+		{"enbms", p.EnBms},
+	}
+	for _, f := range fields {
+		if f.val <= 0 {
+			return fmt.Errorf("обязательное поле poll.%s должно быть > 0 (секунды)", f.name)
+		}
+	}
+	pollPeriod = time.Duration(p.Inverter) * time.Second
+	mapPollInterval = time.Duration(p.Map) * time.Second
+	meterPollInterval = time.Duration(p.Meter) * time.Second
+	ce308PollInterval = time.Duration(p.Ce308) * time.Second
+	bmsPollInterval = time.Duration(p.AntBms) * time.Second
+	enbmsPollInterval = time.Duration(p.EnBms) * time.Second
+	return nil
 }
 
 // configPath — sunReceiver.json в каталоге исполняемого файла.
@@ -374,6 +431,10 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 		if !mpptOk {
 			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: нет ни одного активного устройства", path)
 		}
+	}
+	// Периоды опроса устройств (секунды) — обязательный раздел "poll".
+	if err := applyPollConfig(cf.Poll); err != nil {
+		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
 	}
 	// Порт веб-дашборда — обязательное поле dashboard_port.
 	if cf.DashboardPort == 0 {
@@ -998,8 +1059,8 @@ var (
 // с временем снятия — для калибровки карты аварий. По нормам апстрима Alert
 // находится именно здесь (single-phase hybrid), для string-модели официальной
 // карты нет. Логируем при изменении и не реже 10 минут.
-func logDeyeRawAlert(ip string, status int, hexA, hexB string) {
-	key := hexA + "|" + hexB + "|" + fmt.Sprint(status)
+func logDeyeRawAlert(ip string, status int, hexA, hexB, warns string) {
+	key := hexA + "|" + hexB + "|" + warns + "|" + fmt.Sprint(status)
 	deyeAlertMu.Lock()
 	defer deyeAlertMu.Unlock()
 	now := time.Now()
@@ -1008,8 +1069,12 @@ func logDeyeRawAlert(ip string, status int, hexA, hexB string) {
 	}
 	deyeAlertLast[ip] = key
 	lastDeyeAlertLog[ip] = now
-	log.Printf("deye alert %s: status(0x3B)=%d regs 0x65-0x6A=0x%s regs 0x229-0x22E=0x%s (имена битов калибруются)",
-		ip, status, hexA, hexB)
+	extra := ""
+	if warns != "" {
+		extra = " warns=[ " + warns + " ]"
+	}
+	log.Printf("deye alert %s: status(0x3B)=%d regs 0x65-0x6A=0x%s regs 0x229-0x22E=0x%s%s",
+		ip, status, hexA, hexB, extra)
 }
 
 // deyeRegsHex собирает hex-строку из count регистров, начиная с addr, из карты.
@@ -1082,6 +1147,131 @@ var deyeRegMap = map[uint16]deyeSensor{
 	0xCE: {"total_energy_sold", "energy_sold_total", 0.1, "kWh", false, 0, true},
 	0xD0: {"daily_energy_bought", "energy_bought_today", 0.01, "kWh", false, 0, false},
 	0xD1: {"total_energy_bought", "energy_bought_total", 0.1, "kWh", false, 0, true},
+}
+
+// deyeFaultNames — карта fault-кодов Deye (F1..F64) по номеру. Источник:
+// FAULT_TABLE проекта pbix/HA-solark-PV (Sol-Ark/Deye, те же регистры): 64-битная
+// карта R103–R106 = 0x67–0x6A (wordorder LSW-first), бит N-1 = F(N). Проверено на
+// живом событии: пропадание сети даёт бит 0x69.2 → F35 AC_NoUtility.
+var deyeFaultNames = map[int]string{
+	1:  "F1: инвертирование DC (параллельный блок выключен)",
+	8:  "F8: неисправность реле GFDI (защита от утечки)",
+	13: "F13: смена режима сети/батареи",
+	14: "F14: перегрузка по току DC",
+	15: "F15: перегрузка по току AC (ПО)",
+	16: "F16: неисправность GFCI",
+	18: "F18: перегрузка по току AC (аппаратная)",
+	20: "F20: перегрузка по току DC (аппаратная)",
+	22: "F22: аварийный останов (EmergStop)",
+	23: "F23: GFCI/утечка — импульсная перегрузка",
+	24: "F24: нарушение изоляции DC (PV)",
+	25: "F25: обратная связь DC (нет АКБ при Activate Battery)",
+	26: "F26: разбаланс DC-шины",
+	29: "F29: ошибка CAN в параллельной системе",
+	30: "F30: неисправность главного контактора AC",
+	31: "F31: сбой плавного пуска",
+	34: "F34: перегрузка AC",
+	35: "F35: нет сети (AC_NoUtility)",
+	37: "F37: программная перегрузка DC",
+	39: "F39: аппаратная перегрузка DC",
+	40: "F40: перегрузка АКБ по току",
+	41: "F41: останов параллельной системы",
+	45: "F45: AC: низкое/высокое напряжение сети",
+	46: "F46: неисправность АКБ/резервной системы",
+	47: "F47: повышение частоты сети",
+	48: "F48: понижение частоты сети",
+	55: "F55: высокое напряжение DC/PV",
+	56: "F56: низкое напряжение DC (АКБ разряжена)",
+	58: "F58: ошибка связи с BMS",
+	60: "F60: генератор: напряжение/частота вне допуска",
+	61: "F61: ручное выключение (параллельный ведомый)",
+	63: "F63: дуговая защита (AFCI)",
+	64: "F64: перегрев радиатора",
+}
+
+// deyeWarnNames — карта предупреждений Deye W1..W32 (источник: страница Inversol
+// «Deye error codes W1–W32 F1–F64»). Регистры предупреждений — 0x65/0x66
+// (32 бита, LSW-first), бит N-1 = W(N).
+var deyeWarnNames = map[int]string{
+	1:  "W1: напряжение сети у порога",
+	2:  "W2: неисправность вентилятора",
+	3:  "W3: неправильная фазировка сети",
+	4:  "W4: ошибка связи со счётчиком",
+	5:  "W5: ошибка обновления прошивки",
+	6:  "W6: напряжение PV у предела",
+	7:  "W7: ток PV у предела",
+	8:  "W8: напряжение DC-шины у предела",
+	9:  "W9: ток AC у порога",
+	10: "W10: высокая внутренняя температура",
+	11: "W11: высокая температура радиатора",
+	12: "W12: общее аппаратное предупреждение",
+	13: "W13: несовпадение версии прошивки",
+	14: "W14: частота сети у предела",
+	15: "W15: высокое сопротивление сети",
+	16: "W16: небаланс напряжений фаз",
+	17: "W17: небаланс токов фаз",
+	18: "W18: ограничение мощности (derating)",
+	19: "W19: активно управление реактивной мощностью",
+	20: "W20: активно ограничение экспорта",
+	21: "W21: активен режим нулевого экспорта",
+	22: "W22: активно управление DRM",
+	23: "W23: инвертор управляется удалённо",
+	24: "W24: предупреждение синхронизации параллельной системы",
+	25: "W25: ограничение мощности параллельной системы",
+	26: "W26: напряжение АКБ у предела",
+	27: "W27: температура АКБ у предела",
+	28: "W28: аномальные данные BMS",
+	29: "W29: задержка шины связи",
+	30: "W30: высокая нагрузка системы",
+	31: "W31: предупреждение связи с АКБ",
+	32: "W32: предупреждение",
+}
+
+// decodeDeyeWarnings декодирует предупреждения Deye из регистров 0x65/0x66
+// (младшее слово — 0x65), бит N-1 = W(N). Предупреждения — не аварии, в историю
+// ошибок не пишутся (только в сырой лог).
+func decodeDeyeWarnings(regs map[uint16]uint16) []string {
+	bitmap := uint32(regs[0x65]) | uint32(regs[0x66])<<16
+	if bitmap == 0 {
+		return nil
+	}
+	var out []string
+	for bit := 0; bit < 32; bit++ {
+		if bitmap&(1<<uint(bit)) == 0 {
+			continue
+		}
+		n := bit + 1
+		if name, ok := deyeWarnNames[n]; ok {
+			out = append(out, name)
+		} else {
+			out = append(out, fmt.Sprintf("W%d: предупреждение", n))
+		}
+	}
+	return out
+}
+
+// decodeDeyeFaults декодирует аварии Deye из сырых регистров: 64-битная карта
+// R103–R106 = 0x67–0x6A (первый регистр — младшее слово), бит N-1 = F(N).
+// Возвращает человекочитаемые активные коды (появлений). Пусто — аварий нет.
+func decodeDeyeFaults(regs map[uint16]uint16) []string {
+	get := func(a uint16) uint64 { return uint64(regs[a]) }
+	bitmap := get(0x67) | get(0x68)<<16 | get(0x69)<<32 | get(0x6A)<<48
+	if bitmap == 0 {
+		return nil
+	}
+	var out []string
+	for bit := 0; bit < 64; bit++ {
+		if bitmap&(1<<uint(bit)) == 0 {
+			continue
+		}
+		n := bit + 1
+		if name, ok := deyeFaultNames[n]; ok {
+			out = append(out, name)
+		} else {
+			out = append(out, fmt.Sprintf("F%d: авария (нет описания)", n))
+		}
+	}
+	return out
 }
 
 // mapDeyeRegisters строит значения универсального контракта Deye string-инвертора
@@ -1385,7 +1575,9 @@ func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 				}
 				alertB = deyeRegsHex(m2, 0x0229, 6)
 			}
-			logDeyeRawAlert(t.IP, int(result[0x3B]), deyeRegsHex(result, 0x65, 6), alertB)
+			logDeyeRawAlert(t.IP, int(result[0x3B]), deyeRegsHex(result, 0x65, 6), alertB,
+				strings.Join(decodeDeyeWarnings(result), ", "))
+			res.Faults = decodeDeyeFaults(result)
 			res.Values = mapDeyeRegisters(result)
 			// Ядро (ac_active_power, рег. 0x56/0x57) обязано быть: без него values после
 			// фильтра commonContractTags пуст, а снимок со свежим timestamp показывает
@@ -1604,8 +1796,7 @@ func pollMPPTFromArr(t invTarget, arr []mpptRaw) DeviceResult {
 // МАП-цели исключены из 10-сек циклов инверторов (см. runInverterPoll); MPPT не
 // регистрируются в конфиге вовсе (см. pollAndSaveMap).
 func runMapPoll(store *redisStore, pg *pgStore, stop context.Context) {
-	const pollEvery = time.Second
-	ticker := time.NewTicker(pollEvery)
+	ticker := time.NewTicker(mapPollInterval)
 	defer ticker.Stop()
 	state := newMPPTPollState()
 	errState := map[string]bool{} // app-ошибки по устройствам МАП/MPPT (для истории)
@@ -2149,6 +2340,10 @@ func runInverterPoll(store *redisStore, pg *pgStore, t invTarget, stop context.C
 	var lastErrAt time.Time
 	lastErrCodeLog := ""            // история ошибок: код, записанный в прошлом чтении (пусто — ошибки не было)
 	lastFaults := map[string]bool{} // активные аварии устройства (из регистров), для истории
+	// Подавление шума «неверный Modbus-адрес» (ErrCode 0x05): пишем в историю только
+	// если держится непрерывно ≥ inverterModbusErrPersist без восстановления.
+	var modbusErrSince time.Time
+	var modbusErrLogged bool
 	for {
 		select {
 		case <-ticker.C:
@@ -2185,7 +2380,19 @@ func runInverterPoll(store *redisStore, pg *pgStore, t invTarget, stop context.C
 				// Правило истории: пишем только если этой ошибки НЕ было в прошлом
 				// чтении (сравнение по коду), дубли на каждом чтении не создаются.
 				// «Нет данных» (no_data) — не авария устройства, в историю не пишем.
-				if pg != nil && code != lastErrCodeLog && code != "no_data" {
+				// «Неверный Modbus-адрес» (0x05) — шум: пишем только при удержании
+				// ≥10 мин без восстановления.
+				if res.ErrCode == 0x05 {
+					if modbusErrSince.IsZero() {
+						modbusErrSince = now
+					}
+					if pg != nil && !modbusErrLogged && now.Sub(modbusErrSince) >= inverterModbusErrPersist {
+						if e := pg.InsertDeviceError(t.IP, "inverter", code, desc, now); e != nil {
+							log.Printf("error pg %s: %v", t.IP, e)
+						}
+						modbusErrLogged = true
+					}
+				} else if pg != nil && code != lastErrCodeLog && code != "no_data" {
 					if e := pg.InsertDeviceError(t.IP, "inverter", code, desc, now); e != nil {
 						log.Printf("error pg %s: %v", t.IP, e)
 					}
@@ -2194,6 +2401,8 @@ func runInverterPoll(store *redisStore, pg *pgStore, t invTarget, stop context.C
 				continue
 			}
 			lastErrCodeLog = ""
+			modbusErrSince = time.Time{}
+			modbusErrLogged = false
 			// Аварии устройства (Sofar fault-регистры и т.п.): пишем только появление.
 			if pg != nil {
 				cur := map[string]bool{}

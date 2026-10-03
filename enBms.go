@@ -421,6 +421,34 @@ type enbmsTail struct {
 	Alarms     []string
 }
 
+// enbmsCellWarnBits раскладывает байт предупреждений ячейки в тексты битов.
+// Имена и порядок — из APK (ble_data.dart, определения warn-битов ячейки):
+// 0=Cell high voltage warning, 1=Cell over voltage protection,
+// 2=Cell low voltage warning, 3=Cell under voltage protection. Прочие биты — номер.
+func enbmsCellWarnBits(v int) []string {
+	if v == 0 {
+		return nil
+	}
+	names := map[int]string{
+		0: "высокое напряжение (предупреждение)",
+		1: "защита от перенапряжения",
+		2: "низкое напряжение (предупреждение)",
+		3: "защита от пониженного напряжения",
+	}
+	var out []string
+	for bit := 0; bit < 8; bit++ {
+		if v&(1<<uint(bit)) == 0 {
+			continue
+		}
+		if n, ok := names[bit]; ok {
+			out = append(out, n)
+		} else {
+			out = append(out, fmt.Sprintf("бит %d", bit))
+		}
+	}
+	return out
+}
+
 // parseEnBmsTail декодирует warn-область хвоста Battery (последние 39 байт).
 // Безопасно при коротком payload. Статусы (ключи/баланс/режим) не декодируются —
 // их смещения не подтверждены.
@@ -442,13 +470,13 @@ func parseEnBmsTail(p []byte) enbmsTail {
 	t.PowerWarn = int(p[o+21])
 	t.ChargeWarn = int(p[o+22])
 	for i, v := range t.BatWarn {
-		if v != 0 {
-			t.Alarms = append(t.Alarms, fmt.Sprintf("Ячейка: предупреждение (%d, 0x%02x)", i+1, v))
+		for _, s := range enbmsCellWarnBits(v) {
+			t.Alarms = append(t.Alarms, fmt.Sprintf("Ячейка %d: %s", i+1, s))
 		}
 	}
 	for i, v := range t.TempWarn {
 		if v != 0 {
-			t.Alarms = append(t.Alarms, fmt.Sprintf("Датчик: предупреждение (%d, 0x%02x)", i+1, v))
+			t.Alarms = append(t.Alarms, fmt.Sprintf("Датчик %d: предупреждение (0x%02x)", i+1, v))
 		}
 	}
 	if t.EnvWarn != 0 {

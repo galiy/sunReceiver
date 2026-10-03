@@ -432,10 +432,11 @@ ON CONFLICT (device, kind, code, ts) DO NOTHING`, device, kind, code, msg, ts.UT
 	return nil
 }
 
-// DeviceErrors возвращает историю ошибок за период [from,to] с необязательными
-// фильтрами по типу (kind) и устройству (device, точное совпадение), по возрастанию ts.
-func (s *pgStore) DeviceErrors(from, to time.Time, kind, device string) ([]DeviceErrorRow, error) {
-	q := `SELECT device, kind, code, msg, ts FROM sunreceiver.device_errors WHERE ts >= $1 AND ts <= $2`
+// deviceErrorsWhere строит WHERE-условие и аргументы для device_errors.
+// Все значения передаются как параметры ($n) — защита от SQL-инъекций; строки
+// фильтров никогда не подставляются в SQL.
+func deviceErrorsWhere(from, to time.Time, kind, device string) (string, []any) {
+	q := " WHERE ts >= $1 AND ts <= $2"
 	args := []any{from.UTC(), to.UTC()}
 	if kind != "" {
 		args = append(args, kind)
@@ -445,7 +446,23 @@ func (s *pgStore) DeviceErrors(from, to time.Time, kind, device string) ([]Devic
 		args = append(args, device)
 		q += fmt.Sprintf(" AND device = $%d", len(args))
 	}
-	q += " ORDER BY ts ASC"
+	return q, args
+}
+
+// DeviceErrors возвращает историю ошибок за период [from,to] с необязательными
+// фильтрами по типу (kind) и устройству (device, точное совпадение), по УБЫВАНИЮ ts
+// (последние сверху) с пагинацией limit/offset. Все фильтры — параметризованные ($n).
+func (s *pgStore) DeviceErrors(from, to time.Time, kind, device string, limit, offset int) ([]DeviceErrorRow, error) {
+	where, args := deviceErrorsWhere(from, to, kind, device)
+	if limit <= 0 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	args = append(args, limit, offset)
+	q := fmt.Sprintf(`SELECT device, kind, code, msg, ts FROM sunreceiver.device_errors%s ORDER BY ts DESC LIMIT $%d OFFSET $%d`,
+		where, len(args)-1, len(args))
 	rows, err := s.pool.Query(s.ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("pg query device errors: %w", err)
@@ -463,6 +480,17 @@ func (s *pgStore) DeviceErrors(from, to time.Time, kind, device string) ([]Devic
 		return nil, fmt.Errorf("pg rows device errors: %w", err)
 	}
 	return out, nil
+}
+
+// DeviceErrorsCount возвращает общее число записей истории ошибок по тем же фильтрам
+// (для пагинации). Параметризованный запрос.
+func (s *pgStore) DeviceErrorsCount(from, to time.Time, kind, device string) (int, error) {
+	where, args := deviceErrorsWhere(from, to, kind, device)
+	var n int
+	if err := s.pool.QueryRow(s.ctx, "SELECT count(*) FROM sunreceiver.device_errors"+where, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("pg count device errors: %w", err)
+	}
+	return n, nil
 }
 
 // EnBmsAverages возвращает 5-минутные усреднённые точки одного устройства EnBMS

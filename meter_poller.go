@@ -158,7 +158,7 @@ func runMeterPoll(store *redisStore, pg *pgStore, cfg *meterConfig, ctx context.
 	if pg != nil {
 		capture = newMeterTariffCapture(pg)
 	}
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(meterPollInterval)
 	defer ticker.Stop()
 	// Ретрит логирования сбоев: первый сбой — сразу, далее не чаще раза в 10 мин
 	// (при длительном отключении счётчика ~20 строк/мин было бы слишком). При

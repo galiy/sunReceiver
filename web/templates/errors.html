@@ -44,6 +44,19 @@
   </div>
 </div>
 
+<div class="period-panel" id="errPager">
+  <button id="errPrev">← Назад</button>
+  <span id="errPageInfo" class="lbl">—</span>
+  <button id="errNext">Вперёд →</button>
+  <span class="lbl">На странице</span>
+  <select id="errLimit">
+    <option value="50">50</option>
+    <option value="100" selected>100</option>
+    <option value="200">200</option>
+    <option value="500">500</option>
+  </select>
+</div>
+
 <script>window.CACHE_BUST='{{.CacheBust}}';</script>
 <script src="/static/js/common.js?v={{.CacheBust}}"></script>
 <script src="/static/js/errors.js?v={{.CacheBust}}"></script>
