@@ -170,19 +170,19 @@ func TestRedLampDecision(t *testing.T) {
 		want   lampState
 	}{
 		// 1. Модуль счётчика отключён → не горит (даже если счётчик «жив»).
-		{"meter disabled", nil, &fakeSnapshotLoader{snaps: map[string]deviceSnapshot{meter.IP: freshSnap(now, meter.IP, "meter_active_power", -100.0)}}, lampOff},
+		{"meter disabled", nil, &fakeSnapshotLoader{snaps: map[string]deviceSnapshot{meterDeviceKey: freshSnap(now, meterDeviceKey, "meter_active_power", -100.0)}}, lampOff},
 		// 2. Счётчик недоступен: снэпшот отсутствует / старше 20 с → мигает.
 		{"snapshot absent", meter, &fakeSnapshotLoader{}, lampBlink},
-		{"snapshot stale", meter, &fakeSnapshotLoader{snaps: map[string]deviceSnapshot{meter.IP: freshSnap(old, meter.IP, "meter_active_power", -100.0)}}, lampBlink},
-		{"unparseable ts", meter, &fakeSnapshotLoader{snaps: map[string]deviceSnapshot{meter.IP: {IP: meter.IP, Timestamp: "not-a-time", Values: map[string]any{"meter_active_power": -100.0}}}}, lampBlink},
+		{"snapshot stale", meter, &fakeSnapshotLoader{snaps: map[string]deviceSnapshot{meterDeviceKey: freshSnap(old, meterDeviceKey, "meter_active_power", -100.0)}}, lampBlink},
+		{"unparseable ts", meter, &fakeSnapshotLoader{snaps: map[string]deviceSnapshot{meterDeviceKey: {IP: meterDeviceKey, Timestamp: "not-a-time", Values: map[string]any{"meter_active_power": -100.0}}}}, lampBlink},
 		// 3. Мощность положительная (потребление) → не горит.
-		{"positive power", meter, &fakeSnapshotLoader{snaps: map[string]deviceSnapshot{meter.IP: freshSnap(now, meter.IP, "meter_active_power", 200.0)}}, lampOff},
+		{"positive power", meter, &fakeSnapshotLoader{snaps: map[string]deviceSnapshot{meterDeviceKey: freshSnap(now, meterDeviceKey, "meter_active_power", 200.0)}}, lampOff},
 		// 3. Мощность НУЛЕВАЯ (нет потока) → не горит.
-		{"zero power", meter, &fakeSnapshotLoader{snaps: map[string]deviceSnapshot{meter.IP: freshSnap(now, meter.IP, "meter_active_power", 0.0)}}, lampOff},
+		{"zero power", meter, &fakeSnapshotLoader{snaps: map[string]deviceSnapshot{meterDeviceKey: freshSnap(now, meterDeviceKey, "meter_active_power", 0.0)}}, lampOff},
 		// 4. Мощность отрицательная (отдача) → горит.
-		{"negative power", meter, &fakeSnapshotLoader{snaps: map[string]deviceSnapshot{meter.IP: freshSnap(now, meter.IP, "meter_active_power", -300.0)}}, lampOn},
+		{"negative power", meter, &fakeSnapshotLoader{snaps: map[string]deviceSnapshot{meterDeviceKey: freshSnap(now, meterDeviceKey, "meter_active_power", -300.0)}}, lampOn},
 		// Нечисловое значение — считаем недоступным → мигает.
-		{"non-numeric power", meter, &fakeSnapshotLoader{snaps: map[string]deviceSnapshot{meter.IP: freshSnap(now, meter.IP, "meter_active_power", "?")}}, lampBlink},
+		{"non-numeric power", meter, &fakeSnapshotLoader{snaps: map[string]deviceSnapshot{meterDeviceKey: freshSnap(now, meterDeviceKey, "meter_active_power", "?")}}, lampBlink},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -206,14 +206,14 @@ func TestWhiteLampDecision(t *testing.T) {
 		}
 		if !meterErr {
 			if staleMeter {
-				snaps[meter.IP] = freshSnap(old, meter.IP, "meter_voltage", meterV)
+				snaps[meterDeviceKey] = freshSnap(old, meterDeviceKey, "meter_voltage", meterV)
 			} else {
-				snaps[meter.IP] = freshSnap(now, meter.IP, "meter_voltage", meterV)
+				snaps[meterDeviceKey] = freshSnap(now, meterDeviceKey, "meter_voltage", meterV)
 			}
 		}
 		errs := map[string]error{}
 		if meterErr {
-			errs[meter.IP] = errors.New("redis: nil")
+			errs[meterDeviceKey] = errors.New("redis: nil")
 		}
 		return &fakeSnapshotLoader{snaps: snaps, errs: errs}
 	}
@@ -239,8 +239,8 @@ func TestWhiteLampDecision(t *testing.T) {
 		{"map grid absent, meter stale", loader(0, 230, false, true), mapIP, meter, lampOff},
 		// Нечисловое напряжение МАП → считаем «нет напряжения» → смотрим счётчик (свежий → мигает).
 		{"map grid non-numeric", &fakeSnapshotLoader{snaps: map[string]deviceSnapshot{
-			mapIP:    {IP: mapIP, Timestamp: now.Format(time.RFC3339), Values: map[string]any{"grid_voltage": "?"}},
-			meter.IP: freshSnap(now, meter.IP, "meter_voltage", 230.0),
+			mapIP:          {IP: mapIP, Timestamp: now.Format(time.RFC3339), Values: map[string]any{"grid_voltage": "?"}},
+			meterDeviceKey: freshSnap(now, meterDeviceKey, "meter_voltage", 230.0),
 		}}, mapIP, meter, lampBlink},
 	}
 	for _, tc := range cases {
@@ -256,7 +256,7 @@ func TestWhiteLampDecision(t *testing.T) {
 func TestRedLampOnlyChangesOnTransition(t *testing.T) {
 	c, sent := newTestRelay([]relayLampCfg{{Name: "white", Relay: 1}, {Name: "red", Relay: 2}})
 	now := time.Now()
-	loader := &fakeSnapshotLoader{snaps: map[string]deviceSnapshot{"192.168.0.77": freshSnap(now, "192.168.0.77", "meter_active_power", -100.0)}} // отдача → on
+	loader := &fakeSnapshotLoader{snaps: map[string]deviceSnapshot{meterDeviceKey: freshSnap(now, meterDeviceKey, "meter_active_power", -100.0)}} // отдача → on
 	meter := &meterConfig{IP: "192.168.0.77"}
 
 	if err := c.SetLampByName("white", lampOn); err != nil {

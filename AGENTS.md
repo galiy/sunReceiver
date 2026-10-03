@@ -74,8 +74,12 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 дефолт 30 суток; пароль PG — в DSN, конфиг приватный). Порт веб-дашборда — корневое поле
 **`dashboard_port`** — **ОБЯЗАТЕЛЬНОЕ** (отсутствие = ошибка загрузки конфига; в
 `sunReceiver.sample.json` указан 80, на проде 8080). Счётчик DDS238 — раздел **`meter`**
-`{"name", "ip", "port", "unit", "first_reg", "register_count"}` (имеет приоритет над
-legacy-файлом `dds238.json`). Счётчик Энергомера **CE308** (опрос по BLE) — раздел
+`{"name", "ip", "port", "unit", "protocol", "first_reg", "register_count"}` (имеет приоритет над
+legacy-файлом `dds238.json`; `protocol` — `"tcp"` (Modbus TCP, по умолчанию) или `"rtu"`
+(Modbus RTU поверх TCP через прозрачный шлюз)). Идентификатор счётчика во всех
+хранилищах — единый стабильный ключ **`dds238`** (Redis current/ряд, PG `averages`),
+не зависящий от `ip`; смена адреса/транспорта не распадается на разные устройства
+(однократная миграция — `migrateMeterDeviceKey` в `meter_migrate.go`). Счётчик Энергомера **CE308** (опрос по BLE) — раздел
 **`ce308`** `{"name", "mac", "pin"}` (**`disabled` — ОБЯЗАТЕЛЬНОЕ** поле: `false` —
 счётчик опрашивается, `true` — опрос CE308 отключён; `mac` — BD_ADDR счётчика,
 `pin` — BLE-PIN радиоинтерфейса для спаривания), полностью описан в
@@ -295,7 +299,8 @@ arm-linux-musleabihf -static` (статичный elf32 ARM); не зависи�
 Локальный `/home/sasha/src/sunReceiver/sunReceiver.json` должен **соответствовать
 продовому** `/opt/sunreceiver/sunReceiver.json`. После любого изменения конфига на
 проде — сразу применять то же изменение к локальному файлу (или синхронизировать
-целиком: `scp root@192.168.13.253:/opt/sunreceiver/sunReceiver.json ./sunReceiver.json`).
+целиком: `scp root@<прод-сервер>:/opt/sunreceiver/sunReceiver.json ./sunReceiver.json`
+(адрес — в `.kilo/AGENTS-private.md`)).
 Оба файла приватные (в `.gitignore`), в git не выгружаются.
 
 ## BMS: опрос только с согласования (правило пользователя)

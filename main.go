@@ -52,7 +52,7 @@ const (
 	// inverterModbusErrPersist — сколько «неверный Modbus-адрес» (ErrCode 0x05)
 	// должен держаться непрерывно, прежде чем попасть в историю ошибок (антишум).
 	inverterModbusErrPersist = 10 * time.Minute
-	timeout    = 15 * time.Second
+	timeout                  = 15 * time.Second
 	// defaultIdleWindow — «тишина» между байтами ответа (Deye): паузы < 4 с.
 	defaultIdleWindow = 4 * time.Second
 	// sofarIdleWindow — Sofar LSW-3 шлёт куски с паузами до ~6.5 с — окно шире.
@@ -182,6 +182,8 @@ type dbConfig struct {
 // Disabled — ОБЯЗАТЕЛЬНОЕ поле (отсутствие = ошибка конфига): false = счётчик
 // опрашивается; true = все пулеры счётчика отключены, плашки/кнопка «Электроэнергия»
 // на дашборде скрыты.
+// Protocol — тип протокола: "tcp" (Modbus TCP, по умолчанию — прямой опрос)
+// или "rtu" (Modbus RTU поверх TCP — прозрачный шлюз, напр. USR-DR164).
 type meterSection struct {
 	Name        string `json:"name"`
 	IP          string `json:"ip"`
@@ -189,6 +191,7 @@ type meterSection struct {
 	Unit        byte   `json:"unit"`
 	FirstReg    uint16 `json:"first_reg"`
 	RegisterCnt uint16 `json:"register_count"`
+	Protocol    string `json:"protocol"`
 	Disabled    *bool  `json:"disabled"`
 }
 
@@ -632,14 +635,6 @@ func mapSourceName() string {
 		return "веб-API ПАК «Малина»"
 	}
 	return "нет источника"
-}
-
-// meterCfgIP возвращает IP счётчика для справочного напряжения ("" если не настроен).
-func meterCfgIP(c *meterConfig) string {
-	if c == nil {
-		return ""
-	}
-	return c.IP
 }
 
 var targets []invTarget
@@ -2120,6 +2115,12 @@ func main() {
 		log.Printf("pg: отключено (флаг -pg пустой); работаем только через Redis")
 	}
 
+	// Однократная миграция идентификатора счётчика на единый ключ (dds238):
+	// переписывает current/временной ряд Redis и строки PG averages. Выполняется
+	// СИНХРОННО до запуска пулеров и runAccumulator — иначе backfill агрегации успел
+	// бы обработать ряд под старыми IP-ключами.
+	migrateMeterDeviceKey(store, pg, time.Now())
+
 	// Фоновые процессы: усреднение данных за 5 минут в PG и очистка старых
 	// данных Redis (старше 2 календарных суток).
 	bgWg.Add(1)
@@ -2179,7 +2180,7 @@ func main() {
 		bgWg.Add(1)
 		go func() {
 			defer bgWg.Done()
-			runNotifyMonitor(store, notifyCfg, mapIP, mapName, meterCfgIP(meterCfg), stopCtx)
+			runNotifyMonitor(store, notifyCfg, mapIP, mapName, meterCurrentKey(meterCfg), stopCtx)
 		}()
 		log.Printf("notify: уведомления в MAX включены (МАП %s, источник %s)", mapName, mapSourceName())
 	} else if notifyCfg != nil {

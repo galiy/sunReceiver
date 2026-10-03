@@ -153,7 +153,7 @@ func runMeterPoll(store *redisStore, pg *pgStore, cfg *meterConfig, ctx context.
 	if cfg == nil {
 		return
 	}
-	client := newMeterClient(fmt.Sprintf("%s:%d", cfg.IP, cfg.Port), cfg.Unit)
+	client := newMeterClient(fmt.Sprintf("%s:%d", cfg.IP, cfg.Port), cfg.Unit, cfg.Protocol == meterProtoRTU)
 	var capture *meterTariffCapture
 	if pg != nil {
 		capture = newMeterTariffCapture(pg)
@@ -183,9 +183,12 @@ func runMeterPoll(store *redisStore, pg *pgStore, cfg *meterConfig, ctx context.
 				log.Printf("%s: meter опрос восстановлен", cfg.IP)
 				wasFailing = false
 			}
+			// IP снимка — единый стабильный ключ устройства (meterDeviceKey),
+			// а не адрес транспорта: при смене .77/.75 identity счётчика в Redis
+			// (current, ряд) и PG (averages) не меняется.
 			snap := deviceSnapshot{
 				Name:      cfg.Name,
-				IP:        cfg.IP,
+				IP:        meterDeviceKey,
 				Timestamp: now.Format(time.RFC3339),
 				Values:    vals,
 			}

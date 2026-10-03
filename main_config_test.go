@@ -83,6 +83,29 @@ func TestLoadMeterConfigValidation(t *testing.T) {
 	}
 }
 
+// TestMeterProtocol: поле protocol раздела meter принимает "tcp"/"rtu", пусто =
+// "tcp" (обратная совместимость), недопустимое значение отключает опрос.
+func TestMeterProtocol(t *testing.T) {
+	base := func(proto string) *meterSection {
+		return &meterSection{Name: "M", IP: "192.0.2.75", Port: 502, Unit: 1, Protocol: proto}
+	}
+	if mc := loadMeterConfig(base("")); mc == nil || mc.Protocol != meterProtoTCP {
+		t.Fatalf("пусто → %+v, want protocol=tcp", mc)
+	}
+	if mc := loadMeterConfig(base("tcp")); mc == nil || mc.Protocol != meterProtoTCP {
+		t.Fatalf("tcp → %+v, want protocol=tcp", mc)
+	}
+	if mc := loadMeterConfig(base("rtu")); mc == nil || mc.Protocol != meterProtoRTU {
+		t.Fatalf("rtu → %+v, want protocol=rtu", mc)
+	}
+	if mc := loadMeterConfig(base("RTU")); mc == nil || mc.Protocol != meterProtoRTU {
+		t.Fatalf("RTU → %+v, want protocol=rtu", mc)
+	}
+	if mc := loadMeterConfig(base("bogus")); mc != nil {
+		t.Fatalf("bogus → %+v, want nil", mc)
+	}
+}
+
 // TestLoadConfigDashboardPortRequired (п. 4): dashboard_port — обязательное поле;
 // без него — ошибка конфига при старте.
 func TestLoadConfigDashboardPortRequired(t *testing.T) {

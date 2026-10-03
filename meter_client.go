@@ -25,16 +25,23 @@ import (
 	"time"
 
 	"github.com/galiy/sunReceiver/modbusmap"
+	"github.com/galiy/sunReceiver/solarman"
 )
 
 // meterClient — переиспользуемое TCP-соединение к электросчётчику DDS238
-// (Modbus TCP, стандартные holding registers). В отличие от modbusmap для МАП
-// (гейт хранит ячейки побайтно в старшем байте слова), DDS238 отдаёт обычные
-// uint16-слова (big-endian), поэтому читаем регистры как uint16.
+// (стандартные holding registers). В отличие от modbusmap для МАП (гейт хранит
+// ячейки побайтно в старшем байте слова), DDS238 отдаёт обычные uint16-слова
+// (big-endian), поэтому читаем регистры как uint16.
 // Соединение переиспользуется между 1-секундными опросами.
+//
+// Поддерживаются два транспорта (поле RTU):
+//   - Modbus TCP (RTU=false) — MBAP-заголовок + PDU, без CRC (прямой опрос);
+//   - Modbus RTU поверх TCP (RTU=true) — сырой серийный кадр с CRC16, без MBAP
+//     (прозрачный шлюз, напр. USR-DR164 в режиме Modbus OFF).
 type meterClient struct {
 	Address string // host:port
 	Unit    byte   // Modbus-адрес устройства (обычно 1)
+	RTU     bool   // true — Modbus RTU поверх TCP (прозрачный шлюз)
 
 	mu   sync.Mutex
 	conn net.Conn
@@ -42,8 +49,9 @@ type meterClient struct {
 }
 
 // newMeterClient создаёт клиент к хост:port с Modbus-адресом unit.
-func newMeterClient(addr string, unit byte) *meterClient {
-	return &meterClient{Address: addr, Unit: unit}
+// rtu=true — опрос по Modbus RTU поверх TCP (прозрачный шлюз).
+func newMeterClient(addr string, unit byte, rtu bool) *meterClient {
+	return &meterClient{Address: addr, Unit: unit, RTU: rtu}
 }
 
 // dial устанавливает (или переиспользует) TCP-соединение; при необходимости переподнимает.
@@ -69,9 +77,47 @@ func (c *meterClient) closeConn() {
 
 func (c *meterClient) nextTxn() uint16 { c.txn++; return c.txn }
 
+// writeReqLocked отправляет готовый кадр по соединению. При ошибке записи
+// переподнимает соединение один раз и повторяет отправку.
+func (c *meterClient) writeReqLocked(ctx context.Context, req []byte) error {
+	if err := c.conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		return fmt.Errorf("meter set deadline: %w", err)
+	}
+	if _, err := c.conn.Write(req); err != nil {
+		// соединение могло умереть — переподнимаем один раз и повторяем
+		c.closeConn()
+		if derr := c.dial(ctx); derr != nil {
+			return derr
+		}
+		if err := c.conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+			return fmt.Errorf("meter set deadline: %w", err)
+		}
+		if _, err := c.conn.Write(req); err != nil {
+			c.closeConn()
+			return fmt.Errorf("meter write: %w", err)
+		}
+	}
+	return nil
+}
+
+// drainLocked коротким read-deadline вычитывает и отбрасывает возможные «хвосты»
+// предыдущих ответов в сокете. Для RTU это важно: у кадров нет transaction id,
+// и задержавшийся ответ мог бы быть принят за ответ на текущий запрос.
+func (c *meterClient) drainLocked() {
+	_ = c.conn.SetReadDeadline(time.Now().Add(30 * time.Millisecond))
+	buf := make([]byte, 256)
+	for {
+		if _, err := c.conn.Read(buf); err != nil {
+			break
+		}
+	}
+	_ = c.conn.SetReadDeadline(time.Time{})
+}
+
 // ReadHoldingRegisters читает count держащих регистров с адреса start (функция 03)
 // и возвращает их как uint16 (big-endian). Эти же регистры возвращает
-// read_holding_registers(0, N) в dds238read.py.
+// read_holding_registers(0, N) в dds238read.py. Транспорт выбирается полем RTU
+// (Modbus TCP / Modbus RTU поверх TCP).
 //
 // Уважает ctx только на этапе dial (DialContext): при отмене (стоп сервиса)
 // медленное подключение прерывается. Чтение ограничено 3-сек read-deadline.
@@ -86,6 +132,14 @@ func (c *meterClient) ReadHoldingRegisters(ctx context.Context, start, count uin
 			return nil, err
 		}
 	}
+	if c.RTU {
+		return c.readRTULocked(ctx, start, count)
+	}
+	return c.readTCPLocked(ctx, start, count)
+}
+
+// readTCPLocked выполняет один запрос Modbus TCP (MBAP + PDU, без CRC).
+func (c *meterClient) readTCPLocked(ctx context.Context, start, count uint16) ([]uint16, error) {
 	// MBAP + PDU (func 03, start, count)
 	req := make([]byte, 0, 12)
 	req = binary.BigEndian.AppendUint16(req, c.nextTxn())
@@ -95,22 +149,8 @@ func (c *meterClient) ReadHoldingRegisters(ctx context.Context, start, count uin
 	req = binary.BigEndian.AppendUint16(req, start)
 	req = binary.BigEndian.AppendUint16(req, count)
 
-	if err := c.conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
-		return nil, fmt.Errorf("meter set deadline: %w", err)
-	}
-	if _, err := c.conn.Write(req); err != nil {
-		// соединение могло умереть — переподнимаем один раз и повторяем
-		c.closeConn()
-		if derr := c.dial(ctx); derr != nil {
-			return nil, derr
-		}
-		if err := c.conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
-			return nil, fmt.Errorf("meter set deadline: %w", err)
-		}
-		if _, err := c.conn.Write(req); err != nil {
-			c.closeConn()
-			return nil, fmt.Errorf("meter write: %w", err)
-		}
+	if err := c.writeReqLocked(ctx, req); err != nil {
+		return nil, err
 	}
 
 	hdr := make([]byte, 7)
@@ -164,6 +204,87 @@ func (c *meterClient) ReadHoldingRegisters(ctx context.Context, start, count uin
 		return nil, fmt.Errorf("meter: bytecount=%d, ждали %d", bc, 2*int(count))
 	}
 	data := rest[2 : 2+bc]
+	regs := make([]uint16, count)
+	for i := 0; i < int(count); i++ {
+		regs[i] = binary.BigEndian.Uint16(data[2*i:])
+	}
+	return regs, nil
+}
+
+// meterRTUCRCOK проверяет CRC16/MODBUS кадра RTU (CRC — два младших байта,
+// little-endian, в конце кадра).
+func meterRTUCRCOK(frame []byte) bool {
+	if len(frame) < 4 {
+		return false
+	}
+	want := binary.LittleEndian.Uint16(frame[len(frame)-2:])
+	return solarman.CRC16Modbus(frame[:len(frame)-2]) == want
+}
+
+// readRTULocked выполняет один запрос Modbus RTU поверх TCP: сырой серийный кадр
+// (unit + PDU + CRC16, без MBAP). Так работает прозрачный шлюз USR-DR164.
+func (c *meterClient) readRTULocked(ctx context.Context, start, count uint16) ([]uint16, error) {
+	// Перед запросом осушаем сокет: у RTU нет transaction id, задержавшийся
+	// ответ предыдущего опроса мог бы быть принят за текущий.
+	c.drainLocked()
+
+	// PDU: unit + func 03 + start + count + CRC16.
+	req := make([]byte, 0, 8)
+	req = append(req, c.Unit, 0x03)
+	req = binary.BigEndian.AppendUint16(req, start)
+	req = binary.BigEndian.AppendUint16(req, count)
+	crc := solarman.CRC16Modbus(req)
+	req = append(req, byte(crc), byte(crc>>8))
+
+	if err := c.writeReqLocked(ctx, req); err != nil {
+		return nil, err
+	}
+
+	// Заголовок ответа: unit, func, bytecount/exception-code.
+	hdr := make([]byte, 3)
+	if _, err := modbusmap.ReadFull(c.conn, hdr); err != nil {
+		c.closeConn()
+		return nil, fmt.Errorf("meter rtu read header: %w", err)
+	}
+	if hdr[0] != c.Unit {
+		c.closeConn()
+		return nil, fmt.Errorf("meter rtu: несовпадение unit id: ожидался %d, получен %d", c.Unit, hdr[0])
+	}
+	if hdr[1]&0x80 != 0 {
+		// Exception: unit, func|0x80, код, CRC(2).
+		tail := make([]byte, 2)
+		if _, err := modbusmap.ReadFull(c.conn, tail); err != nil {
+			c.closeConn()
+			return nil, fmt.Errorf("meter rtu read exception crc: %w", err)
+		}
+		frame := append(hdr, tail...)
+		if !meterRTUCRCOK(frame) {
+			c.closeConn()
+			return nil, fmt.Errorf("meter rtu: некорректный CRC16 в exception-кадре")
+		}
+		return nil, fmt.Errorf("meter: modbus exception func=0x%02X code=0x%02X", hdr[1], hdr[2])
+	}
+	if hdr[1] != 0x03 {
+		c.closeConn()
+		return nil, fmt.Errorf("meter rtu: неожиданная функция 0x%02X", hdr[1])
+	}
+	bc := int(hdr[2])
+	if bc != 2*int(count) {
+		c.closeConn()
+		return nil, fmt.Errorf("meter rtu: bytecount=%d, ждали %d", bc, 2*int(count))
+	}
+	// Данные + CRC(2).
+	rest := make([]byte, bc+2)
+	if _, err := modbusmap.ReadFull(c.conn, rest); err != nil {
+		c.closeConn()
+		return nil, fmt.Errorf("meter rtu read data: %w", err)
+	}
+	frame := append(hdr, rest...)
+	if !meterRTUCRCOK(frame) {
+		c.closeConn()
+		return nil, fmt.Errorf("meter rtu: некорректный CRC16")
+	}
+	data := rest[:bc]
 	regs := make([]uint16, count)
 	for i := 0; i < int(count); i++ {
 		regs[i] = binary.BigEndian.Uint16(data[2*i:])

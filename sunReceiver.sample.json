@@ -1,55 +1,88 @@
 {
-  "dashboard_port": 80,
-  "dashboard_user": "CHANGE_ME",
-  "dashboard_password": "CHANGE_ME_PASSWORD",
-  "poll": { "inverter": 10, "map": 1, "meter": 1, "ce308": 5, "antbms": 1, "enbms": 3 },
-  "invertors": [
-    { "ip": "192.168.0.16", "name": "Bineos Left", "type": "deye", "logger_sn": 1890123456, "placement": "Дом", "disabled": false },
-    { "ip": "192.168.0.17", "name": "Bineos Center", "type": "deye", "logger_sn": 2890123456, "placement": "Дом", "disabled": false },
-    { "ip": "192.168.0.18", "name": "Bineos Right", "type": "deye", "logger_sn": 3890123456, "placement": "Дом", "disabled": false },
-    { "ip": "192.168.0.13", "name": "Sofar 3.3K Левый", "type": "sofar", "logger_sn": 1567890123, "placement": "Дом", "disabled": false },
-    { "ip": "192.168.0.14", "name": "Sofar 3.3K Средний", "type": "sofar", "logger_sn": 2678901234, "placement": "Дом", "disabled": false },
-    { "ip": "192.168.0.15", "name": "Sofar 3.3K Правый", "type": "sofar", "logger_sn": 3678901234, "placement": "Дом", "disabled": false },
-    { "ip": "192.168.0.11", "name": "Sofar-2.5", "type": "sofar", "logger_sn": 2345678901, "placement": "Дом", "disabled": false },
-    { "ip": "192.168.0.10", "name": "Deye Left", "type": "deye", "logger_sn": 1234567890, "placement": "Гараж", "disabled": false },
-    { "ip": "192.168.0.12", "name": "Deye Right", "type": "deye", "logger_sn": 3456789012, "placement": "Гараж", "disabled": false }
-  ],
-  "map": {
-    "disabled": false,
-    "bms_disabled": false,
-    "rs485": { "name": "MAP (батарея/сеть)", "ip": "192.168.0.20", "unit": 1, "disabled": false },
-    "base_url": "http://192.168.0.30",
-    "mppt_path": "/read_json.php?device=mppt",
-    "map_path": "/read_json.php?device=map",
-    "bms_path": "/read_bms.php",
-    "login": "admin",
-    "password": "CHANGE_ME"
-  },
-  "db": { "redis": "192.168.0.253:6379", "pg": "postgres://sunreceiver:CHANGE_ME_PASSWORD@192.168.0.253:5432/sunreceiver?sslmode=disable", "pg_restore_window": "720h" },
-  "meter": { "disabled": false, "name": "Электросчётчик", "ip": "192.168.0.40", "port": 502, "unit": 1, "first_reg": 0, "register_count": 27 },
-  "ce308": { "disabled": false, "name": "CE308 #000000000", "mac": "AA:BB:CC:DD:EE:FF", "pin": "CHANGE_ME_PIN" },
-  "enBms": {
-    "disabled": false,
-    "devices": [
-      { "name": "BMS EnBMS #1", "mac": "AA:BB:CC:11:22:33", "disabled": false }
-    ]
-  },
-  "notify": { "token": "CHANGE_ME", "user_id": "", "chat_id": "", "disabled": false, "stable_window_sec": 30, "map_undeclared_sec": 20, "grid_voltage_low": 195 },
-  "relay": {
-    "disabled": false,
-    "ip": "192.168.0.34",
-    "udp_port": 6723,
-    "blink_hz": 2.0,
-    "keepalive": "2s",
-    "lamps": [
-      { "name": "white", "relay": 1 },
-      { "name": "red", "relay": 2 }
-    ],
-    "meter_stale_sec": 20,
-    "map_stale_sec": 20,
-    "meter_power_tag": "meter_active_power",
-    "meter_voltage_tag": "meter_voltage",
-    "map_grid_tag": "grid_voltage",
-    "voltage_present_min": 0
-  }
+	"dashboard_port": 80,
+	"dashboard_user": "CHANGE_ME",
+	"dashboard_password": "CHANGE_ME_PASSWORD",
+	"poll": {
+		"inverter": 10,
+		"map": 1,
+		"meter": 1,
+		"ce308": 5,
+		"antbms": 1,
+		"enbms": 3
+	},
+	"invertors": [
+		{ "ip": "192.168.0.16", "name": "Bineos Left", "type": "deye", "logger_sn": 1890123456, "placement": "Дом", "disabled": false },
+		{ "ip": "192.168.0.17", "name": "Bineos Center", "type": "deye", "logger_sn": 2890123456, "placement": "Дом", "disabled": false },
+		{ "ip": "192.168.0.18", "name": "Bineos Right", "type": "deye", "logger_sn": 3890123456, "placement": "Дом", "disabled": false },
+		{ "ip": "192.168.0.13", "name": "Sofar 3.3K Левый", "type": "sofar", "logger_sn": 1567890123, "placement": "Дом", "disabled": false },
+		{ "ip": "192.168.0.14", "name": "Sofar 3.3K Средний", "type": "sofar", "logger_sn": 2678901234, "placement": "Дом", "disabled": false },
+		{ "ip": "192.168.0.15", "name": "Sofar 3.3K Правый", "type": "sofar", "logger_sn": 3678901234, "placement": "Дом", "disabled": false },
+		{ "ip": "192.168.0.11", "name": "Sofar-2.5", "type": "sofar", "logger_sn": 2345678901, "placement": "Дом", "disabled": false },
+		{ "ip": "192.168.0.10", "name": "Deye Left", "type": "deye", "logger_sn": 1234567890, "placement": "Гараж", "disabled": false },
+		{ "ip": "192.168.0.12", "name": "Deye Right", "type": "deye", "logger_sn": 3456789012, "placement": "Гараж", "disabled": false }
+	],
+	"map": {
+		"disabled": false,
+		"bms_disabled": false,
+		"rs485": { "name": "MAP (батарея/сеть)", "ip": "192.168.0.20", "unit": 1, "disabled": false },
+		"base_url": "http://192.168.0.30",
+		"mppt_path": "/read_json.php?device=mppt",
+		"map_path": "/read_json.php?device=map",
+		"bms_path": "/read_bms.php",
+		"login": "admin",
+		"password": "CHANGE_ME"
+	},
+	"db": {
+		"redis": "192.168.0.253:6379",
+		"pg": "postgres://sunreceiver:CHANGE_ME_PASSWORD@192.168.0.253:5432/sunreceiver?sslmode=disable",
+		"pg_restore_window": "720h"
+	},
+	"meter": {
+		"disabled": false,
+		"name": "Электросчётчик",
+		"ip": "192.168.0.40",
+		"port": 502,
+		"unit": 1,
+		"protocol": "tcp",
+		"first_reg": 0,
+		"register_count": 27
+	},
+	"ce308": {
+		"disabled": false,
+		"name": "CE308 #000000000",
+		"mac": "AA:BB:CC:DD:EE:FF",
+		"pin": "CHANGE_ME_PIN"
+	},
+	"enBms": {
+		"disabled": false,
+		"devices": [
+			{ "name": "BMS EnBMS #1", "mac": "AA:BB:CC:11:22:33", "disabled": false }
+		]
+	},
+	"notify": {
+		"token": "CHANGE_ME",
+		"user_id": "",
+		"chat_id": "",
+		"disabled": false,
+		"stable_window_sec": 30,
+		"map_undeclared_sec": 20,
+		"grid_voltage_low": 195
+	},
+	"relay": {
+		"disabled": false,
+		"ip": "192.168.0.34",
+		"udp_port": 6723,
+		"blink_hz": 2.0,
+		"keepalive": "2s",
+		"lamps": [
+			{ "name": "white", "relay": 1 },
+			{ "name": "red", "relay": 2 }
+		],
+		"meter_stale_sec": 20,
+		"map_stale_sec": 20,
+		"meter_power_tag": "meter_active_power",
+		"meter_voltage_tag": "meter_voltage",
+		"map_grid_tag": "grid_voltage",
+		"voltage_present_min": 0
+	}
 }

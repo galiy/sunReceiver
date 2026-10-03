@@ -22,7 +22,50 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 )
+
+// Тип протокола опроса счётчика:
+//   - meterProtoTCP — Modbus TCP: кадр с MBAP-заголовком (transID/proto/len/unit)
+//   - PDU, без CRC. Прямой опрос счётчика;
+//   - meterProtoRTU — Modbus RTU поверх TCP: на шину уходит сырой серийный кадр
+//     (unit + PDU + CRC16), без MBAP. Так работает прозрачный шлюз (напр. USR-DR164,
+//     режим Modbus OFF): TCP-сокет есть, но преобразования TCP↔RTU нет.
+const (
+	meterProtoTCP = "tcp"
+	meterProtoRTU = "rtu"
+)
+
+// meterDeviceKey — единый стабильный идентификатор счётчика DDS238 во всех
+// хранилищах: поле HASH `sunreceiver:current`, identity снимков временного ряда
+// Redis, колонка `ip` в PG `averages`, добор тарифных границ. НЕ зависит от
+// адреса/транспорта (прямой Modbus TCP или прозрачный шлюз) — при смене IP
+// (напр. .77 → .75) история и агрегаты не распадаются на разные устройства.
+const meterDeviceKey = "dds238"
+
+// meterCurrentKey возвращает ключ счётчика в Redis-current ("" если счётчик не
+// настроен). Используется потребителями, которым нужен актуальный снимок
+// счётчика по ключу (уведомления, лампы-индикаторы).
+func meterCurrentKey(c *meterConfig) string {
+	if c == nil {
+		return ""
+	}
+	return meterDeviceKey
+}
+
+// normalizeMeterProtocol приводит значение поля protocol к каноническому виду.
+// Пустая строка = "tcp" (обратная совместимость). Недопустимое значение — ошибка
+// (опрос отключается), чтобы опечатка не привела к молчаливому выбору протокола.
+func normalizeMeterProtocol(s string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", meterProtoTCP:
+		return meterProtoTCP, nil
+	case meterProtoRTU:
+		return meterProtoRTU, nil
+	default:
+		return "", fmt.Errorf("protocol=%q: поддерживаются только %q (Modbus TCP) и %q (Modbus RTU через прозрачный шлюз)", s, meterProtoTCP, meterProtoRTU)
+	}
+}
 
 // meterConfig — конфигурация электросчётчика DDS238. Читается из отдельного
 // файла dds238.json рядом с исполняемым файлом (как sunReceiver.json);
@@ -35,6 +78,9 @@ type meterConfig struct {
 	Unit        byte   `json:"unit"`
 	FirstReg    uint16 `json:"first_reg"`
 	RegisterCnt uint16 `json:"register_count"`
+	// Protocol — "tcp" (Modbus TCP, по умолчанию) или "rtu" (Modbus RTU поверх
+	// TCP, прозрачный шлюз). Пусто трактуется как "tcp".
+	Protocol string `json:"protocol"`
 }
 
 // meterConfigPath возвращает путь к dds238.json в каталоге исполняемого файла.
@@ -70,7 +116,11 @@ func meterFromSection(m *meterSection) (*meterConfig, error) {
 	if regCnt < 18 {
 		return nil, fmt.Errorf("register_count=%d: нужно минимум 18 (декодер читает регистры 0..17); при меньшем уйдут нулевые показания", regCnt)
 	}
-	return &meterConfig{Name: m.Name, IP: m.IP, Port: m.Port, Unit: m.Unit, FirstReg: 0, RegisterCnt: regCnt}, nil
+	proto, err := normalizeMeterProtocol(m.Protocol)
+	if err != nil {
+		return nil, err
+	}
+	return &meterConfig{Name: m.Name, IP: m.IP, Port: m.Port, Unit: m.Unit, FirstReg: 0, RegisterCnt: regCnt, Protocol: proto}, nil
 }
 
 // loadMeterConfig читает и проверяет конфигурацию счётчика. Источники по приоритету:
@@ -127,6 +177,12 @@ func loadMeterConfig(section *meterSection) *meterConfig {
 		log.Printf("meter: legacy dds238.json register_count=%d < 18 — опрос счётчика отключён", mc.RegisterCnt)
 		return nil
 	}
+	proto, err := normalizeMeterProtocol(mc.Protocol)
+	if err != nil {
+		log.Printf("meter: legacy dds238.json некорректен (%v) — опрос счётчика отключён", err)
+		return nil
+	}
+	mc.Protocol = proto
 	return &mc
 }
 
@@ -135,6 +191,6 @@ func describeMeterConfig(c *meterConfig) string {
 	if c == nil {
 		return ""
 	}
-	return fmt.Sprintf("%s (%s:%d, unit %d, regs %d..%d)",
-		c.Name, c.IP, c.Port, c.Unit, c.FirstReg, c.FirstReg+c.RegisterCnt-1)
+	return fmt.Sprintf("%s (%s:%d, unit %d, %s, regs %d..%d)",
+		c.Name, c.IP, c.Port, c.Unit, c.Protocol, c.FirstReg, c.FirstReg+c.RegisterCnt-1)
 }

@@ -152,9 +152,10 @@ func meterBoundaryImportCol(hour int) string {
 	return ""
 }
 
-// nearestMeterReading ищет в ряде Redis (по devKey cfg.IP) снимок счётчика,
-// ближайший по времени к границе b в пределах ±meterBackfillScanT, и возвращает
-// его показание Import/Export (kWh). Если поблизости данных нет — ok=false.
+// nearestMeterReading ищет в ряде Redis (по стабильному ключу meterDeviceKey)
+// снимок счётчика, ближайший по времени к границе b в пределах
+// ±meterBackfillScanT, и возвращает его показание Import/Export (kWh). Если
+// поблизости данных нет — ok=false.
 func nearestMeterReading(store *redisStore, cfg *meterConfig, b time.Time) (imp, exp float64, ok bool) {
 	from := b.Add(-meterBackfillScanT)
 	to := b.Add(meterBackfillScanT)
@@ -165,7 +166,9 @@ func nearestMeterReading(store *redisStore, cfg *meterConfig, b time.Time) (imp,
 	var bestImp, bestExp float64
 	var bestDelta = time.Duration(math.MaxInt64)
 	for _, sn := range snaps {
-		if sn.IP != cfg.IP {
+		// Новые снимки — под единым ключом; cfg.IP принимаем для совместимости
+		// с рядом, ещё не прошедшим миграцию ключа.
+		if sn.IP != meterDeviceKey && sn.IP != cfg.IP {
 			continue
 		}
 		ii, okI := snapFloat(sn.Values, "meter_import")

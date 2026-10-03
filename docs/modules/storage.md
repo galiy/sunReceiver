@@ -80,6 +80,9 @@ snap)` (PIPELINE/TxPipeline). `SaveSnapshot` пишет **каждое** сня�
 - `ensureSchema`/`ensureMeterTariffSchema` — создание `averages` и `daily_tariffs`.
 - Тарифы счётчика: `DailyTariffsRange`, `StoreMeterBoundary` — см.
   [dds238-meter.md](../dds238-meter.md).
+- Счётчик в `averages` идентифицируется единым стабильным ключом `dds238` (колонка
+  `ip`), не зависящим от адреса; однократная миграция — `migrateMeterDeviceKey`
+  (`meter_migrate.go`).
 
 ## Фоновые процессы (`accumulator.go`)
 

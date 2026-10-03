@@ -598,7 +598,7 @@ func redLampDecision(loader relaySnapshotLoader, cfg *relaySection, meterCfg *me
 		return lampOff
 	}
 	// 2. Счётчик недоступен: нет снэпшота или он старше окна.
-	snap, err := loader.CurrentOne(meterCfg.IP)
+	snap, err := loader.CurrentOne(meterDeviceKey)
 	if err != nil {
 		return lampBlink
 	}
@@ -670,7 +670,7 @@ func whiteLampDecision(loader relaySnapshotLoader, cfg *relaySection, mapIP stri
 	if meterCfg == nil {
 		return lampOff
 	}
-	meterSnap, err := loader.CurrentOne(meterCfg.IP)
+	meterSnap, err := loader.CurrentOne(meterDeviceKey)
 	if err != nil || snapshotStale(meterSnap, cfg.meterStale()) {
 		// 4. Счётчик недоступен — лампа не горит.
 		return lampOff
