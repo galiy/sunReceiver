@@ -25,7 +25,7 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 | МАП + MPPT | [`docs/modules/map-mppt.md`](docs/modules/map-mppt.md) |
 | Счётчик DDS238 | [`docs/dds238-meter.md`](docs/dds238-meter.md) |
 | Счётчик Энергомера CE308 (BLE) | [`docs/modules/ce308.md`](docs/modules/ce308.md) |
-| BMS EnBMS (Enjie EMU110x, BLE) | [`docs/modules/enbms.md`](docs/modules/enbms.md) |
+| BMS EnBMS (Enjie EMU110x, BLE/RS485) | [`docs/modules/enbms.md`](docs/modules/enbms.md) |
 | ANT BMS | [`docs/antbms.md`](docs/antbms.md) |
 | Шлюз Modbus TCP↔RTU (`mapgateway/`, C) | [`mapgateway/README.md`](mapgateway/README.md) |
 | Уведомления в MAX | [`docs/modules/notify.md`](docs/modules/notify.md) |
@@ -84,12 +84,22 @@ legacy-файлом `dds238.json`; `protocol` — `"tcp"` (Modbus TCP, по ум
 счётчик опрашивается, `true` — опрос CE308 отключён; `mac` — BD_ADDR счётчика,
 `pin` — BLE-PIN радиоинтерфейса для спаривания), полностью описан в
 [`docs/modules/ce308.md`](docs/modules/ce308.md). BMS **EnBMS** (Enjie EMU110x,
-опрос по BLE) — раздел **`enBms`** `{"disabled", "devices": [{"name", "mac",
-"disabled"}]}` (**`disabled` — ОБЯЗАТЕЛЬНОЕ** поле на уровне раздела и у каждого
-устройства: `false` — опрашивается, `true` — отключён; `mac` обязателен для
-активного устройства; `name` — необязательная метка отображения). BLE-имя
-устройства не используется (у всех EnBMS оно одинаковое — `BP00`): идентификатор
-и ключ — только MAC, отображаемое имя = `<name> <MAC>`. Описан в
+метод опроса BLE или RS485 у каждого устройства) — раздел **`enBms`**
+`{"disabled", "poll_interval_ble", "poll_interval_rs485", "devices": [{"name",
+"mac", "method", "rs485", "disabled"}]}` (**`disabled` — ОБЯЗАТЕЛЬНОЕ** поле на
+уровне раздела и у каждого устройства: `false` — опрашивается, `true` —
+отключён). Период задаётся для КАЖДОГО метода (`poll_interval_ble` /
+`poll_interval_rs485`, секунды, оба > 0; sample: BLE 3, RS485 1). **`method` — у
+КАЖДОГО устройства** (`"ble"` | `"rs485"`), поэтому в одной коллекции устройства
+могут одновременно опрашиваться разными методами (каждый своим периодом). Для
+`method=rs485` обязателен вложенный блок `rs485` (`transport` — `"tcp"`
+(прозрачный IP-RS485-шлюз, `address` host:port) или `"com"` (COM-порт `port`,
+`baud` по умолч. 19200); `port_type` — `"rs485"`|`"rm485"`; `unit` — адрес в кадре
+PACE (поле ADR, как есть; для этой BMS ADR=0)). Для `method=ble` блок `rs485` не
+нужен (может отсутствовать). В BLE `mac` обязателен (подключение); для RS485 MAC
+не нужен, но остаётся ключом хранилища, если задан (иначе ключ — `name`). BLE-имя
+устройства не используется (у всех EnBMS оно одинаковое — `BP00`): отображаемое
+имя = `<name> <MAC/ключ>`. Описан в
 [`docs/modules/enbms.md`](docs/modules/enbms.md). Уведомления в мессенджер MAX — раздел **`notify`**
 `{"token", "user_id", "chat_id", "disabled", "stable_window_sec", "map_undeclared_sec", "grid_voltage_low"}`
 (токен бота MAX обязателен; адресат `user_id`/`chat_id` — **необязателен**: если
@@ -102,9 +112,11 @@ legacy-файлом `dds238.json`; `protocol` — `"tcp"` (Modbus TCP, по ум
 управляются; `ip` обязателен при `disabled=false`), полностью описан в
 [`docs/relay_sr-201(2light).md`](docs/relay_sr-201(2light).md). **Периоды опроса
 устройств задаются обязательным разделом `poll` (в СЕКУНДАХ)**: `{"inverter",
-"map", "meter", "ce308", "antbms", "enbms"}` — все поля обязательны и > 0
+"map", "meter", "ce308", "antbms"}` — все поля обязательны и > 0
 (отсутствие/ноль = ошибка загрузки конфига); значения по умолчанию в sample:
-inverter 10, map 1, meter 1, ce308 5, antbms 1, enbms 3. **В Redis пишется КАЖДОЕ
+inverter 10, map 1, meter 1, ce308 5, antbms 1. Период EnBMS задаётся НЕ здесь, а
+в разделе `enBms` отдельно для каждого метода (`poll_interval_ble` /
+`poll_interval_rs485`). **В Redis пишется КАЖДОЕ
 снятое показание** (окно 2 календарных суток), **в PG все ряды усредняются до 1 записи
 за 5 минут** (инверторы, МАП/MPPT, DDS238, CE308, ANT BMS, EnBMS).
 
@@ -145,13 +157,16 @@ inverter 10, map 1, meter 1, ce308 5, antbms 1, enbms 3. **В Redis пишетс
   `ce308_accumulator.go` (усреднение до 1 записи за 5 мин в PG),
   `ce308_store.go` (Redis: current/series/energy), `ce308_agent_linux.go` (BlueZ-агент PIN).
   Полное описание — [`docs/modules/ce308.md`](docs/modules/ce308.md).
-- **BMS EnBMS** (BLE) — `enBms.go`, `enBms_client.go`, `enBms_poller.go`,
-  `enBms_accumulator.go`, `enBms_store.go`: опрос BMS Enjie (EMU110x) по BLE —
-  только блок Battery (CID2 `0x61`), устройства последовательно, цикл не чаще
-  1 раза в секунду, постоянные соединения (структура BLE — из CE308, схема
-  хранения/усреднения — из ANT BMS). Redis: current + каждое снятое показание;
-  PG: 5-минутные средние. Полное описание —
-  [`docs/modules/enbms.md`](docs/modules/enbms.md).
+- **BMS EnBMS** (BLE и/или RS485) — `enBms.go`, `enBms_client.go` (BLE-транспорт),
+  `enBms_rs485.go` (ASCII PACE: TCP-шлюз/COM), `enBms_poller.go`,
+  `enBms_accumulator.go`, `enBms_store.go`: опрос BMS Enjie (EMU110x) — по BLE
+  блок Battery (CID2 `0x61`), по RS485 TeleMeter (CID2 `0x42`, та же раскладка
+  телеметрии). Метод задаётся у каждого устройства, поэтому BLE- и RS485-устройства
+  опрашиваются независимыми циклами со своими периодами
+  (`poll_interval_ble`/`poll_interval_rs485`), внутри цикла — последовательно;
+  постоянные соединения (структура BLE — из CE308, схема хранения/усреднения — из
+  ANT BMS). Redis: current + каждое снятое показание; PG: 5-минутные средние.
+  Полное описание — [`docs/modules/enbms.md`](docs/modules/enbms.md).
 - **ANT BMS** — `bms_poller.go`, `bms_accumulator.go`, `bmslistener/`. Полное описание —
   [`docs/antbms.md`](docs/antbms.md). Демон bmslistener (установка на ПАК «Малина») —
   [`docs/modules/bms-listener.md`](docs/modules/bms-listener.md).
@@ -305,8 +320,11 @@ arm-linux-musleabihf -static` (статичный elf32 ARM); не зависи�
 
 ## BMS: опрос только с согласования (правило пользователя)
 
-**BMS (EnBMS по BLE) не опрашивать без явного согласования с пользователем.**
-По прямому разрешению пользователя (2026-10-03) опрос EnBMS **включён** на проде
-(`enBms` устройство `disabled=false`, период `poll.enbms`). Любое изменение
-состояния опроса (`enBms.disabled`, `devices[].disabled`) — только с явного
-согласования. Правки конфига на проде синхронизировать с локальным (см. выше).
+**BMS (EnBMS) не опрашивать без явного согласования с пользователем.**
+По прямому разрешению пользователя опрос EnBMS **включён** на проде (`enBms`
+устройство `disabled=false`). С 2026-10-04 активный метод устройства — **RS485**
+(TCP-шлюз: `devices[].method=rs485`, период `enBms.poll_interval_rs485=1`);
+период BLE в конфиге сохранён (`enBms.poll_interval_ble=3`). Любое изменение
+состояния опроса (`enBms.disabled`, `devices[].disabled`, `devices[].method`) —
+только с явного согласования. Правки конфига на проде синхронизировать с
+локальным (см. выше).

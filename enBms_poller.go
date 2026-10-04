@@ -19,18 +19,26 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"sync"
 	"time"
 )
 
 // Параметры опроса EnBMS.
 const (
-	// enbmsPollInterval — общий период опроса всех устройств (настраивается через
-	// "poll.enbms", по умолчанию 3 с). Устройства опрашиваются последовательно
-	// одно за другим; если суммарное чтение заняло больше периода — паузы нет.
+	// Период общего цикла опроса задаётся в конфиге ОТДЕЛЬНО ДЛЯ КАЖДОГО метода
+	// (enBms.ble.poll_interval / enBms.rs485.poll_interval, секунды) и хранится в
+	// enBmsConfig.PollInterval. Устройства опрашиваются последовательно одно за
+	// другим; если суммарное чтение заняло больше периода — паузы нет.
+	//
 	// enbmsReconnectDelay / enbmsReconnectMaxDelay — базовый и максимальный
-	// интервалы переподключения устройства (ограниченный бэкофф).
+	// интервалы переподключения BLE-устройства (ограниченный бэкофф).
 	enbmsReconnectDelay    = 2 * time.Second
 	enbmsReconnectMaxDelay = 30 * time.Second
+	// enbmsRS485ReconnectDelay — пауза перед повтором подключения по RS485, если
+	// попытка (до 5 с, enBmsRS485DialTimeout) не удалась: ждём 15 с и пробуем снова
+	// (постоянное TCP-соединение со шлюзом переустанавливается). Фиксированная,
+	// без экспоненциального роста.
+	enbmsRS485ReconnectDelay = 15 * time.Second
 	// enbmsReadRetries — повторов чтения при таймауте (итого +1 попыток).
 	enbmsReadRetries = 2
 	// enbmsConsecutiveFailLimit — число подряд неудачных опросов, после которых
@@ -53,10 +61,13 @@ const (
 
 // enbmsPollerDev — состояние опроса одного устройства EnBMS. Соединение
 // постоянное (conn != nil между опросами); при обрыве conn сбрасывается и
-// переустанавливается по nextRetry с ограниченным бэкоффом.
+// переустанавливается по nextRetry с ограниченным бэкоффом. method/rs485 задают
+// активный транспорт (BLE или RS485).
 type enbmsPollerDev struct {
 	cfg         enBmsDeviceConfig
-	conn        *enbmsConn
+	method      enBmsMethod
+	rs485       *enBmsRS485Config
+	conn        enbmsLink
 	reconnect   time.Duration
 	nextRetry   time.Time
 	lastFailLog time.Time
@@ -73,8 +84,10 @@ type enbmsPollerDev struct {
 // при изменении сигнального хвоста (появились/сменились сигналы/аварии) либо не
 // реже enbmsRawLogInterval. Нужен для последующей калибровки раскладки хвоста.
 func (d *enbmsPollerDev) logEnBmsRaw(payload []byte, ts time.Time) {
+	// Сигнальный хвост (39 Б) есть только у BLE Battery (0x61); у RS485 TeleMeter
+	// (0x42) после напряжения клемм идут другие поля, поэтому tail не выделяем.
 	var tailHex string
-	if len(payload) >= enbmsRawTailLen {
+	if d.method == enBmsMethodBLE && len(payload) >= enbmsRawTailLen {
 		tailHex = hex.EncodeToString(payload[len(payload)-enbmsRawTailLen:])
 	}
 	if tailHex == d.lastTail && time.Since(d.lastRawLog) < enbmsRawLogInterval {
@@ -83,7 +96,7 @@ func (d *enbmsPollerDev) logEnBmsRaw(payload []byte, ts time.Time) {
 	d.lastTail = tailHex
 	d.lastRawLog = ts
 	logEnBms("RAW %s (%s) ts=%s tail=%s payload=%s",
-		d.cfg.Name, d.cfg.MAC, ts.Format(time.RFC3339), tailHex, hex.EncodeToString(payload))
+		d.cfg.Name, d.cfg.Key, ts.Format(time.RFC3339), tailHex, hex.EncodeToString(payload))
 }
 
 // closeConn закрывает текущее соединение (если есть).
@@ -92,28 +105,54 @@ func (d *enbmsPollerDev) closeConn() {
 		return
 	}
 	if err := d.conn.Close(); err != nil {
-		logEnBms("закрытие соединения с %s: %v", d.cfg.MAC, err)
+		logEnBms("закрытие соединения с %s: %v", d.cfg.Key, err)
 	}
 	d.conn = nil
 }
 
-// runEnBmsPoll — отдельный цикл опроса BMS EnBMS по BLE. Устройства
-// опрашиваются последовательно один за другим; общий цикл — не чаще 1 раза в
-// секунду; соединение с каждым устройством не рвётся между опросами (см.
-// enbmsPollerDev). Каждое успешное чтение пишет текущий снимок в Redis (HASH
-// current) и СЫРОЕ показание в Redis-ряд; in-memory аккумулятор считает
-// 5-минутные усреднённые точки для PG (enbms_averages) — гранулярность PG =
-// 1 запись / 5 минут.
+// runEnBmsPoll опрашивает все активные устройства EnBMS. Так как метод задаётся
+// у КАЖДОГО устройства, устройства группируются по методу, и каждая группа
+// опрашивается СВОИМ независимым циклом со своим периодом
+// (poll_interval_ble / poll_interval_rs485) — в одной коллекции одновременно
+// могут работать и BLE-, и RS485-устройства. Внутри группы устройства
+// опрашиваются последовательно; соединение с каждым постоянное (см.
+// enbmsPollerDev). Каждое успешное чтение пишет снимок в Redis (current и ряд);
+// in-memory аккумулятор группы считает 5-минутные средние для PG.
 func runEnBmsPoll(store *redisStore, pg *pgStore, cfg *enBmsConfig, ctx context.Context) {
 	if cfg == nil || len(cfg.Devices) == 0 {
 		return
 	}
-	acc := newEnBmsAccumulator()
-	devs := make([]*enbmsPollerDev, 0, len(cfg.Devices))
+	groups := map[enBmsMethod][]*enbmsPollerDev{}
 	for _, dc := range cfg.Devices {
-		devs = append(devs, &enbmsPollerDev{cfg: dc, reconnect: enbmsReconnectDelay})
+		reconnect := enbmsReconnectDelay
+		if dc.Method == enBmsMethodRS485 {
+			reconnect = enbmsRS485ReconnectDelay
+		}
+		dev := &enbmsPollerDev{cfg: dc, method: dc.Method, rs485: dc.RS485, reconnect: reconnect}
+		groups[dc.Method] = append(groups[dc.Method], dev)
 	}
-	logEnBms("avg: накопление 5-минутных усреднённых точек (в памяти процесса; PG %v)", pg != nil)
+	var wg sync.WaitGroup
+	for method, devs := range groups {
+		interval := cfg.PollBLE
+		if method == enBmsMethodRS485 {
+			interval = cfg.PollRS485
+		}
+		wg.Add(1)
+		go func(method enBmsMethod, devs []*enbmsPollerDev, interval time.Duration) {
+			defer wg.Done()
+			runEnBmsGroup(store, pg, method, devs, interval, ctx)
+		}(method, devs, interval)
+	}
+	wg.Wait()
+}
+
+// runEnBmsGroup — цикл опроса одной группы устройств (одного метода) с периодом
+// interval. Свой in-memory аккумулятор 5-минутных средних для PG (аккумулятор не
+// потокобезопасен, поэтому у каждой группы он свой).
+func runEnBmsGroup(store *redisStore, pg *pgStore, method enBmsMethod, devs []*enbmsPollerDev, interval time.Duration, ctx context.Context) {
+	acc := newEnBmsAccumulator()
+	logEnBms("метод=%s период=%s устройств=%d — опрос запущен (avg: PG %v)",
+		method, interval, len(devs), pg != nil)
 
 	shutdown := func() {
 		// Неполный 5-минутный промежуток в PG не пишем (только полные бакеты); в
@@ -136,7 +175,7 @@ func runEnBmsPoll(store *redisStore, pg *pgStore, cfg *enBmsConfig, ctx context.
 			shutdown()
 			return
 		}
-		if wait := enbmsPollInterval - time.Since(cycleStart); wait > 0 {
+		if wait := interval - time.Since(cycleStart); wait > 0 {
 			if !waitCtx(ctx, wait) {
 				shutdown()
 				return
@@ -153,40 +192,56 @@ func pollEnBmsDevice(pg *pgStore, store *redisStore, acc *enbmsAccumulator, d *e
 		if time.Now().Before(d.nextRetry) {
 			return
 		}
-		// Сбрасываем кэш id адаптера: внешняя переинициализация USB-контроллера
-		// могла сменить его номер (hci0→hci1) — без сброса переподключение не
-		// прошло бы без рестарта сервиса (см. ce308AdapterIDReset).
-		ce308AdapterIDReset()
-		c, err := openEnBms(d.cfg.MAC, ctx)
+		var (
+			c   enbmsLink
+			err error
+		)
+		if d.method == enBmsMethodRS485 {
+			c, err = openEnBmsRS485(d.rs485, ctx)
+		} else {
+			// Сбрасываем кэш id адаптера: внешняя переинициализация USB-контроллера
+			// могла сменить его номер (hci0→hci1) — без сброса переподключение не
+			// прошло бы без рестарта сервиса (см. ce308AdapterIDReset).
+			ce308AdapterIDReset()
+			c, err = openEnBms(d.cfg.MAC, ctx)
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
 			if time.Since(d.lastFailLog) >= enbmsConnFailLogInterval {
-				logEnBms("подключение к %s (%s) не удалось: %v", d.cfg.Name, d.cfg.MAC, err)
+				logEnBms("подключение к %s (%s) не удалось: %v", d.cfg.Name, d.cfg.Key, err)
 				d.lastFailLog = time.Now()
 			}
 			if pg != nil && !d.commErr {
 				d.commErr = true
-				if e := pg.InsertDeviceError(d.cfg.MAC, "enbms", "comm", err.Error(), time.Now()); e != nil {
-					logEnBms("error pg %s: %v", d.cfg.MAC, e)
+				if e := pg.InsertDeviceError(d.cfg.Key, "enbms", "comm", err.Error(), time.Now()); e != nil {
+					logEnBms("error pg %s: %v", d.cfg.Key, e)
 				}
 			}
+			// RS485: фиксированная пауза 15 с (попытка ограничена 5 с диалом);
+			// BLE: экспоненциальный бэкофф 2…30 с.
 			d.nextRetry = time.Now().Add(d.reconnect)
-			d.reconnect = enbmsBackoff(d.reconnect)
+			if d.method != enBmsMethodRS485 {
+				d.reconnect = enbmsBackoff(d.reconnect)
+			}
 			return
 		}
 		d.conn = c
-		d.reconnect = enbmsReconnectDelay
+		if d.method == enBmsMethodRS485 {
+			d.reconnect = enbmsRS485ReconnectDelay
+		} else {
+			d.reconnect = enbmsReconnectDelay
+		}
 		d.consecFails = 0
 		d.lastErrLog = time.Time{}
 		d.commErr = false
-		logEnBms("подключено к %s (%s)", d.cfg.Name, d.cfg.MAC)
+		logEnBms("подключено к %s (%s) по %s", d.cfg.Name, d.cfg.Key, d.method)
 		if d.model == "" {
 			if bi, serr := c.readEnBmsBasicInfo(); serr == nil {
 				if m := parseEnBmsModel(bi); m != "" {
 					d.model = m
-					logEnBms("модель %s (%s): %s", d.cfg.Name, d.cfg.MAC, m)
+					logEnBms("модель %s (%s): %s", d.cfg.Name, d.cfg.Key, m)
 				}
 			}
 		}
@@ -201,34 +256,38 @@ func pollEnBmsDevice(pg *pgStore, store *redisStore, acc *enbmsAccumulator, d *e
 		d.consecFails++
 		if d.consecFails >= enbmsConsecutiveFailLimit {
 			logEnBms("опрос %s: %d опросов подряд не удались (последняя: %v) — переподключение",
-				d.cfg.MAC, d.consecFails, err)
+				d.cfg.Key, d.consecFails, err)
 			d.closeConn()
 			d.nextRetry = time.Now().Add(d.reconnect)
-			d.reconnect = enbmsBackoff(d.reconnect)
+			if d.method != enBmsMethodRS485 {
+				d.reconnect = enbmsBackoff(d.reconnect)
+			}
 		} else {
 			// Троттлинг: при деградации канала не писать об ошибке каждый цикл.
 			if time.Since(d.lastErrLog) >= enbmsConnFailLogInterval {
 				logEnBms("опрос %s: не удался (%d подряд): %v — соединение сохраняю",
-					d.cfg.MAC, d.consecFails, err)
+					d.cfg.Key, d.consecFails, err)
 				d.lastErrLog = time.Now()
 			}
 		}
 		return
 	}
 
-	parsed, err := parseEnBmsBattery(payload)
+	// Разбор телеметрии. Хвост предупреждений есть только у BLE Battery (0x61);
+	// у RS485 TeleMeter (0x42) после напряжения клемм идут другие поля.
+	parsed, err := parseEnBmsBatteryPayload(payload, d.method == enBmsMethodBLE)
 	if err != nil {
-		logEnBms("опрос %s: разбор Battery: %v", d.cfg.MAC, err)
+		logEnBms("опрос %s: разбор Battery: %v", d.cfg.Key, err)
 		return
 	}
 	if !enbmsParsedValid(parsed) {
-		// Нестабильный BLE-канал: кадр искажён — снимок отбрасываем, соединение
+		// Нестабильный канал: кадр искажён — снимок отбрасываем, соединение
 		// не рвём.
-		logEnBms("опрос %s: невалидные показания — снимок отброшен", d.cfg.MAC)
+		logEnBms("опрос %s: невалидные показания — снимок отброшен", d.cfg.Key)
 		return
 	}
 	if d.consecFails > 0 {
-		logEnBms("опрос %s: связь восстановлена (%d неудачных сброшены)", d.cfg.MAC, d.consecFails)
+		logEnBms("опрос %s: связь восстановлена (%d неудачных сброшены)", d.cfg.Key, d.consecFails)
 		d.consecFails = 0
 		d.lastErrLog = time.Time{}
 	}
@@ -241,7 +300,7 @@ func pollEnBmsDevice(pg *pgStore, store *redisStore, acc *enbmsAccumulator, d *e
 	// Redis-ряд (сырое, samples=1). 5-минутные средние для PG накапливает
 	// аккумулятор (как ANT BMS).
 	if err := store.SaveEnBmsCurrent(snap); err != nil {
-		logEnBms("redis current %s: %v", d.cfg.MAC, err)
+		logEnBms("redis current %s: %v", d.cfg.Key, err)
 	}
 	saveEnBmsReading(store, snap, now)
 	acc.add(snap, now)
@@ -254,8 +313,8 @@ func pollEnBmsDevice(pg *pgStore, store *redisStore, acc *enbmsAccumulator, d *e
 		}
 		for a := range cur {
 			if d.lastAlarms == nil || !d.lastAlarms[a] {
-				if e := pg.InsertDeviceError(d.cfg.MAC, "enbms", a, a, now); e != nil {
-					logEnBms("error pg %s: %v", d.cfg.MAC, e)
+				if e := pg.InsertDeviceError(d.cfg.Key, "enbms", a, a, now); e != nil {
+					logEnBms("error pg %s: %v", d.cfg.Key, e)
 				}
 			}
 		}
@@ -304,7 +363,7 @@ func (d *enbmsPollerDev) readWithRetries() ([]byte, error) {
 		lastErr = err
 		if isEnBmsReadTimeout(err) && attempt < enbmsReadRetries {
 			logEnBms("чтение %s: таймаут (попытка %d/%d) — повтор",
-				d.cfg.MAC, attempt+1, enbmsReadRetries+1)
+				d.cfg.Key, attempt+1, enbmsReadRetries+1)
 			continue
 		}
 		return nil, err

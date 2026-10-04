@@ -36,32 +36,107 @@ func logEnBms(f string, a ...any) {
 	log.Printf("enbms: "+f, a...)
 }
 
-// enBmsSection — раздел "enBms" sunReceiver.json: коллекция настроек
-// мониторинга BMS типа EnBMS. Общий disabled — ОБЯЗАТЕЛЬНОЕ поле: false —
-// устройства опрашиваются; true — опрос EnBMS отключён целиком.
+// enBmsSection — раздел "enBms" sunReceiver.json: коллекция устройств BMS типа
+// EnBMS. Общий disabled — ОБЯЗАТЕЛЬНОЕ поле: false — устройства опрашиваются;
+// true — опрос EnBMS отключён целиком.
+//
+// Период опроса задаётся для КАЖДОГО метода отдельно (poll_interval_ble /
+// poll_interval_rs485, секунды). Метод выбирается у КАЖДОГО устройства
+// (devices[].method), поэтому в одной коллекции устройства могут одновременно
+// опрашиваться разными методами (часть по BLE, часть по RS485) — каждый своим
+// периодом.
 type enBmsSection struct {
-	Disabled *bool                `json:"disabled"`
-	Devices  []enBmsDeviceSection `json:"devices"`
+	Disabled          *bool                `json:"disabled"`
+	PollIntervalBLE   int                  `json:"poll_interval_ble"`
+	PollIntervalRS485 int                  `json:"poll_interval_rs485"`
+	Devices           []enBmsDeviceSection `json:"devices"`
 }
 
-// enBmsDeviceSection — один элемент коллекции: mac и/или имя опрашиваемого
-// устройства + обязательный disabled. MAC нужен для BLE-подключения (заводское
-// BLE-имя "BP00" не уникально и не позволяет надёжно отличить устройства).
+// enBmsDeviceSection — одно устройство коллекции: обязательные disabled и method
+// ("ble"|"rs485"), ключ (mac, иначе name) и настройки метода. Для method=rs485
+// обязателен вложенный блок rs485; для method=ble он не нужен и может
+// отсутствовать (если присутствует — хранится как альтернативные настройки для
+// возможного переключения на RS485).
 type enBmsDeviceSection struct {
-	Name     string `json:"name"` // отображаемое имя (необязательно)
-	MAC      string `json:"mac"`  // BD_ADDR устройства (обязателен для активного)
-	Disabled *bool  `json:"disabled"`
+	Name     string             `json:"name"`   // отображаемое имя (необязательно)
+	MAC      string             `json:"mac"`    // BD_ADDR (обязателен для BLE; ключ хранилища)
+	Method   string             `json:"method"` // "ble" | "rs485" (обязательно)
+	RS485    *enBmsRS485Section `json:"rs485"`  // настройки RS485 (для method=rs485)
+	Disabled *bool              `json:"disabled"`
 }
 
-// enBmsConfig — проверенный конфиг EnBMS (только активные устройства).
+// enBmsRS485Section — настройки RS485-транспорта конкретного устройства.
+// Транспорт — либо TCP (прозрачный IP-RS485-шлюз), либо локальный COM-порт.
+// Протокол — ASCII PACE (см. enBms_rs485.go).
+//
+//	Transport  — "tcp" (по умолчанию) | "com"
+//	Address    — host:port прозрачного TCP-шлюза (для transport=tcp)
+//	Port       — имя COM-порта (для transport=com, напр. "COM3" или "/dev/ttyUSB0")
+//	Baud       — скорость COM (для transport=com, по умолчанию 19200)
+//	DataBits/Parity/StopBits — параметры COM (по умолчанию 8/none/1)
+//	PortType   — "rs485" (верхний host-RS485 BMS: read-команды без INFO; по
+//	             умолчанию) | "rm485" (инверторный RM485 BMS: для 0x42 нужен
+//	             INFO=[00]). Это выбор ФИЗИЧЕСКОГО порта BMS, к которому
+//	             подключён шлюз.
+//	Unit       — адрес устройства в кадре PACE (поле ADR). Для этой BMS живой
+//	             опрос идёт с ADR=0, поэтому unit=0. Значение подставляется в кадр
+//	             как есть (без +1/−1).
+type enBmsRS485Section struct {
+	Transport string `json:"transport"`
+	Address   string `json:"address"`
+	Port      string `json:"port"`
+	Baud      int    `json:"baud"`
+	DataBits  int    `json:"data_bits"`
+	Parity    string `json:"parity"`
+	StopBits  int    `json:"stop_bits"`
+	PortType  string `json:"port_type"`
+	Unit      int    `json:"unit"`
+}
+
+// enBmsMethod — способ опроса EnBMS.
+type enBmsMethod int
+
+const (
+	enBmsMethodBLE enBmsMethod = iota
+	enBmsMethodRS485
+)
+
+// String — короткое имя метода для логов.
+func (m enBmsMethod) String() string {
+	if m == enBmsMethodRS485 {
+		return "rs485"
+	}
+	return "ble"
+}
+
+// enBmsConfig — проверенный конфиг EnBMS (только активные устройства). Периоды
+// цикла — по методам; устройства несут собственный метод и (для RS485) настройки.
 type enBmsConfig struct {
-	Devices []enBmsDeviceConfig
+	PollBLE   time.Duration // период цикла BLE-устройств
+	PollRS485 time.Duration // период цикла RS485-устройств
+	Devices   []enBmsDeviceConfig
 }
 
 // enBmsDeviceConfig — одно активное устройство EnBMS.
 type enBmsDeviceConfig struct {
-	Name string // отображаемое имя
-	MAC  string // ключ устройства в Redis/PG (уникален)
+	Name   string            // отображаемое имя
+	Key    string            // стабильный ключ устройства в Redis/PG (= MAC, иначе name)
+	MAC    string            // BD_ADDR (для BLE-подключения; для RS485 может быть пустым)
+	Method enBmsMethod       // метод опроса этого устройства
+	RS485  *enBmsRS485Config // не nil при Method=rs485
+}
+
+// enBmsRS485Config — проверенные настройки RS485-транспорта.
+type enBmsRS485Config struct {
+	Transport string // "tcp" | "com"
+	Address   string // tcp: host:port
+	Port      string // com: имя порта
+	Baud      int
+	DataBits  int
+	Parity    string
+	StopBits  int
+	PortType  string // "rs485" | "rm485"
+	Unit      int    // PACE ADR (в кадр как есть)
 }
 
 // Теги протокола EnBMS (CID, транспорт).
@@ -92,7 +167,9 @@ const enbmsMaxBTDevices = 5
 
 // enBmsConfigFromSection строит *enBmsConfig из раздела enBms. nil — если
 // раздела нет, он отключён или не содержит активных устройств. Ошибка — при
-// некорректных обязательных полях.
+// некорректных обязательных полях. Периоды задаются для каждого метода,
+// метод выбирается у каждого устройства (устройства могут опрашиваться разными
+// методами одновременно).
 func enBmsConfigFromSection(s *enBmsSection) (*enBmsConfig, error) {
 	if s == nil {
 		return nil, nil
@@ -101,7 +178,14 @@ func enBmsConfigFromSection(s *enBmsSection) (*enBmsConfig, error) {
 		logEnBms("disabled=true — опрос EnBMS отключён")
 		return nil, nil
 	}
-	var devs []enBmsDeviceConfig
+	if s.PollIntervalBLE <= 0 {
+		return nil, fmt.Errorf("enBms.poll_interval_ble должен быть > 0 (секунды)")
+	}
+	if s.PollIntervalRS485 <= 0 {
+		return nil, fmt.Errorf("enBms.poll_interval_rs485 должен быть > 0 (секунды)")
+	}
+
+	devs := make([]enBmsDeviceConfig, 0, len(s.Devices))
 	seen := map[string]string{}
 	for i := range s.Devices {
 		d := &s.Devices[i]
@@ -112,25 +196,112 @@ func enBmsConfigFromSection(s *enBmsSection) (*enBmsConfig, error) {
 			logEnBms("устройство %q (mac %s) отключено (disabled=true)", d.Name, d.MAC)
 			continue
 		}
-		if d.MAC == "" {
-			return nil, fmt.Errorf("в разделе enBms у устройства %q не задан обязательный mac (нужен для BLE-подключения)", d.Name)
+		var method enBmsMethod
+		switch strings.ToLower(strings.TrimSpace(d.Method)) {
+		case "ble":
+			method = enBmsMethodBLE
+		case "rs485":
+			method = enBmsMethodRS485
+		default:
+			return nil, fmt.Errorf("в разделе enBms у устройства %q не задано/некорректно обязательное поле method (ожидается ble|rs485, получено %q)", d.Name, d.Method)
 		}
-		if prev, dup := seen[d.MAC]; dup {
-			return nil, fmt.Errorf("в разделе enBms дублирующийся mac %s (%q и %q)", d.MAC, prev, d.Name)
+		// Ключ хранилища стабилен между методами: MAC (если задан), иначе name.
+		key := strings.TrimSpace(d.MAC)
+		if key == "" {
+			key = strings.TrimSpace(d.Name)
 		}
-		seen[d.MAC] = d.Name
+		if key == "" {
+			return nil, fmt.Errorf("в разделе enBms у устройства %d не задан ни mac, ни name (нужен ключ устройства)", i+1)
+		}
+		if method == enBmsMethodBLE && d.MAC == "" {
+			return nil, fmt.Errorf("в разделе enBms у устройства %q (method=ble) не задан обязательный mac (нужен для BLE-подключения)", d.Name)
+		}
+		if prev, dup := seen[key]; dup {
+			return nil, fmt.Errorf("в разделе enBms дублирующийся ключ устройства %s (%q и %q)", key, prev, d.Name)
+		}
+		seen[key] = d.Name
 		name := d.Name
 		if name == "" {
-			// Метка по умолчанию — только по MAC: заводское BLE-имя (BP00) у всех
+			// Метка по умолчанию — по ключу: заводское BLE-имя (BP00) у всех
 			// одинаково и как имя бесполезно.
-			name = "BMS " + d.MAC
+			name = "BMS " + key
 		}
-		devs = append(devs, enBmsDeviceConfig{Name: name, MAC: d.MAC})
+		dev := enBmsDeviceConfig{Name: name, Key: key, MAC: d.MAC, Method: method}
+		if d.RS485 != nil {
+			// Настройки RS485 валидируются и для method=ble (хранятся как
+			// альтернативные — при переключении метода в конфиге).
+			c, err := enBmsRS485ConfigFromSection(d.RS485)
+			if err != nil {
+				return nil, fmt.Errorf("устройство %q: %w", name, err)
+			}
+			if method == enBmsMethodRS485 {
+				dev.RS485 = c
+			}
+		} else if method == enBmsMethodRS485 {
+			return nil, fmt.Errorf("в разделе enBms у устройства %q (method=rs485) не задан блок rs485", d.Name)
+		}
+		devs = append(devs, dev)
 	}
 	if len(devs) == 0 {
 		return nil, nil
 	}
-	return &enBmsConfig{Devices: devs}, nil
+	return &enBmsConfig{
+		PollBLE:   time.Duration(s.PollIntervalBLE) * time.Second,
+		PollRS485: time.Duration(s.PollIntervalRS485) * time.Second,
+		Devices:   devs,
+	}, nil
+}
+
+// enBmsRS485ConfigFromSection проверяет и применяет настройки RS485-транспорта
+// одного устройства.
+func enBmsRS485ConfigFromSection(s *enBmsRS485Section) (*enBmsRS485Config, error) {
+	transport := strings.ToLower(strings.TrimSpace(s.Transport))
+	if transport == "" {
+		transport = "tcp"
+	}
+	if s.Unit < 0 || s.Unit > 255 {
+		return nil, fmt.Errorf("enBms.rs485.unit=%d вне диапазона 0..255 (PACE ADR)", s.Unit)
+	}
+	c := &enBmsRS485Config{Transport: transport, Unit: s.Unit}
+	switch transport {
+	case "tcp":
+		if strings.TrimSpace(s.Address) == "" {
+			return nil, fmt.Errorf("enBms.rs485.transport=tcp: не задан address (host:port прозрачного TCP-шлюза)")
+		}
+		c.Address = strings.TrimSpace(s.Address)
+	case "com":
+		if strings.TrimSpace(s.Port) == "" {
+			return nil, fmt.Errorf("enBms.rs485.transport=com: не задан port (имя COM-порта)")
+		}
+		c.Port = strings.TrimSpace(s.Port)
+		c.Baud = s.Baud
+		if c.Baud <= 0 {
+			c.Baud = 19200
+		}
+		c.DataBits = s.DataBits
+		if c.DataBits <= 0 {
+			c.DataBits = 8
+		}
+		c.Parity = strings.ToLower(strings.TrimSpace(s.Parity))
+		if c.Parity == "" {
+			c.Parity = "none"
+		}
+		c.StopBits = s.StopBits
+		if c.StopBits <= 0 {
+			c.StopBits = 1
+		}
+	default:
+		return nil, fmt.Errorf("enBms.rs485.transport: неизвестное значение %q (ожидается tcp|com)", s.Transport)
+	}
+	portType := strings.ToLower(strings.TrimSpace(s.PortType))
+	if portType == "" {
+		portType = "rs485"
+	}
+	if portType != "rs485" && portType != "rm485" {
+		return nil, fmt.Errorf("enBms.rs485.port_type: неизвестное значение %q (ожидается rs485|rm485)", s.PortType)
+	}
+	c.PortType = portType
+	return c, nil
 }
 
 // describeEnBmsConfig — строка-описание конфига для лога.
@@ -140,9 +311,10 @@ func describeEnBmsConfig(c *enBmsConfig) string {
 	}
 	parts := make([]string, 0, len(c.Devices))
 	for _, d := range c.Devices {
-		parts = append(parts, fmt.Sprintf("%s (MAC %s)", d.Name, d.MAC))
+		parts = append(parts, fmt.Sprintf("%s (ключ %s, %s)", d.Name, d.Key, d.Method))
 	}
-	return fmt.Sprintf("устройств=%d: %v", len(c.Devices), parts)
+	return fmt.Sprintf("периоды: ble=%s rs485=%s; устройств=%d: %v",
+		c.PollBLE, c.PollRS485, len(c.Devices), parts)
 }
 
 // crc16CCITT — CRC-16/CCITT (полином 0x1021, init 0, без отражения, MSB-first),
@@ -247,11 +419,21 @@ type enbmsParsed struct {
 	Tail          enbmsTail // сигнальный хвост Battery (защиты/Ext_Bit/баланс/режим)
 }
 
-// parseEnBmsBattery декодирует payload блока Battery (PROTOCOL.md §5.1).
-// Многобайтовые поля — big-endian; customerp занимает ровно 1 байт. Требует
-// минимум 67 байт (данные до portvoltage включительно); хвост предупреждений
-// не парсится.
+// parseEnBmsBattery декодирует payload блока Battery BLE (CID2 0x61) с разбором
+// сигнального хвоста (см. parseEnBmsBatteryPayload).
 func parseEnBmsBattery(p []byte) (enbmsParsed, error) {
+	return parseEnBmsBatteryPayload(p, true)
+}
+
+// parseEnBmsBatteryPayload декодирует payload телеметрии Telemeter/Battery.
+// Раскладка телеметрии у BLE-блока Battery (0x61) и RS485-блока TeleMeter (0x42)
+// до поля portvoltage/busvoltage совпадает, поэтому парсер общий. withTail
+// управляет разбором сигнального хвоста предупреждений: он есть ТОЛЬКО у BLE
+// Battery (106 Б, хвост 39 Б); у RS485 TeleMeter (75 Б) после напряжения клемм
+// идут другие поля (temp-drift/энергии), поэтому хвост не разбирается.
+// Многобайтовые поля — big-endian; customerp/field count занимает ровно 1 байт.
+// Требует минимум 67 байт (данные до portvoltage включительно).
+func parseEnBmsBatteryPayload(p []byte, withTail bool) (enbmsParsed, error) {
 	var r enbmsParsed
 	if len(p) < 4 {
 		return r, fmt.Errorf("payload Battery слишком короткий: %d Б", len(p))
@@ -309,11 +491,13 @@ func parseEnBmsBattery(p []byte) (enbmsParsed, error) {
 	r.Soh = enbmsRound(float64(u16be(p, o))*0.1, 1)
 	o += 2
 	r.PortVoltageV = enbmsRound(float64(u16be(p, o))*0.01, 2)
-	// Сигнальный хвост (защиты ячеек/датчиков, Ext_Bit, балансировка, режим).
-	// Раскладка из приложения (16S_V20_ADDR_EN.xml, teleSignal_Group): хвост =
-	// 16+6+2+14+1 = 39 байт. Смещение Ext_Bit подтверждается живым кадром лишь
-	// косвенно (см. BACKLOG) — возможны ложные срабатывания, калибруем по сырому логу.
-	r.Tail = parseEnBmsTail(p)
+	if withTail {
+		// Сигнальный хвост (защиты ячеек/датчиков, Ext_Bit, балансировка, режим).
+		// Раскладка из приложения (16S_V20_ADDR_EN.xml, teleSignal_Group): хвост =
+		// 16+6+2+14+1 = 39 байт. Смещение Ext_Bit подтверждается живым кадром лишь
+		// косвенно (см. BACKLOG) — возможны ложные срабатывания, калибруем по сырому логу.
+		r.Tail = parseEnBmsTail(p)
+	}
 	return r, nil
 }
 
@@ -362,9 +546,15 @@ type enbmsSnapshot struct {
 // P = U·I (протокол мощность отдельно не отдаёт), индексы/напряжения max/min
 // ячеек — из фактического массива ячеек (как recomputeMinMaxCells в ANT BMS).
 func enbmsSnapshotFromParsed(cfg enBmsDeviceConfig, r enbmsParsed, now time.Time) enbmsSnapshot {
+	// Ключ хранилища — cfg.Key (MAC, иначе name); fallback на MAC для прямых
+	// литералов enBmsDeviceConfig (тесты/иные вызовы без разбора конфига).
+	key := cfg.Key
+	if key == "" {
+		key = cfg.MAC
+	}
 	s := enbmsSnapshot{
 		Name:          cfg.Name,
-		MAC:           cfg.MAC,
+		MAC:           key,
 		Timestamp:     now.Format(time.RFC3339),
 		CellCount:     len(r.CellsV),
 		CellsV:        r.CellsV,
@@ -406,10 +596,12 @@ func enbmsSnapshotFromParsed(cfg enBmsDeviceConfig, r enbmsParsed, now time.Time
 // enbmsTail — декодированный хвост Battery. Раскладка восстановлена из APK
 // (`parseBody_Battery`, BmsMsgUtil.dart 0x3f3a18; порядок имён — `toJson`
 // 0x3def6c): после телеметрии идут warn-списки, затем статусы:
-//   [0..15]  список по ячейкам (batterynum=16 байт)
-//   [16..19] список по температурам (tempnum-2=4 байта)
-//   [20] envtempwarn, [21] powertempwarn, [22] chargecurrentwarn
-//   [23] customerwarnp, далее статусы (ключи/баланс/режим) — в норме ненулевые.
+//
+//	[0..15]  список по ячейкам (batterynum=16 байт)
+//	[16..19] список по температурам (tempnum-2=4 байта)
+//	[20] envtempwarn, [21] powertempwarn, [22] chargecurrentwarn
+//	[23] customerwarnp, далее статусы (ключи/баланс/режим) — в норме ненулевые.
+//
 // На ЗДОРОВОМ кадре warn-область (0..23) нулевая; ненулевые байты 25..27 —
 // статусы, не аварии (см. PROTOCOL.md energybms §5.1.1).
 type enbmsTail struct {

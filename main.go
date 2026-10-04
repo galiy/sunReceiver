@@ -44,7 +44,8 @@ var (
 	meterPollInterval = time.Second      // счётчик DDS238
 	ce308PollInterval = 5 * time.Second  // счётчик CE308 (BLE)
 	bmsPollInterval   = time.Second      // ANT BMS
-	enbmsPollInterval = 3 * time.Second  // EnBMS (BLE)
+	// EnBMS: период задаётся в разделе enBms отдельно для каждого метода
+	// (ble.poll_interval / rs485.poll_interval), см. enBmsConfig.PollInterval.
 )
 
 const (
@@ -223,7 +224,8 @@ type pollSection struct {
 	Meter    int `json:"meter"`    // счётчик DDS238
 	Ce308    int `json:"ce308"`    // счётчик CE308 (BLE)
 	AntBms   int `json:"antbms"`   // ANT BMS
-	EnBms    int `json:"enbms"`    // EnBMS (BLE)
+	// EnBMS-периода здесь нет: он задаётся в разделе enBms отдельно для каждого
+	// метода (ble.poll_interval / rs485.poll_interval).
 }
 
 type configFile struct {
@@ -259,7 +261,6 @@ func applyPollConfig(p *pollSection) error {
 		{"meter", p.Meter},
 		{"ce308", p.Ce308},
 		{"antbms", p.AntBms},
-		{"enbms", p.EnBms},
 	}
 	for _, f := range fields {
 		if f.val <= 0 {
@@ -271,7 +272,6 @@ func applyPollConfig(p *pollSection) error {
 	meterPollInterval = time.Duration(p.Meter) * time.Second
 	ce308PollInterval = time.Duration(p.Ce308) * time.Second
 	bmsPollInterval = time.Duration(p.AntBms) * time.Second
-	enbmsPollInterval = time.Duration(p.EnBms) * time.Second
 	return nil
 }
 
@@ -2231,29 +2231,42 @@ func main() {
 		}()
 	}
 
-	// BMS EnBMS — отдельный цикл опроса по BLE (устройства опрашиваются
-	// последовательно, общий цикл не чаще 1 раза в секунду; соединения не рвутся
-	// между опросами). Данные — Redis current/series + PG enbms_averages, см.
-	// enBms_poller.go/enBms_accumulator.go. Перед запуском проверяем суммарное
-	// число BLE-устройств (enBms + CE308): реальный BLE-контроллер держит
-	// ограниченное число одновременных соединений; при превышении опрос EnBMS не
-	// запускается вовсе.
+	// BMS EnBMS — отдельный цикл опроса выбранным методом (BLE или RS485; см.
+	// enBms.method). Устройства опрашиваются последовательно с периодом метода;
+	// соединения не рвутся между опросами. Данные — Redis current/series + PG
+	// enbms_averages, см. enBms_poller.go/enBms_accumulator.go. Для BLE перед
+	// запуском проверяем суммарное число BLE-устройств (enBms + CE308): реальный
+	// BLE-контроллер держит ограниченное число одновременных соединений; при
+	// превышении опрос EnBMS не запускается вовсе. Для RS485 этого лимита нет.
 	if enBmsCfg != nil {
-		ceCount := 0
-		if ce308Cfg != nil {
-			ceCount = 1
+		// Лимит BLE-контроллера касается только BLE-устройств EnBMS (+ CE308).
+		bleDevs := 0
+		for _, d := range enBmsCfg.Devices {
+			if d.Method == enBmsMethodBLE {
+				bleDevs++
+			}
 		}
-		btCount := len(enBmsCfg.Devices) + ceCount
-		if btCount > enbmsMaxBTDevices {
-			log.Printf("enbms: суммарное число BLE-устройств %d (enBms %d + CE308 %d) превышает лимит %d — опрос EnBMS НЕ запускается",
-				btCount, len(enBmsCfg.Devices), ceCount, enbmsMaxBTDevices)
-		} else {
+		start := true
+		if bleDevs > 0 {
+			ceCount := 0
+			if ce308Cfg != nil {
+				ceCount = 1
+			}
+			btCount := bleDevs + ceCount
+			if btCount > enbmsMaxBTDevices {
+				start = false
+				log.Printf("enbms: суммарное число BLE-устройств %d (enBms %d + CE308 %d) превышает лимит %d — опрос EnBMS НЕ запускается",
+					btCount, bleDevs, ceCount, enbmsMaxBTDevices)
+			}
+		}
+		if start {
 			bgWg.Add(1)
 			go func() {
 				defer bgWg.Done()
 				runEnBmsPoll(store, pg, enBmsCfg, stopCtx)
 			}()
-			log.Printf("enbms: опрос %d устройств по BLE запущен", len(enBmsCfg.Devices))
+			log.Printf("enbms: опрос %d устройств запущен (BLE-цикл %s, RS485-цикл %s)",
+				len(enBmsCfg.Devices), enBmsCfg.PollBLE, enBmsCfg.PollRS485)
 		}
 	}
 

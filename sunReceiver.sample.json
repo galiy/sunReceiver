@@ -7,8 +7,7 @@
 		"map": 1,
 		"meter": 1,
 		"ce308": 5,
-		"antbms": 1,
-		"enbms": 3
+		"antbms": 1
 	},
 	"invertors": [
 		{ "ip": "192.168.0.16", "name": "Bineos Left", "type": "deye", "logger_sn": 1890123456, "placement": "Дом", "disabled": false },
@@ -55,8 +54,12 @@
 	},
 	"enBms": {
 		"disabled": false,
+		"poll_interval_ble": 3,
+		"poll_interval_rs485": 1,
 		"devices": [
-			{ "name": "BMS EnBMS #1", "mac": "AA:BB:CC:11:22:33", "disabled": false }
+			{ "name": "BMS EnBMS #1 (BLE)", "mac": "AA:BB:CC:11:22:33", "method": "ble", "disabled": false },
+			{ "name": "BMS EnBMS #2 (RS485)", "mac": "AA:BB:CC:44:55:66", "method": "rs485", "disabled": false,
+			  "rs485": { "transport": "tcp", "address": "192.168.0.77:502", "port_type": "rs485", "unit": 0 } }
 		]
 	},
 	"notify": {

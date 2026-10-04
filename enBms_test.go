@@ -82,6 +82,57 @@ func TestEnBmsBuildRequestFrame(t *testing.T) {
 	}
 }
 
+func TestEnBmsPaceFrameBuild(t *testing.T) {
+	// host-RS485: INFO отсутствует.
+	if got, want := string(buildEnBmsPaceFrame(0, enBmsRS485CID2Meter, nil)), "~200046420000FDAE\r"; got != want {
+		t.Fatalf("PACE host request = %q, want %q", got, want)
+	}
+	// RM485: для 0x42 нужен INFO=[00].
+	if got, want := string(buildEnBmsPaceFrame(0, enBmsRS485CID2Meter, []byte{0x00})), "~20004642F00100FD37\r"; got != want {
+		t.Fatalf("PACE rm485 request = %q, want %q", got, want)
+	}
+}
+
+func TestEnBmsPaceParseLiveManufacture(t *testing.T) {
+	raw := []byte("~20004600C040313130312D584F313720100643414E3A504E475F4459455F4C7578705F544242F01A\r")
+	rtn, info, err := parseEnBmsPaceResponse(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if rtn != 0 || len(info) != 32 {
+		t.Fatalf("rtn=%d len=%d", rtn, len(info))
+	}
+	if m := parseEnBmsModel(info); m == "" {
+		t.Fatalf("модель не извлечена из Manufacture")
+	}
+}
+
+func TestEnBmsPaceTelemetryNoTail(t *testing.T) {
+	// Живой INFO TeleMeter (0x42) с шлюза 192.0.2.10:502 (75 Б). Хвоста
+	// предупреждений у RS485 нет — парсим без него.
+	info := mustHex(t, "0000100C980C970C9A0C9B0C980C990C980C9B0C960C990C9B0C9C0C960C970C970C97060BA40B9B0B980BA60BCB0BAAFD00142716290A7AA800B47AA8000503E81429002C0000030802D2")
+	if len(info) != 75 {
+		t.Fatalf("INFO len = %d, want 75", len(info))
+	}
+	r, err := parseEnBmsBatteryPayload(info, false)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if r.BatteryNum != 16 || len(r.CellsV) != 16 || len(r.TemperaturesC) != 6 {
+		t.Fatalf("ячейки/температуры: n=%d cells=%d temps=%d", r.BatteryNum, len(r.CellsV), len(r.TemperaturesC))
+	}
+	// Протокол: «минус = разряд», проект инвертирует знак → разряд положительный.
+	if r.CurrentA != 7.68 || r.TotalVoltageV != 51.59 || r.Soc != 18.0 || r.PortVoltageV != 51.61 {
+		t.Fatalf("ток/напряжение/soc/клеммы = %v/%v/%v/%v", r.CurrentA, r.TotalVoltageV, r.Soc, r.PortVoltageV)
+	}
+	if len(r.Tail.Alarms) != 0 {
+		t.Fatalf("у RS485 не должно быть алармов хвоста: %v", r.Tail.Alarms)
+	}
+	if !enbmsParsedValid(r) {
+		t.Fatalf("живые RS485-показания признаны невалидными")
+	}
+}
+
 func TestEnBmsExtractFrameByLength(t *testing.T) {
 	// payload с 0x0D внутри: кадр должен собираться по длине, а не резаться по EOI.
 	payload := []byte{0x0d, 0x0d, 0x00, 0x7e, 0x0d, 0x00}
@@ -297,6 +348,9 @@ func TestEnBmsMappingToBMSSeries(t *testing.T) {
 }
 
 func TestEnBmsConfigFromSection(t *testing.T) {
+	bleSec := func() *enBmsSection {
+		return &enBmsSection{Disabled: boolPtr(false), PollIntervalBLE: 3, PollIntervalRS485: 1}
+	}
 	// nil-раздел.
 	if c, err := enBmsConfigFromSection(nil); err != nil || c != nil {
 		t.Fatalf("nil: c=%v err=%v", c, err)
@@ -306,42 +360,77 @@ func TestEnBmsConfigFromSection(t *testing.T) {
 	if c, err := enBmsConfigFromSection(&enBmsSection{Disabled: &tr}); err != nil || c != nil {
 		t.Fatalf("disabled: c=%v err=%v", c, err)
 	}
+	// Нет poll_interval_ble — ошибка.
+	if _, err := enBmsConfigFromSection(&enBmsSection{Disabled: boolPtr(false), PollIntervalRS485: 1}); err == nil {
+		t.Fatalf("без poll_interval_ble должно давать ошибку")
+	}
 	// Устройство без disabled — ошибка.
-	if _, err := enBmsConfigFromSection(&enBmsSection{Disabled: boolPtr(false), Devices: []enBmsDeviceSection{{MAC: "AA:BB:CC:DD:EE:FF"}}}); err == nil {
+	s := bleSec()
+	s.Devices = []enBmsDeviceSection{{MAC: "AA:BB:CC:DD:EE:FF", Method: "ble"}}
+	if _, err := enBmsConfigFromSection(s); err == nil {
 		t.Fatalf("устройство без disabled должно давать ошибку")
 	}
-	// Активное устройство без mac — ошибка.
-	if _, err := enBmsConfigFromSection(&enBmsSection{Disabled: boolPtr(false), Devices: []enBmsDeviceSection{{Name: "x", Disabled: boolPtr(false)}}}); err == nil {
-		t.Fatalf("активное устройство без mac должно давать ошибку")
+	// Устройство без method — ошибка.
+	s = bleSec()
+	s.Devices = []enBmsDeviceSection{{MAC: "AA:BB:CC:DD:EE:FF", Disabled: boolPtr(false)}}
+	if _, err := enBmsConfigFromSection(s); err == nil {
+		t.Fatalf("устройство без method должно давать ошибку")
 	}
-	// Дубликат MAC — ошибка.
-	dup := &enBmsSection{Disabled: boolPtr(false), Devices: []enBmsDeviceSection{
-		{MAC: "AA:BB:CC:DD:EE:FF", Disabled: boolPtr(false)},
-		{MAC: "AA:BB:CC:DD:EE:FF", Disabled: boolPtr(false)},
-	}}
-	if _, err := enBmsConfigFromSection(dup); err == nil {
+	// BLE-устройство без mac — ошибка.
+	s = bleSec()
+	s.Devices = []enBmsDeviceSection{{Name: "x", Method: "ble", Disabled: boolPtr(false)}}
+	if _, err := enBmsConfigFromSection(s); err == nil {
+		t.Fatalf("BLE-устройство без mac должно давать ошибку")
+	}
+	// Дубликат ключа — ошибка.
+	s = bleSec()
+	s.Devices = []enBmsDeviceSection{
+		{MAC: "AA:BB:CC:DD:EE:FF", Method: "ble", Disabled: boolPtr(false)},
+		{MAC: "AA:BB:CC:DD:EE:FF", Method: "ble", Disabled: boolPtr(false)},
+	}
+	if _, err := enBmsConfigFromSection(s); err == nil {
 		t.Fatalf("дубликат mac должен давать ошибку")
 	}
-	// Валидный конфиг: отключённое устройство пропускается, имя по умолчанию.
-	c, err := enBmsConfigFromSection(&enBmsSection{Disabled: boolPtr(false), Devices: []enBmsDeviceSection{
-		{Name: "BP00", MAC: "AA:BB:CC:DD:EE:00", Disabled: boolPtr(false)},
-		{MAC: "11:22:33:44:55:66", Disabled: boolPtr(true)},
-	}})
+	// Валидный смешанный конфиг: BLE + RS485, отключённое пропускается.
+	s = bleSec()
+	s.Devices = []enBmsDeviceSection{
+		{Name: "BLE-1", MAC: "AA:BB:CC:DD:EE:00", Method: "ble", Disabled: boolPtr(false)},
+		{Name: "485-1", MAC: "AA:BB:CC:DD:EE:01", Method: "rs485", Disabled: boolPtr(false),
+			RS485: &enBmsRS485Section{Transport: "tcp", Address: "192.0.2.10:502", PortType: "rs485", Unit: 0}},
+		{MAC: "11:22:33:44:55:66", Method: "ble", Disabled: boolPtr(true)},
+	}
+	c, err := enBmsConfigFromSection(s)
 	if err != nil {
 		t.Fatalf("valid: %v", err)
 	}
-	if c == nil || len(c.Devices) != 1 {
-		t.Fatalf("valid: devices=%v", c)
+	if c == nil || len(c.Devices) != 2 || c.PollBLE != 3*time.Second || c.PollRS485 != time.Second {
+		t.Fatalf("valid cfg = %+v", c)
 	}
-	if c.Devices[0].Name != "BP00" || c.Devices[0].MAC != "AA:BB:CC:DD:EE:00" {
-		t.Fatalf("valid device = %+v", c.Devices[0])
+	if c.Devices[0].Method != enBmsMethodBLE || c.Devices[0].Key != "AA:BB:CC:DD:EE:00" {
+		t.Fatalf("ble device = %+v", c.Devices[0])
 	}
-	// Пустое имя → имя по умолчанию.
-	c2, _ := enBmsConfigFromSection(&enBmsSection{Devices: []enBmsDeviceSection{
-		{MAC: "AA:BB:CC:DD:EE:FF", Disabled: boolPtr(false)},
-	}})
-	if c2 == nil || c2.Devices[0].Name != "BMS AA:BB:CC:DD:EE:FF" {
+	if c.Devices[1].Method != enBmsMethodRS485 || c.Devices[1].RS485 == nil ||
+		c.Devices[1].RS485.Unit != 0 || c.Devices[1].RS485.Address != "192.0.2.10:502" {
+		t.Fatalf("rs485 device = %+v", c.Devices[1])
+	}
+	// Метка по умолчанию — по ключу.
+	s = bleSec()
+	s.Devices = []enBmsDeviceSection{{MAC: "AA:BB:CC:DD:EE:FF", Method: "ble", Disabled: boolPtr(false)}}
+	if c2, _ := enBmsConfigFromSection(s); c2 == nil || c2.Devices[0].Name != "BMS AA:BB:CC:DD:EE:FF" {
 		t.Fatalf("default name = %v", c2)
+	}
+	// RS485-устройство без блока rs485 — ошибка.
+	s = bleSec()
+	s.Devices = []enBmsDeviceSection{{Name: "x", Method: "rs485", Disabled: boolPtr(false)}}
+	if _, err := enBmsConfigFromSection(s); err == nil {
+		t.Fatalf("rs485 без блока rs485 должен давать ошибку")
+	}
+	// RS485 transport=tcp без address — ошибка.
+	s = bleSec()
+	s.Devices = []enBmsDeviceSection{{Name: "x", Method: "rs485", Disabled: boolPtr(false),
+		RS485: &enBmsRS485Section{Transport: "tcp"}}}
+	if _, err := enBmsConfigFromSection(s); err == nil {
+		t.Fatalf("rs485 tcp без address должен давать ошибку")
 	}
 }
 

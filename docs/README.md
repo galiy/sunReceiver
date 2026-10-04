@@ -42,7 +42,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 | **МАП + MPPT** (`mppt_api.go`, `modbusmap/`) | МАП (батарея/сеть) через Modbus TCP или веб-API; MPPT-контроллеры через `read_json.php?device=mppt` (динамический состав) | [modules/map-mppt.md](modules/map-mppt.md) |
 | **Счётчик DDS238** (`meter_*.go`) | Мгновенные значения `meter_*` + посуточные тарифы «День/Ночь» (`daily_tariffs`) с добором пропущенных границ; транспорт — Modbus TCP (`tcp`) или Modbus RTU через прозрачный шлюз (`rtu`) | [dds238-meter.md](dds238-meter.md) |
 | **Счётчик Энергомера CE308** (`ce308_*.go`) | Опрос по BLE (2 с): напряжения/токи/мощности по фазам + разовый снимок накопленной энергии по сигналу; в Redis — каждое показание (~2 с), в PG — 5-мин средние | [modules/ce308.md](modules/ce308.md) |
-| **BMS EnBMS** (`enBms_*.go`) | Опрос BMS Enjie (EMU110x) по BLE: только блок Battery (CID2 `0x61`); устройства последовательно, цикл ≤ 1/с, постоянные соединения; в Redis — каждое показание, в PG — 5-мин средние | [modules/enbms.md](modules/enbms.md) |
+| **BMS EnBMS** (`enBms_*.go`) | Опрос BMS Enjie (EMU110x) по BLE (Battery, CID2 `0x61`) или RS485 (TeleMeter, CID2 `0x42`, ASCII PACE через TCP-шлюз/COM); метод и период — в конфиге; устройства последовательно, постоянные соединения; в Redis — каждое показание, в PG — 5-мин средние | [modules/enbms.md](modules/enbms.md) |
 | **Проброс Bluetooth (usbip)** (вне кода, ОТКЛЮЧЕНО 2026-09-24) | Историческая схема: проброс BLE-контроллера MediaTek с `.9` на `.253` через usbip; на `.253` теперь физический USB-адаптер | [ce308-bluetooth/README.md](ce308-bluetooth/README.md) |
 | **ANT BMS** (`bms_poller.go`, `bmslistener/`) | Опрос батарей через `read_bms.php` → shm bmslistener; в Redis — каждое показание, в PG — 5-мин средние | [antbms.md](antbms.md), [modules/bms-listener.md](modules/bms-listener.md) |
 | **Шлюз Modbus TCP↔RTU** (`mapgateway/`, C) | Публикует последовательный порт МАП как Modbus TCP (:502) для пулера; systemd на ПАК «Малина» | [mapgateway/README.md](../mapgateway/README.md) |
@@ -60,7 +60,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 | MPPT-контроллеры «КЭС» | веб-API read_json.php (HTTP) | 1 с | PV панели, заряд АКБ, выработка за сутки |
 | Счётчик DDS238 | Modbus TCP или Modbus RTU через прозрачный шлюз (502) | 1 с | мгновенные значения + посуточные тарифы «День/Ночь» |
 | Счётчик Энергомера CE308 | BLE (Энергомера/IEC 61107) | 2 с | напряжения/токи/мощности по фазам + разовый снимок энергии |
-| BMS EnBMS (Enjie EMU110x) | BLE (EnBMS CID) | ≤ 1 с (последовательно) | ячейки, ток/напряжение, SOC/SOH, ёмкости, температуры |
+| BMS EnBMS (Enjie EMU110x) | BLE (EnBMS CID) или RS485 (ASCII PACE, TCP-шлюз/COM) | BLE 3 с / RS485 1 с (последовательно, из конфига метода) | ячейки, ток/напряжение, SOC/SOH, ёмкости, температуры |
 | ANT BMS | веб-API read_bms.php (HTTP) | 1 с | SOC, ячейки, ток/мощность, температуры, MOS |
 
 - **Инверторы** — раздел `invertors` конфига, нормализуются в контракт `values`
@@ -117,7 +117,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 | `db` | `redis` (host:port), `pg` (DSN с паролем), `pg_restore_window` (необязательный duration окна реставрации Redis из PG; пусто/нет — 30 суток) |
 | `meter` | `disabled` (обязательное: `true` — пулеры отключены, плашки/кнопка «Электроэнергия» скрыты), `name`, `ip`, `port`, `unit`, `first_reg` (должен быть `0`), `register_count` (`0` → 27; иначе ≥ 18) |
 | `ce308` | `disabled` (обязательное: `true` — опрос CE308 отключён), `name`, `mac` (BD_ADDR счётчика), `pin` (BLE-PIN радиоинтерфейса) — см. [modules/ce308.md](modules/ce308.md) |
-| `enBms` | `disabled` (обязательное: `true` — опрос EnBMS отключён), `devices[]`: `name` (метка отображения), `mac` (обязателен для активного устройства), `disabled` (обязательное у каждого устройства) — см. [modules/enbms.md](modules/enbms.md) |
+| `enBms` | `disabled` (обязательное), `poll_interval_ble`, `poll_interval_rs485`, `devices[]`: `name`, `mac` (обязателен для BLE; ключ хранилища), `method` (**обязательное** у устройства: `ble`\|`rs485`), `rs485` (`transport`=`tcp`\|`com`, `address`, `port`, `baud`, `port_type`, `unit` — для `method=rs485`), `disabled` (обязательное у каждого устройства) — см. [modules/enbms.md](modules/enbms.md) |
 | `notify` | `token` (обязательное — токен бота MAX), `user_id`/`chat_id` (адресат; **можно не задавать** — бот сам регистрирует первого подписчика), `disabled` (необязательное: `true` — без оповещений), `stable_window_sec`, `map_undeclared_sec`, `grid_voltage_low` — см. [modules/notify.md](modules/notify.md) |
 | `relay` | `disabled` (обязательное: `true` — модуля нет, лампы не управляются), `ip` (обязательное при `disabled=false`), `udp_port`, `blink_hz`, `keepalive`, `lamps[]` (`name`, `relay`), `meter_stale_sec`, `map_stale_sec`, `meter_power_tag`, `meter_voltage_tag`, `map_grid_tag`, `voltage_present_min` — см. [relay_sr-201(2light).md](relay_sr-201(2light).md) |
 | legacy | `dds238.json` — старый файл счётчика (используется, только если нет раздела `meter`) |
@@ -193,7 +193,7 @@ arm-linux-musleabihf -static` (статичный elf32 ARM), поэтому н�
 - [`modules/dashboard.md`](modules/dashboard.md) — веб-дашборд.
 - [`modules/map-mppt.md`](modules/map-mppt.md) — МАП + MPPT.
 - [`modules/ce308.md`](modules/ce308.md) — счётчик Энергомера CE308 (BLE).
-- [`modules/enbms.md`](modules/enbms.md) — BMS EnBMS (Enjie EMU110x, BLE).
+- [`modules/enbms.md`](modules/enbms.md) — BMS EnBMS (Enjie EMU110x, BLE/RS485).
 - [`modules/notify.md`](modules/notify.md) — уведомления в мессенджер MAX.
 - [`modules/tray-logging.md`](modules/tray-logging.md) — системный трей и логирование
   (Windows / POSIX).
