@@ -9,7 +9,10 @@
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js" integrity="sha384-zPzbVRXfR492Sd5D+HydTYCxxgHAfgVO8KERbLlpeH5unsmbAEXrscGUUqLZG9BM" crossorigin="anonymous"></script>
 <link rel="stylesheet" href="/static/css/charts.css?v={{.CacheBust}}">
 </head>
-<body>
+<body data-show-meter="{{if .flags.ShowMeter}}1{{else}}0{{end}}"
+      data-show-ce308="{{if .flags.ShowCE308}}1{{else}}0{{end}}"
+      data-ce308-final="{{if .flags.CE308FinalReadingsOnly}}1{{else}}0{{end}}"
+      data-show-dts017="{{if .flags.ShowDTS017}}1{{else}}0{{end}}">
 <link rel="stylesheet" href="/static/css/site.css?v={{.CacheBust}}">
 <div class="top-nav">
   <div>
@@ -40,7 +43,7 @@
 <div class="lg-hint">ЛКМ по чипу — вкл/выкл линию · двойной ЛКМ — только эта линия · «Все» — показать все</div>
 <div class="charts">
   <div id="chartbox">
-    <h2>Напряжение сети и батареи (МАП), V + напряжение счётчика/CE308</h2>
+    <h2 id="gridVChartTitle">Напряжения сети и батареи (МАП), V</h2>
     <div class="chart-toolbar">
       <span id="gridVChartRange"></span>
       <span>Зум: Ctrl+колесо / drag&ndash;панорама</span>
@@ -50,7 +53,7 @@
   </div>
 
   <div id="chartbox">
-    <h2>Мощности сети и батареи (МАП), W + активная мощность счётчика/CE308</h2>
+    <h2 id="gridPChartTitle">Мощности сети и батареи (МАП), W</h2>
     <div class="chart-toolbar">
       <span id="gridPChartRange"></span>
       <span>Зум: Ctrl+колесо / drag&ndash;панорама</span>

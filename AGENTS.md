@@ -24,7 +24,9 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 | Веб-дашборд (`dashboard.go`) | [`docs/modules/dashboard.md`](docs/modules/dashboard.md) |
 | МАП + MPPT | [`docs/modules/map-mppt.md`](docs/modules/map-mppt.md) |
 | Счётчик DDS238 | [`docs/dds238-meter.md`](docs/dds238-meter.md) |
+| Счётчик DTS017M | [`docs/dts017m-meter.md`](docs/dts017m-meter.md) |
 | Счётчик Энергомера CE308 (BLE) | [`docs/modules/ce308.md`](docs/modules/ce308.md) |
+| Счётчик энергосбыта «Меркурий» (прогноз) | [`docs/meter_mercury.md`](docs/meter_mercury.md) |
 | BMS EnBMS (Enjie EMU110x, BLE/RS485) | [`docs/modules/enbms.md`](docs/modules/enbms.md) |
 | ANT BMS | [`docs/antbms.md`](docs/antbms.md) |
 | Шлюз Modbus TCP↔RTU (`mapgateway/`, C) | [`mapgateway/README.md`](mapgateway/README.md) |
@@ -79,11 +81,33 @@ legacy-файлом `dds238.json`; `protocol` — `"tcp"` (Modbus TCP, по ум
 (Modbus RTU поверх TCP через прозрачный шлюз)). Идентификатор счётчика во всех
 хранилищах — единый стабильный ключ **`dds238`** (Redis current/ряд, PG `averages`),
 не зависящий от `ip`; смена адреса/транспорта не распадается на разные устройства
-(однократная миграция — `migrateMeterDeviceKey` в `meter_migrate.go`). Счётчик Энергомера **CE308** (опрос по BLE) — раздел
-**`ce308`** `{"name", "mac", "pin"}` (**`disabled` — ОБЯЗАТЕЛЬНОЕ** поле: `false` —
-счётчик опрашивается, `true` — опрос CE308 отключён; `mac` — BD_ADDR счётчика,
-`pin` — BLE-PIN радиоинтерфейса для спаривания), полностью описан в
-[`docs/modules/ce308.md`](docs/modules/ce308.md). BMS **EnBMS** (Enjie EMU110x,
+ (однократная миграция — `migrateMeterDeviceKey` в `meter_migrate.go`). Счётчик **DTS017M** (трёхфазный, Modbus RTU через
+прозрачный шлюз; историю счётчика **не читаем** — посуточные тарифы считаются сами) —
+раздел **`dts017m`** `{"disabled", "name", "ip", "port", "unit", "protocol",
+"poll_interval"}` (**`disabled` — ОБЯЗАТЕЛЬНОЕ**: `true` — опрос выключен; `protocol` —
+`"rtu"` (по умолчанию, прозрачный шлюз) или `"tcp"`; `port` умолч. 502, `unit` умолч. 1,
+`poll_interval` умолч. 1 с). Хранилище **обособлено**: собственные ключи/ряд Redis
+(`sunreceiver:dts017m:current`, `sunreceiver:dts017m:series:*`) и таблицы PG
+(`dts017m_averages`, `dts017m_daily_tariffs`), отдельный аккумулятор; общие
+ключи/таблицы DDS238 не используются. Описан в
+[`docs/dts017m-meter.md`](docs/dts017m-meter.md). Счётчик Энергомера **CE308** (опрос по BLE) — раздел
+**`ce308`** `{"disabled", "final_readings_only", "name", "mac", "pin"}`
+(**`disabled` — ОБЯЗАТЕЛЬНОЕ** поле: `false` — счётчик опрашивается, `true` — опрос
+CE308 отключён; **`final_readings_only` — ОБЯЗАТЕЛЬНОЕ** поле: `false` — обычный
+режим (постоянное BLE-соединение, телеметрия current/series в Redis + 5-мин средние
+в PG), `true` — режим «только итоговые показания»: пулер НЕ держит соединение и НЕ
+пишет телеметрию/агрегаты, а раз в 30 мин (или по кнопке «Обновить» с дашборда)
+однократно снимает накопленную энергию (панель «показания») и отключается; на
+дашборде не показывается рамка «текущие данные», ряды/API ce308 не отдаются;
+`mac` — BD_ADDR счётчика, `pin` — BLE-PIN радиоинтерфейса для спаривания),
+полностью описан в [`docs/modules/ce308.md`](docs/modules/ce308.md). Счётчик
+энергосбыта **«Меркурий»** (без интерфейса мониторинга, установлен последовательно с
+DDS238) — раздел **`mercury`**: коллекция ручных снятий показаний `[{"taken_at"
+(RFC3339), "import_day", "import_night", "export_day", "export_night"}]` (kWh);
+прогноз показаний на текущий момент считается по последней ручной точке + статистике
+DDS238 (реализовано в `mercury.go`, отдаётся в `/api/current` → рамка «Меркурий —
+прогноз» в рамке DDS238). Описан в
+[`docs/meter_mercury.md`](docs/meter_mercury.md). BMS **EnBMS** (Enjie EMU110x,
 метод опроса BLE или RS485 у каждого устройства) — раздел **`enBms`**
 `{"disabled", "poll_interval_ble", "poll_interval_rs485", "devices": [{"name",
 "mac", "method", "rs485", "disabled"}]}` (**`disabled` — ОБЯЗАТЕЛЬНОЕ** поле на
@@ -115,10 +139,11 @@ PACE (поле ADR, как есть; для этой BMS ADR=0)). Для `method
 "map", "meter", "ce308", "antbms"}` — все поля обязательны и > 0
 (отсутствие/ноль = ошибка загрузки конфига); значения по умолчанию в sample:
 inverter 10, map 1, meter 1, ce308 5, antbms 1. Период EnBMS задаётся НЕ здесь, а
-в разделе `enBms` отдельно для каждого метода (`poll_interval_ble` /
-`poll_interval_rs485`). **В Redis пишется КАЖДОЕ
+ в разделе `enBms` отдельно для каждого метода (`poll_interval_ble` /
+`poll_interval_rs485`). Период **DTS017M** задаётся НЕ здесь, а полем `poll_interval`
+в разделе `dts017m`. **В Redis пишется КАЖДОЕ
 снятое показание** (окно 2 календарных суток), **в PG все ряды усредняются до 1 записи
-за 5 минут** (инверторы, МАП/MPPT, DDS238, CE308, ANT BMS, EnBMS).
+за 5 минут** (инверторы, МАП/MPPT, DDS238, CE308, ANT BMS, EnBMS, DTS017M).
 
 **Шаблон `sunReceiver.sample.json`** (в git) — публичный пример структуры конфига.
 **Всегда** обновлять его при любом изменении структуры/содержимого `sunReceiver.json`
@@ -152,9 +177,23 @@ inverter 10, map 1, meter 1, ce308 5, antbms 1. Период EnBMS задаёт�
 - **Счётчик DDS238** — `meter_*.go`: мгновенные значения `meter_*` + посуточные
   тарифы (`daily_tariffs`), добор пропущенных границ. Полное описание —
   [`docs/dds238-meter.md`](docs/dds238-meter.md).
+- **Счётчик DTS017M** — `dts017_*.go`: `dts017.go` (регистры/декодер/теги),
+  `dts017_client`-транспорт — переиспользуемый `meter_client.go` (fn `0x04`),
+  `dts017_poller.go`, `dts017_store.go` (обособленные ключи/ряд Redis),
+  `dts017_accumulator.go` (5-мин средние в `dts017m_averages`), `dts017_tariff.go`
+  (посуточные тарифы в `dts017m_daily_tariffs`), `dts017_backfill.go`,
+  `dts017_time.go` (раз в 30 мин сверка часов счётчика с локальным временем; при
+  расхождении > 2 с — коррекция записью fn `0x10` в `0x0210`; стартовая проверка на
+  первом тике, время последней проверки — в памяти). Modbus RTU
+  (прозрачный шлюз), историю счётчика не читаем — статистику считаем сами.
+  **Хранилище обособлено** от DDS238. API/дашборд — отдельная задача; пока модуль
+  отображается только на схеме анимации (мощность счётчика гаража
+  `garage_meter_power` = `dts017_active_power`, резервно CE308). Полное
+  описание — [`docs/dts017m-meter.md`](docs/dts017m-meter.md).
 - **Счётчик Энергомера CE308** (BLE) — `ce308_*.go`: `ce308_client.go` (BLE-транспорт),
   `ce308.go` (маппинг/энергоснимок), `ce308_poller.go` (цикл с периодом
-  `poll.ce308`, в sample 5 с; реконнект),
+  `poll.ce308`, в sample 5 с; реконнект; режим `final_readings_only` — без
+  телеметрии, раз в 30 мин/по кнопке только итоговая энергия),
   `ce308_accumulator.go` (усреднение до 1 записи за 5 мин в PG),
   `ce308_store.go` (Redis: current/series/energy), `ce308_agent_linux.go` (BlueZ-агент PIN).
   Полное описание — [`docs/modules/ce308.md`](docs/modules/ce308.md).

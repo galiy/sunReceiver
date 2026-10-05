@@ -48,6 +48,7 @@
 	},
 	"ce308": {
 		"disabled": false,
+		"final_readings_only": false,
 		"name": "CE308 #000000000",
 		"mac": "AA:BB:CC:DD:EE:FF",
 		"pin": "CHANGE_ME_PIN"
@@ -61,6 +62,15 @@
 			{ "name": "BMS EnBMS #2 (RS485)", "mac": "AA:BB:CC:44:55:66", "method": "rs485", "disabled": false,
 			  "rs485": { "transport": "tcp", "address": "192.168.0.77:502", "port_type": "rs485", "unit": 0 } }
 		]
+	},
+	"dts017m": {
+		"disabled": false,
+		"name": "Электросчётчик DTS017M",
+		"ip": "192.168.0.41",
+		"port": 502,
+		"unit": 1,
+		"protocol": "rtu",
+		"poll_interval": 1
 	},
 	"notify": {
 		"token": "CHANGE_ME",
@@ -87,5 +97,14 @@
 		"meter_voltage_tag": "meter_voltage",
 		"map_grid_tag": "grid_voltage",
 		"voltage_present_min": 0
-	}
+	},
+	"mercury": [
+		{
+			"taken_at": "2026-10-05T23:00:00+03:00",
+			"import_day": 33148,
+			"import_night": 55418,
+			"export_day": 31960,
+			"export_night": 792
+		}
+	]
 }

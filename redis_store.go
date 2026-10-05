@@ -498,6 +498,13 @@ func (s *redisStore) PurgeOld(now time.Time) {
 	} else {
 		keys = append(keys, enbmsKeys...)
 	}
+	// Обособленный ряд счётчика DTS017M (окно 2 календарных суток).
+	dts017Keys, err := s.scanPrefixKeys(redisDts017SeriesPrefix + "*")
+	if err != nil {
+		log.Printf("redis cleanup dts017m keys: %v", err)
+	} else {
+		keys = append(keys, dts017Keys...)
+	}
 	// Операцию выполняем так, чтобы «строго старше cutoff», т.е. ZRemRangeByScore
 	// убирает [ -inf ; cutoff-1 ], поэтому ровно cutoff остаётся в ряде.
 	remBelow := strconv.FormatInt(cutoff.Unix()-1, 10)

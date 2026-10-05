@@ -41,6 +41,8 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 | **Веб-дашборд** (`dashboard.go`, `web/`, `go:embed`) | HTML + JSON API (`/`, `/charts`, `/energy`, `/bms/<name>`) поверх Redis/PG, зум/панорама, offline-индикация, mobile-раскладка; шаблоны/статика (`web/templates`, `web/static/js`) встроены в бинарник | [modules/dashboard.md](modules/dashboard.md) |
 | **МАП + MPPT** (`mppt_api.go`, `modbusmap/`) | МАП (батарея/сеть) через Modbus TCP или веб-API; MPPT-контроллеры через `read_json.php?device=mppt` (динамический состав) | [modules/map-mppt.md](modules/map-mppt.md) |
 | **Счётчик DDS238** (`meter_*.go`) | Мгновенные значения `meter_*` + посуточные тарифы «День/Ночь» (`daily_tariffs`) с добором пропущенных границ; транспорт — Modbus TCP (`tcp`) или Modbus RTU через прозрачный шлюз (`rtu`) | [dds238-meter.md](dds238-meter.md) |
+| **Счётчик DTS017M** (`dts017_*.go`) | Трёхфазный счётчик (Modbus RTU через прозрачный шлюз): телеметрия/энергии → **собственные** ключи/ряд Redis и **собственные** таблицы PG; посуточные тарифы «День/Ночь» считаются сами (историю счётчика не читаем). API/дашборд — отдельная задача | [dts017m-meter.md](dts017m-meter.md) |
+| **Счётчик «Меркурий»** (энергосбыт, без мониторинга; прогноз) | Последовательно с DDS238; показания снимаются **вручную** (раздел конфига `mercury`), прогноз на текущий момент по последней ручной точке + статистике DDS238 (`mercury.go` → `/api/current` → рамка «Меркурий — прогноз») | [meter_mercury.md](meter_mercury.md) |
 | **Счётчик Энергомера CE308** (`ce308_*.go`) | Опрос по BLE (2 с): напряжения/токи/мощности по фазам + разовый снимок накопленной энергии по сигналу; в Redis — каждое показание (~2 с), в PG — 5-мин средние | [modules/ce308.md](modules/ce308.md) |
 | **BMS EnBMS** (`enBms_*.go`) | Опрос BMS Enjie (EMU110x) по BLE (Battery, CID2 `0x61`) или RS485 (TeleMeter, CID2 `0x42`, ASCII PACE через TCP-шлюз/COM); метод и период — в конфиге; устройства последовательно, постоянные соединения; в Redis — каждое показание, в PG — 5-мин средние | [modules/enbms.md](modules/enbms.md) |
 | **Проброс Bluetooth (usbip)** (вне кода, ОТКЛЮЧЕНО 2026-09-24) | Историческая схема: проброс BLE-контроллера MediaTek с `.9` на `.253` через usbip; на `.253` теперь физический USB-адаптер | [ce308-bluetooth/README.md](ce308-bluetooth/README.md) |
@@ -59,6 +61,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 | МАП Титанатор | Modbus TCP (502) или веб-API | 1 с | напряжение/мощность сети и батареи |
 | MPPT-контроллеры «КЭС» | веб-API read_json.php (HTTP) | 1 с | PV панели, заряд АКБ, выработка за сутки |
 | Счётчик DDS238 | Modbus TCP или Modbus RTU через прозрачный шлюз (502) | 1 с | мгновенные значения + посуточные тарифы «День/Ночь» |
+| Счётчик DTS017M | Modbus RTU через прозрачный шлюз (502, unit 1, fn 03/04) | 1 с | напряжения/токи/мощности/энергии + посуточные тарифы «День/Ночь» |
 | Счётчик Энергомера CE308 | BLE (Энергомера/IEC 61107) | 2 с | напряжения/токи/мощности по фазам + разовый снимок энергии |
 | BMS EnBMS (Enjie EMU110x) | BLE (EnBMS CID) или RS485 (ASCII PACE, TCP-шлюз/COM) | BLE 3 с / RS485 1 с (последовательно, из конфига метода) | ячейки, ток/напряжение, SOC/SOH, ёмкости, температуры |
 | ANT BMS | веб-API read_bms.php (HTTP) | 1 с | SOC, ячейки, ток/мощность, температуры, MOS |
@@ -77,6 +80,12 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
   `"rtu"` (Modbus RTU поверх TCP — прозрачный шлюз, напр. USR-DR164; MBAP нет,
   кадр `unit+PDU+CRC16`). Идентификатор счётчика — единый стабильный ключ **`dds238`**
   во всех хранилищах (Redis current/ряд, PG `averages`), не зависящий от `ip`.
+- **Счётчик DTS017M** — раздел `dts017m`; `disabled` обязателен. `protocol` — `"rtu"`
+  (по умолчанию, прозрачный шлюз) или `"tcp"`; `poll_interval` (сек, по умолчанию 1).
+  **Обособленное хранилище**: собственные ключи/ряд Redis (`sunreceiver:dts017m:*`),
+  собственные таблицы PG (`dts017m_averages`, `dts017m_daily_tariffs`) и отдельный
+  аккумулятор; общие ключи/таблицы DDS238 не используются. Историю счётчика не читаем —
+  посуточные тарифы считаем сами. См. [`dts017m-meter.md`](dts017m-meter.md).
 - **BMS** — поле `map.bms_path`; состав батарей динамический по ответу `read_bms.php`.
   При `map.bms_disabled=true` пулер отключён, батарейки с дашборда скрыты.
 - **Уведомления** — раздел `notify` (бот MAX): события мониторинга МАП
@@ -91,9 +100,10 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
   CE308). Запускается с persistence (RDB+AOF). При полностью пустом Redis данные
   восстанавливаются из PostgreSQL. (Подробнее — [modules/storage.md](modules/storage.md).)
 - **PostgreSQL** — вся история, **единая гранулярность 1 запись / 5 минут** для всех
-  рядов (`sunreceiver.averages`, `ce308_averages`, `bms_averages`, `enbms_averages`),
-  плюс `sunreceiver.daily_tariffs`. Фоновые аккумуляторы усредняют накопленные в Redis
-  снимки.
+  рядов (`sunreceiver.averages`, `ce308_averages`, `bms_averages`, `enbms_averages`,
+  `dts017m_averages`), плюс таблицы тарифов (`sunreceiver.daily_tariffs` для DDS238 и
+  обособленная `sunreceiver.dts017m_daily_tariffs`). Фоновые аккумуляторы усредняют
+  накопленные в Redis снимки.
 - **Тарифы счётчика** — `sunreceiver.daily_tariffs` (посуточно, «День/Ночь» ×
   потребление/отдача).
 
@@ -102,7 +112,8 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 Один файл **`sunReceiver.json`** рядом с бинарником (`os.Executable()`; при
 `go run .` — fallback в CWD). Разделы: `dashboard_port` (обязательное) и
 необязательные `dashboard_user`/`dashboard_password`, `invertors`, `map`
-(с подразделом `rs485`), `db`, `meter`, `ce308`, `enBms`, `notify`, `relay`.
+(с подразделом `rs485`), `db`, `meter`, `dts017m`, `ce308`, `enBms`, `notify`,
+`relay`, `mercury`.
 Файл приватный (пароли — в открытом виде, в `.gitignore`); публичный шаблон
 структуры — [`sunReceiver.sample.json`](../sunReceiver.sample.json) (обновлять при
 любом изменении структуры конфига: IP — случайные из `192.168.0.x`, серийные
@@ -116,7 +127,9 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 | `map` | `disabled` (обязательное: `true` — все пулеры МАП/MPPT/BMS отключены, плашки МАП скрыты), `bms_disabled` (обязательное: `true` — пулер ANT BMS отключён, батарейки скрыты), `rs485` (подраздел: `name`, `ip`, `unit` (Modbus, умолч. 1), `disabled` (обязательное: `false`=Modbus/RS485, `true`=веб-API ПАК «Малина»)); веб-API: `base_url`, `mppt_path`, `map_path` (необязательный — путь к read_json.php?device=map), `bms_path` (включает опрос ANT BMS), `login`, `password` |
 | `db` | `redis` (host:port), `pg` (DSN с паролем), `pg_restore_window` (необязательный duration окна реставрации Redis из PG; пусто/нет — 30 суток) |
 | `meter` | `disabled` (обязательное: `true` — пулеры отключены, плашки/кнопка «Электроэнергия» скрыты), `name`, `ip`, `port`, `unit`, `first_reg` (должен быть `0`), `register_count` (`0` → 27; иначе ≥ 18) |
-| `ce308` | `disabled` (обязательное: `true` — опрос CE308 отключён), `name`, `mac` (BD_ADDR счётчика), `pin` (BLE-PIN радиоинтерфейса) — см. [modules/ce308.md](modules/ce308.md) |
+| `dts017m` | `disabled` (обязательное), `name`, `ip`, `port` (умолч. 502), `unit` (умолч. 1), `protocol` (`rtu`/`tcp`, умолч. `rtu`), `poll_interval` (сек, умолч. 1) — см. [dts017m-meter.md](dts017m-meter.md) |
+| `ce308` | `disabled` (обязательное: `true` — опрос CE308 отключён), `final_readings_only` (обязательное: `true` — только итоговые показания раз в 30 мин/по кнопке, без телеметрии) , `name`, `mac` (BD_ADDR счётчика), `pin` (BLE-PIN радиоинтерфейса) — см. [modules/ce308.md](modules/ce308.md) |
+| `mercury` | Коллекция ручных снятий показаний счётчика энергосбыта «Меркурий»: `taken_at` (RFC3339), `import_day`, `import_night`, `export_day`, `export_night` (kWh) — см. [meter_mercury.md](meter_mercury.md) |
 | `enBms` | `disabled` (обязательное), `poll_interval_ble`, `poll_interval_rs485`, `devices[]`: `name`, `mac` (обязателен для BLE; ключ хранилища), `method` (**обязательное** у устройства: `ble`\|`rs485`), `rs485` (`transport`=`tcp`\|`com`, `address`, `port`, `baud`, `port_type`, `unit` — для `method=rs485`), `disabled` (обязательное у каждого устройства) — см. [modules/enbms.md](modules/enbms.md) |
 | `notify` | `token` (обязательное — токен бота MAX), `user_id`/`chat_id` (адресат; **можно не задавать** — бот сам регистрирует первого подписчика), `disabled` (необязательное: `true` — без оповещений), `stable_window_sec`, `map_undeclared_sec`, `grid_voltage_low` — см. [modules/notify.md](modules/notify.md) |
 | `relay` | `disabled` (обязательное: `true` — модуля нет, лампы не управляются), `ip` (обязательное при `disabled=false`), `udp_port`, `blink_hz`, `keepalive`, `lamps[]` (`name`, `relay`), `meter_stale_sec`, `map_stale_sec`, `meter_power_tag`, `meter_voltage_tag`, `map_grid_tag`, `voltage_present_min` — см. [relay_sr-201(2light).md](relay_sr-201(2light).md) |
@@ -221,6 +234,10 @@ arm-linux-musleabihf -static` (статичный elf32 ARM), поэтому н�
 - [`universal-contract.md`](universal-contract.md) — контракт `values` (каждый тег).
 - [`dds238-meter.md`](dds238-meter.md) — модуль счётчика (мгновенные значения,
   посуточные тарифы, конфигурация).
+- [`dts017m-meter.md`](dts017m-meter.md) — модуль счётчика DTS017M (Modbus RTU,
+  обособленные ключи/таблицы, посуточные тарифы; API/дашборд — отдельная задача).
+- [`meter_mercury.md`](meter_mercury.md) — счётчик энергосбыта «Меркурий»
+  (без мониторинга): ручные точки в конфиге `mercury`, прогноз по статистике DDS238.
 - [`antbms.md`](antbms.md), [`antbms-worklog.md`](antbms-worklog.md) — BMS: цепочка
   bmslistener → read_bms.php, протокол, дашборд.
 - [`modules/bms-listener.md`](modules/bms-listener.md) — демон bmslistener: описание

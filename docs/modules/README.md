@@ -11,6 +11,7 @@
 | Веб-дашборд | [dashboard.md](dashboard.md) | `dashboard.go`, `web/` (templates/static, `go:embed`) |
 | МАП + MPPT | [map-mppt.md](map-mppt.md) | `mppt_api.go`, `modbusmap/` |
 | Счётчик DDS238 | [../dds238-meter.md](../dds238-meter.md) | `meter_*.go` |
+| Счётчик DTS017M | [../dts017m-meter.md](../dts017m-meter.md) | `dts017_*.go` (Modbus RTU; обособленные ключи/ряд Redis + таблицы PG; API/дашборд — отдельно) |
 | Счётчик Энергомера CE308 (BLE) | [ce308.md](ce308.md) | `ce308_*.go` |
 | BMS EnBMS (Enjie EMU110x, BLE) | [enbms.md](enbms.md) | `enBms_*.go` |
 | ANT BMS | [../antbms.md](../antbms.md) | `bms_poller.go`, `bmslistener/` |

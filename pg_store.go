@@ -101,6 +101,13 @@ CREATE INDEX IF NOT EXISTS averages_ts_ip_idx ON sunreceiver.averages (ts, ip);
 	if err := ensureMeterTariffSchema(s); err != nil {
 		return fmt.Errorf("pg meter tariff schema: %w", err)
 	}
+	// Обособленные таблицы счётчика DTS017M (5-мин средние + посуточные тарифы).
+	if err := ensureDts017AveragesSchema(s); err != nil {
+		return fmt.Errorf("pg dts017m averages schema: %w", err)
+	}
+	if err := ensureDts017TariffSchema(s); err != nil {
+		return fmt.Errorf("pg dts017m tariff schema: %w", err)
+	}
 	// Таблица 5-минутных усреднённых точек ANT BMS (name = deviceName).
 	// PK (name, ts) — эффективная выборка «конкретная BMS за диапазон времени»
 	// (узкий индексный range-scan по первичному ключу).
@@ -636,6 +643,80 @@ ORDER BY ts ASC`, start.UTC(), end.UTC())
 		return nil, fmt.Errorf("pg enbms averages all rows: %w", err)
 	}
 	return pts, nil
+}
+
+// CE308AveragesAll возвращает 5-минутные усреднённые точки CE308 ВСЕХ устройств за
+// период [start, end] включительно, по возрастанию ts. Используется для реставрации
+// Redis-ряда sunreceiver:ce308:series из PG при пустом Redis
+// (см. restoreRedisFromPG).
+func (s *pgStore) CE308AveragesAll(start, end time.Time) ([]ce308Snapshot, error) {
+	rows, err := s.pool.Query(s.ctx, `
+SELECT name, ts, values
+FROM sunreceiver.ce308_averages
+WHERE ts >= $1 AND ts <= $2
+ORDER BY ts ASC`, start.UTC(), end.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("pg query ce308 averages all: %w", err)
+	}
+	defer rows.Close()
+
+	out := []ce308Snapshot{}
+	for rows.Next() {
+		var name string
+		var ts time.Time
+		var vals json.RawMessage
+		if err := rows.Scan(&name, &ts, &vals); err != nil {
+			return nil, fmt.Errorf("pg scan ce308 avg all: %w", err)
+		}
+		snap := ce308Snapshot{Name: name, Timestamp: ts.Format(time.RFC3339)}
+		if len(vals) > 0 {
+			if err := json.Unmarshal(vals, &snap.Values); err != nil {
+				continue
+			}
+		}
+		out = append(out, snap)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pg ce308 averages all rows: %w", err)
+	}
+	return out, nil
+}
+
+// Dts017AveragesAll возвращает 5-минутные усреднённые точки DTS017M за период
+// [start, end] включительно, по возрастанию ts. Используется для реставрации
+// Redis-ряда sunreceiver:dts017m:series из PG при пустом Redis
+// (см. restoreRedisFromPG).
+func (s *pgStore) Dts017AveragesAll(start, end time.Time) ([]dts017Snapshot, error) {
+	rows, err := s.pool.Query(s.ctx, `
+SELECT name, ts, values
+FROM sunreceiver.dts017m_averages
+WHERE ts >= $1 AND ts <= $2
+ORDER BY ts ASC`, start.UTC(), end.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("pg query dts017m averages all: %w", err)
+	}
+	defer rows.Close()
+
+	out := []dts017Snapshot{}
+	for rows.Next() {
+		var name string
+		var ts time.Time
+		var vals json.RawMessage
+		if err := rows.Scan(&name, &ts, &vals); err != nil {
+			return nil, fmt.Errorf("pg scan dts017m avg all: %w", err)
+		}
+		snap := dts017Snapshot{Name: name, Timestamp: ts.Format(time.RFC3339)}
+		if len(vals) > 0 {
+			if err := json.Unmarshal(vals, &snap.Values); err != nil {
+				continue
+			}
+		}
+		out = append(out, snap)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pg dts017m averages all rows: %w", err)
+	}
+	return out, nil
 }
 
 // DailyTariffsRange возвращает финализированные посуточные тарифы счётчика

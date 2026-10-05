@@ -236,6 +236,8 @@ type configFile struct {
 	Meter         *meterSection    `json:"meter"`
 	Ce308         *ce308Section    `json:"ce308"`
 	EnBms         *enBmsSection    `json:"enBms"`
+	Dts017        *dts017Section   `json:"dts017m"`
+	Mercury       []mercurySection `json:"mercury"` // ручные снятия показаний счётчика энергосбыта «Меркурий»
 	Notify        *notifySection   `json:"notify"`
 	Relay         *relaySection    `json:"relay"`          // сетевое реле SR-201 (лампы), управление по UDP
 	DashboardPort int              `json:"dashboard_port"` // порт веб-дашборда; обязательное поле (0 — ошибка загрузки конфига)
@@ -370,6 +372,9 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	if cf.Ce308 != nil && cf.Ce308.Disabled == nil {
 		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе ce308 не задано обязательное поле disabled (false/true)", path)
 	}
+	if cf.Ce308 != nil && cf.Ce308.FinalReadingsOnly == nil {
+		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе ce308 не задано обязательное поле final_readings_only (false/true)", path)
+	}
 	ce308Cfg, err := ce308ConfigFromSection(cf.Ce308)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
@@ -382,6 +387,18 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	}
 	enBmsCfg, err := enBmsConfigFromSection(cf.EnBms)
 	if err != nil {
+		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
+	}
+	// Счётчик DTS017M (раздел "dts017m") — отдельные ключи/ряд Redis и таблицы PG.
+	// Disabled обязателен; при активном разделе нужны name/ip (остальное — дефолты).
+	if cf.Dts017 != nil && cf.Dts017.Disabled == nil {
+		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе dts017m не задано обязательное поле disabled (false/true)", path)
+	}
+	if err := loadDts017Config(cf.Dts017); err != nil {
+		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
+	}
+	// Ручные снятия показаний счётчика энергосбыта «Меркурий» (раздел "mercury").
+	if err := loadMercuryConfig(cf.Mercury); err != nil {
 		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
 	}
 	// Сетевое реле SR-201 (лампы) — раздел "relay". Disabled обязателен: true
@@ -426,7 +443,7 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 
 	meterActive := cf.Meter != nil && cf.Meter.Disabled != nil && !*cf.Meter.Disabled
 	relayActive := cf.Relay != nil && cf.Relay.Disabled != nil && !*cf.Relay.Disabled
-	if len(targets) == 0 && mapAPI == nil && ce308Cfg == nil && !meterActive && !relayActive {
+	if len(targets) == 0 && mapAPI == nil && ce308Cfg == nil && !meterActive && !relayActive && dts017Cfg == nil {
 		// Если активными остались только MPPT-контроллеры из API ПАК «Малина»,
 		// targets может быть пуст — это допустимо: цели собираются динамически.
 		mpptOk := cf.Map != nil && cf.Map.BaseURL != "" && cf.Map.MPPTPath != "" &&
@@ -2012,6 +2029,12 @@ func main() {
 	} else {
 		log.Printf("enbms: не настроен (нет активных устройств в разделе enBms) — опрос отключён")
 	}
+	// Счётчик DTS017M — раздел "dts017m" (Modbus RTU/TCP, обособленное хранилище).
+	if desc := describeDts017Config(dts017Cfg); desc != "" {
+		log.Printf("dts017m: %s", desc)
+	} else {
+		log.Printf("dts017m: не настроен (нет активного раздела dts017m) — опрос отключён")
+	}
 
 	// Флаги видимости блоков дашборда, вычисленные из конфигурации:
 	//   - ShowMap — МАП/MPPT включены (map.disabled != true);
@@ -2019,11 +2042,13 @@ func main() {
 	//   - ShowBMS — пулер ANT BMS запущен (bms_disabled != true, заполнен bms_path);
 	//   - ShowRelay — контроллер ламп SR-201 включен (relay.disabled != true).
 	dash := dashFlags{
-		ShowMap:   mapSec != nil && (mapSec.Disabled == nil || !*mapSec.Disabled),
-		ShowMeter: meterCfg != nil,
-		ShowBMS:   bmsSite != nil || enBmsCfg != nil,
-		ShowRelay: relaySec != nil && (relaySec.Disabled == nil || !*relaySec.Disabled),
-		ShowCE308: ce308Cfg != nil,
+		ShowMap:                mapSec != nil && (mapSec.Disabled == nil || !*mapSec.Disabled),
+		ShowMeter:              meterCfg != nil,
+		ShowBMS:                bmsSite != nil || enBmsCfg != nil,
+		ShowRelay:              relaySec != nil && (relaySec.Disabled == nil || !*relaySec.Disabled),
+		ShowCE308:              ce308Cfg != nil,
+		CE308FinalReadingsOnly: ce308Cfg != nil && ce308Cfg.FinalReadingsOnly,
+		ShowDTS017:             dts017Cfg != nil,
 	}
 
 	// Сетевое реле SR-201 (лампы): управление по UDP, состояние поддерживает
@@ -2097,11 +2122,17 @@ func main() {
 				// входят. Проверяем их, чтобы сложившийся BMS-«магазин» не был
 				// засчитан пустым и не перетёрся реставрацией.
 				bmsPresent, berr := redisBMSDataPresent(store)
+				dtsPresent, derr := redisDts017DataPresent(store)
+				cePresent, ceerr := redisCE308DataPresent(store)
 				switch {
 				case berr != nil:
 					log.Printf("redis empty-check (bms): %v", berr)
-				case bmsPresent:
-					log.Printf("redis empty-check: в Redis есть BMS-данные — реставрация не требуется")
+				case derr != nil:
+					log.Printf("redis empty-check (dts017m): %v", derr)
+				case ceerr != nil:
+					log.Printf("redis empty-check (ce308): %v", ceerr)
+				case bmsPresent || dtsPresent || cePresent:
+					log.Printf("redis empty-check: в Redis есть данные BMS/DTS017M/CE308 — реставрация не требуется")
 				default:
 					// SETNX-маркер: защита от повторной/одновременной реставрации
 					// (два экземпляра на одном Redis). Захвативший маркер — единственный,
@@ -2113,7 +2144,8 @@ func main() {
 					} else if !locked {
 						log.Printf("pg restore: реставрацию уже выполняет другой процесс — пропускаю")
 					} else {
-						restoreRedisFromPG(store, pg, restoreWindow, stopCtx)
+						restoreCE308Series := ce308Cfg == nil || !ce308Cfg.FinalReadingsOnly
+						restoreRedisFromPG(store, pg, restoreWindow, restoreCE308Series, stopCtx)
 						store.rdb.Del(store.ctx, redisRestoreLockKey)
 					}
 				}
@@ -2222,22 +2254,56 @@ func main() {
 		}()
 	}
 
+	// Счётчик DTS017M — отдельный цикл опроса (Modbus RTU через прозрачный шлюз)
+	// с периодом dts017m.poll_interval. Данные — ТОЛЬКО в собственные ключи/ряд
+	// Redis и собственные таблицы PG (dts017m_averages, dts017m_daily_tariffs);
+	// история счётчика не читается, посуточные тарифы считаются сами (см.
+	// dts017_poller.go, dts017_accumulator.go, dts017_tariff.go, dts017_backfill.go).
+	if dts017Cfg != nil {
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			runDts017Poll(store, pg, dts017Cfg, stopCtx)
+		}()
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			runDts017Backfill(store, pg, dts017Cfg, stopCtx)
+		}()
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			runDts017Accumulator(store, pg, dts017Cfg.Name, stopCtx)
+		}()
+	}
+
 	// Счётчик Энергомера CE308 — отдельный цикл опроса по BLE с периодом poll.ce308
 	// (в sample по умолчанию 5 с; текущие
 	// значения + история в Redis (каждое показание), усреднение до 1 записи за 5 мин в PG), см.
 	// ce308_poller.go и ce308_accumulator.go. Разовый снимок энергии — по сигналу.
 	// Раздел ce308 независим от счётчика DDS238 (meter) и запускается даже без него.
 	if ce308Cfg != nil {
-		bgWg.Add(1)
-		go func() {
-			defer bgWg.Done()
-			runCe308Poll(store, pg, ce308Cfg, stopCtx)
-		}()
-		bgWg.Add(1)
-		go func() {
-			defer bgWg.Done()
-			runCe308Accumulator(store, pg, ce308Cfg.Name, stopCtx)
-		}()
+		if ce308Cfg.FinalReadingsOnly {
+			// Режим «только итоговые показания»: без постоянного соединения,
+			// телеметрии и PG-агрегации; раз в 30 мин (или по кнопке) — разовый
+			// снимок накопленной энергии и отключение. Аккумулятор не запускаем.
+			bgWg.Add(1)
+			go func() {
+				defer bgWg.Done()
+				runCe308FinalReadings(store, ce308Cfg, stopCtx)
+			}()
+		} else {
+			bgWg.Add(1)
+			go func() {
+				defer bgWg.Done()
+				runCe308Poll(store, pg, ce308Cfg, stopCtx)
+			}()
+			bgWg.Add(1)
+			go func() {
+				defer bgWg.Done()
+				runCe308Accumulator(store, pg, ce308Cfg.Name, stopCtx)
+			}()
+		}
 	}
 
 	// BMS EnBMS — отдельный цикл опроса выбранным методом (BLE или RS485; см.
@@ -2257,8 +2323,10 @@ func main() {
 		}
 		start := true
 		if bleDevs > 0 {
+			// В режиме final_readings_only CE308 не держит постоянное BLE-соединение
+			// (подключается лишь на время снятия), поэтому в лимит не входит.
 			ceCount := 0
-			if ce308Cfg != nil {
+			if ce308Cfg != nil && !ce308Cfg.FinalReadingsOnly {
 				ceCount = 1
 			}
 			btCount := bleDevs + ceCount
@@ -2568,6 +2636,43 @@ func redisBMSDataPresent(store *redisStore) (bool, error) {
 	return false, nil
 }
 
+// redisDts017DataPresent — true, если в Redis есть данные счётчика DTS017M
+// (HASH sunreceiver:dts017m:current или ряд sunreceiver:dts017m:series:*).
+// Отдельно от IsEmpty, т.к. тот учитывает только инверторное current/series:
+// сложившийся ряд счётчика не должен быть засчитан пустым и перетёрт реставрацией.
+func redisDts017DataPresent(store *redisStore) (bool, error) {
+	n, err := store.rdb.HLen(store.ctx, redisDts017CurrentKey).Result()
+	if err != nil {
+		return false, err
+	}
+	if n > 0 {
+		return true, nil
+	}
+	keys, err := store.scanPrefixKeys(redisDts017SeriesPrefix + "*")
+	if err != nil {
+		return false, err
+	}
+	return len(keys) > 0, nil
+}
+
+// redisCE308DataPresent — true, если в Redis есть данные счётчика CE308
+// (HASH sunreceiver:ce308:current или ряд sunreceiver:ce308:series:*).
+// Отдельно от IsEmpty (тот учитывает только инверторное current/series).
+func redisCE308DataPresent(store *redisStore) (bool, error) {
+	n, err := store.rdb.HLen(store.ctx, redisCE308CurrentKey).Result()
+	if err != nil {
+		return false, err
+	}
+	if n > 0 {
+		return true, nil
+	}
+	keys, err := store.scanPrefixKeys(redisCE308SeriesPrefix + "*")
+	if err != nil {
+		return false, err
+	}
+	return len(keys) > 0, nil
+}
+
 // restoreRedisFromPG восстанавливает Redis из persistent-хранилища PostgreSQL
 // за период [now-window, now], но не старше окна удержания Redis (последние 2
 // календарных суток), иначе фоновая очистка сразу удалит восстановленное.
@@ -2577,12 +2682,16 @@ func redisBMSDataPresent(store *redisStore) (bool, error) {
 //   - точки ANT BMS (pg.BMSAveragesAll) — SaveBMSSeries в ряд
 //     sunreceiver:bms:series:<YYYY-MM>;
 //   - точки EnBMS (pg.EnBmsAveragesAll) — SaveEnBmsSeries в ряд
-//     sunreceiver:enbms:series:<YYYY-MM>.
+//     sunreceiver:enbms:series:<YYYY-MM>;
+//   - точки DTS017M (pg.Dts017AveragesAll) — SaveDts017Series/SaveDts017Current в
+//     обособленный ряд sunreceiver:dts017m:series:<YYYY-MM>;
+//   - точки CE308 (pg.CE308AveragesAll) — SaveCE308History/SaveCE308Current в
+//     обособленный ряд sunreceiver:ce308:series:<YYYY-MM>.
 //
 // Замечание: штатно Redis-ряд BMS — сырые показания (samples=1), а
 // восстановленный из PG участок представлен 5-минутными средними (samples>1);
 // после первых новых опросов он дополняется сырыми точками.
-func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, stop context.Context) {
+func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, restoreCE308Series bool, stop context.Context) {
 	end := time.Now()
 	start := recentCutoff(end)
 	if w := end.Add(-window); w.After(start) {
@@ -2685,4 +2794,87 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, st
 		enbmsRestored++
 	}
 	log.Printf("pg restore: EnBMS восстановлено точек: %d", enbmsRestored)
+
+	// Ряд DTS017M — из pg.dts017m_averages (5-мин средние) в
+	// sunreceiver:dts017m:series:<YYYY-MM> (то же окно удержания); current —
+	// последняя восстановленная точка.
+	dtsPts, err := pg.Dts017AveragesAll(start, end)
+	if err != nil {
+		log.Printf("pg restore: dts017m query: %v", err)
+		return
+	}
+	var dtsRestored int
+	var dtsLast *dts017Snapshot
+	for i := range dtsPts {
+		select {
+		case <-stop.Done():
+			log.Printf("pg restore: остановлено по сигналу (DTS017M восстановлено точек: %d)", dtsRestored)
+			return
+		default:
+		}
+		snap := dtsPts[i]
+		ts, perr := time.Parse(time.RFC3339, snap.Timestamp)
+		if perr != nil {
+			continue
+		}
+		// Ключ месяца (dts017SeriesKey) приводим к локальной зоне, как живая запись.
+		ts = ts.In(time.Local)
+		if serr := store.SaveDts017Series(snap, ts); serr != nil {
+			log.Printf("pg restore: dts017m save %s: %v", snap.Name, serr)
+			continue
+		}
+		cur := snap
+		dtsLast = &cur
+		dtsRestored++
+	}
+	if dtsLast != nil {
+		if serr := store.SaveDts017Current(*dtsLast); serr != nil {
+			log.Printf("pg restore: dts017m current: %v", serr)
+		}
+	}
+	log.Printf("pg restore: DTS017M восстановлено точек: %d", dtsRestored)
+
+	// Ряд CE308 — из pg.ce308_averages (5-мин средние) в
+	// sunreceiver:ce308:series:<YYYY-MM> (то же окно удержания); current —
+	// последняя восстановленная точка. В режиме final_readings_only телеметрия
+	// CE308 не пишется/не отдаётся — реставрация ряда не выполняется.
+	if !restoreCE308Series {
+		log.Printf("pg restore: CE308 в режиме final_readings_only — ряд не восстанавливается")
+		return
+	}
+	cePts, err := pg.CE308AveragesAll(start, end)
+	if err != nil {
+		log.Printf("pg restore: ce308 query: %v", err)
+		return
+	}
+	var ceRestored int
+	var ceLast *ce308Snapshot
+	for i := range cePts {
+		select {
+		case <-stop.Done():
+			log.Printf("pg restore: остановлено по сигналу (CE308 восстановлено точек: %d)", ceRestored)
+			return
+		default:
+		}
+		snap := cePts[i]
+		ts, perr := time.Parse(time.RFC3339, snap.Timestamp)
+		if perr != nil {
+			continue
+		}
+		// Ключ месяца (ce308SeriesKey) приводим к локальной зоне, как живая запись.
+		ts = ts.In(time.Local)
+		if serr := store.SaveCE308History(snap, ts); serr != nil {
+			log.Printf("pg restore: ce308 save %s: %v", snap.Name, serr)
+			continue
+		}
+		cur := snap
+		ceLast = &cur
+		ceRestored++
+	}
+	if ceLast != nil {
+		if serr := store.SaveCE308Current(*ceLast); serr != nil {
+			log.Printf("pg restore: ce308 current: %v", serr)
+		}
+	}
+	log.Printf("pg restore: CE308 восстановлено точек: %d", ceRestored)
 }

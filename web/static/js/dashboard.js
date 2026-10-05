@@ -6,6 +6,9 @@ var showMap = document.body.dataset.showMap === '1';
 var showMeter = document.body.dataset.showMeter === '1';
 var showBMS = document.body.dataset.showBms === '1';
 var showCE308 = document.body.dataset.showCe308 === '1';
+// Режим ce308.final_readings_only: мгновенная телеметрия (текущие данные) не
+// собирается/не отдаётся — рамка скрыта шаблоном, /api/ce308/current не опрашиваем.
+var ce308Final = document.body.dataset.ce308Final === '1';
 
 // ---------- Утилиты ----------
 function esc(s){ return String(s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
@@ -192,39 +195,155 @@ var METER_PARAMS = [
 	['meter_export','Отдача (Export)','kWh',false,true],
 	['meter_total','Общая (Total)','kWh',false,true]
 ];
-// renderMeter строит HTML статистик плашки счётчика из его снимка (или «Нет данных»).
-// При устаревшем снэпшоте (> MTR_STALE_MS) оперативные значения выводятся как «—»,
-// накопленные (import/export/total) продолжают показываться.
-function renderMeter(meter){
+// METER_GROUPS — раскладка DDS238 (одна фаза) та же, что у гаража (DTS017M), но в
+// каждой строке по одной плашке: 1) напряжение/ток/частота; 2) активная/реактивная/
+// коэффициент мощности; 3) потребление/отдача/общая. Строки строятся по тегам
+// METER_PARAMS (единый источник подписей/единиц/признаков).
+var METER_BY_TAG = {};
+METER_PARAMS.forEach(function(p){ METER_BY_TAG[p[0]] = p; });
+var METER_GROUPS = [
+	[['meter_voltage'], ['meter_current'], ['meter_frequency']],
+	[['meter_active_power'], ['meter_reactive_power'], ['meter_power_factor']],
+	[['meter_import'], ['meter_export'], ['meter_total']]
+].map(function(group){
+	return group.map(function(row){
+		return row.map(function(tag){ return METER_BY_TAG[tag]; });
+	});
+});
+// DTS017_GROUPS — телеметрия счётчика DTS017M (гараж), сгруппированная в 3
+// вложенные рамки БЕЗ заголовков; внутри каждой строки — свой набор плашек:
+//  1) напряжения A,B,C → ниже токи A,B,C → ниже частоты A,B,C;
+//  2) активные мощности Σ,A,B,C → ниже реактивные → ниже коэффициент мощности;
+//  3) энергии: потребление → ниже отдача → ниже TOTAL.
+// Элемент — [тег, подпись, единица, знаковый, накопленный]. Знаковые мощности:
+// положительная — потребление, отрицательная — отдача.
+var DTS017_GROUPS = [
+	[
+		[['dts017_voltage_a','Напряжение A','V',false,false],
+		 ['dts017_voltage_b','Напряжение B','V',false,false],
+		 ['dts017_voltage_c','Напряжение C','V',false,false]],
+		[['dts017_current_a','Ток A','A',false,false],
+		 ['dts017_current_b','Ток B','A',false,false],
+		 ['dts017_current_c','Ток C','A',false,false]],
+		[['dts017_frequency_a','Частота A','Hz',false,false],
+		 ['dts017_frequency_b','Частота B','Hz',false,false],
+		 ['dts017_frequency_c','Частота C','Hz',false,false]]
+	],
+	[
+		[['dts017_active_power_a','Активная мощность A','W',true,false],
+		 ['dts017_active_power_b','Активная мощность B','W',true,false],
+		 ['dts017_active_power_c','Активная мощность C','W',true,false],
+		 ['dts017_active_power','Активная мощность (Σ)','W',true,false]],
+		[['dts017_reactive_power_a','Реактивная мощность A','var',true,false],
+		 ['dts017_reactive_power_b','Реактивная мощность B','var',true,false],
+		 ['dts017_reactive_power_c','Реактивная мощность C','var',true,false],
+		 ['dts017_reactive_power','Реактивная мощность (Σ)','var',true,false]],
+		[['dts017_power_factor_a','Коэффициент мощности A','',false,false],
+		 ['dts017_power_factor_b','Коэффициент мощности B','',false,false],
+		 ['dts017_power_factor_c','Коэффициент мощности C','',false,false],
+		 ['dts017_power_factor','Коэффициент мощности (Σ)','',false,false]]
+	],
+	[
+		[['dts017_import','Потребление (Import)','kWh',false,true]],
+		[['dts017_export','Отдача (Export)','kWh',false,true]],
+		[['dts017_total','Общая (Total)','kWh',false,true]]
+	]
+];
+// DTS017_STALE_MS — окно «молчания» DTS017M (опрос ~1 с): устаревшие оперативные
+// значения выводятся прочерком, накопленные энергии — продолжают показываться.
+var DTS017_STALE_MS=20*1000;
+// statHtml строит HTML одной плашки по параметру [тег, подпись, единица, знаковый,
+// накопленный] и снимку values. При устаревшем снимке оперативные значения — «—»,
+// накопленные продолжают показываться.
+function statHtml(p, values, stale){
+	var tag=p[0], lbl=p[1], unit=p[2], signed=p[3], cumulative=p[4];
+	var raw=values? values[tag] : undefined;
+	if((stale && !cumulative) || raw===undefined || raw===null){
+		return '<div class="meter-stat"><div class="lbl">'+esc(lbl)+'</div><div class="val off">—</div></div>';
+	}
+	var n=Number(raw), cls='val', txt;
+	if(isFinite(n)){
+		txt=n.toLocaleString('ru-RU',{maximumFractionDigits:2});
+		// Инверсия цвета мощностей: положительная (потребление) — красная (neg),
+		// отрицательная (отдача в сеть) — зелёная (pos).
+		if(signed){ cls+=' '+(n<0?' pos':' neg'); }
+	}else{
+		cls+=' off'; txt='—';
+	}
+	return '<div class="meter-stat"><div class="lbl">'+esc(lbl)+'</div><div class="'+cls+'">'+esc(txt)+
+	   (unit?' <span class="unit">'+esc(unit)+'</span>':'')+'</div></div>';
+}
+// groupTableHtml строит таблицу одной вложенной рамки: строки rows, значения values.
+function groupTableHtml(rows, values, stale){
+	var h='<table class="stat-table">';
+	for(var r=0;r<rows.length;r++){
+		h+='<tr>';
+		for(var i=0;i<rows[r].length;i++) h+='<td>'+statHtml(rows[r][i], values, stale)+'</td>';
+		h+='</tr>';
+	}
+	return h+'</table>';
+}
+// groupBoxHtml — вложенная рамка (необязательный заголовок) с одной таблицей.
+function groupBoxHtml(rows, values, stale, title){
+	return '<div class="stat-group">'+(title?'<div class="stat-group-title">'+esc(title)+'</div>':'')+
+		groupTableHtml(rows, values, stale)+'</div>';
+}
+// renderGroupedStats рисует плашки снимка {timestamp, values} вложенными рамками:
+// groups — массив рамок, каждая рамка — массив строк, строка — массив параметров.
+// Табличная раскладка: ширина плашек в столбце выравнивается по самой широкой ячейке
+// столбца (table-layout по содержимому). Используется DTS017M (гараж).
+function renderGroupedStats(statsId, tsId, snap, groups, staleMs){
+	var stats=document.getElementById(statsId);
+	if(!stats) return;
+	if(!snap){ stats.innerHTML='<span class="missing">Нет данных</span>'; return; }
+	var ts=document.getElementById(tsId);
+	if(ts) ts.textContent=snap.timestamp? 'Актуально: '+fmtSec(snap.timestamp) : '—';
+	var t=(snap.timestamp)? new Date(snap.timestamp).getTime() : NaN;
+	var stale=!isFinite(t) || (Date.now()-t)>staleMs;
+	var h='';
+	for(var g=0; g<groups.length; g++) h+=groupBoxHtml(groups[g], snap.values, stale, '');
+	stats.innerHTML=h;
+}
+// MERCURY_GROUPS — раскладка вложенной рамки «Меркурий — прогноз»: 2 столбца
+// (Импорт/Экспорт) × 2 строки (День/Ночь), значения — прогноз с /api/current.
+var MERCURY_TITLE='Меркурий — прогноз';
+function mercuryGroupHtml(merc){
+	if(!merc) return '';
+	var vals={
+		mercury_import_day:merc.import_day, mercury_import_night:merc.import_night,
+		mercury_export_day:merc.export_day, mercury_export_night:merc.export_night
+	};
+	var rows=[
+		[['mercury_import_day','Импорт · День','kWh',false,true],['mercury_export_day','Экспорт · День','kWh',false,true]],
+		[['mercury_import_night','Импорт · Ночь','kWh',false,true],['mercury_export_night','Экспорт · Ночь','kWh',false,true]]
+	];
+	return groupBoxHtml(rows, vals, false, MERCURY_TITLE);
+}
+// renderMeter — статистики счётчика DDS238 (дом) из снимка устройства + вложенная
+// рамка «Меркурий — прогноз» (из top-level data.mercury, если раздел настроен).
+function renderMeter(meter, mercury){
 	var stats=document.getElementById('meterStats');
 	if(!stats) return;
 	if(!meter){ stats.innerHTML='<span class="missing">Нет данных</span>'; return; }
 	var ts=document.getElementById('meterTs');
 	if(ts) ts.textContent=meter.timestamp? 'Актуально: '+fmtSec(meter.timestamp) : '—';
-	// Свежесть снэпшота счётчика (0.02 окна — только для оперативных плашек).
 	var t=(meter.timestamp)? new Date(meter.timestamp).getTime() : NaN;
 	var stale=!isFinite(t) || (Date.now()-t)>MTR_STALE_MS;
 	var h='';
-	for(var i=0;i<METER_PARAMS.length;i++){
-		var t=METER_PARAMS[i][0], lbl=METER_PARAMS[i][1], unit=METER_PARAMS[i][2], signed=METER_PARAMS[i][3], cumulative=METER_PARAMS[i][4];
-		var raw=meter.values? meter.values[t] : undefined;
-		// Оперативное значение при устаревшем снэпшоте данных не имеем — «—».
-		if(stale && !cumulative){ h+='<div class="meter-stat"><div class="lbl">'+esc(lbl)+'</div><div class="val off">—</div></div>'; continue; }
-		if(raw===undefined||raw===null){ h+='<div class="meter-stat"><div class="lbl">'+esc(lbl)+'</div><div class="val off">—</div></div>'; continue; }
-		var n=Number(raw);
-		var cls='val', txt;
-		if(isFinite(n)){
-			txt=n.toLocaleString('ru-RU',{maximumFractionDigits:2});
-			// Инверсия цвета мощностей: положительная (потребление) — красная (neg),
-			// отрицательная (отдача в сеть) — зелёная (pos).
-			if(signed){ cls+=' '+(n<0?' pos':' neg'); }
-		}else{
-			cls+=' off'; txt='—';
-		}
-		h+='<div class="meter-stat"><div class="lbl">'+esc(lbl)+'</div><div class="'+cls+'">'+esc(txt)+
-		   (unit?' <span class="unit">'+esc(unit)+'</span>':'')+'</div></div>';
-	}
+	for(var g=0; g<METER_GROUPS.length; g++) h+=groupBoxHtml(METER_GROUPS[g], meter.values, stale, '');
+	h+=mercuryGroupHtml(mercury);
 	stats.innerHTML=h;
+}
+// renderDts017 — статистики счётчика DTS017M (гараж) из /api/dts017m/current.
+function renderDts017(snap){ renderGroupedStats('dts017Stats','dts017Ts',snap,DTS017_GROUPS,DTS017_STALE_MS); }
+// tickDts017 — раз в секунду тянет текущий снимок DTS017M и рисует рамку (если она
+// есть на странице, т.е. раздел dts017m активен).
+function tickDts017(){
+	if(!document.getElementById('dts017Stats')) return;
+	if(window.srRefresh && !window.srRefresh.isEnabled()) return;
+	fetch('/api/dts017m/current').then(function(r){ return r.ok? r.json(): null; })
+		.then(function(snap){ renderDts017(snap); })
+		.catch(function(){});
 }
 // invPlatesSig — подпись набора размещений, по которой решаем, нужно ли пересобирать
 // плашки рамки «Мощности инверторов» (при смене набора). Значения обновляются в tick
@@ -316,16 +435,14 @@ function renderCE308Energy(snap){
 	var ts=document.getElementById('ce308EnTs');
 	if(ts) ts.textContent = (snap && snap.timestamp) ? ('Актуально: '+fmtSec(snap.timestamp)) : 'Актуально: —';
 	var s=snap||{};
-	// Значения в ячейках карточек (День/Ночь × А+/А− и R+/R−) — левые подписи-надписи
+	// Значения в ячейках карточек (День/Ночь × А+/А−) — левые подписи-надписи
 	// заданы в HTML (.ce308-lbl), здесь только числа (целочисленный формат + «,—»).
+	// Показывается только активная энергия (реактивная из рамки убрана).
 	var set=function(id, v){ var el=document.getElementById(id); if(el) el.textContent=ce308Fmt(v); };
 	set('ce308AtcDay', s.active_consumption_day);  set('ce308AtcNight', s.active_consumption_night);
 	set('ce308AtdDay', s.active_delivery_day);     set('ce308AtdNight', s.active_delivery_night);
-	set('ce308RtcDay', s.reactive_consumption_day); set('ce308RtcNight', s.reactive_consumption_night);
-	set('ce308RtdDay', s.reactive_delivery_day);    set('ce308RtdNight', s.reactive_delivery_night);
-	// Итоги по каждому виду энергии (потребление/отдача за день+ночь).
+	// Итоги по активной энергии (потребление/отдача за день+ночь).
 	set('ce308AtcTotal', s.active_consumption_total); set('ce308AtdTotal', s.active_delivery_total);
-	set('ce308RtcTotal', s.reactive_consumption_total); set('ce308RtdTotal', s.reactive_delivery_total);
 }
 // Ограничение частоты ручного снимка энергии: кнопка «Обновить» не чаще раза в
 // 5 минут (совпадает с бэкендом, POST /api/ce308/energy → 429 при частом нажатии).
@@ -347,8 +464,11 @@ function ce308RefreshReserve(){
 async function tickCE308(){
 	if(!showCE308 || (window.srRefresh && !window.srRefresh.isEnabled())) return;
 	try{
-		var r=await fetch('/api/ce308/current');
-		if(r.ok) renderCE308Current(await r.json());
+		// В режиме final_readings_only текущих данных нет — только показания.
+		if(!ce308Final){
+			var r=await fetch('/api/ce308/current');
+			if(r.ok) renderCE308Current(await r.json());
+		}
 		var re=await fetch('/api/ce308/energy');
 		if(re.ok) renderCE308Energy(await re.json());
 	}catch(e){}
@@ -379,6 +499,8 @@ async function tick(){
 		// Электросчётчик CE308 (текущие данные + показания) — опрашивается тем же
 		// ежесекундным циклом спойлера «Детальные данные» (свои /api/ce308/*).
 		tickCE308();
+		// Гаражный счётчик DTS017M — отдельный /api/dts017m/current.
+		tickDts017();
 		var r=await fetch('/api/current');
 		if(!r.ok) return;
 		var data=await r.json();
@@ -428,7 +550,7 @@ async function tick(){
 			// Плашка электросчётчика (вверху).
 			var meter=null;
 			for(var i=0;i<data.devices.length;i++) if(isMeterDevice(data.devices[i])){ meter=data.devices[i]; break; }
-			renderMeter(meter);
+			renderMeter(meter, data.mercury);
 		}
 		var cards=document.getElementById('cards');
 		cards.innerHTML = renderPivot(data.devices);
@@ -500,8 +622,10 @@ if(window.srRefresh){ window.srRefresh.register(bmsStart, bmsStop); }
 bmsStart();
 
 // ---------- Спойлеры и опрос данных ----------
-// Спойлеры (Дом / Гараж / Детальные данные): открытость храним на клиенте
-// (localStorage) и восстанавливаем при загрузке. Ключ — data-spoil элемента.
+// Спойлеры (Дом / Гараж / Детальные данные / Потребление-Отдача): открытость
+// храним на клиенте (localStorage) и восстанавливаем при загрузке. Ключ — data-spoil
+// элемента. Элемент с data-spoil-always-closed всегда свёрнут при загрузке
+// (открытость не сохраняется) — так ведёт себя блок тарифов.
 // Помимо видимости, состояние спойлера управляет опросом API: замкнутый спойлер НЕ
 // опрашивает свои данные (не дёргает API); при открытии выполняется один немедленный
 // опрос, далее — по собственному графику (интервалу), и только пока спойлер открыт.
@@ -561,13 +685,18 @@ function initSpoilers(){
       var spoiler=head.parentElement;
       var key=spoiler.getAttribute('data-spoil');
       if(!key) return;
-      if(localStorage.getItem('sunr.spoil.'+key)==='1'){
+      // data-spoil-always-closed: не восстанавливаем открытость из localStorage
+      // (и не сохраняем её) — такой спойлер всегда свёрнут при загрузке страницы.
+      var alwaysClosed=spoiler.hasAttribute('data-spoil-always-closed');
+      if(!alwaysClosed && localStorage.getItem('sunr.spoil.'+key)==='1'){
         spoiler.classList.add('open');
         srSpoilers.toggle(key); // восстановленный открытым спойлер сразу опрашивается
       }
       head.addEventListener('click', function(){
         spoiler.classList.toggle('open');
-        localStorage.setItem('sunr.spoil.'+key, spoiler.classList.contains('open')?'1':'0');
+        if(!alwaysClosed){
+          localStorage.setItem('sunr.spoil.'+key, spoiler.classList.contains('open')?'1':'0');
+        }
         srSpoilers.toggle(key);
       });
     })(heads[i]);

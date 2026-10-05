@@ -6,6 +6,40 @@ function fmtSec(t){ var d=new Date(t); function p(x){return (x<10?'0':'')+x;} re
 function startOfToday(){ var d=new Date(); d.setHours(0,0,0,0); return d; }
 function endOfToday(){ var d=new Date(); d.setHours(23,59,59,999); return d; }
 
+// ---------- Состав устройств и заголовки графиков ----------
+// Флаги — из data-атрибутов страницы (см. charts.html). Заголовки графиков
+// напряжений/мощностей собираются динамически: DDS238, CE308 (только в обычном
+// режиме, не final_readings_only) и DTS017M (если его опрос включён).
+var showMeter = document.body.dataset.showMeter === '1';
+var showCE308 = document.body.dataset.showCe308 === '1';
+var ce308Final = document.body.dataset.ce308Final === '1';
+var showDTS017 = document.body.dataset.showDts017 === '1';
+function tr(s){ return (window.SR_i18n && window.SR_i18n.t) ? window.SR_i18n.t(s) : s; }
+function composeChartTitles(){
+	var vEl=document.getElementById('gridVChartTitle');
+	if(vEl){
+		var v=tr('Напряжения сети и батареи (МАП), V');
+		if(showMeter) v+=tr(' + напряжение DDS238');
+		if(showCE308 && !ce308Final) v+=tr(' + напряжение CE308');
+		if(showDTS017) v+=tr(' + напряжение DTS017M (3 фазы)');
+		vEl.textContent=v;
+	}
+	var pEl=document.getElementById('gridPChartTitle');
+	if(pEl){
+		var p=tr('Мощности сети и батареи (МАП), W');
+		if(showMeter) p+=tr(' + активная мощность DDS238');
+		if(showCE308 && !ce308Final) p+=tr(' + активная мощность CE308');
+		if(showDTS017) p+=tr(' + активные мощности DTS017M (3 фазы + Σ)');
+		pEl.textContent=p;
+	}
+}
+document.addEventListener('DOMContentLoaded', function(){
+	composeChartTitles();
+	// Пересобираем заголовки при смене языка (i18n-селектор создаётся в i18n.js).
+	var sel=document.getElementById('langSelect');
+	if(sel) sel.addEventListener('change', composeChartTitles);
+});
+
 // ---------- Графики ----------
 Chart.register(ChartZoom);
 
@@ -406,7 +440,7 @@ function buildGridVChart(data){
 		{ label:'Напряжение батареи', data:bat, borderColor:'#d9534f', backgroundColor:'#d9534f',
 		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false,
 		  yAxisID:'y1' },
-		{ label:'Напряжение счётчика', data:meter, borderColor:'#6b7785', backgroundColor:'#6b7785',
+		{ label:'Напряжение DDS238', data:meter, borderColor:'#6b7785', backgroundColor:'#6b7785',
 		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false }
 	];
 	// Фазные напряжения CE308 (опрос по BLE) — на левую ось (как напряжение сети).
@@ -417,6 +451,18 @@ function buildGridVChart(data){
 	  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false });
 	addIfPts({ label:'CE308 L3', data:ce3, borderColor:'#7048e8', backgroundColor:'#7048e8',
 	  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false });
+	// Фазные напряжения DTS017M (Modbus, опрос включён) — на левую ось.
+	if(showDTS017){
+		addIfPts({ label:'DTS017M L1', data:(data.dts017_voltage_a||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; }),
+		  borderColor:'#1098ad', backgroundColor:'#1098ad',
+		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false });
+		addIfPts({ label:'DTS017M L2', data:(data.dts017_voltage_b||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; }),
+		  borderColor:'#f59f00', backgroundColor:'#f59f00',
+		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false });
+		addIfPts({ label:'DTS017M L3', data:(data.dts017_voltage_c||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; }),
+		  borderColor:'#ae3ec9', backgroundColor:'#ae3ec9',
+		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false });
+	}
 	renderChart('gridVChart', datasets, chartOpts(true,'V',{
 		scales:{ y1:{ type:'linear', position:'right', beginAtZero:false, title:{display:true, text:'Напряжение батареи, V'} } }
 	}));
@@ -447,13 +493,25 @@ function buildGridPChart(data){
 		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false },
 		{ label:'Мощность дома', data:house, borderColor:'#f08c00', backgroundColor:'#f08c00',
 		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false },
-		{ label:'Мощность счётчика (активная)', data:meter, borderColor:'#6b7785', backgroundColor:'#6b7785',
+		{ label:'Мощность DDS238 (активная)', data:meter, borderColor:'#6b7785', backgroundColor:'#6b7785',
 		  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.2, cubicInterpolationMode:'monotone', fill:false }
 	];
 	// Суммарная активная мощность CE308 (опрос по BLE). Линия добавляется только
 	// при наличии точек (счётчик мог быть не настроен/не опрошен).
 	if(ce308.length) datasets.push({ label:'CE308 (активная, Σ)', data:ce308, borderColor:'#e64980', backgroundColor:'#e64980',
 	  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false });
+	// Активные мощности DTS017M (Modbus, опрос включён): 3 фазы + Σ.
+	if(showDTS017){
+		function dtsP(key,color){
+			datasets.push({ label:key.label, data:(data[key.field]||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; }),
+			  borderColor:color, backgroundColor:color,
+			  pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false });
+		}
+		dtsP({label:'DTS017M L1', field:'dts017_active_power_a'}, '#1098ad');
+		dtsP({label:'DTS017M L2', field:'dts017_active_power_b'}, '#f59f00');
+		dtsP({label:'DTS017M L3', field:'dts017_active_power_c'}, '#ae3ec9');
+		dtsP({label:'DTS017M Σ',  field:'dts017_active_power'},   '#e8590c');
+	}
 	renderChart('gridPChart', datasets, chartOpts(true,'W'));
 	lgKit('gridPChart','gridPChartLg').build(window.gridPChart);
 	return window.gridPChart;

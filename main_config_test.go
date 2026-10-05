@@ -142,6 +142,47 @@ func TestLoadConfigPollRequired(t *testing.T) {
 	}
 }
 
+// TestLoadConfigCE308FinalReadingsOnly: final_readings_only обязателен в разделе
+// ce308; оба значения корректно парсятся в ce308Config.
+func TestLoadConfigCE308FinalReadingsOnly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cfg.json")
+	poll := `"poll":{"inverter":10,"map":1,"meter":1,"ce308":5,"antbms":1,"enbms":3}`
+	base := `"ce308":{"disabled":false,"mac":"AA:BB:CC:DD:EE:FF","pin":"000000"`
+
+	// Поле отсутствует — ошибка загрузки конфига.
+	if err := os.WriteFile(path, []byte(`{`+poll+`,"dashboard_port":8080,`+base+`}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, _, _, _, _, err := loadConfig(path); err == nil || !strings.Contains(err.Error(), "final_readings_only") {
+		t.Fatalf("без final_readings_only ожидали ошибку, got %v", err)
+	}
+
+	// false — обычный режим.
+	if err := os.WriteFile(path, []byte(`{`+poll+`,"dashboard_port":8080,`+base+`,"final_readings_only":false}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, _, _, ce, _, _, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("final_readings_only=false: %v", err)
+	}
+	if ce == nil || ce.FinalReadingsOnly {
+		t.Fatalf("ce=%+v, want непустой с FinalReadingsOnly=false", ce)
+	}
+
+	// true — режим «только итоговые показания».
+	if err := os.WriteFile(path, []byte(`{`+poll+`,"dashboard_port":8080,`+base+`,"final_readings_only":true}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, _, _, ce, _, _, err = loadConfig(path)
+	if err != nil {
+		t.Fatalf("final_readings_only=true: %v", err)
+	}
+	if ce == nil || !ce.FinalReadingsOnly {
+		t.Fatalf("ce=%+v, want FinalReadingsOnly=true", ce)
+	}
+}
+
 // TestDefaultPGRestoreWindow — дефолт и разбор из конфига.
 func TestDefaultPGRestoreWindow(t *testing.T) {
 	if got := defaultPGRestoreWindow(nil); got != 30*24*time.Hour {

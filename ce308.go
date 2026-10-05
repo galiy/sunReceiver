@@ -41,8 +41,16 @@ type ce308Section struct {
 	// MAC — BD_ADDR счётчика (адрес для BLE-подключения).
 	MAC string `json:"mac"`
 	// PIN — BLE-PIN (код доступа радиоинтерфейса, 6 цифр) для спаривания.
-	PIN      string `json:"pin"`
-	Disabled *bool  `json:"disabled"`
+	PIN string `json:"pin"`
+	// Disabled — ОБЯЗАТЕЛЬНОЕ поле: false — счётчик опрашивается; true — опрос
+	// CE308 отключён.
+	Disabled *bool `json:"disabled"`
+	// FinalReadingsOnly — ОБЯЗАТЕЛЬНОЕ поле. false — обычный режим (постоянное
+	// BLE-соединение, телеметрия в Redis/PG). true — режим «только итоговые
+	// показания»: пулер не держит соединение и не пишет телеметрию, а раз в
+	// 30 минут (или по кнопке с дашборда) однократно снимает накопленную
+	// энергию (панель «показания») и отключается.
+	FinalReadingsOnly *bool `json:"final_readings_only"`
 }
 
 // ce308Config — проверенный конфиг CE308 (только активная ветка).
@@ -50,6 +58,8 @@ type ce308Config struct {
 	Name string
 	MAC  string
 	PIN  string
+	// FinalReadingsOnly — см. ce308Section.FinalReadingsOnly.
+	FinalReadingsOnly bool
 }
 
 // Теги мгновенных значений CE308 в valuesContract. Единица зашита в суффикс:
@@ -260,10 +270,16 @@ type ce308EnergySnapshot struct {
 	ReactiveDeliveryTotal    float64 `json:"reactive_delivery_total"`
 }
 
-// readCE308Energy читает накопления энергии. Команды ENDzz() возвращают
-// ENDzz(дата,сумма)(T1)(T2)(T3…); сумма = сумма ВСЕХ тарифных групп. Виды энергии (zz):
-// 01 — активная потребление A+, 02 — активная отдача A−, 03 — реактивная
-// потребление R+, 04 — реактивная отдача R−. Тарифы: T1 = день, T2 = ночь.
+// readCE308Energy читает текущие накопления энергии. Используем EMDzz(0.0,FF) —
+// суточный архив по индексу i=0 (текущая фиксация НА): ответ содержит ТОЛЬКО
+// текущий блок, он малый (влезает в лимит 15 фрагментов) и приходит быстро.
+// Команда ENDzz() без аргументов отдаёт весь архив (~25 c на команду, обрезается
+// на 15 фрагментах) — медленно и нестабильно (прибор рвёт связь), поэтому здесь
+// не используется.
+// Формат ответа тот же: EMDzz(дата,сумма)(T1)(T2)(T3…); сумма = сумма ВСЕХ
+// тарифных групп. Виды энергии (zz): 01 — активная потребление A+, 02 — активная
+// отдача A−, 03 — реактивная потребление R+, 04 — реактивная отдача R−.
+// Тарифы: T1 = день, T2 = ночь.
 func readCE308Energy(m *ce308Meter) (*ce308EnergySnapshot, error) {
 	snap := &ce308EnergySnapshot{}
 	type item struct {
@@ -271,13 +287,13 @@ func readCE308Energy(m *ce308Meter) (*ce308EnergySnapshot, error) {
 		day, night, total *float64
 	}
 	items := []item{
-		{"END01()", &snap.ActiveConsumptionDay, &snap.ActiveConsumptionNight, &snap.ActiveConsumptionTotal},
-		{"END02()", &snap.ActiveDeliveryDay, &snap.ActiveDeliveryNight, &snap.ActiveDeliveryTotal},
-		{"END03()", &snap.ReactiveConsumptionDay, &snap.ReactiveConsumptionNight, &snap.ReactiveConsumptionTotal},
-		{"END04()", &snap.ReactiveDeliveryDay, &snap.ReactiveDeliveryNight, &snap.ReactiveDeliveryTotal},
+		{"EMD01(0.0,FF)", &snap.ActiveConsumptionDay, &snap.ActiveConsumptionNight, &snap.ActiveConsumptionTotal},
+		{"EMD02(0.0,FF)", &snap.ActiveDeliveryDay, &snap.ActiveDeliveryNight, &snap.ActiveDeliveryTotal},
+		{"EMD03(0.0,FF)", &snap.ReactiveConsumptionDay, &snap.ReactiveConsumptionNight, &snap.ReactiveConsumptionTotal},
+		{"EMD04(0.0,FF)", &snap.ReactiveDeliveryDay, &snap.ReactiveDeliveryNight, &snap.ReactiveDeliveryTotal},
 	}
 	for _, it := range items {
-		s, err := m.Read(it.cmd)
+		s, err := readCE308WithRetries(m, it.cmd)
 		if err != nil {
 			return nil, err
 		}
@@ -300,7 +316,13 @@ func parseCE308End(cmd, resp string) (day, night, total float64, err error) {
 	// только ПЕРВЫЙ блок (актуальный снимок): обрезаем ответ по началу следующего
 	// ENDzz(. Иначе дата следующего блока ("23.09.26,7348.28…") попадает в тарифы и
 	// парсинг падает с «нечисловой тариф».
-	prefix := strings.TrimSuffix(cmd, "()") + "("
+	// Имя команды до первой «(» — тег ответа (END01, EMD01, …). Работает и для
+	// команд с аргументами: EMD01(0.0,FF) -> «EMD01(».
+	name := cmd
+	if i := strings.IndexByte(name, '('); i >= 0 {
+		name = name[:i]
+	}
+	prefix := name + "("
 	if i := strings.Index(resp, prefix); i >= 0 {
 		tail := resp[i+len(prefix):]
 		if j := strings.Index(tail, prefix); j >= 0 {
@@ -376,7 +398,8 @@ func ce308ConfigFromSection(s *ce308Section) (*ce308Config, error) {
 	if name == "" {
 		name = "CE308 " + s.MAC
 	}
-	return &ce308Config{Name: name, MAC: s.MAC, PIN: s.PIN}, nil
+	finalOnly := s.FinalReadingsOnly != nil && *s.FinalReadingsOnly
+	return &ce308Config{Name: name, MAC: s.MAC, PIN: s.PIN, FinalReadingsOnly: finalOnly}, nil
 }
 
 // describeCE308Config — строка-описание конфига для лога.
@@ -384,7 +407,11 @@ func describeCE308Config(c *ce308Config) string {
 	if c == nil {
 		return ""
 	}
-	return fmt.Sprintf("%s (MAC %s)", c.Name, c.MAC)
+	mode := "обычный"
+	if c.FinalReadingsOnly {
+		mode = "только итоговые показания (раз в 30 мин / по кнопке)"
+	}
+	return fmt.Sprintf("%s (MAC %s) — режим: %s", c.Name, c.MAC, mode)
 }
 
 // ce308Timestamp возвращает время актуальности (момент снятия) снимка в RFC3339.

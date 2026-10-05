@@ -80,6 +80,10 @@ snap)` (PIPELINE/TxPipeline). `SaveSnapshot` пишет **каждое** сня�
 - `ensureSchema`/`ensureMeterTariffSchema` — создание `averages` и `daily_tariffs`.
 - Тарифы счётчика: `DailyTariffsRange`, `StoreMeterBoundary` — см.
   [dds238-meter.md](../dds238-meter.md).
+- Счётчик DTS017M: **обособленные** ключи/ряд Redis (`sunreceiver:dts017m:current`,
+  `sunreceiver:dts017m:series:*`) и таблицы PG (`dts017m_averages`,
+  `dts017m_daily_tariffs`), отдельный аккумулятор; общие ключи/таблицы DDS238 не
+  используются — [dts017m-meter.md](../dts017m-meter.md).
 - Счётчик в `averages` идентифицируется единым стабильным ключом `dds238` (колонка
   `ip`), не зависящим от адреса; однократная миграция — `migrateMeterDeviceKey`
   (`meter_migrate.go`).

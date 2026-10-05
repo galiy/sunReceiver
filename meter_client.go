@@ -42,10 +42,21 @@ type meterClient struct {
 	Address string // host:port
 	Unit    byte   // Modbus-адрес устройства (обычно 1)
 	RTU     bool   // true — Modbus RTU поверх TCP (прозрачный шлюз)
+	// Func — код функции чтения (0x03 holding / 0x04 input). 0 = 0x03 по
+	// умолчанию (DDS238). Счётчик DTS017M документирован под 0x04.
+	Func byte
 
 	mu   sync.Mutex
 	conn net.Conn
 	txn  uint16
+}
+
+// fn возвращает код функции чтения: Func, если задан, иначе 0x03.
+func (c *meterClient) fn() byte {
+	if c.Func == 0 {
+		return 0x03
+	}
+	return c.Func
 }
 
 // newMeterClient создаёт клиент к хост:port с Modbus-адресом unit.
@@ -138,6 +149,169 @@ func (c *meterClient) ReadHoldingRegisters(ctx context.Context, start, count uin
 	return c.readTCPLocked(ctx, start, count)
 }
 
+// WriteMultipleRegisters записывает values (uint16, big-endian) в holding-регистры,
+// начиная с start, функцией 0x10. Транспорт — как у чтения (TCP/RTU). Используется
+// для коррекции времени счётчика DTS017M (регистр 0x0210).
+func (c *meterClient) WriteMultipleRegisters(ctx context.Context, start uint16, values []uint16) error {
+	if len(values) == 0 {
+		return fmt.Errorf("meter: пустой блок записи")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn == nil {
+		if err := c.dial(ctx); err != nil {
+			return err
+		}
+	}
+	if c.RTU {
+		return c.writeRTULocked(ctx, start, values)
+	}
+	return c.writeTCPLocked(ctx, start, values)
+}
+
+// writeTCPLocked выполняет запись Modbus TCP (MBAP + PDU, функция 0x10).
+func (c *meterClient) writeTCPLocked(ctx context.Context, start uint16, values []uint16) error {
+	count := uint16(len(values))
+	dataLen := 2 * len(values)
+	// MBAP length = unit(1) + func(1) + start(2) + count(2) + bytecount(1) + data.
+	respLenField := 7 + dataLen
+	req := make([]byte, 0, 12+dataLen)
+	req = binary.BigEndian.AppendUint16(req, c.nextTxn())
+	req = binary.BigEndian.AppendUint16(req, 0) // protocol
+	req = binary.BigEndian.AppendUint16(req, uint16(respLenField))
+	req = append(req, c.Unit, 0x10)
+	req = binary.BigEndian.AppendUint16(req, start)
+	req = binary.BigEndian.AppendUint16(req, count)
+	req = append(req, byte(dataLen))
+	for _, v := range values {
+		req = binary.BigEndian.AppendUint16(req, v)
+	}
+	if err := c.writeReqLocked(ctx, req); err != nil {
+		return err
+	}
+
+	txn := binary.BigEndian.Uint16(req[:2])
+	hdr := make([]byte, 7)
+	if _, err := modbusmap.ReadFull(c.conn, hdr); err != nil {
+		c.closeConn()
+		return fmt.Errorf("meter write read header: %w", err)
+	}
+	if got := binary.BigEndian.Uint16(hdr[0:2]); got != txn {
+		c.closeConn()
+		return fmt.Errorf("meter write: несовпадение transaction id: ожидался %d, получен %d", txn, got)
+	}
+	if binary.BigEndian.Uint16(hdr[2:4]) != 0 {
+		c.closeConn()
+		return fmt.Errorf("meter write: protocol != 0 в MBAP")
+	}
+	if hdr[6] != c.Unit {
+		c.closeConn()
+		return fmt.Errorf("meter write: несовпадение unit id: ожидался %d, получен %d", c.Unit, hdr[6])
+	}
+	mbLen := int(binary.BigEndian.Uint16(hdr[4:6]))
+	if mbLen < 3 {
+		c.closeConn()
+		return fmt.Errorf("meter write: некорректный MBAP length=%d (минимум 3)", mbLen)
+	}
+	rest := make([]byte, mbLen-1) // минус unit id
+	if _, err := modbusmap.ReadFull(c.conn, rest); err != nil {
+		c.closeConn()
+		return fmt.Errorf("meter write read pdu: %w", err)
+	}
+	if rest[0]&0x80 != 0 {
+		return fmt.Errorf("meter write: modbus exception func=0x%02X code=0x%02X", rest[0], rest[1])
+	}
+	// Ответ на fn10: unit + func + start(2) + count(2) = length 6.
+	if mbLen != 6 {
+		c.closeConn()
+		return fmt.Errorf("meter write: некорректный MBAP length=%d, ждали 6", mbLen)
+	}
+	if rest[0] != 0x10 {
+		c.closeConn()
+		return fmt.Errorf("meter write: неожиданная функция 0x%02X", rest[0])
+	}
+	if got := binary.BigEndian.Uint16(rest[1:3]); got != start {
+		c.closeConn()
+		return fmt.Errorf("meter write: эхо start=%d, ждали %d", got, start)
+	}
+	if got := binary.BigEndian.Uint16(rest[3:5]); got != count {
+		c.closeConn()
+		return fmt.Errorf("meter write: эхо count=%d, ждали %d", got, count)
+	}
+	return nil
+}
+
+// writeRTULocked выполняет запись Modbus RTU поверх TCP (unit + PDU + CRC16).
+func (c *meterClient) writeRTULocked(ctx context.Context, start uint16, values []uint16) error {
+	c.drainLocked()
+	count := uint16(len(values))
+	dataLen := 2 * len(values)
+	req := make([]byte, 0, 9+dataLen)
+	req = append(req, c.Unit, 0x10)
+	req = binary.BigEndian.AppendUint16(req, start)
+	req = binary.BigEndian.AppendUint16(req, count)
+	req = append(req, byte(dataLen))
+	for _, v := range values {
+		req = binary.BigEndian.AppendUint16(req, v)
+	}
+	crc := solarman.CRC16Modbus(req)
+	req = append(req, byte(crc), byte(crc>>8))
+
+	if err := c.writeReqLocked(ctx, req); err != nil {
+		return err
+	}
+
+	// Ответ: unit, func, start(2), count(2), CRC(2) = 8 байт (или exception).
+	hdr := make([]byte, 3)
+	if _, err := modbusmap.ReadFull(c.conn, hdr); err != nil {
+		c.closeConn()
+		return fmt.Errorf("meter write rtu read header: %w", err)
+	}
+	if hdr[0] != c.Unit {
+		c.closeConn()
+		return fmt.Errorf("meter write rtu: несовпадение unit id: ожидался %d, получен %d", c.Unit, hdr[0])
+	}
+	if hdr[1]&0x80 != 0 {
+		tail := make([]byte, 2)
+		if _, err := modbusmap.ReadFull(c.conn, tail); err != nil {
+			c.closeConn()
+			return fmt.Errorf("meter write rtu read exception crc: %w", err)
+		}
+		frame := append(hdr, tail...)
+		if !meterRTUCRCOK(frame) {
+			c.closeConn()
+			return fmt.Errorf("meter write rtu: некорректный CRC16 в exception-кадре")
+		}
+		return fmt.Errorf("meter write: modbus exception func=0x%02X code=0x%02X", hdr[1], hdr[2])
+	}
+	if hdr[1] != 0x10 {
+		c.closeConn()
+		return fmt.Errorf("meter write rtu: неожиданная функция 0x%02X", hdr[1])
+	}
+	// hdr[2] — старший байт start; дочитываем start lo, count hi/lo, CRC(2).
+	rest := make([]byte, 5)
+	if _, err := modbusmap.ReadFull(c.conn, rest); err != nil {
+		c.closeConn()
+		return fmt.Errorf("meter write rtu read data: %w", err)
+	}
+	frame := append(hdr, rest...)
+	if !meterRTUCRCOK(frame) {
+		c.closeConn()
+		return fmt.Errorf("meter write rtu: некорректный CRC16")
+	}
+	gotStart := binary.BigEndian.Uint16([]byte{hdr[2], rest[0]})
+	gotCount := binary.BigEndian.Uint16(rest[1:3])
+	if gotStart != start {
+		c.closeConn()
+		return fmt.Errorf("meter write rtu: эхо start=%d, ждали %d", gotStart, start)
+	}
+	if gotCount != count {
+		c.closeConn()
+		return fmt.Errorf("meter write rtu: эхо count=%d, ждали %d", gotCount, count)
+	}
+	return nil
+}
+
 // readTCPLocked выполняет один запрос Modbus TCP (MBAP + PDU, без CRC).
 func (c *meterClient) readTCPLocked(ctx context.Context, start, count uint16) ([]uint16, error) {
 	// MBAP + PDU (func 03, start, count)
@@ -145,7 +319,7 @@ func (c *meterClient) readTCPLocked(ctx context.Context, start, count uint16) ([
 	req = binary.BigEndian.AppendUint16(req, c.nextTxn())
 	req = binary.BigEndian.AppendUint16(req, 0) // protocol
 	req = binary.BigEndian.AppendUint16(req, 6) // length
-	req = append(req, c.Unit, 0x03)
+	req = append(req, c.Unit, c.fn())
 	req = binary.BigEndian.AppendUint16(req, start)
 	req = binary.BigEndian.AppendUint16(req, count)
 
@@ -228,9 +402,9 @@ func (c *meterClient) readRTULocked(ctx context.Context, start, count uint16) ([
 	// ответ предыдущего опроса мог бы быть принят за текущий.
 	c.drainLocked()
 
-	// PDU: unit + func 03 + start + count + CRC16.
+	// PDU: unit + func (03/04) + start + count + CRC16.
 	req := make([]byte, 0, 8)
-	req = append(req, c.Unit, 0x03)
+	req = append(req, c.Unit, c.fn())
 	req = binary.BigEndian.AppendUint16(req, start)
 	req = binary.BigEndian.AppendUint16(req, count)
 	crc := solarman.CRC16Modbus(req)
@@ -264,9 +438,9 @@ func (c *meterClient) readRTULocked(ctx context.Context, start, count uint16) ([
 		}
 		return nil, fmt.Errorf("meter: modbus exception func=0x%02X code=0x%02X", hdr[1], hdr[2])
 	}
-	if hdr[1] != 0x03 {
+	if hdr[1] != c.fn() {
 		c.closeConn()
-		return nil, fmt.Errorf("meter rtu: неожиданная функция 0x%02X", hdr[1])
+		return nil, fmt.Errorf("meter rtu: неожиданная функция 0x%02X (ждали 0x%02X)", hdr[1], c.fn())
 	}
 	bc := int(hdr[2])
 	if bc != 2*int(count) {

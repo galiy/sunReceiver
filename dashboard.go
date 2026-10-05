@@ -74,6 +74,13 @@ type dashFlags struct {
 	ShowBMS   bool
 	ShowRelay bool
 	ShowCE308 bool
+	// CE308FinalReadingsOnly — режим ce308.final_readings_only: рамку «текущие
+	// данные» не показываем, графики/API рядов ce308 отключены; видна только
+	// панель «показания» (итоговая энергия).
+	CE308FinalReadingsOnly bool
+	// ShowDTS017 — опрос DTS017M включён (раздел dts017m активен): на графики
+	// добавляются фазные напряжения и активные мощности DTS017M.
+	ShowDTS017 bool
 }
 
 // dashboardHandler — веб-дашборд: отдаёт три HTML-страницы и JSON API.
@@ -117,6 +124,17 @@ type dashboardHandler struct {
 	tariffM  [4]float64        // месяц: [importDay, importNight, exportDay, exportNight]
 	tariffY  [4]float64        // год:  [importDay, importNight, exportDay, exportNight]
 
+	// Кэш статической части прогноза «Меркурия» (TTL mercuryCacheTTL): сумма финализированных
+	// дней [date(T0), date(now)) и тарифный прирост дня T0 к T0. Живая часть
+	// (прирост сегодняшнего дня к now) считается в каждом запросе из показаний DDS238.
+	mercuryMu       sync.Mutex
+	mercuryCacheAt  time.Time
+	mercuryCacheT0  time.Time
+	mercuryCacheDay time.Time
+	mercuryCacheSum [4]float64
+	mercuryCacheP0  [4]float64
+	mercuryCacheOK  bool
+
 	// Ограничение частоты ручного снимка энергии CE308 (кнопка «Обновить», POST
 	// /api/ce308/energy): не чаще раза в ce308EnergyMinInterval. Хранится время
 	// последнего принятого (не отклонённого) сигнала. Шифруется мьютексом, т.к.
@@ -156,15 +174,18 @@ type currentResponse struct {
 	MeterExportNight float64 `json:"meter_export_night"`
 	// То же за текущий месяц (MM.YYYY) и текущий год (YYYY): сумма финализированных
 	// дней периода + незавершённый сегодняшний день.
-	MeterImportDayMonth   float64          `json:"meter_import_day_month"`
-	MeterImportNightMonth float64          `json:"meter_import_night_month"`
-	MeterExportDayMonth   float64          `json:"meter_export_day_month"`
-	MeterExportNightMonth float64          `json:"meter_export_night_month"`
-	MeterImportDayYear    float64          `json:"meter_import_day_year"`
-	MeterImportNightYear  float64          `json:"meter_import_night_year"`
-	MeterExportDayYear    float64          `json:"meter_export_day_year"`
-	MeterExportNightYear  float64          `json:"meter_export_night_year"`
-	Devices               []deviceSnapshot `json:"devices"`
+	MeterImportDayMonth   float64 `json:"meter_import_day_month"`
+	MeterImportNightMonth float64 `json:"meter_import_night_month"`
+	MeterExportDayMonth   float64 `json:"meter_export_day_month"`
+	MeterExportNightMonth float64 `json:"meter_export_night_month"`
+	MeterImportDayYear    float64 `json:"meter_import_day_year"`
+	MeterImportNightYear  float64 `json:"meter_import_night_year"`
+	MeterExportDayYear    float64 `json:"meter_export_day_year"`
+	MeterExportNightYear  float64 `json:"meter_export_night_year"`
+	// Mercury — прогноз показаний счётчика энергосбыта «Меркурий» на текущий момент
+	// (nil, если раздел mercury пуст/не настроен или нет данных для расчёта).
+	Mercury *mercuryForecast `json:"mercury,omitempty"`
+	Devices []deviceSnapshot `json:"devices"`
 }
 
 // seriesPoint — одна точка временного ряда: время + значение.
@@ -209,12 +230,14 @@ type animScheme struct {
 	// HousePower — мощность Дома (формула-разница), только в схеме Дома.
 	HousePower float64 `json:"house_power"`
 	// GaragePower — мощность на отрезке «Сеть гаража — Гараж»:
-	// ce308Power + Σac(инверторы гаража) — нагрузка гаража (внешняя сеть + инверторы).
-	// Положительная — потребление гаража, отрицательная — отдача. Только в схеме Гаража.
+	// GarageMeterPower + Σac(инверторы гаража) — нагрузка гаража (внешняя сеть +
+	// инверторы). Положительная — потребление гаража, отрицательная — отдача.
+	// Только в схеме Гаража.
 	GaragePower float64 `json:"garage_power"`
-	// Ce308Power — активная мощность электросчётчика CE308 (гараж): знак как у
-	// счётчика (потребление +, отдача в сеть −). Только в схеме Гаража.
-	Ce308Power float64 `json:"ce308_power"`
+	// GarageMeterPower — активная мощность счётчика гаража (DTS017M, при
+	// недоступности — CE308): знак как у счётчика (потребление +, отдача в сеть −).
+	// Только в схеме Гаража.
+	GarageMeterPower float64 `json:"garage_meter_power"`
 	// MapTemps — температуры МАП для панели над изображением МАП: Тор и Транзисторы
 	// (map_temp_tor / map_temp_transistor). Только в схеме Дома.
 	MapTemps []animTemp `json:"map_temps,omitempty"`
@@ -275,6 +298,16 @@ type seriesResponse struct {
 	CE308L2Voltage   []seriesPoint `json:"ce308_l2_voltage,omitempty"`
 	CE308L3Voltage   []seriesPoint `json:"ce308_l3_voltage,omitempty"`
 	CE308ActivePower []seriesPoint `json:"ce308_active_power,omitempty"`
+	// Ряды счётчика DTS017M (Modbus, обособленное хранилище): фазные напряжения и
+	// активные мощности (3 фазы + Σ) для наложения на графики напряжений/мощностей.
+	// Заполняются только при активном разделе dts017m (h.flags.ShowDTS017).
+	DTS017VoltageA     []seriesPoint `json:"dts017_voltage_a,omitempty"`
+	DTS017VoltageB     []seriesPoint `json:"dts017_voltage_b,omitempty"`
+	DTS017VoltageC     []seriesPoint `json:"dts017_voltage_c,omitempty"`
+	DTS017ActivePower  []seriesPoint `json:"dts017_active_power,omitempty"`
+	DTS017ActivePowerA []seriesPoint `json:"dts017_active_power_a,omitempty"`
+	DTS017ActivePowerB []seriesPoint `json:"dts017_active_power_b,omitempty"`
+	DTS017ActivePowerC []seriesPoint `json:"dts017_active_power_c,omitempty"`
 	// Temps — временные ряды температур всех устройств, отдающих температурные
 	// теги универсального контракта (инверторы Deye/Sofar и МАП): по одной линии
 	// на каждый датчик («Имя — датчик»). Только Redis (в PG температуры не
@@ -1116,6 +1149,16 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	impDayY, impNightY, expDayY, expNightY = math.Round(impDayY*100)/100, math.Round(impNightY*100)/100,
 		math.Round(expDayY*100)/100, math.Round(expNightY*100)/100
 
+	// Прогноз «Меркурия» на текущий момент: ручная точка + прирост DDS238 с неё
+	// (финализированные дни + незавершённый сегодняшний день). Только при живом
+	// счётчике и наличии точек в конфиге.
+	var mercury *mercuryForecast
+	if hasImp && hasExp && len(mercuryReadings) > 0 {
+		if f, ok := h.mercuryForecastNow(now, impDay, impNight, expDay, expNight); ok {
+			mercury = &f
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(currentResponse{
@@ -1140,6 +1183,7 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 		MeterImportNightYear:  impNightY,
 		MeterExportDayYear:    expDayY,
 		MeterExportNightYear:  expNightY,
+		Mercury:               mercury,
 		Devices:               devices,
 	})
 }
@@ -1175,12 +1219,22 @@ func (h *dashboardHandler) apiAnimation(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	now := time.Now()
-	ce308, err := h.store.CE308Current()
+	// Счётчик гаража — DTS017M. CE308 читаем как резервный источник (в обычном
+	// режиме); в режиме final_readings_only мгновенной мощности CE308 нет.
+	var ce308 map[string]ce308Snapshot
+	if !h.flags.CE308FinalReadingsOnly {
+		ce308, err = h.store.CE308Current()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	dts017, err := h.store.Dts017Current()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	res := buildAnimationResponse(devices, ce308, h.placeByIP, now)
+	res := buildAnimationResponse(devices, dts017, ce308, h.placeByIP, now)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(res)
@@ -1190,11 +1244,12 @@ func (h *dashboardHandler) apiAnimation(w http.ResponseWriter, r *http.Request) 
 // сортирует их как apiCurrent (MPPT — последними), группирует инверторы по
 // размещению (пустое → «Дом»), MPPT-контроллеры (КЭС) — в схему Дома, из МАП и
 // счётчика берёт мощности сети/батареи/счётчика. Считает мощность Дома по
-// формуле-разнице. Для Гаража берёт активную мощность электросчётчика CE308
-// (ce308) и считает мощность Гаража на развилке (см. GaragePower). Устройства со
-// снимком старше окна (20 мин) помечаются Stale — клиент показывает их мощность
-// нулём (ночью инверторы/КЭС не отдают данные).
-func buildAnimationResponse(devices []deviceSnapshot, ce308 map[string]ce308Snapshot, placeByIP map[string]string, now time.Time) animationResponse {
+// формуле-разнице. Для Гаража берёт активную мощность счётчика гаража — DTS017M
+// (dts017), при недоступности — резервно CE308 (ce308) — и считает мощность
+// Гаража на развилке (см. GaragePower/GarageMeterPower). Устройства со снимком
+// старше окна (20 мин) помечаются Stale — клиент показывает их мощность нулём
+// (ночью инверторы/КЭС не отдают данные).
+func buildAnimationResponse(devices []deviceSnapshot, dts017 *dts017Snapshot, ce308 map[string]ce308Snapshot, placeByIP map[string]string, now time.Time) animationResponse {
 	// Сортируем как apiCurrent: MPPT — последними, остальные по Order.
 	sort.SliceStable(devices, func(i, j int) bool {
 		mi, mj := isMPPTKey(devices[i].IP), isMPPTKey(devices[j].IP)
@@ -1323,24 +1378,25 @@ func buildAnimationResponse(devices []deviceSnapshot, ce308 map[string]ce308Snap
 	}
 	house.HouseGridPower = houseGrid
 	house.HousePower = houseAC + houseGrid + house.MapBatteryPower
-	// Мощность на отрезке «Сеть гаража — Гараж» (новая формула владельца):
-	//   P = (0 − P(внешняя сеть ↔ CE308)) + P(шина инверторов ↔ Сеть гаража)
-	// где P(внешняя сеть ↔ CE308) — поток из CE308 во внешнюю сеть (отдача;
-	// в знаках CE308 отдача отрицательна, поэтому величина = −ce308Power), а
+	// Мощность на отрезке «Сеть гаража — Гараж»:
+	//   P = (0 − P(внешняя сеть ↔ счётчик гаража)) + P(шина инверторов ↔ Сеть гаража)
+	// где P(внешняя сеть ↔ счётчик) — поток через счётчик гаража (отдача;
+	// в знаках счётчика отдача отрицательна, поэтому величина = −meterPower), а
 	// P(шина инверторов ↔ Сеть гаража) — вклад инверторов гаража в узел = Σac.
-	// Итог: P_гараж = ce308Power + Σac — нагрузка гаража (внешняя сеть + инверторы).
+	// Итог: P_гараж = garageMeterPower + Σac — нагрузка гаража (внешняя сеть + инверторы).
 	// Пример: сеть +120 Вт (потребление), инверторы +1 Вт → в гараж +121 Вт;
-	// при отдаче в сеть ce308Power отрицателен и вычитается из выработки.
-	// Если свежего снимка CE308 нет — мощности гаража не считаем (узел статичен).
+	// при отдаче в сеть meterPower отрицателен и вычитается из выработки.
+	// Источник мощности счётчика гаража — DTS017M (при недоступности — CE308).
+	// Если свежего снимка нет — мощности гаража не считаем (узел статичен).
 	garageAC := 0.0
 	for _, inv := range garage.Inverters {
 		garageAC += inv.AC
 	}
-	if ce308Power, ok := freshCE308Power(ce308, now); ok {
-		garage.Ce308Power = ce308Power
-		garage.GaragePower = ce308Power + garageAC
+	if meterPower, ok := freshGarageMeterPower(dts017, ce308, now); ok {
+		garage.GarageMeterPower = meterPower
+		garage.GaragePower = meterPower + garageAC
 	} else {
-		garage.Ce308Power = 0
+		garage.GarageMeterPower = 0
 		garage.GaragePower = 0
 	}
 
@@ -1354,7 +1410,7 @@ func buildAnimationResponse(devices []deviceSnapshot, ce308 map[string]ce308Snap
 	res.House.MapBatteryPower = animRound1(res.House.MapBatteryPower)
 	res.House.MeterActivePower = animRound1(res.House.MeterActivePower)
 	res.House.HousePower = animRound1(res.House.HousePower)
-	res.Garage.Ce308Power = animRound1(res.Garage.Ce308Power)
+	res.Garage.GarageMeterPower = animRound1(res.Garage.GarageMeterPower)
 	res.Garage.GaragePower = animRound1(res.Garage.GaragePower)
 	for i := range res.House.Inverters {
 		res.House.Inverters[i].PV = animRound1(res.House.Inverters[i].PV)
@@ -1371,10 +1427,27 @@ func buildAnimationResponse(devices []deviceSnapshot, ce308 map[string]ce308Snap
 	return res
 }
 
+// freshGarageMeterPower возвращает активную мощность счётчика гаража для схемы
+// анимации. Приоритет — DTS017M (dts017_active_power): если его снимок свежий
+// (не старше окна 20 мин), берётся он. Иначе — резервно CE308 (ce308,
+// freshCE308Power). ok=false, если ни одного свежего снимка нет — тогда мощность
+// гаража на схеме не считаем.
+func freshGarageMeterPower(dts017 *dts017Snapshot, ce308 map[string]ce308Snapshot, now time.Time) (float64, bool) {
+	if dts017 != nil {
+		if ts, err := time.Parse(time.RFC3339, dts017.Timestamp); err == nil && ts.After(now.Add(-20*time.Minute)) {
+			if v, ok := dts017.Values[dts017ActivePower]; ok {
+				return v, true
+			}
+		}
+	}
+	return freshCE308Power(ce308, now)
+}
+
 // freshCE308Power возвращает суммарную активную мощность электросчётчика CE308
 // из свежего снимка (не старше окна staleCutoff, аналог stale в
 // buildAnimationResponse). ok=false, если CE308 не настроен/не опрошен или снимок
-// устарел — тогда мощность гаража на схеме не считаем.
+// устарел — тогда мощность гаража на схеме не считаем. Резервный источник для
+// гаража (основной — DTS017M, см. freshGarageMeterPower).
 func freshCE308Power(ce308 map[string]ce308Snapshot, now time.Time) (float64, bool) {
 	staleCutoff := now.Add(-20 * time.Minute)
 	for _, sn := range ce308 {
@@ -1734,15 +1807,37 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	// Ряды электросчётчика CE308 (опрос по BLE): фазные напряжения и суммарная
 	// активная мощность. CE308 хранится в собственных ключах Redis/PG (нет
 	// универсального контракта значений), поэтому читается отдельно от loadRange.
-	ce308, err := h.ce308SeriesRange(from, to, now)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	// В режиме final_readings_only телеметрия CE308 не собирается — ряды не
+	// запрашиваем и в ответ не отдаём.
+	if !h.flags.CE308FinalReadingsOnly {
+		ce308, err := h.ce308SeriesRange(from, to, now)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		res.CE308L1Voltage = ce308[ce308L1Voltage]
+		res.CE308L2Voltage = ce308[ce308L2Voltage]
+		res.CE308L3Voltage = ce308[ce308L3Voltage]
+		res.CE308ActivePower = ce308[ce308ActiveP]
 	}
-	res.CE308L1Voltage = ce308[ce308L1Voltage]
-	res.CE308L2Voltage = ce308[ce308L2Voltage]
-	res.CE308L3Voltage = ce308[ce308L3Voltage]
-	res.CE308ActivePower = ce308[ce308ActiveP]
+
+	// Ряды счётчика DTS017M (Modbus, собственные ключи Redis/PG): фазные
+	// напряжения и активные мощности (3 фазы + Σ). Только при активном разделе
+	// dts017m (иначе рядов нет).
+	if h.flags.ShowDTS017 {
+		dts, err := h.dts017SeriesRange(from, to, now)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		res.DTS017VoltageA = dts[dts017VoltageA]
+		res.DTS017VoltageB = dts[dts017VoltageB]
+		res.DTS017VoltageC = dts[dts017VoltageC]
+		res.DTS017ActivePower = dts[dts017ActivePower]
+		res.DTS017ActivePowerA = dts[dts017ActivePowerA]
+		res.DTS017ActivePowerB = dts[dts017ActivePowerB]
+		res.DTS017ActivePowerC = dts[dts017ActivePowerC]
+	}
 
 	// Усреднение длинных серий: если в ряду больше maxSeriesPoints точек — диапазон
 	// [from, to] делится на равные периоды и точки в пределах периода схлопываются
@@ -1764,6 +1859,13 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	res.CE308L2Voltage = downsampleSeries(res.CE308L2Voltage, from, to)
 	res.CE308L3Voltage = downsampleSeries(res.CE308L3Voltage, from, to)
 	res.CE308ActivePower = downsampleSeries(res.CE308ActivePower, from, to)
+	res.DTS017VoltageA = downsampleSeries(res.DTS017VoltageA, from, to)
+	res.DTS017VoltageB = downsampleSeries(res.DTS017VoltageB, from, to)
+	res.DTS017VoltageC = downsampleSeries(res.DTS017VoltageC, from, to)
+	res.DTS017ActivePower = downsampleSeries(res.DTS017ActivePower, from, to)
+	res.DTS017ActivePowerA = downsampleSeries(res.DTS017ActivePowerA, from, to)
+	res.DTS017ActivePowerB = downsampleSeries(res.DTS017ActivePowerB, from, to)
+	res.DTS017ActivePowerC = downsampleSeries(res.DTS017ActivePowerC, from, to)
 	for i := range res.Temps {
 		res.Temps[i].Points = downsampleSeries(res.Temps[i].Points, from, to)
 	}
@@ -3092,9 +3194,34 @@ func buildDashboardMux(pages map[string]http.HandlerFunc, static http.Handler, a
 	return recoverMiddleware(mux)
 }
 
+// apiDts017Current отвечает на GET /api/dts017m/current: текущий снимок DTS017M
+// (мгновенные значения + энергии + время актуальности) из Redis. 404, если раздел
+// dts017m не активен или счётчик ещё не опрошен.
+func (h *dashboardHandler) apiDts017Current(w http.ResponseWriter, r *http.Request) {
+	if !h.flags.ShowDTS017 {
+		http.Error(w, "нет данных DTS017M", http.StatusNotFound)
+		return
+	}
+	snap, err := h.store.Dts017Current()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if snap == nil {
+		http.Error(w, "нет данных DTS017M", http.StatusNotFound)
+		return
+	}
+	writeJSONResponse(w, snap)
+}
+
 // apiCE308Current отвечает на GET /api/ce308/current: текущий снимок CE308
 // (мгновенные значения + время актуальности). 404, если счётчик ещё не опрошен.
 func (h *dashboardHandler) apiCE308Current(w http.ResponseWriter, r *http.Request) {
+	if h.flags.CE308FinalReadingsOnly {
+		// В режиме final_readings_only мгновенная телеметрия не собирается.
+		http.Error(w, "нет данных CE308 (режим final_readings_only)", http.StatusNotFound)
+		return
+	}
 	cur, err := h.store.CE308Current()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -3153,6 +3280,11 @@ func (h *dashboardHandler) apiCE308Energy(w http.ResponseWriter, r *http.Request
 // более старая — из PostgreSQL (10-сек усреднённые точки). Точки объединяются
 // и сортируются по времени.
 func (h *dashboardHandler) apiCE308Series(w http.ResponseWriter, r *http.Request) {
+	if h.flags.CE308FinalReadingsOnly {
+		// В режиме final_readings_only история мгновенных значений не собирается.
+		http.Error(w, "нет данных CE308 (режим final_readings_only)", http.StatusNotFound)
+		return
+	}
 	now := time.Now()
 	to := now
 	if s := r.URL.Query().Get("to"); s != "" {
@@ -3236,6 +3368,9 @@ func ce308SeriesPoint(p ce308PGPoint) seriesPoint {
 // более старая — из PostgreSQL (10-сек усреднённые точки). Возвращает map
 // «тег → ряд». Если счётчик ещё не опрошен (нет текущего имени) — nil.
 func (h *dashboardHandler) ce308SeriesRange(from, to time.Time, now time.Time) (map[string][]seriesPoint, error) {
+	if h.flags.CE308FinalReadingsOnly {
+		return nil, nil
+	}
 	cur, err := h.store.CE308Current()
 	if err != nil {
 		return nil, err
@@ -3300,6 +3435,73 @@ func (h *dashboardHandler) ce308SeriesRange(from, to time.Time, now time.Time) (
 	return out, nil
 }
 
+// dts017SeriesRange собирает по счётчику DTS017M за период [from, to] временные
+// ряды фазных напряжений (dts017_voltage_a/b/c) и активных мощностей
+// (dts017_active_power_a/b/c + сумма dts017_active_power) для наложения на графики
+// напряжений и мощностей. Рецентная часть — из Redis-ряда, более старая — из
+// PostgreSQL (5-мин средние). Возвращает map «тег → ряд».
+func (h *dashboardHandler) dts017SeriesRange(from, to time.Time, now time.Time) (map[string][]seriesPoint, error) {
+	type rec struct {
+		ts   time.Time
+		vals map[string]float64
+	}
+	var recs []rec
+	cutoff := recentCutoff(now)
+	pgStart, pgEnd, pgOK, rStart, rEnd, rOK := seamWindows(from, to, cutoff)
+	if h.pg != nil && pgOK {
+		old, err := h.pg.Dts017AveragesAll(pgStart, pgEnd)
+		if err != nil {
+			return nil, err
+		}
+		for i := range old {
+			ts, terr := time.Parse(time.RFC3339, old[i].Timestamp)
+			if terr != nil {
+				continue
+			}
+			recs = append(recs, rec{ts: ts, vals: old[i].Values})
+		}
+	}
+	if rOK {
+		recent, err := h.store.QueryDts017Series(rStart, rEnd)
+		if err != nil {
+			return nil, err
+		}
+		for _, sn := range recent {
+			ts, terr := time.Parse(time.RFC3339, sn.Timestamp)
+			if terr != nil {
+				continue
+			}
+			recs = append(recs, rec{ts: ts, vals: sn.Values})
+		}
+	}
+	sort.Slice(recs, func(i, j int) bool { return recs[i].ts.Before(recs[j].ts) })
+	out := map[string][]seriesPoint{}
+	for _, metric := range []string{
+		dts017VoltageA, dts017VoltageB, dts017VoltageC,
+		dts017ActivePower, dts017ActivePowerA, dts017ActivePowerB, dts017ActivePowerC,
+	} {
+		var pts []seriesPoint
+		lastT := ""
+		for _, r := range recs {
+			v, ok := r.vals[metric]
+			if !ok {
+				continue
+			}
+			t := r.ts.Format(time.RFC3339)
+			if t == lastT {
+				if n := len(pts); n > 0 {
+					pts[n-1].V = v
+				}
+				continue
+			}
+			lastT = t
+			pts = append(pts, seriesPoint{T: t, V: v})
+		}
+		out[metric] = pts
+	}
+	return out, nil
+}
+
 // writeJSONResponse — вспомогательный вывод JSON-ответа (no-store).
 func writeJSONResponse(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -3323,18 +3525,19 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayCon
 		"/errors": h.errorsPage,
 	}
 	api := map[string]http.HandlerFunc{
-		"/current":       h.apiCurrent,
-		"/series":        h.apiSeries,
-		"/tariffs":       h.apiTariffs,
-		"/animation":     h.apiAnimation,
-		"/bms":           h.apiBMS,
-		"/bms/":          h.apiBMSOne,
-		"/agm":           h.apiAGMCurrent,
-		"/agm/series":    h.apiAGMSeries,
-		"/errors":        h.apiErrors,
-		"/ce308/current": h.apiCE308Current,
-		"/ce308/energy":  h.apiCE308Energy,
-		"/ce308/series":  h.apiCE308Series,
+		"/current":         h.apiCurrent,
+		"/series":          h.apiSeries,
+		"/tariffs":         h.apiTariffs,
+		"/animation":       h.apiAnimation,
+		"/bms":             h.apiBMS,
+		"/bms/":            h.apiBMSOne,
+		"/agm":             h.apiAGMCurrent,
+		"/agm/series":      h.apiAGMSeries,
+		"/errors":          h.apiErrors,
+		"/ce308/current":   h.apiCE308Current,
+		"/ce308/energy":    h.apiCE308Energy,
+		"/ce308/series":    h.apiCE308Series,
+		"/dts017m/current": h.apiDts017Current,
 	}
 	if relay != nil {
 		api["/relay"] = h.apiRelay

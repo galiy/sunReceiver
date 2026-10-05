@@ -412,10 +412,15 @@ func applyCE308Parity(v byte) byte {
 }
 
 func ce308Fragments(frame []byte, mtu int) [][]byte {
-	maxPayload := 16
-	if mtu > 23 {
-		maxPayload = mtu - 4
+	// Размер payload строго MTU-4 (как в эталонном energomera_ble.cpp,
+	// get_max_payload_() = mtu-4). При MTU 23 это 19, а НЕ 16: прибор требует
+	// ровно такой размер фрагмента, иначе многофрагментные команды (напр.
+	// EMD01(0.0,FF)) отдают (ERR13)/(ERR12). Для коротких команд (<=19 байт)
+	// разницы нет — они и так уходят одним фрагментом.
+	if mtu <= 4 {
+		mtu = 23
 	}
+	maxPayload := mtu - 4
 	var out [][]byte
 	seq := 0
 	first := true

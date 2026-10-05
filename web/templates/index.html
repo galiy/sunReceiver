@@ -9,7 +9,8 @@
 <body data-show-map="{{if .flags.ShowMap}}1{{else}}0{{end}}"
       data-show-meter="{{if .flags.ShowMeter}}1{{else}}0{{end}}"
       data-show-bms="{{if .flags.ShowBMS}}1{{else}}0{{end}}"
-      data-show-ce308="{{if .flags.ShowCE308}}1{{else}}0{{end}}">
+      data-show-ce308="{{if .flags.ShowCE308}}1{{else}}0{{end}}"
+      data-ce308-final="{{if .flags.CE308FinalReadingsOnly}}1{{else}}0{{end}}">
 <link rel="stylesheet" href="/static/css/site.css?v={{.CacheBust}}">
 <div class="top-nav">
   <div>
@@ -68,7 +69,7 @@
   </button>
   <div class="spoiler-body">
 
-  {{if .flags.ShowCE308}}
+  {{if and .flags.ShowCE308 (not .flags.CE308FinalReadingsOnly)}}
   <div class="group group-top">
     <div class="group-head">
       <span class="group-title">Электросчётчик CE308 &mdash; текущие данные</span>
@@ -110,23 +111,13 @@
       </div>
       <div class="ce308-total">Всего (А+): <span id="ce308AtcTotal">&mdash;</span> &nbsp;&middot;&nbsp; Всего (А&minus;): <span id="ce308AtdTotal">&mdash;</span></div>
     </div>
-    <div class="ce308-sec">
-      <div class="ce308-sec-title">Реактивная энергия</div>
-      <div class="ce308-grid">
-        <div class="ce308-card"><div class="ce308-head"><div class="ce308-lbl">День<br>(R+)</div><div class="ce308-note">потребление</div></div><div class="ce308-val" id="ce308RtcDay">&mdash;</div></div>
-        <div class="ce308-card"><div class="ce308-head"><div class="ce308-lbl">Ночь<br>(R+)</div><div class="ce308-note">потребление</div></div><div class="ce308-val" id="ce308RtcNight">&mdash;</div></div>
-        <div class="ce308-card"><div class="ce308-head"><div class="ce308-lbl">День<br>(R&minus;)</div><div class="ce308-note">отдача</div></div><div class="ce308-val" id="ce308RtdDay">&mdash;</div></div>
-        <div class="ce308-card"><div class="ce308-head"><div class="ce308-lbl">Ночь<br>(R&minus;)</div><div class="ce308-note">отдача</div></div><div class="ce308-val" id="ce308RtdNight">&mdash;</div></div>
-      </div>
-      <div class="ce308-total">Всего (R+): <span id="ce308RtcTotal">&mdash;</span> &nbsp;&middot;&nbsp; Всего (R&minus;): <span id="ce308RtdTotal">&mdash;</span></div>
-    </div>
   </div>
   {{end}}
 
   {{if .flags.ShowMeter}}
   <div class="group group-top">
     <div class="group-head">
-      <span class="group-title">Электросчётчик DDS238 &mdash; текущие параметры</span>
+      <span class="group-title">Дом. Электросчётчик DDS238 &mdash; текущие параметры</span>
       <span class="meter-ts" id="meterTs">&mdash;</span>
     </div>
     <div class="group-body" id="meterStats"><span class="missing">Нет данных</span></div>
@@ -134,80 +125,99 @@
   </div>
   {{end}}
 
+  {{if .flags.ShowDTS017}}
+  <div class="group group-top">
+    <div class="group-head">
+      <span class="group-title">Гараж. Электросчётчик DTS017М &mdash; текущие параметры</span>
+      <span class="meter-ts" id="dts017Ts">&mdash;</span>
+    </div>
+    <div class="group-body" id="dts017Stats"><span class="missing">Нет данных</span></div>
+    <div class="meter-note">Мощность с отрицательным знаком &mdash; отдача в сеть (генерация); положительная &mdash; потребление.</div>
+  </div>
+  {{end}}
+
   {{if .flags.ShowMeter}}
-  <div class="groups-row">
-    <div class="group tariff-grid">
-      <div class="group-title">Потребление/Отдача за сегодня</div>
-      <div class="group-body">
-        <div class="plate">
-          <div class="lbl">Потребление день</div>
-          <div class="val"><span id="kpiImpDay">—</span><span class="unit">kWh</span></div>
-          <div class="sub">День 07:00–23:00</div>
+  <div class="spoiler" data-spoil="tariffs" data-spoil-always-closed="1">
+    <button class="spoiler-head" type="button">
+      <span class="spoiler-caret">&#9656;</span>
+      <span class="spoiler-title">Потребление/Отдача (сегодня, месяц, год)</span>
+    </button>
+    <div class="spoiler-body">
+      <div class="groups-row">
+        <div class="group tariff-grid">
+          <div class="group-title">Потребление/Отдача за сегодня</div>
+          <div class="group-body">
+            <div class="plate">
+              <div class="lbl">Потребление день</div>
+              <div class="val"><span id="kpiImpDay">—</span><span class="unit">kWh</span></div>
+              <div class="sub">День 07:00–23:00</div>
+            </div>
+            <div class="plate">
+              <div class="lbl">Отдача день</div>
+              <div class="val"><span id="kpiExpDay">—</span><span class="unit">kWh</span></div>
+              <div class="sub">День 07:00–23:00</div>
+            </div>
+            <div class="plate">
+              <div class="lbl">Потребление ночь</div>
+              <div class="val"><span id="kpiImpNight">—</span><span class="unit">kWh</span></div>
+              <div class="sub">Ночь 23:00–07:00</div>
+            </div>
+            <div class="plate">
+              <div class="lbl">Отдача ночь</div>
+              <div class="val"><span id="kpiExpNight">—</span><span class="unit">kWh</span></div>
+              <div class="sub">Ночь 23:00–07:00</div>
+            </div>
+          </div>
         </div>
-        <div class="plate">
-          <div class="lbl">Отдача день</div>
-          <div class="val"><span id="kpiExpDay">—</span><span class="unit">kWh</span></div>
-          <div class="sub">День 07:00–23:00</div>
+        <div class="group tariff-grid">
+          <div class="group-title" id="tariffMonthTitle">Потребление/Отдача за месяц</div>
+          <div class="group-body">
+            <div class="plate">
+              <div class="lbl">Потребление день</div>
+              <div class="val"><span id="kpiImpDayM">—</span><span class="unit">kWh</span></div>
+              <div class="sub">День 07:00–23:00</div>
+            </div>
+            <div class="plate">
+              <div class="lbl">Отдача день</div>
+              <div class="val"><span id="kpiExpDayM">—</span><span class="unit">kWh</span></div>
+              <div class="sub">День 07:00–23:00</div>
+            </div>
+            <div class="plate">
+              <div class="lbl">Потребление ночь</div>
+              <div class="val"><span id="kpiImpNightM">—</span><span class="unit">kWh</span></div>
+              <div class="sub">Ночь 23:00–07:00</div>
+            </div>
+            <div class="plate">
+              <div class="lbl">Отдача ночь</div>
+              <div class="val"><span id="kpiExpNightM">—</span><span class="unit">kWh</span></div>
+              <div class="sub">Ночь 23:00–07:00</div>
+            </div>
+          </div>
         </div>
-        <div class="plate">
-          <div class="lbl">Потребление ночь</div>
-          <div class="val"><span id="kpiImpNight">—</span><span class="unit">kWh</span></div>
-          <div class="sub">Ночь 23:00–07:00</div>
-        </div>
-        <div class="plate">
-          <div class="lbl">Отдача ночь</div>
-          <div class="val"><span id="kpiExpNight">—</span><span class="unit">kWh</span></div>
-          <div class="sub">Ночь 23:00–07:00</div>
-        </div>
-      </div>
-    </div>
-    <div class="group tariff-grid">
-      <div class="group-title" id="tariffMonthTitle">Потребление/Отдача за месяц</div>
-      <div class="group-body">
-        <div class="plate">
-          <div class="lbl">Потребление день</div>
-          <div class="val"><span id="kpiImpDayM">—</span><span class="unit">kWh</span></div>
-          <div class="sub">День 07:00–23:00</div>
-        </div>
-        <div class="plate">
-          <div class="lbl">Отдача день</div>
-          <div class="val"><span id="kpiExpDayM">—</span><span class="unit">kWh</span></div>
-          <div class="sub">День 07:00–23:00</div>
-        </div>
-        <div class="plate">
-          <div class="lbl">Потребление ночь</div>
-          <div class="val"><span id="kpiImpNightM">—</span><span class="unit">kWh</span></div>
-          <div class="sub">Ночь 23:00–07:00</div>
-        </div>
-        <div class="plate">
-          <div class="lbl">Отдача ночь</div>
-          <div class="val"><span id="kpiExpNightM">—</span><span class="unit">kWh</span></div>
-          <div class="sub">Ночь 23:00–07:00</div>
-        </div>
-      </div>
-    </div>
-    <div class="group tariff-grid">
-      <div class="group-title" id="tariffYearTitle">Потребление/Отдача за год</div>
-      <div class="group-body">
-        <div class="plate">
-          <div class="lbl">Потребление день</div>
-          <div class="val"><span id="kpiImpDayY">—</span><span class="unit">kWh</span></div>
-          <div class="sub">День 07:00–23:00</div>
-        </div>
-        <div class="plate">
-          <div class="lbl">Отдача день</div>
-          <div class="val"><span id="kpiExpDayY">—</span><span class="unit">kWh</span></div>
-          <div class="sub">День 07:00–23:00</div>
-        </div>
-        <div class="plate">
-          <div class="lbl">Потребление ночь</div>
-          <div class="val"><span id="kpiImpNightY">—</span><span class="unit">kWh</span></div>
-          <div class="sub">Ночь 23:00–07:00</div>
-        </div>
-        <div class="plate">
-          <div class="lbl">Отдача ночь</div>
-          <div class="val"><span id="kpiExpNightY">—</span><span class="unit">kWh</span></div>
-          <div class="sub">Ночь 23:00–07:00</div>
+        <div class="group tariff-grid">
+          <div class="group-title" id="tariffYearTitle">Потребление/Отдача за год</div>
+          <div class="group-body">
+            <div class="plate">
+              <div class="lbl">Потребление день</div>
+              <div class="val"><span id="kpiImpDayY">—</span><span class="unit">kWh</span></div>
+              <div class="sub">День 07:00–23:00</div>
+            </div>
+            <div class="plate">
+              <div class="lbl">Отдача день</div>
+              <div class="val"><span id="kpiExpDayY">—</span><span class="unit">kWh</span></div>
+              <div class="sub">День 07:00–23:00</div>
+            </div>
+            <div class="plate">
+              <div class="lbl">Потребление ночь</div>
+              <div class="val"><span id="kpiImpNightY">—</span><span class="unit">kWh</span></div>
+              <div class="sub">Ночь 23:00–07:00</div>
+            </div>
+            <div class="plate">
+              <div class="lbl">Отдача ночь</div>
+              <div class="val"><span id="kpiExpNightY">—</span><span class="unit">kWh</span></div>
+              <div class="sub">Ночь 23:00–07:00</div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

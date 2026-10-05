@@ -521,10 +521,11 @@ function layoutHouse(data){
 }
 
 // ---------- Схема Гаража ----------
-// Магистраль сверху: Сеть → Счётчик CE308(развилка) → Гараж. От точки (стыка труб)
+// Магистраль сверху: Сеть → Счётчик(развилка) → Гараж. От точки (стыка труб)
 // вправо от счётчика — вниз ветвь инверторов → панели; счётчик стоит левее стыка,
-// чтобы не находиться над ним. Мощность счётчик↔сеть — по данным CE308; мощность
-// в гараж (справа от развилки) = P(CE308) − Σac(инверторы гаража).
+// чтобы не находиться над ним. Мощность счётчик↔сеть — по данным счётчика гаража
+// (DTS017M, резервно CE308); мощность в гараж (справа от развилки) =
+// P(счётчик) + Σac(инверторы гаража).
 function layoutGarage(data){
   var invs=data.inverters||[];
   var n=invs.length;
@@ -535,20 +536,20 @@ function layoutGarage(data){
   var nodes=[
     {key:'grid',  cx:gridX,  cy:MAI, label:'Сеть'},
     {key:'ce308', cx:meterX, cy:MAI, label:'Счётчик'},
-    // «Сеть гаража» — узел-соединитель справа от CE308: CE308, шина инверторов, Гараж.
+    // «Сеть гаража» — узел-соединитель справа от счётчика: счётчик, шина инверторов, Гараж.
     {key:'net',   cx:nodeX,  cy:MAI, label:'Сеть гаража'},
     {key:'garage',cx:garageX,cy:MAI,label:'Гараж', raise:24}
   ];
 
   var edges=[
-    // Сеть → счётчик CE308. Потребление из сети (CE308>0) — красный, отдача — зелёный.
+    // Сеть → счётчик. Потребление из сети (meter>0) — красный, отдача — зелёный.
     {pts:[[gridX,MAI],[meterX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
      label:{x:(gridX+meterX)/2, y:MAI-12},
-     getValue:function(d){return d.ce308_power;}},
-    // Счётчик → «Сеть гаража» (показания CE308) и «Сеть гаража» → Гараж (остаток).
+     getValue:function(d){return d.garage_meter_power;}},
+    // Счётчик → «Сеть гаража» (показания счётчика) и «Сеть гаража» → Гараж (остаток).
     {pts:[[meterX,MAI],[nodeX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
      label:{x:(meterX+nodeX)/2, y:MAI-12},
-     getValue:function(d){return d.ce308_power;}},
+     getValue:function(d){return d.garage_meter_power;}},
     {pts:[[nodeX,MAI],[garageX,MAI]], rule:{greenSign:-1,greenDir:'toStart'},
      label:{x:(nodeX+garageX)/2, y:MAI-12},
      getValue:function(d){return d.garage_power;}}

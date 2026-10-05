@@ -32,6 +32,10 @@ import (
 // время последнего снимка (см. ce308EnergyDelay).
 const ce308EnergyInterval = 30 * time.Minute
 
+// ce308FinalReadingsInterval — период снятия итоговых показаний в режиме
+// final_readings_only. Совпадает с автономным снимком энергии обычного режима.
+const ce308FinalReadingsInterval = ce308EnergyInterval
+
 // ce308ReconnectDelay — базовая пауза между попытками переподключения при обрыве связи.
 const ce308ReconnectDelay = 2 * time.Second
 
@@ -51,8 +55,8 @@ const ce308ReadRetries = 2
 const ce308ConsecutiveFailLimit = 3
 
 // ce308ConnFailLogInterval — порог логирования неудачных подключений:
-	// первый сбой — сразу, далее не чаще раза в 10 минут (при длительном отсутствии
-	// связи журнал не засоряется).
+// первый сбой — сразу, далее не чаще раза в 10 минут (при длительном отсутствии
+// связи журнал не засоряется).
 const ce308ConnFailLogInterval = 10 * time.Minute
 
 // ce308CommErrPersist — сколько «нет связи» должно держаться непрерывно (без
@@ -138,6 +142,89 @@ func runCe308Poll(store *redisStore, pg *pgStore, cfg *ce308Config, ctx context.
 			return
 		}
 		reconnect = ce308Backoff(reconnect)
+	}
+}
+
+// runCe308FinalReadings — режим «только итоговые показания» (final_readings_only).
+// В отличие от runCe308Poll:
+//   - НЕ держит постоянное BLE-соединение (подключается только на время снятия);
+//   - НЕ читает и НЕ пишет мгновенную телеметрию (Redis current/series, PG-агрегация
+//     не выполняются — аккумулятор в этом режиме не запускается);
+//   - раз в ce308FinalReadingsInterval (30 мин) подключается, однократно снимает
+//     накопленную энергию END01..END04 (панель «показания» на дашборде) и
+//     отключается;
+//   - дополнительно снимает снимок по сигналу (кнопка «Обновить» на дашборде,
+//     triggerCE308EnergySnapshot).
+//
+// При инициализации момент первого снятия ориентируется на время последнего
+// снимка энергии в Redis (ce308EnergyDelay): свежий снимок — ждём до (last+30 мин),
+// снимка нет/устарел — снимаем сразу. Ошибка подключения/чтения не роняет поток:
+// следующая попытка — через ограниченный бэкофф (база 2 с, до 30 с).
+func runCe308FinalReadings(store *redisStore, cfg *ce308Config, ctx context.Context) {
+	if cfg == nil {
+		return
+	}
+	// Канал запроса снимка энергии (POST /api/ce308/energy) привязываем к этому
+	// циклу, чтобы кнопка «Обновить» работала и в режиме только итоговых показаний.
+	trig := make(chan struct{}, 1)
+	setCE308TriggerChan(trig)
+	defer setCE308TriggerChan(nil)
+
+	logCE308("режим final_readings_only: итоговые показания раз в %s (или по кнопке)", ce308FinalReadingsInterval)
+	var lastFailLog time.Time
+	reconnect := ce308ReconnectDelay
+	// next — момент следующего ПЛАНОВОГО снятия.
+	next := time.Now().Add(ce308EnergyDelay(store))
+	for {
+		d := time.Until(next)
+		if d < 0 {
+			d = 0
+		}
+		timer := time.NewTimer(d)
+		manual := false
+		select {
+		case <-timer.C:
+		case <-trig:
+			manual = true
+			stopTimer(timer)
+		case <-ctx.Done():
+			stopTimer(timer)
+			return
+		}
+
+		ce308AdapterIDReset()
+		m, err := openCE308(cfg.MAC, cfg.PIN, ctx)
+		if err != nil {
+			if time.Since(lastFailLog) >= ce308ConnFailLogInterval {
+				logCE308("подключение к %s не удалось: %v", cfg.MAC, err)
+				lastFailLog = time.Now()
+			}
+			reconnect = ce308Backoff(reconnect)
+			next = time.Now().Add(reconnect)
+			continue
+		}
+		reconnect = ce308ReconnectDelay
+		err = ce308CaptureEnergy(store, cfg, m)
+		if cerr := m.Close(); cerr != nil {
+			logCE308("закрытие соединения с %s: %v", cfg.MAC, cerr)
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			if !isCE308Closed(err) {
+				logCE308("снятие итоговых показаний не удалось: %v", err)
+			}
+			reconnect = ce308Backoff(reconnect)
+			next = time.Now().Add(reconnect)
+			continue
+		}
+		// Успех: следующий плановый снимок — через полный интервал. Ручной запрос
+		// лишь сдвигает расписание от текущего момента (как и в обычном режиме).
+		if manual {
+			logCE308("итоговые показания сняты по запросу")
+		}
+		next = time.Now().Add(ce308FinalReadingsInterval)
 	}
 }
 
