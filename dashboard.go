@@ -3528,6 +3528,7 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayCon
 		"/current":         h.apiCurrent,
 		"/series":          h.apiSeries,
 		"/tariffs":         h.apiTariffs,
+		"/dts017m/tariffs": h.apiDts017Tariffs,
 		"/animation":       h.apiAnimation,
 		"/bms":             h.apiBMS,
 		"/bms/":            h.apiBMSOne,
@@ -3590,6 +3591,37 @@ func (h *dashboardHandler) apiTariffs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(meterDailyResponse{
+		GeneratedAt: time.Now().Format(time.RFC3339),
+		From:        from.Format(time.RFC3339),
+		To:          to.Add(-time.Second).Format(time.RFC3339),
+		Days:        days,
+	})
+}
+
+// apiDts017Tariffs отдаёт посуточную тарифную статистику счётчика DTS017M
+// (гараж) за период [from, to] — тот же формат, что /api/tariffs (DDS238), но из
+// собственной таблицы sunreceiver.dts017m_daily_tariffs. Только финализированные
+// дни. При выключенном разделе dts017m (flags.ShowDTS017=false) отдаётся пустой
+// список, чтобы страница «Электроэнергия» не показывала гаражные графики.
+func (h *dashboardHandler) apiDts017Tariffs(w http.ResponseWriter, r *http.Request) {
+	if !h.flags.ShowDTS017 {
+		writeJSONResponse(w, meterDailyResponse{
+			GeneratedAt: time.Now().Format(time.RFC3339),
+			Days:        []meterDayStat{},
+		})
+		return
+	}
+	from, to := parseTariffRange(r.URL.Query().Get("from"), r.URL.Query().Get("to"))
+	days := []meterDayStat{}
+	if h.pg != nil {
+		var err error
+		days, err = h.pg.DailyDts017TariffsRange(from, to)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	writeJSONResponse(w, meterDailyResponse{
 		GeneratedAt: time.Now().Format(time.RFC3339),
 		From:        from.Format(time.RFC3339),
 		To:          to.Add(-time.Second).Format(time.RFC3339),

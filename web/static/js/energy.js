@@ -172,7 +172,7 @@ function initEnergyPanel(cfg){
 	}
 	async function load(){
 		if(window.srRefresh && !window.srRefresh.isEnabled()) return;
-		var url='/api/tariffs?from='+encodeURIComponent(p.selFrom.toISOString())+'&to='+encodeURIComponent(p.selTo.toISOString());
+		var url=(cfg.url||'/api/tariffs')+'?from='+encodeURIComponent(p.selFrom.toISOString())+'&to='+encodeURIComponent(p.selTo.toISOString());
 		var r=await fetch(url); if(!r.ok) return;
 		var data=await r.json();
 		var days=data.days||[];
@@ -227,6 +227,37 @@ initEnergyPanel({
 	],
 	defaultFrom:startOfYear, defaultTo:endOfYear
 });
+
+// Гаражные графики DTS017M — те же панели, но данные из /api/dts017m/tariffs.
+// Блоки рендерятся только при активном разделе dts017m (ShowDTS017), поэтому
+// инициализируем их лишь если соответствующий canvas есть в DOM.
+if(document.getElementById('gDailyTariffChart')){
+	initEnergyPanel({
+		canvasId:'gDailyTariffChart', statusId:'gs1', fromEl:'g1From', toEl:'g1To', applyBtn:'g1Apply', isMonthly:false,
+		url:'/api/dts017m/tariffs',
+		presets:[
+			{ btn:'g1Month', range:function(){ return { from:startOfMonth(), to:endOfMonth() }; } },
+			{ btn:'g1PrevMonth', range:function(){ var d=new Date(); return { from:new Date(d.getFullYear(),d.getMonth()-1,1,0,0,0,0), to:new Date(d.getFullYear(),d.getMonth(),0,23,59,59,999) }; } },
+			{ btn:'g1Year', range:function(){ return { from:startOfYear(), to:endOfYear() }; } },
+			{ btn:'g1Week', range:function(){ var to=new Date(); var from=new Date(); from.setDate(from.getDate()-6); from.setHours(0,0,0,0); return { from:from, to:endOfDay(to) }; } },
+			{ btn:'g1Days30', range:function(){ var to=new Date(); var from=new Date(); from.setDate(from.getDate()-29); from.setHours(0,0,0,0); return { from:from, to:endOfDay(to) }; } }
+		],
+		defaultFrom:function(){ var from=new Date(); from.setDate(from.getDate()-29); from.setHours(0,0,0,0); return from; },
+		defaultTo:function(){ return endOfDay(new Date()); }
+	});
+}
+if(document.getElementById('gMonthlyTariffChart')){
+	initEnergyPanel({
+		canvasId:'gMonthlyTariffChart', statusId:'gs2', fromEl:'g2From', toEl:'g2To', applyBtn:'g2Apply', isMonthly:true,
+		url:'/api/dts017m/tariffs',
+		presets:[
+			{ btn:'g2Year', range:function(){ return { from:startOfYear(), to:endOfYear() }; } },
+			{ btn:'g2PrevYear', range:function(){ var y=new Date().getFullYear()-1; return { from:new Date(y,0,1,0,0,0,0), to:new Date(y,11,31,23,59,59,999) }; } },
+			{ btn:'g2Month', range:function(){ return { from:startOfMonth(), to:endOfMonth() }; } }
+		],
+		defaultFrom:startOfYear, defaultTo:endOfYear
+	});
+}
 // Перезагрузка данных после зума/сдвига (каждый график независимо). Time-шкала:
 // окно X — время; по завершении жеста (onZoomComplete/onPanComplete на десктопе,
 // onGestureComplete на touch) 300ms-debounce → данные удаляются и грузятся
@@ -253,7 +284,8 @@ function energyWindowChanged(canvasId){
 // свайп — панорама, двойной тап — сброс; на touch плагин zoom отключён, жесты —
 // srTouchChart). По завершении жеста — перезагрузка под новое окно.
 if(SR_COARSE){
-	['dailyTariffChart','monthlyTariffChart'].forEach(function(id){
+	['dailyTariffChart','monthlyTariffChart','gDailyTariffChart','gMonthlyTariffChart'].forEach(function(id){
+		if(!document.getElementById(id)) return;
 		srTouchChart(function(){ return window[id]; }, id, 3*86400000, null, function(){ energyWindowChanged(id); });
 	});
 }

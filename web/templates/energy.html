@@ -14,7 +14,7 @@
 <div class="top-nav">
   <div>
     <h1 class="ttl">Электроэнергия</h1>
-    <p class="sub">Счётчик DDS238: потребление/отдача по тарифам «День»/«Ночь»</p>
+    <p class="sub">Счётчики DDS238 «Дом» и DTS017M «Гараж»: потребление/отдача по тарифам «День»/«Ночь»</p>
   </div>
   {{template "mnav" .}}
   {{template "refreshToggle" .}}
@@ -56,6 +56,44 @@
   <div class="lg-chips" id="monthlyTariffChartLg"></div>
   <div class="chart-wrap"><canvas id="monthlyTariffChart"></canvas></div>
 </div>
+
+{{if .flags.ShowDTS017}}
+<div id="chartbox">
+  <h2>Гараж. Потребление / отдача по тарифу «День» и «Ночь» по дням, kWh</h2>
+  <div class="range-panel" id="gr1">
+    <button id="g1Month">Текущий месяц</button>
+    <button id="g1PrevMonth">Прошлый месяц</button>
+    <button id="g1Year">Текущий год</button>
+    <button id="g1Week">7 дней</button>
+    <button id="g1Days30">30 дней</button>
+    <span style="color:#555">С</span>
+    <input type="datetime-local" id="g1From">
+    <span style="color:#555">по</span>
+    <input type="datetime-local" id="g1To">
+    <button id="g1Apply">Показать</button>
+  </div>
+  <div class="chart-toolbar"><span class="range-status" id="gs1"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
+  <div class="lg-chips" id="gDailyTariffChartLg"></div>
+  <div class="chart-wrap"><canvas id="gDailyTariffChart"></canvas></div>
+</div>
+
+<div id="chartbox">
+  <h2>Гараж. Потребление / отдача по тарифу «День» и «Ночь» по месяцам, kWh</h2>
+  <div class="range-panel" id="gr2">
+    <button id="g2Year">Текущий год</button>
+    <button id="g2PrevYear">Прошлый год</button>
+    <button id="g2Month">Текущий месяц</button>
+    <span style="color:#555">С</span>
+    <input type="datetime-local" id="g2From">
+    <span style="color:#555">по</span>
+    <input type="datetime-local" id="g2To">
+    <button id="g2Apply">Показать</button>
+  </div>
+  <div class="chart-toolbar"><span class="range-status" id="gs2"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
+  <div class="lg-chips" id="gMonthlyTariffChartLg"></div>
+  <div class="chart-wrap"><canvas id="gMonthlyTariffChart"></canvas></div>
+</div>
+{{end}}
 
 <script src="/static/js/common.js?v={{.CacheBust}}"></script>
 <script src="/static/js/energy.js?v={{.CacheBust}}"></script>
