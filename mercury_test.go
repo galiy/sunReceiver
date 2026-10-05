@@ -35,3 +35,38 @@ func TestLoadMercuryConfig(t *testing.T) {
 		t.Fatalf("ожидали ошибку на неверный taken_at")
 	}
 }
+
+// TestDdsTariffPartialUpTo проверяет выбор ближайшей ПРЕДШЕСТВУЮЩЕЙ тарифной
+// границы: до 07:00 прирост нулевой (граница — 00:00), днём ночь накоплена, к
+// концу дня добавляется день. Регресс: раньше до 07:00 возвращалась вся ночная
+// разница [00:00,07:00] (занижало прогноз «Меркурия»).
+func TestDdsTariffPartialUpTo(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	b := &meterBoundaryRow{
+		Import0000: f(100), Import0700: f(110), Import2300: f(130),
+		Export0000: f(200), Export0700: f(205), Export2300: f(215),
+	}
+	loc := time.Local
+	at := func(h, m int) time.Time { return time.Date(2026, 10, 5, h, m, 0, 0, loc) }
+
+	// 00:00–06:59 — предшествующая граница 00:00: прироста нет.
+	if d, n, _, _ := ddsTariffPartialUpTo(at(3, 0), b); d != 0 || n != 0 {
+		t.Fatalf("03:00: impDay=%v impNight=%v, want 0/0", d, n)
+	}
+	// 07:00 — ночь [00:00,07:00] накоплена, день ещё нет.
+	if d, n, _, en := ddsTariffPartialUpTo(at(7, 0), b); d != 0 || n != 10 || en != 5 {
+		t.Fatalf("07:00: impDay=%v impNight=%v expNight=%v, want 0/10/5", d, n, en)
+	}
+	// 12:00 — ночь накоплена, день нет.
+	if d, n, _, _ := ddsTariffPartialUpTo(at(12, 0), b); d != 0 || n != 10 {
+		t.Fatalf("12:00: impDay=%v impNight=%v, want 0/10", d, n)
+	}
+	// 23:00 — день [07:00,23:00] полон, ночь (первая часть) накоплена.
+	if d, n, ed, en := ddsTariffPartialUpTo(at(23, 0), b); d != 20 || n != 10 || ed != 10 || en != 5 {
+		t.Fatalf("23:00: impDay=%v impNight=%v expDay=%v expNight=%v, want 20/10/10/5", d, n, ed, en)
+	}
+	// 23:30 — то же (прирост [23:00,at] не атрибуцируется).
+	if d, n, _, _ := ddsTariffPartialUpTo(at(23, 30), b); d != 20 || n != 10 {
+		t.Fatalf("23:30: impDay=%v impNight=%v, want 20/10", d, n)
+	}
+}

@@ -64,6 +64,38 @@ ON CONFLICT (name, ts) DO UPDATE
 	return nil
 }
 
+// migrateDts017AverageKey однократно переносит усреднённые точки DTS017M в
+// sunreceiver.dts017m_averages на СТАБИЛЬНЫЙ ключ dts017DeviceKey с прежнего
+// изменяемого cfg.Name: переименование счётчика в конфиге не должно расщеплять
+// историю на два потока (аналогично единому ключу dds238). Идемпотентно: при
+// отсутствии строк со старым именем — no-op.
+func migrateDts017AverageKey(pg *pgStore, cfg *dts017Config) {
+	if pg == nil || cfg == nil || cfg.Name == "" || cfg.Name == dts017DeviceKey {
+		return
+	}
+	var moved int64
+	err := pg.withTx(func(q pgExecer) error {
+		tag, err := q.Exec(pg.ctx, `
+INSERT INTO sunreceiver.dts017m_averages (name, ts, values)
+SELECT $1, ts, values FROM sunreceiver.dts017m_averages WHERE name = $2
+ON CONFLICT (name, ts) DO NOTHING`, dts017DeviceKey, cfg.Name)
+		if err != nil {
+			return err
+		}
+		moved = tag.RowsAffected()
+		_, err = q.Exec(pg.ctx,
+			`DELETE FROM sunreceiver.dts017m_averages WHERE name = $1`, cfg.Name)
+		return err
+	})
+	if err != nil {
+		log.Printf("dts017m: миграция ключа %q → %q: %v", cfg.Name, dts017DeviceKey, err)
+		return
+	}
+	if moved > 0 {
+		log.Printf("dts017m: миграция ключа %q → %q: перенесено строк: %d", cfg.Name, dts017DeviceKey, moved)
+	}
+}
+
 // averageDts017 усредняет снимки одного 5-минутного окна: обычные теги — среднее
 // (округление до 1 знака), накопительные энергии — последнее значение окна.
 func averageDts017(snaps []dts017Snapshot) map[string]float64 {

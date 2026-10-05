@@ -188,47 +188,37 @@ const ce308ConnectTimeout = 20 * time.Second
 
 // connectCE308Bounded выполняет connectCE308 с ограничением по времени (см.
 // ce308ConnectTimeout), чтобы зависший Connect не блокировал пулер навсегда.
-// Если Connect успел завершиться после таймаута — незатребованное соединение
-// закрывается (если результат уже готов), иначе горутина остаётся висеть до
-// ответа BlueZ (редко, при устойчиво зависшем радио).
+// connectCE308 вызывается без дедлайна (BlueZ), поэтому по таймауту/отмене мы его
+// не ждём, но соединение не должно утечь: горутина всегда кладёт результат в
+// буферизованный канал (cap=1), а фоновый «сторож» дожидается результата и
+// закрывает соединение, если оно уже не нужно (сам Connect при устойчиво
+// зависшем радио остаётся висеть — задокументированное поведение).
 func connectCE308Bounded(mac string, ctx context.Context) (*ce308Meter, error) {
 	type res struct {
 		m   *ce308Meter
 		err error
 	}
 	ch := make(chan res, 1)
-	// done закрывается, когда результат уже не нужен: горутина connectCE308 сама
-	// закроет соединение, если успеет завершиться после таймаута (иначе оно
-	// утекло бы — результат никто не забирает).
-	done := make(chan struct{})
 	go func() {
 		m, err := connectCE308(mac, ctx)
-		select {
-		case ch <- res{m, err}:
-		case <-done:
-			if m != nil {
-				_ = m.Close()
-			}
-		}
+		ch <- res{m, err} // cap=1 — отправка не блокируется
 	}()
-	drainClose := func() {
-		close(done)
-		select {
-		case r := <-ch:
+	drain := func() {
+		go func() {
+			r := <-ch
 			if r.m != nil {
 				_ = r.m.Close()
 			}
-		default:
-		}
+		}()
 	}
 	select {
 	case r := <-ch:
 		return r.m, r.err
 	case <-ctx.Done():
-		drainClose()
+		drain()
 		return nil, ctx.Err()
 	case <-time.After(ce308ConnectTimeout):
-		drainClose()
+		drain()
 		return nil, fmt.Errorf("подключение к %s: превышено %s", mac, ce308ConnectTimeout)
 	}
 }

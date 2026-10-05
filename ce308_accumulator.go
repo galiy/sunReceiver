@@ -58,6 +58,59 @@ func averageCe308(snaps []ce308Snapshot) map[string]float64 {
 	return out
 }
 
+// backfillCe308 конвертирует уже накопленные в Redis снимки CE308 (окно
+// удержания Redis — 2 календарных суток) в 5-минутные точки PG. Вызывается
+// однократно при старте: без него окна, пропущенные за время простоя, теряются
+// (живой цикл обрабатывает только будущие окна). Читает ряд ОДНИМ запросом и
+// группирует снимки по 5-минутным бакетам в памяти (аналог backfillAccumulator).
+func backfillCe308(store *redisStore, pg *pgStore, name string) {
+	if pg == nil {
+		return
+	}
+	now := time.Now()
+	end := floorToStep(now)
+	start := recentCutoff(now)
+	if !start.Before(end) {
+		return
+	}
+	snaps, err := store.QueryCE308Series(start, end.Add(-time.Second))
+	if err != nil {
+		log.Printf("ce308: backfill: %v", err)
+		return
+	}
+	groups := map[time.Time][]ce308Snapshot{}
+	for _, sn := range snaps {
+		ts, perr := time.Parse(time.RFC3339, sn.Timestamp)
+		if perr != nil {
+			continue
+		}
+		ts = ts.In(time.Local)
+		if ts.Before(start) || !ts.Before(end) {
+			continue
+		}
+		bts := floorToStep(ts)
+		groups[bts] = append(groups[bts], sn)
+	}
+	var n int
+	for bts, bucket := range groups {
+		vc := averageCe308(bucket)
+		if len(vc) == 0 {
+			continue
+		}
+		// Upsert по (name, ts) — идемпотентно при повторном старте.
+		if err := retryPg(func() error {
+			return pg.InsertCe308Average(name, bts, vc)
+		}, 3); err != nil {
+			log.Printf("ce308: backfill pg %s: %v", bts.Format(time.RFC3339), err)
+			continue
+		}
+		n++
+	}
+	if n > 0 {
+		log.Printf("ce308: backfill: записано 5-минутных точек: %d", n)
+	}
+}
+
 // runCe308Accumulator — фоновый процесс усреднения истории CE308 в PostgreSQL.
 // По завершении каждого 5-минутного промежутка (не сразу, а спустя
 // ce308AvgDelay) читает снимки промежутка из Redis-ряда и пишет одну усреднённую
@@ -67,6 +120,8 @@ func runCe308Accumulator(store *redisStore, pg *pgStore, name string, ctx contex
 		return
 	}
 	log.Printf("ce308: avg старт; период=%s, отсрочка=%s, 5-минутные промежутки", ce308AvgStep, ce308AvgDelay)
+	// Догон уже накопленных в Redis окон (простой/рестарт): до старта живого цикла.
+	backfillCe308(store, pg, name)
 	var wg sync.WaitGroup
 	defer wg.Wait()
 

@@ -18,6 +18,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"strconv"
 	"time"
@@ -58,10 +59,26 @@ func migrateMeterDeviceKey(store *redisStore, pg *pgStore, now time.Time) {
 	// адресно переносим строки PG averages (по индексу (ip,ts), без полного скана
 	// jsonb с риском упереться в statement_timeout).
 	ips := map[string]struct{}{}
-	migrateMeterCurrent(store, ips)
-	migrateMeterSeries(store, now, ips)
-	if pg != nil {
-		migrateMeterPGAverages(pg, ips)
+	// Маркер ставим ТОЛЬКО после полностью успешной миграции, иначе при сбое
+	// (напр. PG временно недоступен) миграция не повторилась бы и история
+	// счётчика навсегда осталась бы под старыми IP-ключами.
+	if err := migrateMeterCurrent(store, ips); err != nil {
+		log.Printf("meter migrate: current: %v — маркер не ставлю, повтор при следующем старте", err)
+		return
+	}
+	if err := migrateMeterSeries(store, now, ips); err != nil {
+		log.Printf("meter migrate: series: %v — маркер не ставлю, повтор при следующем старте", err)
+		return
+	}
+	// Перенос PG-истории возможен только при доступном PG. Если pg==nil (PG ещё не
+	// подключён) — маркер не ставим, миграция повторится при следующем старте.
+	if pg == nil {
+		log.Printf("meter migrate: PG недоступен — маркер не ставлю, миграция повторится")
+		return
+	}
+	if err := migrateMeterPGAverages(pg, ips); err != nil {
+		log.Printf("meter migrate: pg averages: %v — маркер не ставлю, повтор при следующем старте", err)
+		return
 	}
 	if err := store.rdb.Set(store.ctx, meterMigrateMarkerKey, "1", 0).Err(); err != nil {
 		log.Printf("meter migrate: запись маркера: %v", err)
@@ -70,11 +87,10 @@ func migrateMeterDeviceKey(store *redisStore, pg *pgStore, now time.Time) {
 
 // migrateMeterCurrent переносит свежайший снимок счётчика в current-HASH под
 // единым ключом и удаляет старые IP-поля. Найденные старые IP добавляет в ips.
-func migrateMeterCurrent(store *redisStore, ips map[string]struct{}) {
+func migrateMeterCurrent(store *redisStore, ips map[string]struct{}) error {
 	cur, err := store.rdb.HGetAll(store.ctx, redisCurrentKey).Result()
 	if err != nil {
-		log.Printf("meter migrate current: %v", err)
-		return
+		return err
 	}
 	var oldKeys []string
 	var newest deviceSnapshot
@@ -93,38 +109,39 @@ func migrateMeterCurrent(store *redisStore, ips map[string]struct{}) {
 		}
 	}
 	if !found || len(oldKeys) == 0 {
-		return
+		return nil
 	}
 	newest.IP = meterDeviceKey
 	b, err := json.Marshal(newest)
 	if err != nil {
 		log.Printf("meter migrate current marshal: %v", err)
-		return
+		return nil // структурная ошибка не повторится — не блокируем маркер
 	}
 	pipe := store.rdb.TxPipeline()
 	pipe.HSet(store.ctx, redisCurrentKey, meterDeviceKey, string(b))
 	pipe.HDel(store.ctx, redisCurrentKey, oldKeys...)
 	if _, err := pipe.Exec(store.ctx); err != nil {
-		log.Printf("meter migrate current write: %v", err)
-		return
+		return err
 	}
 	log.Printf("meter migrate current: %v → %q", oldKeys, meterDeviceKey)
+	return nil
 }
 
 // migrateMeterSeries переписывает ip снимков счётчика во временном ряду Redis
 // (окно удержания, все месячные сегменты) на единый ключ, сохраняя score.
 // Найденные старые IP добавляет в ips.
-func migrateMeterSeries(store *redisStore, now time.Time, ips map[string]struct{}) {
+func migrateMeterSeries(store *redisStore, now time.Time, ips map[string]struct{}) error {
 	start := recentCutoff(now)
 	min := strconv.FormatInt(start.Unix(), 10)
 	max := strconv.FormatInt(now.Unix(), 10)
 	total := 0
+	var migErr error
 	eachMonth(start, now, func(y int, m time.Month) bool {
 		key := redisSeriesKey(time.Date(y, m, 1, 0, 0, 0, 0, time.Local))
 		zs, err := store.rdb.ZRangeByScoreWithScores(store.ctx, key, &redis.ZRangeBy{Min: min, Max: max}).Result()
 		if err != nil {
-			log.Printf("meter migrate series %s: %v", key, err)
-			return true
+			migErr = fmt.Errorf("series %s: %w", key, err)
+			return false
 		}
 		var stale []any
 		var adds []redis.Z
@@ -154,15 +171,19 @@ func migrateMeterSeries(store *redisStore, now time.Time, ips map[string]struct{
 		pipe.ZAdd(store.ctx, key, adds...)
 		pipe.Expire(store.ctx, key, 40*24*time.Hour)
 		if _, err := pipe.Exec(store.ctx); err != nil {
-			log.Printf("meter migrate series write %s: %v", key, err)
-			return true
+			migErr = fmt.Errorf("series write %s: %w", key, err)
+			return false
 		}
 		total += len(adds)
 		return true
 	})
+	if migErr != nil {
+		return migErr
+	}
 	if total > 0 {
 		log.Printf("meter migrate series: точек счётчика перенесено: %d", total)
 	}
+	return nil
 }
 
 // migrateMeterPGAverages переводит исторические усреднённые строки счётчика в
@@ -170,9 +191,9 @@ func migrateMeterSeries(store *redisStore, now time.Time, ips map[string]struct{
 // конкретными старыми IP счётчика (ips) — выборка идёт по индексу (ip, ts), без
 // полного скана jsonb. Дополнительно строки фильтруются по наличию тега
 // meter_voltage (защита от смены назначения IP).
-func migrateMeterPGAverages(pg *pgStore, ips map[string]struct{}) {
+func migrateMeterPGAverages(pg *pgStore, ips map[string]struct{}) error {
 	if len(ips) == 0 {
-		return
+		return nil
 	}
 	old := make([]string, 0, len(ips))
 	for ip := range ips {
@@ -195,10 +216,10 @@ func migrateMeterPGAverages(pg *pgStore, ips map[string]struct{}) {
 		return nil
 	})
 	if err != nil {
-		log.Printf("meter migrate pg averages: %v", err)
-		return
+		return err
 	}
 	if n > 0 {
 		log.Printf("meter migrate pg averages: строк счётчика перенесено: %d (%v)", n, old)
 	}
+	return nil
 }

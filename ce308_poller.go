@@ -160,7 +160,7 @@ func runCe308Poll(store *redisStore, pg *pgStore, cfg *ce308Config, ctx context.
 // снимка энергии в Redis (ce308EnergyDelay): свежий снимок — ждём до (last+30 мин),
 // снимка нет/устарел — снимаем сразу. Ошибка подключения/чтения не роняет поток:
 // следующая попытка — через ограниченный бэкофф (база 2 с, до 30 с).
-func runCe308FinalReadings(store *redisStore, cfg *ce308Config, ctx context.Context) {
+func runCe308FinalReadings(store *redisStore, pg *pgStore, cfg *ce308Config, ctx context.Context) {
 	if cfg == nil {
 		return
 	}
@@ -173,6 +173,10 @@ func runCe308FinalReadings(store *redisStore, cfg *ce308Config, ctx context.Cont
 	logCE308("режим final_readings_only: итоговые показания раз в %s (или по кнопке)", ce308FinalReadingsInterval)
 	var lastFailLog time.Time
 	reconnect := ce308ReconnectDelay
+	// История ошибок: пишем «нет связи» только если держится ≥ ce308CommErrPersist
+	// (как в runCe308Poll), иначе одиночный сбой не засоряет журнал.
+	var commErrSince time.Time
+	commErrLogged := false
 	// next — момент следующего ПЛАНОВОГО снятия.
 	next := time.Now().Add(ce308EnergyDelay(store))
 	for {
@@ -199,11 +203,23 @@ func runCe308FinalReadings(store *redisStore, cfg *ce308Config, ctx context.Cont
 				logCE308("подключение к %s не удалось: %v", cfg.MAC, err)
 				lastFailLog = time.Now()
 			}
+			now := time.Now()
+			if commErrSince.IsZero() {
+				commErrSince = now
+			}
+			if pg != nil && !commErrLogged && now.Sub(commErrSince) >= ce308CommErrPersist {
+				if e := pg.InsertDeviceError(cfg.Name, "ce308", "comm", err.Error(), now); e != nil {
+					logCE308("error pg: %v", e)
+				}
+				commErrLogged = true
+			}
 			reconnect = ce308Backoff(reconnect)
 			next = time.Now().Add(reconnect)
 			continue
 		}
 		reconnect = ce308ReconnectDelay
+		commErrSince = time.Time{}
+		commErrLogged = false
 		err = ce308CaptureEnergy(store, cfg, m)
 		if cerr := m.Close(); cerr != nil {
 			logCE308("закрытие соединения с %s: %v", cfg.MAC, cerr)

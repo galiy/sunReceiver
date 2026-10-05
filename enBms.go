@@ -496,7 +496,7 @@ func parseEnBmsBatteryPayload(p []byte, withTail bool) (enbmsParsed, error) {
 		// Раскладка из приложения (16S_V20_ADDR_EN.xml, teleSignal_Group): хвост =
 		// 16+6+2+14+1 = 39 байт. Смещение Ext_Bit подтверждается живым кадром лишь
 		// косвенно (см. BACKLOG) — возможны ложные срабатывания, калибруем по сырому логу.
-		r.Tail = parseEnBmsTail(p)
+		r.Tail = parseEnBmsTail(p, n, tn)
 	}
 	return r, nil
 }
@@ -597,13 +597,13 @@ func enbmsSnapshotFromParsed(cfg enBmsDeviceConfig, r enbmsParsed, now time.Time
 // (`parseBody_Battery`, BmsMsgUtil.dart 0x3f3a18; порядок имён — `toJson`
 // 0x3def6c): после телеметрии идут warn-списки, затем статусы:
 //
-//	[0..15]  список по ячейкам (batterynum=16 байт)
-//	[16..19] список по температурам (tempnum-2=4 байта)
-//	[20] envtempwarn, [21] powertempwarn, [22] chargecurrentwarn
-//	[23] customerwarnp, далее статусы (ключи/баланс/режим) — в норме ненулевые.
+//	[batterynum]     список по ячейкам
+//	[tempnum-2]      список по температурам
+//	+1 envtempwarn, +1 powertempwarn, +1 chargecurrentwarn, +1 customerwarnp
+//	далее статусы (ключи/баланс/режим) — в норме ненулевые.
 //
-// На ЗДОРОВОМ кадре warn-область (0..23) нулевая; ненулевые байты 25..27 —
-// статусы, не аварии (см. PROTOCOL.md energybms §5.1.1).
+// На ЗДОРОВОМ кадре warn-область нулевая; статусные байты после неё — не аварии
+// (см. PROTOCOL.md energybms §5.1.1).
 type enbmsTail struct {
 	BatWarn    []int // предупреждения по ячейкам (nonzero = активное)
 	TempWarn   []int // предупреждения по температурам
@@ -641,26 +641,37 @@ func enbmsCellWarnBits(v int) []string {
 	return out
 }
 
-// parseEnBmsTail декодирует warn-область хвоста Battery (последние 39 байт).
-// Безопасно при коротком payload. Статусы (ключи/баланс/режим) не декодируются —
-// их смещения не подтверждены.
-func parseEnBmsTail(p []byte) enbmsTail {
+// parseEnBmsTail декодирует warn-область хвоста Battery. Раскладка хвоста зависит
+// от числа ячеек (cells) и датчиков температуры (temps): warn-байтов ячеек — cells,
+// температур — (temps-2) (первые два датчика в warn-область не входят), далее
+// envtempwarn, powertempwarn, chargecurrentwarn, customerwarnp. Смещение начала
+// хвоста вычисляется из counts, а не из фиксированных «последних 39 байт», поэтому
+// поля не «разъезжаются» на моделях с другим числом ячеек/датчиков. Безопасно при
+// коротком payload. Статусы (ключи/баланс/режим) не декодируются — их смещения не
+// подтверждены.
+func parseEnBmsTail(p []byte, cells, temps int) enbmsTail {
 	var t enbmsTail
-	if len(p) < 39 {
+	if cells <= 0 || cells > 32 || temps < 2 {
 		return t
 	}
-	o := len(p) - 39
-	t.BatWarn = make([]int, 16)
-	for i := 0; i < 16; i++ {
+	tw := temps - 2
+	warnLen := cells + tw + 4 // + env/power/charge/customer
+	o := 3 + 2*cells + 1 + 2*temps + 19
+	if o < 0 || o+warnLen > len(p) {
+		return t
+	}
+	t.BatWarn = make([]int, cells)
+	for i := 0; i < cells; i++ {
 		t.BatWarn[i] = int(p[o+i])
 	}
-	t.TempWarn = make([]int, 4)
-	for i := 0; i < 4; i++ {
-		t.TempWarn[i] = int(p[o+16+i])
+	t.TempWarn = make([]int, tw)
+	for i := 0; i < tw; i++ {
+		t.TempWarn[i] = int(p[o+cells+i])
 	}
-	t.EnvWarn = int(p[o+20])
-	t.PowerWarn = int(p[o+21])
-	t.ChargeWarn = int(p[o+22])
+	base := o + cells + tw
+	t.EnvWarn = int(p[base])
+	t.PowerWarn = int(p[base+1])
+	t.ChargeWarn = int(p[base+2])
 	for i, v := range t.BatWarn {
 		for _, s := range enbmsCellWarnBits(v) {
 			t.Alarms = append(t.Alarms, fmt.Sprintf("Ячейка %d: %s", i+1, s))

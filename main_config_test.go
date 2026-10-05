@@ -32,7 +32,7 @@ func TestLoadConfigLoggerSNRequired(t *testing.T) {
 	path := filepath.Join(dir, "cfg.json")
 
 	// Deye без logger_sn — ошибка с упоминанием logger_sn.
-	if err := os.WriteFile(path, []byte(`{"poll":{"inverter":10,"map":1,"meter":1,"ce308":5,"antbms":1,"enbms":3},"dashboard_port":8080,"invertors":[{"ip":"192.0.2.91","name":"D1","type":"deye","disabled":false}]}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"poll":{"inverter":10,"map":1,"meter":1,"ce308":5,"antbms":1},"dashboard_port":8080,"invertors":[{"ip":"192.0.2.91","name":"D1","type":"deye","disabled":false}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, _, _, _, _, _, _, err := loadConfig(path); err == nil {
@@ -42,7 +42,7 @@ func TestLoadConfigLoggerSNRequired(t *testing.T) {
 	}
 
 	// Sofar без logger_sn — тоже ошибка.
-	if err := os.WriteFile(path, []byte(`{"poll":{"inverter":10,"map":1,"meter":1,"ce308":5,"antbms":1,"enbms":3},"dashboard_port":8080,"invertors":[{"ip":"192.0.2.76","name":"S1","type":"sofar","disabled":false}]}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"poll":{"inverter":10,"map":1,"meter":1,"ce308":5,"antbms":1},"dashboard_port":8080,"invertors":[{"ip":"192.0.2.76","name":"S1","type":"sofar","disabled":false}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, _, _, _, _, _, _, err := loadConfig(path); err == nil {
@@ -50,7 +50,7 @@ func TestLoadConfigLoggerSNRequired(t *testing.T) {
 	}
 
 	// С logger_sn — валиден.
-	if err := os.WriteFile(path, []byte(`{"poll":{"inverter":10,"map":1,"meter":1,"ce308":5,"antbms":1,"enbms":3},"dashboard_port":8080,"invertors":[{"ip":"192.0.2.91","name":"D1","type":"deye","disabled":false,"logger_sn":1234567890}]}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"poll":{"inverter":10,"map":1,"meter":1,"ce308":5,"antbms":1},"dashboard_port":8080,"invertors":[{"ip":"192.0.2.91","name":"D1","type":"deye","disabled":false,"logger_sn":1234567890}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	targets, _, _, _, _, _, _, _, err := loadConfig(path)
@@ -111,7 +111,7 @@ func TestMeterProtocol(t *testing.T) {
 func TestLoadConfigDashboardPortRequired(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cfg.json")
-	if err := os.WriteFile(path, []byte(`{"poll":{"inverter":10,"map":1,"meter":1,"ce308":5,"antbms":1,"enbms":3},"invertors":[{"ip":"192.0.2.91","name":"D1","type":"deye","disabled":false,"logger_sn":1234567890}]}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"poll":{"inverter":10,"map":1,"meter":1,"ce308":5,"antbms":1},"invertors":[{"ip":"192.0.2.91","name":"D1","type":"deye","disabled":false,"logger_sn":1234567890}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, _, _, _, _, _, _, err := loadConfig(path); err == nil {
@@ -134,7 +134,7 @@ func TestLoadConfigPollRequired(t *testing.T) {
 		t.Fatalf("без poll ожидали ошибку про poll, got %v", err)
 	}
 	// Поле poll.ce308 отсутствует/0.
-	if err := os.WriteFile(path, []byte(`{"dashboard_port":8080,"poll":{"inverter":10,"map":1,"meter":1,"antbms":1,"enbms":3},`+inv+`}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"dashboard_port":8080,"poll":{"inverter":10,"map":1,"meter":1,"antbms":1},`+inv+`}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, _, _, _, _, _, _, err := loadConfig(path); err == nil || !strings.Contains(err.Error(), "poll.ce308") {
@@ -147,7 +147,7 @@ func TestLoadConfigPollRequired(t *testing.T) {
 func TestLoadConfigCE308FinalReadingsOnly(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cfg.json")
-	poll := `"poll":{"inverter":10,"map":1,"meter":1,"ce308":5,"antbms":1,"enbms":3}`
+	poll := `"poll":{"inverter":10,"map":1,"meter":1,"ce308":5,"antbms":1}`
 	base := `"ce308":{"disabled":false,"mac":"AA:BB:CC:DD:EE:FF","pin":"000000"`
 
 	// Поле отсутствует — ошибка загрузки конфига.
@@ -202,7 +202,7 @@ func TestDefaultPGRestoreWindow(t *testing.T) {
 func TestLoadConfigDuplicateIPRejected(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cfg.json")
-	body := `{"poll":{"inverter":10,"map":1,"meter":1,"ce308":5,"antbms":1,"enbms":3},"dashboard_port":8080,"invertors":[` +
+	body := `{"poll":{"inverter":10,"map":1,"meter":1,"ce308":5,"antbms":1},"dashboard_port":8080,"invertors":[` +
 		`{"ip":"192.0.2.10","name":"A","type":"deye","disabled":false,"logger_sn":1},` +
 		`{"ip":"192.0.2.10","name":"B","type":"deye","disabled":false,"logger_sn":2}]}`
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
@@ -219,7 +219,7 @@ func TestLoadConfigDuplicateIPRejected(t *testing.T) {
 func TestLoadConfigMeterOnlyAccepted(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cfg.json")
-	body := `{"poll":{"inverter":10,"map":1,"meter":1,"ce308":5,"antbms":1,"enbms":3},"dashboard_port":8080,"meter":{"disabled":false,"name":"M","ip":"192.0.2.40","port":502,"unit":1}}`
+	body := `{"poll":{"inverter":10,"map":1,"meter":1,"ce308":5,"antbms":1},"dashboard_port":8080,"meter":{"disabled":false,"name":"M","ip":"192.0.2.40","port":502,"unit":1}}`
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}

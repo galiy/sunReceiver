@@ -3364,9 +3364,15 @@ func (h *dashboardHandler) apiCE308Energy(w http.ResponseWriter, r *http.Request
 				return
 			}
 		}
-		h.ce308EnergyAt = time.Now()
 		h.ce308EnergyMu.Unlock()
 		ok := triggerCE308EnergySnapshot()
+		// Лок 5 мин ставим ТОЛЬКО если пулер принял сигнал (accepted:true): иначе
+		// (очередь занята / пулер не запущен) повторная кнопка молча получала бы 429.
+		if ok {
+			h.ce308EnergyMu.Lock()
+			h.ce308EnergyAt = time.Now()
+			h.ce308EnergyMu.Unlock()
+		}
 		writeJSONResponse(w, map[string]bool{"accepted": ok})
 		return
 	}

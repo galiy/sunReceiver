@@ -107,43 +107,36 @@ func openEnBms(mac string, ctx context.Context) (*enbmsConn, error) {
 }
 
 // connectEnBmsBounded выполняет connectEnBms с ограничением по времени (см.
-// enBmsConnectTimeout). Если Connect завершился после таймаута — незатребованное
-// соединение закрывается.
+// enBmsConnectTimeout). connectEnBms вызывается без дедлайна (BlueZ), поэтому по
+// таймауту/отмене мы его не ждём, но соединение не должно утечь: горутина всегда
+// кладёт результат в буферизованный канал (cap=1), а фоновый «сторож» дожидается
+// результата и закрывает соединение, если оно уже не нужно.
 func connectEnBmsBounded(mac string, ctx context.Context) (*enbmsConn, error) {
 	type res struct {
 		c   *enbmsConn
 		err error
 	}
 	ch := make(chan res, 1)
-	done := make(chan struct{})
 	go func() {
 		c, err := connectEnBms(mac, ctx)
-		select {
-		case ch <- res{c, err}:
-		case <-done:
-			if c != nil {
-				_ = c.Close()
-			}
-		}
+		ch <- res{c, err} // cap=1 — отправка не блокируется
 	}()
-	drainClose := func() {
-		close(done)
-		select {
-		case r := <-ch:
+	drain := func() {
+		go func() {
+			r := <-ch
 			if r.c != nil {
 				_ = r.c.Close()
 			}
-		default:
-		}
+		}()
 	}
 	select {
 	case r := <-ch:
 		return r.c, r.err
 	case <-ctx.Done():
-		drainClose()
+		drain()
 		return nil, ctx.Err()
 	case <-time.After(enBmsConnectTimeout):
-		drainClose()
+		drain()
 		return nil, fmt.Errorf("подключение к %s: превышено %s", mac, enBmsConnectTimeout)
 	}
 }
@@ -286,6 +279,10 @@ func (c *enbmsConn) request(cid2 byte, info []byte) ([]byte, error) {
 		if ok {
 			if fr[3] != cid2 {
 				continue // чужой/запоздалый кадр — ждём нужный
+			}
+			if fr[4] != 0 {
+				// RTN — код ошибки BMS (как в RS485-ветке): разбирать payload нельзя.
+				return nil, fmt.Errorf("ответ BMS: RTN=0x%02X", fr[4])
 			}
 			// Формат ответа: 7E 14 ADR CID2 RTN LEN(2) INFO … — LEN по смещению
 			// 5, INFO с 7 (проверено по живым кадрам).

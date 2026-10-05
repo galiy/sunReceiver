@@ -77,7 +77,8 @@ func TestMigrateMeterDeviceKey(t *testing.T) {
 		t.Fatalf("ряд: meterSeen=%v invSeen=%v (got %d точек)", meterSeen, invSeen, len(got))
 	}
 
-	// Маркер выставлен; повторный вызов — no-op (идемпотентность).
+	// Повторный вызов — no-op (идемпотентность). При pg==nil маркер не ставится
+	// (см. migrateMeterDeviceKey), но переносить уже нечего.
 	migrateMeterDeviceKey(s, nil, now)
 	if n, _ := s.rdb.HLen(s.ctx, redisCurrentKey).Result(); n != 2 {
 		t.Fatalf("после повторной миграции полей current=%d, want 2", n)

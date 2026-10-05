@@ -52,10 +52,14 @@ snap)` (PIPELINE/TxPipeline). `SaveSnapshot` пишет **каждое** сня�
 (без дубля точки на cutoff и без разрыва).
 
 **Восстановление при пустом Redis**: `restoreRedisFromPG` при старте восстанавливает
-ряды инверторов/МАП/счётчика (`pg.Averages` за окно 2 календарных суток), ряд ANT BMS
-(`pg.BMSAveragesAll` → `sunreceiver:bms:series:<YYYY-MM>`) и ряд EnBMS
-(`pg.EnBmsAveragesAll` → `sunreceiver:enbms:series:<YYYY-MM>`), после чего persist их
-сохраняет. Ряд CE308 из PG не восстанавливается (только живой опрос).
+ряды НЕЗАВИСИМО друг от друга: инверторы/МАП/счётчик (`pg.Averages` за окно 2
+календарных суток), ANT BMS (`pg.BMSAveragesAll`), EnBMS (`pg.EnBmsAveragesAll`),
+DTS017M (`pg.Dts017AveragesAll`) и CE308 (`pg.CE308AveragesAll`; кроме режима
+`final_readings_only`) — каждый в свой ряд `sunreceiver:*:series:<YYYY-MM>`. Сбой
+одного запроса не прерывает остальные. Если хотя бы один ряд восстановить не удалось
+(или пришёл сигнал остановки), ставится маркер `sunreceiver:restore:incomplete`, и
+реставрация повторяется при следующем старте даже при непустом Redis; маркер снимается
+после полностью успешной реставрации.
 **Нюанс**: штатный Redis-ряд BMS — сырые показания (`samples=1`), а восстановленный
 из PG участок представлен 5-минутными средними (`samples>1`) — до первых новых
 опросов ряд смешанный (маркер — поле `samples`).

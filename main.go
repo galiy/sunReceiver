@@ -456,9 +456,9 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	if err := applyPollConfig(cf.Poll); err != nil {
 		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
 	}
-	// Порт веб-дашборда — обязательное поле dashboard_port.
-	if cf.DashboardPort == 0 {
-		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: не задано обязательное поле dashboard_port (порт веб-дашборда)", path)
+	// Порт веб-дашборда — обязательное поле dashboard_port в диапазоне 1..65535.
+	if cf.DashboardPort < 1 || cf.DashboardPort > 65535 {
+		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: dashboard_port=%d вне диапазона 1..65535 (порт веб-дашборда)", path, cf.DashboardPort)
 	}
 	// Учётные данные HTTP Basic для `/api/*` дашборда (необязательны). Заданы обе —
 	// требовать авторизацию; иначе API открыт (доступ снаружи закрывает прокси).
@@ -1580,20 +1580,23 @@ func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 		if len(result) > 0 {
 			// Alert-кандидаты: 1-фазный hybrid (0x65-0x6A) и 3-фазный (0x229-0x22E).
 			// Значения логируем сырыми для калибровки (имена битов неизвестны).
-			alertB := ""
-			if pdus2, _, err2 := client.ReadRegistersDeye(ctx, 0x0229, 0x0006, 1); err2 == nil {
-				m2 := map[uint16]uint16{}
-				for _, p := range pdus2 {
-					if p.CRC != p.CRCCalc {
-						continue
-					}
-					for k := 0; k < len(p.Values); k++ {
-						m2[0x0229+uint16(k)] = p.Values[k]
-					}
-				}
-				alertB = deyeRegsHex(m2, 0x0229, 6)
-			}
+			// Дополнительное чтение 0x229-0x22E нужно ТОЛЬКО для сырого лога
+			// (калибровка аварийных битов). При выключенном логе не делаем лишнюю
+			// Modbus-транзакцию на каждом опросе каждого Deye.
 			if deyeRawAlertLog {
+				alertB := ""
+				if pdus2, _, err2 := client.ReadRegistersDeye(ctx, 0x0229, 0x0006, 1); err2 == nil {
+					m2 := map[uint16]uint16{}
+					for _, p := range pdus2 {
+						if p.CRC != p.CRCCalc {
+							continue
+						}
+						for k := 0; k < len(p.Values); k++ {
+							m2[0x0229+uint16(k)] = p.Values[k]
+						}
+					}
+					alertB = deyeRegsHex(m2, 0x0229, 6)
+				}
 				logDeyeRawAlert(t.IP, int(result[0x3B]), deyeRegsHex(result, 0x65, 6), alertB,
 					strings.Join(decodeDeyeWarnings(result), ", "))
 			}
@@ -1819,7 +1822,7 @@ func runMapPoll(store *redisStore, pg *pgStore, stop context.Context) {
 	ticker := time.NewTicker(mapPollInterval)
 	defer ticker.Stop()
 	state := newMPPTPollState()
-	errState := map[string]bool{} // app-ошибки по устройствам МАП/MPPT (для истории)
+	errState := newMapErrState() // app-ошибки по устройствам МАП/MPPT (для истории)
 	for {
 		select {
 		case <-ticker.C:
@@ -1828,6 +1831,36 @@ func runMapPoll(store *redisStore, pg *pgStore, stop context.Context) {
 			return
 		}
 	}
+}
+
+// mapErrState — потокобезопасное состояние «активна ли app-ошибка» по устройствам
+// МАП/MPPT. saveWindowSnapshot вызывается параллельно из нескольких горутин
+// (МАП/МАП-API/MPPT), поэтому доступ к карте сериализуется мьютексом: без него
+// одновременная запись в map приводит к «fatal error: concurrent map writes».
+type mapErrState struct {
+	mu sync.Mutex
+	m  map[string]bool
+}
+
+func newMapErrState() *mapErrState { return &mapErrState{m: map[string]bool{}} }
+
+// markIfAbsent помечает устройство как «с ошибкой» и возвращает true только при
+// переходе «без ошибки → с ошибкой» (для истории ошибок пишется лишь появление).
+func (e *mapErrState) markIfAbsent(key string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.m[key] {
+		return false
+	}
+	e.m[key] = true
+	return true
+}
+
+// clear снимает отметку ошибки устройства (успешный опрос).
+func (e *mapErrState) clear(key string) {
+	e.mu.Lock()
+	e.m[key] = false
+	e.mu.Unlock()
 }
 
 // pollAndSaveMap опрашивает быстрые источники параллельно и пишет в Redis
@@ -1843,12 +1876,11 @@ func runMapPoll(store *redisStore, pg *pgStore, stop context.Context) {
 // saveWindowSnapshot складывает результат опроса в deviceSnapshot (ts = res.Time
 // при наличии, иначе now) и пишет в Redis через SaveSnapshotMAP. Общий для
 // МАП- и MPPT-веток pollAndSaveMap.
-func saveWindowSnapshot(store *redisStore, pg *pgStore, t invTarget, res DeviceResult, now time.Time, errState map[string]bool) {
+func saveWindowSnapshot(store *redisStore, pg *pgStore, t invTarget, res DeviceResult, now time.Time, errState *mapErrState) {
 	key := devKey(t)
 	if !res.OK || !res.HasData {
 		log.Printf("%s: %s %s", t.IP, t.Kind, describeResult(res))
-		if pg != nil && errState != nil && !errState[key] {
-			errState[key] = true
+		if pg != nil && errState != nil && errState.markIfAbsent(key) {
 			kind := "map"
 			if t.Kind == kindMPPT {
 				kind = "mppt"
@@ -1865,7 +1897,7 @@ func saveWindowSnapshot(store *redisStore, pg *pgStore, t invTarget, res DeviceR
 		return
 	}
 	if errState != nil {
-		errState[key] = false
+		errState.clear(key)
 	}
 	ts := now
 	if !res.Time.IsZero() {
@@ -1887,7 +1919,7 @@ func saveWindowSnapshot(store *redisStore, pg *pgStore, t invTarget, res DeviceR
 	}
 }
 
-func pollAndSaveMap(ctx context.Context, store *redisStore, pg *pgStore, now time.Time, state *mpptPollState, errState map[string]bool) {
+func pollAndSaveMap(ctx context.Context, store *redisStore, pg *pgStore, now time.Time, state *mpptPollState, errState *mapErrState) {
 	var wg sync.WaitGroup
 	activeMPPT := map[string]struct{}{}
 	pruneMPPT := false // MPPT-состав чистим из current только по решению state.shouldPrune
@@ -2113,9 +2145,16 @@ func main() {
 			// Redis и перетереть полные PG-бакеты частичными (гонка restore ↔
 			// backfill на пустом Redis).
 			empty, cerr := store.IsEmpty()
-			if cerr != nil {
+			incomplete, ierr := store.rdb.Exists(store.ctx, redisRestoreIncompleteKey).Result()
+			switch {
+			case cerr != nil:
 				log.Printf("redis empty-check: %v", cerr)
-			} else if empty {
+			case ierr != nil:
+				log.Printf("redis restore-check: %v", ierr)
+			case empty || incomplete > 0:
+				if incomplete > 0 {
+					log.Printf("pg restore: прошлая реставрация неполная — повторяю")
+				}
 				// IsEmpty (redis_store.go) учитывает только инверторное current +
 				// серию инверторов. Данные ANT BMS лежат в ОТДЕЛЬНЫХ ключах
 				// (HASH sunreceiver:bms, ряд sunreceiver:bms:series:*), в него не
@@ -2131,7 +2170,7 @@ func main() {
 					log.Printf("redis empty-check (dts017m): %v", derr)
 				case ceerr != nil:
 					log.Printf("redis empty-check (ce308): %v", ceerr)
-				case bmsPresent || dtsPresent || cePresent:
+				case incomplete == 0 && empty && (bmsPresent || dtsPresent || cePresent):
 					log.Printf("redis empty-check: в Redis есть данные BMS/DTS017M/CE308 — реставрация не требуется")
 				default:
 					// SETNX-маркер: защита от повторной/одновременной реставрации
@@ -2145,8 +2184,15 @@ func main() {
 						log.Printf("pg restore: реставрацию уже выполняет другой процесс — пропускаю")
 					} else {
 						restoreCE308Series := ce308Cfg == nil || !ce308Cfg.FinalReadingsOnly
-						restoreRedisFromPG(store, pg, restoreWindow, restoreCE308Series, stopCtx)
+						complete := restoreRedisFromPG(store, pg, restoreWindow, restoreCE308Series, stopCtx)
 						store.rdb.Del(store.ctx, redisRestoreLockKey)
+						// Маркер неполной реставрации: при сбое ряда она повторится
+						// при следующем старте (см. redisRestoreIncompleteKey).
+						if complete {
+							store.rdb.Del(store.ctx, redisRestoreIncompleteKey)
+						} else if serr := store.rdb.Set(store.ctx, redisRestoreIncompleteKey, "1", 0).Err(); serr != nil {
+							log.Printf("pg restore: запись маркера неполной реставрации: %v", serr)
+						}
 					}
 				}
 			}
@@ -2160,6 +2206,8 @@ func main() {
 	// СИНХРОННО до запуска пулеров и runAccumulator — иначе backfill агрегации успел
 	// бы обработать ряд под старыми IP-ключами.
 	migrateMeterDeviceKey(store, pg, time.Now())
+	// Однократный перенос истории DTS017M на стабильный ключ (идемпотентно).
+	migrateDts017AverageKey(pg, dts017Cfg)
 
 	// Фоновые процессы: усреднение данных за 5 минут в PG и очистка старых
 	// данных Redis (старше 2 календарных суток).
@@ -2273,7 +2321,9 @@ func main() {
 		bgWg.Add(1)
 		go func() {
 			defer bgWg.Done()
-			runDts017Accumulator(store, pg, dts017Cfg.Name, stopCtx)
+			// Стабильный ключ (dts017DeviceKey), а не cfg.Name: переименование
+			// счётчика в конфиге не должно расщеплять историю PG на два потока.
+			runDts017Accumulator(store, pg, dts017DeviceKey, stopCtx)
 		}()
 	}
 
@@ -2290,7 +2340,7 @@ func main() {
 			bgWg.Add(1)
 			go func() {
 				defer bgWg.Done()
-				runCe308FinalReadings(store, ce308Cfg, stopCtx)
+				runCe308FinalReadings(store, pg, ce308Cfg, stopCtx)
 			}()
 		} else {
 			bgWg.Add(1)
@@ -2610,6 +2660,13 @@ const redisRestoreLockKey = "sunreceiver:restore:lock"
 // работы (иначе «залипший» маркер навсегда заблокировал бы реставрацию).
 const restoreLockTTL = 30 * time.Minute
 
+// redisRestoreIncompleteKey — маркер НЕПОЛНОЙ реставрации: ставится, если хотя бы
+// один ряд не удалось восстановить (сбой запроса PG или остановка по сигналу).
+// Пока маркер есть, реставрация повторяется при следующем старте даже если Redis
+// уже непуст (частично восстановленные данные не должны «замораживать» пропуск).
+// Снимается после полностью успешной реставрации.
+const redisRestoreIncompleteKey = "sunreceiver:restore:incomplete"
+
 // redisBMSDataPresent — true, если в Redis есть данные внешних BMS: ANT BMS
 // (HASH sunreceiver:bms или ряд sunreceiver:bms:series:*) либо EnBMS (HASH
 // sunreceiver:enbms:current или ряд sunreceiver:enbms:series:*). Отдельно от
@@ -2688,10 +2745,15 @@ func redisCE308DataPresent(store *redisStore) (bool, error) {
 //   - точки CE308 (pg.CE308AveragesAll) — SaveCE308History/SaveCE308Current в
 //     обособленный ряд sunreceiver:ce308:series:<YYYY-MM>.
 //
+// Восстановление каждого ряда независимо: сбой одного запроса не прерывает
+// остальные. Возвращает complete=false, если хотя бы один ряд восстановить не
+// удалось (или пришло завершение по сигналу) — вызывающий ставит маркер неполной
+// реставрации, и она повторяется при следующем старте (см. redisRestoreIncompleteKey).
+//
 // Замечание: штатно Redis-ряд BMS — сырые показания (samples=1), а
 // восстановленный из PG участок представлен 5-минутными средними (samples>1);
 // после первых новых опросов он дополняется сырыми точками.
-func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, restoreCE308Series bool, stop context.Context) {
+func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, restoreCE308Series bool, stop context.Context) (complete bool) {
 	end := time.Now()
 	start := recentCutoff(end)
 	if w := end.Add(-window); w.After(start) {
@@ -2699,101 +2761,105 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, re
 	}
 	log.Printf("pg restore: восстанавливаю Redis из PG за [%s, %s]",
 		start.Format(time.RFC3339), end.Format(time.RFC3339))
+	complete = true
 	snaps, err := pg.Averages(start, end)
 	if err != nil {
 		log.Printf("pg restore: query: %v", err)
-		return
+		complete = false
+	} else {
+		// Сортируем по ts ascending (запрос уже с ORDER BY ts, но сортировка
+		// оставлена как страховка): в цикле ниже каждый SaveSnapshot кладёт точку в
+		// HASH current[ip] — остаётся «последний из итерации». Сортируем, чтобы
+		// последний HSet был самым свежим (детерминированный current[ip]).
+		sort.Slice(snaps, func(i, j int) bool {
+			ti, _ := parseTS(snaps[i].Timestamp)
+			tj, _ := parseTS(snaps[j].Timestamp)
+			return ti.Before(tj)
+		})
+		var restored int
+		for _, snap := range snaps {
+			select {
+			case <-stop.Done():
+				log.Printf("pg restore: остановлено по сигналу (восстановлено точек: %d)", restored)
+				return false
+			default:
+			}
+			ts, perr := time.Parse(time.RFC3339, snap.Timestamp)
+			if perr != nil {
+				continue
+			}
+			// Ключ месячного сегмента ряда строится по ts (redisSeriesKey =
+			// ts.Format("2006-01")). Живая запись пишет по локальной зоне, а тут ts
+			// из RFC3339 обычно в UTC — приводим к time.Local для того же месяца-ключа.
+			ts = ts.In(time.Local)
+			if serr := store.SaveSnapshot(snap, ts); serr != nil {
+				log.Printf("pg restore: save %s: %v", snap.IP, serr)
+				continue
+			}
+			restored++
+		}
+		log.Printf("pg restore: завершено, восстановлено точек: %d", restored)
 	}
-	// Сортируем по ts ascending (запрос уже с ORDER BY ts, но сортировка оставлена
-	// как страховка): в цикле ниже каждый SaveSnapshot кладёт точку в HASH current[ip]
-	// — остаётся «последний из итерации». Сортируем, чтобы последний HSet был самым
-	// свежим (детерминированный current[ip] после реставрации).
-	sort.Slice(snaps, func(i, j int) bool {
-		ti, _ := parseTS(snaps[i].Timestamp)
-		tj, _ := parseTS(snaps[j].Timestamp)
-		return ti.Before(tj)
-	})
-	var restored int
-	for _, snap := range snaps {
-		select {
-		case <-stop.Done():
-			log.Printf("pg restore: остановлено по сигналу (восстановлено точек: %d)", restored)
-			return
-		default:
-		}
-		ts, perr := time.Parse(time.RFC3339, snap.Timestamp)
-		if perr != nil {
-			continue
-		}
-		// Ключ месячного сегмента ряда строится по ts (redisSeriesKey = ts.Format("2006-01")).
-		// Живая запись пишет по локальной зоне (ts = time.Now()), а тут ts из RFC3339
-		// обычно в UTC — приводим к time.Local, чтобы попасть в тот же месяц-ключ.
-		ts = ts.In(time.Local)
-		if serr := store.SaveSnapshot(snap, ts); serr != nil {
-			log.Printf("pg restore: save %s: %v", snap.IP, serr)
-			continue
-		}
-		restored++
-	}
-	log.Printf("pg restore: завершено, восстановлено точек: %d", restored)
 
 	// Ряд ANT BMS — из pg.bms_averages (5-мин средние) в
 	// sunreceiver:bms:series:<YYYY-MM> (то же окно удержания).
 	bmsPts, err := pg.BMSAveragesAll(start, end)
 	if err != nil {
 		log.Printf("pg restore: bms query: %v", err)
-		return
+		complete = false
+	} else {
+		var bmsRestored int
+		for _, p := range bmsPts {
+			select {
+			case <-stop.Done():
+				log.Printf("pg restore: остановлено по сигналу (BMS восстановлено точек: %d)", bmsRestored)
+				return false
+			default:
+			}
+			ts, perr := time.Parse(time.RFC3339, p.Ts)
+			if perr != nil {
+				continue
+			}
+			// Ключ месяца (bmsSeriesKey) приводим к локальной зоне, как живая запись.
+			ts = ts.In(time.Local)
+			if serr := store.SaveBMSSeries(p, ts); serr != nil {
+				log.Printf("pg restore: bms save %s: %v", p.Name, serr)
+				continue
+			}
+			bmsRestored++
+		}
+		log.Printf("pg restore: BMS восстановлено точек: %d", bmsRestored)
 	}
-	var bmsRestored int
-	for _, p := range bmsPts {
-		select {
-		case <-stop.Done():
-			log.Printf("pg restore: остановлено по сигналу (BMS восстановлено точек: %d)", bmsRestored)
-			return
-		default:
-		}
-		ts, perr := time.Parse(time.RFC3339, p.Ts)
-		if perr != nil {
-			continue
-		}
-		// См. выше: ключ месяца (bmsSeriesKey) приводим к локальной зоне, как живая запись.
-		ts = ts.In(time.Local)
-		if serr := store.SaveBMSSeries(p, ts); serr != nil {
-			log.Printf("pg restore: bms save %s: %v", p.Name, serr)
-			continue
-		}
-		bmsRestored++
-	}
-	log.Printf("pg restore: BMS восстановлено точек: %d", bmsRestored)
 
 	// Ряд EnBMS — из pg.enbms_averages (5-мин средние) в
 	// sunreceiver:enbms:series:<YYYY-MM> (то же окно удержания).
 	enbmsPts, err := pg.EnBmsAveragesAll(start, end)
 	if err != nil {
 		log.Printf("pg restore: enbms query: %v", err)
-		return
+		complete = false
+	} else {
+		var enbmsRestored int
+		for _, p := range enbmsPts {
+			select {
+			case <-stop.Done():
+				log.Printf("pg restore: остановлено по сигналу (EnBMS восстановлено точек: %d)", enbmsRestored)
+				return false
+			default:
+			}
+			ts, perr := time.Parse(time.RFC3339, p.Ts)
+			if perr != nil {
+				continue
+			}
+			// Ключ месяца (enbmsSeriesKey) приводим к локальной зоне, как живая запись.
+			ts = ts.In(time.Local)
+			if serr := store.SaveEnBmsSeries(p, ts); serr != nil {
+				log.Printf("pg restore: enbms save %s: %v", p.Name, serr)
+				continue
+			}
+			enbmsRestored++
+		}
+		log.Printf("pg restore: EnBMS восстановлено точек: %d", enbmsRestored)
 	}
-	var enbmsRestored int
-	for _, p := range enbmsPts {
-		select {
-		case <-stop.Done():
-			log.Printf("pg restore: остановлено по сигналу (EnBMS восстановлено точек: %d)", enbmsRestored)
-			return
-		default:
-		}
-		ts, perr := time.Parse(time.RFC3339, p.Ts)
-		if perr != nil {
-			continue
-		}
-		// См. выше: ключ месяца (enbmsSeriesKey) приводим к локальной зоне, как живая запись.
-		ts = ts.In(time.Local)
-		if serr := store.SaveEnBmsSeries(p, ts); serr != nil {
-			log.Printf("pg restore: enbms save %s: %v", p.Name, serr)
-			continue
-		}
-		enbmsRestored++
-	}
-	log.Printf("pg restore: EnBMS восстановлено точек: %d", enbmsRestored)
 
 	// Ряд DTS017M — из pg.dts017m_averages (5-мин средние) в
 	// sunreceiver:dts017m:series:<YYYY-MM> (то же окно удержания); current —
@@ -2801,80 +2867,83 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, re
 	dtsPts, err := pg.Dts017AveragesAll(start, end)
 	if err != nil {
 		log.Printf("pg restore: dts017m query: %v", err)
-		return
+		complete = false
+	} else {
+		var dtsRestored int
+		var dtsLast *dts017Snapshot
+		for i := range dtsPts {
+			select {
+			case <-stop.Done():
+				log.Printf("pg restore: остановлено по сигналу (DTS017M восстановлено точек: %d)", dtsRestored)
+				return false
+			default:
+			}
+			snap := dtsPts[i]
+			ts, perr := time.Parse(time.RFC3339, snap.Timestamp)
+			if perr != nil {
+				continue
+			}
+			// Ключ месяца (dts017SeriesKey) приводим к локальной зоне, как живая запись.
+			ts = ts.In(time.Local)
+			if serr := store.SaveDts017Series(snap, ts); serr != nil {
+				log.Printf("pg restore: dts017m save %s: %v", snap.Name, serr)
+				continue
+			}
+			cur := snap
+			dtsLast = &cur
+			dtsRestored++
+		}
+		if dtsLast != nil {
+			if serr := store.SaveDts017Current(*dtsLast); serr != nil {
+				log.Printf("pg restore: dts017m current: %v", serr)
+			}
+		}
+		log.Printf("pg restore: DTS017M восстановлено точек: %d", dtsRestored)
 	}
-	var dtsRestored int
-	var dtsLast *dts017Snapshot
-	for i := range dtsPts {
-		select {
-		case <-stop.Done():
-			log.Printf("pg restore: остановлено по сигналу (DTS017M восстановлено точек: %d)", dtsRestored)
-			return
-		default:
-		}
-		snap := dtsPts[i]
-		ts, perr := time.Parse(time.RFC3339, snap.Timestamp)
-		if perr != nil {
-			continue
-		}
-		// Ключ месяца (dts017SeriesKey) приводим к локальной зоне, как живая запись.
-		ts = ts.In(time.Local)
-		if serr := store.SaveDts017Series(snap, ts); serr != nil {
-			log.Printf("pg restore: dts017m save %s: %v", snap.Name, serr)
-			continue
-		}
-		cur := snap
-		dtsLast = &cur
-		dtsRestored++
-	}
-	if dtsLast != nil {
-		if serr := store.SaveDts017Current(*dtsLast); serr != nil {
-			log.Printf("pg restore: dts017m current: %v", serr)
-		}
-	}
-	log.Printf("pg restore: DTS017M восстановлено точек: %d", dtsRestored)
 
 	// Ряд CE308 — из pg.ce308_averages (5-мин средние) в
 	// sunreceiver:ce308:series:<YYYY-MM> (то же окно удержания); current —
 	// последняя восстановленная точка. В режиме final_readings_only телеметрия
-	// CE308 не пишется/не отдаётся — реставрация ряда не выполняется.
+	// CE308 не пишется/не отдаётся — реставрация ряда не выполняется (это не сбой).
 	if !restoreCE308Series {
 		log.Printf("pg restore: CE308 в режиме final_readings_only — ряд не восстанавливается")
-		return
+		return complete
 	}
 	cePts, err := pg.CE308AveragesAll(start, end)
 	if err != nil {
 		log.Printf("pg restore: ce308 query: %v", err)
-		return
+		complete = false
+	} else {
+		var ceRestored int
+		var ceLast *ce308Snapshot
+		for i := range cePts {
+			select {
+			case <-stop.Done():
+				log.Printf("pg restore: остановлено по сигналу (CE308 восстановлено точек: %d)", ceRestored)
+				return false
+			default:
+			}
+			snap := cePts[i]
+			ts, perr := time.Parse(time.RFC3339, snap.Timestamp)
+			if perr != nil {
+				continue
+			}
+			// Ключ месяца (ce308SeriesKey) приводим к локальной зоне, как живая запись.
+			ts = ts.In(time.Local)
+			if serr := store.SaveCE308History(snap, ts); serr != nil {
+				log.Printf("pg restore: ce308 save %s: %v", snap.Name, serr)
+				continue
+			}
+			cur := snap
+			ceLast = &cur
+			ceRestored++
+		}
+		if ceLast != nil {
+			if serr := store.SaveCE308Current(*ceLast); serr != nil {
+				log.Printf("pg restore: ce308 current: %v", serr)
+			}
+		}
+		log.Printf("pg restore: CE308 восстановлено точек: %d", ceRestored)
 	}
-	var ceRestored int
-	var ceLast *ce308Snapshot
-	for i := range cePts {
-		select {
-		case <-stop.Done():
-			log.Printf("pg restore: остановлено по сигналу (CE308 восстановлено точек: %d)", ceRestored)
-			return
-		default:
-		}
-		snap := cePts[i]
-		ts, perr := time.Parse(time.RFC3339, snap.Timestamp)
-		if perr != nil {
-			continue
-		}
-		// Ключ месяца (ce308SeriesKey) приводим к локальной зоне, как живая запись.
-		ts = ts.In(time.Local)
-		if serr := store.SaveCE308History(snap, ts); serr != nil {
-			log.Printf("pg restore: ce308 save %s: %v", snap.Name, serr)
-			continue
-		}
-		cur := snap
-		ceLast = &cur
-		ceRestored++
-	}
-	if ceLast != nil {
-		if serr := store.SaveCE308Current(*ceLast); serr != nil {
-			log.Printf("pg restore: ce308 current: %v", serr)
-		}
-	}
-	log.Printf("pg restore: CE308 восстановлено точек: %d", ceRestored)
+	return complete
 }

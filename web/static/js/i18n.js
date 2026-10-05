@@ -195,6 +195,10 @@
   Object.assign(DICT.zh,{"← Назад": "← 上一页", "Вперёд →": "下一页 →", "На странице": "每页", "Стр.": "第", "из": "页，共", "Нет ошибок за период": "该时间段内无错误"});
   Object.assign(DICT.en,{'Потребление/Отдача (сегодня, месяц, год)':'Consumption/Export (today, month, year)'});
   Object.assign(DICT.zh,{'Потребление/Отдача (сегодня, месяц, год)':'用电/上网（今日、本月、本年）'});
+  // Динамические заголовки тарифных рамок «… за MM.YYYY» / «… за YYYY год»:
+  // остальные слова фразы переводит пословный механизм, отдельного ключа «за» не было.
+  Object.assign(DICT.en,{'за':'for'});
+  Object.assign(DICT.zh,{'за':'于'});
   Object.assign(DICT.en,{
     'Дом. Потребление / отдача по тарифу «День» и «Ночь» по дням, kWh':'House. Consumption / export by Day/Night tariff, by day, kWh',
     'Дом. Потребление / отдача по тарифу «День» и «Ночь» по месяцам, kWh':'House. Consumption / export by Day/Night tariff, by month, kWh'

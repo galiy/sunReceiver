@@ -110,19 +110,19 @@ func ddsTariffPartialUpTo(at time.Time, b *meterBoundaryRow) (impDay, impNight, 
 		return 0, 0, 0, 0
 	}
 	h := at.In(time.Local).Hour()
-	switch {
-	case h <= 0:
-		// 00:00 — сутки только начались, прирост нулевой
-	case h <= meterDayStartH:
-		impNight = subPtr(b.Import0700, b.Import0000)
-		expNight = subPtr(b.Export0700, b.Export0000)
-	default:
-		impNight = subPtr(b.Import0700, b.Import0000)
-		expNight = subPtr(b.Export0700, b.Export0000)
-		if h >= meterDayEndH {
-			impDay = subPtr(b.Import2300, b.Import0700)
-			expDay = subPtr(b.Export2300, b.Export0700)
-		}
+	// Ближайшая предшествующая тарифная граница дня:
+	//  - до 07:00 — это 00:00, прироста с начала суток нет;
+	//  - 07:00..22:59 — 07:00, ночь [00:00,07:00] уже накоплена, день ещё нет;
+	//  - 23:00.. — 23:00, день [07:00,23:00] полон, прирост ночи [23:00,at] ≈ 0
+	//    (приближение: прирост после границы не атрибуцируется).
+	if h < meterDayStartH {
+		return 0, 0, 0, 0
+	}
+	impNight = subPtr(b.Import0700, b.Import0000)
+	expNight = subPtr(b.Export0700, b.Export0000)
+	if h >= meterDayEndH {
+		impDay = subPtr(b.Import2300, b.Import0700)
+		expDay = subPtr(b.Export2300, b.Export0700)
 	}
 	return max0f(impDay), max0f(impNight), max0f(expDay), max0f(expNight)
 }

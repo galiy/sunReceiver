@@ -26,7 +26,7 @@ import (
 // Параметры опроса EnBMS.
 const (
 	// Период общего цикла опроса задаётся в конфиге ОТДЕЛЬНО ДЛЯ КАЖДОГО метода
-	// (enBms.ble.poll_interval / enBms.rs485.poll_interval, секунды) и хранится в
+	// (enBms.poll_interval_ble / enBms.poll_interval_rs485, секунды) и хранится в
 	// enBmsConfig.PollInterval. Устройства опрашиваются последовательно одно за
 	// другим; если суммарное чтение заняло больше периода — паузы нет.
 	//
@@ -282,13 +282,13 @@ func pollEnBmsDevice(pg *pgStore, store *redisStore, acc *enbmsAccumulator, d *e
 	// у RS485 TeleMeter (0x42) после напряжения клемм идут другие поля.
 	parsed, err := parseEnBmsBatteryPayload(payload, d.method == enBmsMethodBLE)
 	if err != nil {
-		logEnBms("опрос %s: разбор Battery: %v", d.cfg.Key, err)
+		d.logErrThrottled("опрос %s: разбор Battery: %v", d.cfg.Key, err)
 		return
 	}
 	if !enbmsParsedValid(parsed) {
 		// Нестабильный канал: кадр искажён — снимок отбрасываем, соединение
-		// не рвём.
-		logEnBms("опрос %s: невалидные показания — снимок отброшен", d.cfg.Key)
+		// не рвём. Лог троттлим: при деградации канала ветка срабатывает каждый цикл.
+		d.logErrThrottled("опрос %s: невалидные показания — снимок отброшен", d.cfg.Key)
 		return
 	}
 	if d.consecFails > 0 {
@@ -357,6 +357,17 @@ func saveEnBmsReading(store *redisStore, s enbmsSnapshot, ts time.Time) {
 	}
 }
 
+// logErrThrottled пишет диагностику деградации канала не чаще
+// enbmsConnFailLogInterval (иначе разбор/валидация/таймауты засоряют журнал —
+// при опросе раз в секунду каждая ветка срабатывала бы каждый цикл).
+func (d *enbmsPollerDev) logErrThrottled(format string, args ...any) {
+	if time.Since(d.lastErrLog) < enbmsConnFailLogInterval {
+		return
+	}
+	d.lastErrLog = time.Now()
+	logEnBms(format, args...)
+}
+
 // readWithRetries читает Battery, повторяя только таймаут ответа (транзиентный
 // сбой радио). Ошибка записи/транспорта возвращается сразу — пулер решит о
 // переподключении.
@@ -369,7 +380,7 @@ func (d *enbmsPollerDev) readWithRetries() ([]byte, error) {
 		}
 		lastErr = err
 		if isEnBmsReadTimeout(err) && attempt < enbmsReadRetries {
-			logEnBms("чтение %s: таймаут (попытка %d/%d) — повтор",
+			d.logErrThrottled("чтение %s: таймаут (попытка %d/%d) — повтор",
 				d.cfg.Key, attempt+1, enbmsReadRetries+1)
 			continue
 		}

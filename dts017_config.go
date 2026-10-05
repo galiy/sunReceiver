@@ -76,6 +76,9 @@ func dts017FromSection(s *dts017Section) (*dts017Config, error) {
 		return nil, fmt.Errorf("раздел dts017m неполный: нужны name и ip")
 	}
 	port := s.Port
+	if port < 0 {
+		return nil, fmt.Errorf("dts017m.port=%d: не может быть отрицательным", port)
+	}
 	if port == 0 {
 		port = 502
 	}
@@ -92,7 +95,10 @@ func dts017FromSection(s *dts017Section) (*dts017Config, error) {
 		return nil, fmt.Errorf("dts017m.protocol=%q: поддерживаются %q и %q", s.Protocol, meterProtoRTU, meterProtoTCP)
 	}
 	interval := s.PollInterval
-	if interval <= 0 {
+	if interval < 0 {
+		return nil, fmt.Errorf("dts017m.poll_interval=%d: не может быть отрицательным", interval)
+	}
+	if interval == 0 {
 		interval = 1
 	}
 	return &dts017Config{
@@ -107,8 +113,8 @@ func dts017FromSection(s *dts017Section) (*dts017Config, error) {
 }
 
 // loadDts017Config проверяет раздел "dts017m" и заполняет пакетную dts017Cfg.
-// Вызывается из loadConfig. Ошибка -> опрос DTS017M отключается (cfg=nil), но
-// приложение продолжает работу (счётчик — вспомогательное устройство).
+// Вызывается из loadConfig. Ошибка конфигурации (некорректный раздел) — fail-fast:
+// loadConfig возвращает ошибку и приложение не стартует (как и для других разделов).
 func loadDts017Config(s *dts017Section) error {
 	cfg, err := dts017FromSection(s)
 	if err != nil {
