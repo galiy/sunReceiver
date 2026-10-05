@@ -171,8 +171,10 @@ function setBmsRangeLabels(){
 // ---------- Выбор периода (общий для всех графиков BMS) ----------
 var preserveZoom=false;
 var userZoomed=false; // true — зум/сдвиг (нестандартное окно); false — стандартный вид
-var selRange={from:startOfToday(), to:endOfToday()};
-var periodMode='day';
+// Диапазон по умолчанию при входе на страницу — «24 часа»: скользящее окно
+// (текущий момент минус 24 часа … текущий момент), а не «Сегодня».
+var selRange=(function(){ var to=new Date(); return {from:new Date(to.getTime()-24*60*60*1000), to:to}; })();
+var periodMode='24h';
 function startOfToday(){ var d=new Date(); d.setHours(0,0,0,0); return d; }
 function endOfToday(){ var d=new Date(); d.setHours(23,59,59,999); return d; }
 function startOfYesterday(){ var d=new Date(); d.setDate(d.getDate()-1); d.setHours(0,0,0,0); return d; }
@@ -186,7 +188,7 @@ function addDays(d,n){ var r=new Date(d); r.setDate(r.getDate()+n); return r; }
 function addMonths(d,n){ var r=new Date(d); r.setMonth(r.getMonth()+n); return r; }
 function startOfMonthOf(d){ return dayStart(new Date(d.getFullYear(), d.getMonth(), 1)); }
 function endOfMonthOf(d){ var f=new Date(d.getFullYear(), d.getMonth(), 1); return new Date(f.getFullYear(), f.getMonth()+1, 0, 23,59,59,999); }
-var PERIOD_BTNS=['btnToday','btnYesterday','btn7d','btnMonth'];
+var PERIOD_BTNS=['btn24h','btnToday','btnYesterday','btn7d','btnMonth'];
 function setActiveBtn(activeBtn){ for(var i=0;i<PERIOD_BTNS.length;i++) document.getElementById(PERIOD_BTNS[i]).classList.remove('active'); if(activeBtn) document.getElementById(activeBtn).classList.add('active'); }
 // setPeriod — выставляет диапазон, режим (day/week/month/custom), синхронизирует поля
 // и перерисовывает все графики BMS. Сбрасывает зум (новое окно = полный период).
@@ -526,8 +528,21 @@ function destroyBmsCharts(){
     delete BMS_CHARTS[id];
   });
 }
+// catchUp24hRange — скользящее окно режима «24 часа»: при стандартном виде (без
+// пользовательского зума) на каждом обновлении (таймер, кнопка «Обновить графики»)
+// правый край переставляется на текущий момент, начало — ровно на 24 часа раньше.
+function catchUp24hRange(){
+  if(periodMode!=='24h' || userZoomed) return;
+  var to=new Date();
+  selRange.from=new Date(to.getTime()-24*60*60*1000);
+  selRange.to=to;
+  var f=document.getElementById('fromPick'), t=document.getElementById('toPick');
+  if(f) f.value=toInputDateTime(selRange.from);
+  if(t) t.value=toInputDateTime(selRange.to);
+}
 async function loadBmsCharts(){
   if(window.srRefresh && !window.srRefresh.isEnabled()) return;
+  catchUp24hRange();
   try{
     var from=selRange.from, to=selRange.to;
     var url='/api/bms/'+encodeURIComponent(NAME)+'/series?from='+encodeURIComponent(from.toISOString())+'&to='+encodeURIComponent(to.toISOString());
@@ -547,6 +562,10 @@ async function loadBmsCharts(){
 }
 
 // Кнопки периода BMS.
+document.getElementById('btn24h').addEventListener('click',function(){
+  var to=new Date(); var from=new Date(to.getTime()-24*60*60*1000);
+  setPeriod(from, to, '24h', 'btn24h');
+});
 document.getElementById('btnToday').addEventListener('click',function(){ setPeriod(startOfToday(), endOfToday(), 'day', 'btnToday'); });
 document.getElementById('btnYesterday').addEventListener('click',function(){ var y=startOfYesterday(); setPeriod(y, endOfDay(y), 'day', 'btnYesterday'); });
 document.getElementById('btn7d').addEventListener('click',function(){
@@ -576,7 +595,7 @@ document.getElementById('btnRefresh').addEventListener('click',function(){ prese
 document.getElementById('fromPick').value=toInputDateTime(selRange.from);
 document.getElementById('toPick').value=toInputDateTime(selRange.to);
 document.getElementById('datePick').value=toInputDate(selRange.from);
-setActiveBtn('btnToday');
+setActiveBtn('btn24h'); // по умолчанию активен диапазон «24 часа»
 // Периодическое обновление (графики — раз в минуту, параметры — раз в секунду)
 // управляется глобальным выключателем обновления: enable — немедленный опрос +
 // интервал, disable — остановка.
