@@ -10,7 +10,8 @@
       data-show-meter="{{if .flags.ShowMeter}}1{{else}}0{{end}}"
       data-show-bms="{{if .flags.ShowBMS}}1{{else}}0{{end}}"
       data-show-ce308="{{if .flags.ShowCE308}}1{{else}}0{{end}}"
-      data-ce308-final="{{if .flags.CE308FinalReadingsOnly}}1{{else}}0{{end}}">
+      data-ce308-final="{{if .flags.CE308FinalReadingsOnly}}1{{else}}0{{end}}"
+      data-show-dts017="{{if .flags.ShowDTS017}}1{{else}}0{{end}}">
 <link rel="stylesheet" href="/static/css/site.css?v={{.CacheBust}}">
 <div class="top-nav">
   <div>
@@ -92,36 +93,39 @@
   </div>
   {{end}}
 
-  {{if .flags.ShowCE308}}
-  <div class="group group-top">
-    <div class="group-head">
-      <span class="group-title">Электросчётчик CE308 &mdash; показания</span>
-      <span class="ce308-head-right">
-        <button id="ce308Refresh" type="button" class="ce308-btn">Обновить</button>
-        <span class="meter-ts" id="ce308EnTs">Актуально: &mdash;</span>
-      </span>
-    </div>
-    <div class="ce308-sec">
-      <div class="ce308-sec-title">Активная энергия</div>
-      <div class="ce308-grid">
-        <div class="ce308-card"><div class="ce308-head"><div class="ce308-lbl">День<br>(А+)</div><div class="ce308-note">потребление</div></div><div class="ce308-val" id="ce308AtcDay">&mdash;</div></div>
-        <div class="ce308-card"><div class="ce308-head"><div class="ce308-lbl">Ночь<br>(А+)</div><div class="ce308-note">потребление</div></div><div class="ce308-val" id="ce308AtcNight">&mdash;</div></div>
-        <div class="ce308-card"><div class="ce308-head"><div class="ce308-lbl">День<br>(А&minus;)</div><div class="ce308-note">отдача</div></div><div class="ce308-val" id="ce308AtdDay">&mdash;</div></div>
-        <div class="ce308-card"><div class="ce308-head"><div class="ce308-lbl">Ночь<br>(А&minus;)</div><div class="ce308-note">отдача</div></div><div class="ce308-val" id="ce308AtdNight">&mdash;</div></div>
+  {{if or .flags.ShowMeter .flags.ShowCE308}}
+  <div class="duo-row">
+    {{if .flags.ShowMeter}}
+    <div class="group group-top">
+      <div class="group-head">
+        <span class="group-title">Дом. Электросчётчик DDS238 &mdash; текущие параметры</span>
+        <span class="meter-ts" id="meterTs">&mdash;</span>
       </div>
-      <div class="ce308-total">Всего (А+): <span id="ce308AtcTotal">&mdash;</span> &nbsp;&middot;&nbsp; Всего (А&minus;): <span id="ce308AtdTotal">&mdash;</span></div>
+      <div class="group-body" id="meterStats"><span class="missing">Нет данных</span></div>
+      <div class="meter-note">Мощность с отрицательным знаком &mdash; отдача в сеть (генерация); положительная &mdash; потребление.</div>
     </div>
-  </div>
-  {{end}}
-
-  {{if .flags.ShowMeter}}
-  <div class="group group-top">
-    <div class="group-head">
-      <span class="group-title">Дом. Электросчётчик DDS238 &mdash; текущие параметры</span>
-      <span class="meter-ts" id="meterTs">&mdash;</span>
+    {{end}}
+    {{if .flags.ShowCE308}}
+    <div class="group group-top">
+      <div class="group-head">
+        <span class="group-title">Гараж. Электросчётчик CE308 &mdash; показания</span>
+        <span class="ce308-head-right">
+          <button id="ce308Refresh" type="button" class="ce308-btn">Обновить</button>
+          <span class="meter-ts" id="ce308EnTs">Актуально: &mdash;</span>
+        </span>
+      </div>
+      <div class="ce308-sec">
+        <div class="ce308-sec-title">Активная энергия</div>
+        <div class="ce308-grid">
+          <div class="ce308-card"><div class="ce308-head"><div class="ce308-lbl">День<br>(А+)</div><div class="ce308-note">потребление</div></div><div class="ce308-val" id="ce308AtcDay">&mdash;</div></div>
+          <div class="ce308-card"><div class="ce308-head"><div class="ce308-lbl">Ночь<br>(А+)</div><div class="ce308-note">потребление</div></div><div class="ce308-val" id="ce308AtcNight">&mdash;</div></div>
+          <div class="ce308-card"><div class="ce308-head"><div class="ce308-lbl">День<br>(А&minus;)</div><div class="ce308-note">отдача</div></div><div class="ce308-val" id="ce308AtdDay">&mdash;</div></div>
+          <div class="ce308-card"><div class="ce308-head"><div class="ce308-lbl">Ночь<br>(А&minus;)</div><div class="ce308-note">отдача</div></div><div class="ce308-val" id="ce308AtdNight">&mdash;</div></div>
+        </div>
+        <div class="ce308-total">Всего (А+): <span id="ce308AtcTotal">&mdash;</span> &nbsp;&middot;&nbsp; Всего (А&minus;): <span id="ce308AtdTotal">&mdash;</span></div>
+      </div>
     </div>
-    <div class="group-body" id="meterStats"><span class="missing">Нет данных</span></div>
-    <div class="meter-note">Мощность с отрицательным знаком &mdash; отдача в сеть (генерация); положительная &mdash; потребление.</div>
+    {{end}}
   </div>
   {{end}}
 
@@ -145,7 +149,7 @@
     <div class="spoiler-body">
       <div class="groups-row">
         <div class="group tariff-grid">
-          <div class="group-title">Потребление/Отдача за сегодня</div>
+          <div class="group-title">Дом. Потребление/Отдача за сегодня</div>
           <div class="group-body">
             <div class="plate">
               <div class="lbl">Потребление день</div>
@@ -170,7 +174,7 @@
           </div>
         </div>
         <div class="group tariff-grid">
-          <div class="group-title" id="tariffMonthTitle">Потребление/Отдача за месяц</div>
+          <div class="group-title" id="tariffMonthTitle">Дом. Потребление/Отдача за месяц</div>
           <div class="group-body">
             <div class="plate">
               <div class="lbl">Потребление день</div>
@@ -195,7 +199,7 @@
           </div>
         </div>
         <div class="group tariff-grid">
-          <div class="group-title" id="tariffYearTitle">Потребление/Отдача за год</div>
+          <div class="group-title" id="tariffYearTitle">Дом. Потребление/Отдача за год</div>
           <div class="group-body">
             <div class="plate">
               <div class="lbl">Потребление день</div>
@@ -220,6 +224,85 @@
           </div>
         </div>
       </div>
+      {{if .flags.ShowDTS017}}
+      <div class="groups-row">
+        <div class="group tariff-grid">
+          <div class="group-title">Гараж. Потребление/Отдача за сегодня</div>
+          <div class="group-body">
+            <div class="plate">
+              <div class="lbl">Потребление день</div>
+              <div class="val"><span id="gKpiImpDay">—</span><span class="unit">kWh</span></div>
+              <div class="sub">День 07:00–23:00</div>
+            </div>
+            <div class="plate">
+              <div class="lbl">Отдача день</div>
+              <div class="val"><span id="gKpiExpDay">—</span><span class="unit">kWh</span></div>
+              <div class="sub">День 07:00–23:00</div>
+            </div>
+            <div class="plate">
+              <div class="lbl">Потребление ночь</div>
+              <div class="val"><span id="gKpiImpNight">—</span><span class="unit">kWh</span></div>
+              <div class="sub">Ночь 23:00–07:00</div>
+            </div>
+            <div class="plate">
+              <div class="lbl">Отдача ночь</div>
+              <div class="val"><span id="gKpiExpNight">—</span><span class="unit">kWh</span></div>
+              <div class="sub">Ночь 23:00–07:00</div>
+            </div>
+          </div>
+        </div>
+        <div class="group tariff-grid">
+          <div class="group-title" id="gTariffMonthTitle">Гараж. Потребление/Отдача за месяц</div>
+          <div class="group-body">
+            <div class="plate">
+              <div class="lbl">Потребление день</div>
+              <div class="val"><span id="gKpiImpDayM">—</span><span class="unit">kWh</span></div>
+              <div class="sub">День 07:00–23:00</div>
+            </div>
+            <div class="plate">
+              <div class="lbl">Отдача день</div>
+              <div class="val"><span id="gKpiExpDayM">—</span><span class="unit">kWh</span></div>
+              <div class="sub">День 07:00–23:00</div>
+            </div>
+            <div class="plate">
+              <div class="lbl">Потребление ночь</div>
+              <div class="val"><span id="gKpiImpNightM">—</span><span class="unit">kWh</span></div>
+              <div class="sub">Ночь 23:00–07:00</div>
+            </div>
+            <div class="plate">
+              <div class="lbl">Отдача ночь</div>
+              <div class="val"><span id="gKpiExpNightM">—</span><span class="unit">kWh</span></div>
+              <div class="sub">Ночь 23:00–07:00</div>
+            </div>
+          </div>
+        </div>
+        <div class="group tariff-grid">
+          <div class="group-title" id="gTariffYearTitle">Гараж. Потребление/Отдача за год</div>
+          <div class="group-body">
+            <div class="plate">
+              <div class="lbl">Потребление день</div>
+              <div class="val"><span id="gKpiImpDayY">—</span><span class="unit">kWh</span></div>
+              <div class="sub">День 07:00–23:00</div>
+            </div>
+            <div class="plate">
+              <div class="lbl">Отдача день</div>
+              <div class="val"><span id="gKpiExpDayY">—</span><span class="unit">kWh</span></div>
+              <div class="sub">День 07:00–23:00</div>
+            </div>
+            <div class="plate">
+              <div class="lbl">Потребление ночь</div>
+              <div class="val"><span id="gKpiImpNightY">—</span><span class="unit">kWh</span></div>
+              <div class="sub">Ночь 23:00–07:00</div>
+            </div>
+            <div class="plate">
+              <div class="lbl">Отдача ночь</div>
+              <div class="val"><span id="gKpiExpNightY">—</span><span class="unit">kWh</span></div>
+              <div class="sub">Ночь 23:00–07:00</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      {{end}}
     </div>
   </div>
   {{end}}

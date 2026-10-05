@@ -44,6 +44,10 @@ h1 { font-size:22px; margin:0 0 4px; }
 .group.tariff-grid .plate { min-width:0; }
 .groups-row { display:flex; align-items:stretch; gap:16px; margin:0 0 16px; }
 .groups-row .group { flex:1 1 0; min-width:0; }
+/* Две рамки рядом (DDS238 + CE308) на десктопе; на мобильной — друг под другом. */
+.duo-row { display:flex; align-items:stretch; gap:16px; margin:0 0 16px; }
+.duo-row > .group { flex:1 1 0; min-width:0; margin-bottom:0; }
+@media (max-width:900px){ .duo-row { flex-direction:column; } }
 /* Единая плашка (для счётчика, инверторов и МАП) — приводятся к одному размеру */
 .plate, .meter-stat { flex:1; background:#ffffff; border:1px solid #d0d6de; border-radius:10px; padding:10px 16px; min-width:130px; display:flex; flex-direction:column; gap:4px; }
 .plate .lbl, .meter-stat .lbl { font-size:11px; color:#6b7785; text-transform:uppercase; letter-spacing:.05em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -61,7 +65,10 @@ h1 { font-size:22px; margin:0 0 4px; }
    широкой ячейке. */
 #meterStats, #dts017Stats { flex-direction:row; flex-wrap:wrap; align-items:flex-start; gap:10px; }
 .stat-group { flex:0 1 auto; border:1px solid #e2e6ea; border-radius:8px; padding:4px; }
-.stat-group-title { font-size:12px; font-weight:700; color:#346fa1; padding:4px 6px 2px; }
+.stat-group-title { font-size:12px; font-weight:700; color:#346fa1; padding:4px 6px 2px; white-space:normal; overflow-wrap:anywhere; }
+/* Рамка «Меркурий — прогноз»: ограничиваем ширину, чтобы длинный заголовок
+   переносился, а не растягивал рамку. */
+.stat-group--mercury { max-width:360px; }
 .stat-table { border-collapse:separate; border-spacing:0; }
 .stat-table td { padding:3px; vertical-align:top; }
 .stat-table .meter-stat { width:100%; }
@@ -86,12 +93,12 @@ h1 { font-size:22px; margin:0 0 4px; }
 .ce308-sec { margin-top:12px; }
 .ce308-sec:first-of-type { margin-top:0; }
 .ce308-sec-title { font-size:12px; font-weight:700; color:#6b7785; text-transform:uppercase; letter-spacing:.04em; text-align:left; margin-bottom:6px; }
-.ce308-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:10px; }
+.ce308-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
 .ce308-card { border:1px solid #d0d6de; border-radius:8px; padding:8px 12px; }
 .ce308-head { display:flex; justify-content:space-between; align-items:flex-start; gap:6px; }
 .ce308-lbl { font-size:13px; font-weight:700; color:#2b3238; text-align:left; line-height:1.25; }
 .ce308-note { font-size:12px; font-style:italic; color:#8a94a0; text-align:right; line-height:1.2; max-width:55%; white-space:nowrap; }
-.ce308-val { margin-top:6px; text-align:right; font-family:"SF Mono",Menlo,Consolas,"Liberation Mono",ui-monospace,monospace; font-size:16px; font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.ce308-val { margin-top:6px; text-align:left; font-size:26px; font-weight:700; line-height:1.1; font-variant-numeric:tabular-nums; white-space:nowrap; }
 .ce308-total { margin-top:8px; font-size:12px; color:#6b7785; text-align:left; font-variant-numeric:tabular-nums; }
 /* BMS (ANT батарея) — крупные кнопки-батарейки (высота ~4 см): заполнение =
    остаточный заряд (SOC). */

@@ -135,6 +135,15 @@ type dashboardHandler struct {
 	mercuryCacheP0  [4]float64
 	mercuryCacheOK  bool
 
+	// Кэш тарифных исходников DTS017M (гараж) для плашек «Потребление/Отдача»:
+	// границы текущего дня и суммы финализированных прошедших дней месяца/года
+	// (сегодняшний день считается отдельно из живых показаний счётчика).
+	dtsTariffMu sync.Mutex
+	dtsTariffAt time.Time
+	dtsTariffB  *meterBoundaryRow
+	dtsTariffM  [4]float64
+	dtsTariffY  [4]float64
+
 	// Ограничение частоты ручного снимка энергии CE308 (кнопка «Обновить», POST
 	// /api/ce308/energy): не чаще раза в ce308EnergyMinInterval. Хранится время
 	// последнего принятого (не отклонённого) сигнала. Шифруется мьютексом, т.к.
@@ -182,6 +191,20 @@ type currentResponse struct {
 	MeterImportNightYear  float64 `json:"meter_import_night_year"`
 	MeterExportDayYear    float64 `json:"meter_export_day_year"`
 	MeterExportNightYear  float64 `json:"meter_export_night_year"`
+	// Тарифные величины DTS017M (гараж) — аналог meter_*: потребление/отдача
+	// «День»/«Ночь» за текущие сутки, месяц и год (kWh). Нули, если раздел неактивен.
+	DTS017ImportDay        float64 `json:"dts017m_import_day"`
+	DTS017ImportNight      float64 `json:"dts017m_import_night"`
+	DTS017ExportDay        float64 `json:"dts017m_export_day"`
+	DTS017ExportNight      float64 `json:"dts017m_export_night"`
+	DTS017ImportDayMonth   float64 `json:"dts017m_import_day_month"`
+	DTS017ImportNightMonth float64 `json:"dts017m_import_night_month"`
+	DTS017ExportDayMonth   float64 `json:"dts017m_export_day_month"`
+	DTS017ExportNightMonth float64 `json:"dts017m_export_night_month"`
+	DTS017ImportDayYear    float64 `json:"dts017m_import_day_year"`
+	DTS017ImportNightYear  float64 `json:"dts017m_import_night_year"`
+	DTS017ExportDayYear    float64 `json:"dts017m_export_day_year"`
+	DTS017ExportNightYear  float64 `json:"dts017m_export_night_year"`
 	// Mercury — прогноз показаний счётчика энергосбыта «Меркурий» на текущий момент
 	// (nil, если раздел mercury пуст/не настроен или нет данных для расчёта).
 	Mercury *mercuryForecast `json:"mercury,omitempty"`
@@ -999,6 +1022,49 @@ func (h *dashboardHandler) loadTariffData(now time.Time) (*meterBoundaryRow, [4]
 	return h.tariffB, h.tariffM, h.tariffY
 }
 
+// loadDts017TariffData — аналог loadTariffData для DTS017M (гараж): кешированные
+// границы текущего дня и суммы финализированных прошедших дней месяца/года.
+func (h *dashboardHandler) loadDts017TariffData(now time.Time) (*meterBoundaryRow, [4]float64, [4]float64) {
+	h.dtsTariffMu.Lock()
+	defer h.dtsTariffMu.Unlock()
+	if !h.dtsTariffAt.IsZero() && now.Sub(h.dtsTariffAt) < tariffCacheTTL {
+		return h.dtsTariffB, h.dtsTariffM, h.dtsTariffY
+	}
+	var b *meterBoundaryRow
+	var m, y [4]float64
+	if h.pg != nil {
+		loc := time.Local
+		start, _ := dayBounds(now, loc)
+		if bb, err := h.pg.Dts017BoundaryValues(start); err == nil {
+			b = bb
+		} else {
+			log.Printf("dashboard: dts017m tariff today: %v", err)
+		}
+		if b != nil {
+			yy, mo, _ := now.In(loc).Date()
+			monthStart := time.Date(yy, mo, 1, 0, 0, 0, 0, loc)
+			monthEnd := monthStart.AddDate(0, 1, 0)
+			yearStart := time.Date(yy, 1, 1, 0, 0, 0, 0, loc)
+			yearEnd := yearStart.AddDate(1, 0, 0)
+			if days, err := h.pg.DailyDts017TariffsRange(monthStart, monthEnd); err == nil {
+				m[0], m[1], m[2], m[3] = addTariffs(days, 0, 0, 0, 0)
+			} else {
+				log.Printf("dashboard: dts017m tariff month: %v", err)
+			}
+			if days, err := h.pg.DailyDts017TariffsRange(yearStart, yearEnd); err == nil {
+				y[0], y[1], y[2], y[3] = addTariffs(days, 0, 0, 0, 0)
+			} else {
+				log.Printf("dashboard: dts017m tariff year: %v", err)
+			}
+		}
+	}
+	h.dtsTariffAt = now
+	h.dtsTariffB = b
+	h.dtsTariffM = m
+	h.dtsTariffY = y
+	return h.dtsTariffB, h.dtsTariffM, h.dtsTariffY
+}
+
 func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	devices, err := h.store.Current()
 	if err != nil {
@@ -1149,6 +1215,36 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	impDayY, impNightY, expDayY, expNightY = math.Round(impDayY*100)/100, math.Round(impNightY*100)/100,
 		math.Round(expDayY*100)/100, math.Round(expNightY*100)/100
 
+	// Тарифные величины DTS017M (гараж) — аналог дома: сегодняшний незакрытый день
+	// из живых показаний + границ, месяц/год — сумма финализированных дней + сегодня.
+	var dImpDay, dImpNight, dExpDay, dExpNight float64
+	var dImpDayM, dImpNightM, dExpDayM, dExpNightM float64
+	var dImpDayY, dImpNightY, dExpDayY, dExpNightY float64
+	if h.flags.ShowDTS017 && h.pg != nil {
+		if snap, err := h.store.Dts017Current(); err == nil && snap != nil {
+			fresh := false
+			if ts, perr := time.Parse(time.RFC3339, snap.Timestamp); perr == nil && ts.After(staleCutoff) {
+				fresh = true
+			}
+			dImp, okI := snap.Values[dts017Import]
+			dExp, okE := snap.Values[dts017Export]
+			if fresh && okI && okE {
+				db, dm, dy := h.loadDts017TariffData(now)
+				if db != nil {
+					dImpDay, dImpNight, dExpDay, dExpNight = meterTariffToday(now, dImp, dExp, db)
+				}
+				dImpDayM, dImpNightM, dExpDayM, dExpNightM = dm[0]+dImpDay, dm[1]+dImpNight, dm[2]+dExpDay, dm[3]+dExpNight
+				dImpDayY, dImpNightY, dExpDayY, dExpNightY = dy[0]+dImpDay, dy[1]+dImpNight, dy[2]+dExpDay, dy[3]+dExpNight
+			}
+		}
+	}
+	dImpDay, dImpNight, dExpDay, dExpNight = math.Round(dImpDay*100)/100, math.Round(dImpNight*100)/100,
+		math.Round(dExpDay*100)/100, math.Round(dExpNight*100)/100
+	dImpDayM, dImpNightM, dExpDayM, dExpNightM = math.Round(dImpDayM*100)/100, math.Round(dImpNightM*100)/100,
+		math.Round(dExpDayM*100)/100, math.Round(dExpNightM*100)/100
+	dImpDayY, dImpNightY, dExpDayY, dExpNightY = math.Round(dImpDayY*100)/100, math.Round(dImpNightY*100)/100,
+		math.Round(dExpDayY*100)/100, math.Round(dExpNightY*100)/100
+
 	// Прогноз «Меркурия» на текущий момент: ручная точка + прирост DDS238 с неё
 	// (финализированные дни + незавершённый сегодняшний день). Только при живом
 	// счётчике и наличии точек в конфиге.
@@ -1162,29 +1258,41 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(currentResponse{
-		GeneratedAt:           time.Now().Format(time.RFC3339),
-		TotalPower:            total,
-		TotalPV:               totalPV,
-		Placements:            placements,
-		MapGridV:              gridV,
-		MapGridP:              gridP,
-		MapBatV:               batV,
-		MapBatP:               batP,
-		HousePower:            housePower,
-		MeterImportDay:        impDay,
-		MeterImportNight:      impNight,
-		MeterExportDay:        expDay,
-		MeterExportNight:      expNight,
-		MeterImportDayMonth:   impDayM,
-		MeterImportNightMonth: impNightM,
-		MeterExportDayMonth:   expDayM,
-		MeterExportNightMonth: expNightM,
-		MeterImportDayYear:    impDayY,
-		MeterImportNightYear:  impNightY,
-		MeterExportDayYear:    expDayY,
-		MeterExportNightYear:  expNightY,
-		Mercury:               mercury,
-		Devices:               devices,
+		GeneratedAt:            time.Now().Format(time.RFC3339),
+		TotalPower:             total,
+		TotalPV:                totalPV,
+		Placements:             placements,
+		MapGridV:               gridV,
+		MapGridP:               gridP,
+		MapBatV:                batV,
+		MapBatP:                batP,
+		HousePower:             housePower,
+		MeterImportDay:         impDay,
+		MeterImportNight:       impNight,
+		MeterExportDay:         expDay,
+		MeterExportNight:       expNight,
+		MeterImportDayMonth:    impDayM,
+		MeterImportNightMonth:  impNightM,
+		MeterExportDayMonth:    expDayM,
+		MeterExportNightMonth:  expNightM,
+		MeterImportDayYear:     impDayY,
+		MeterImportNightYear:   impNightY,
+		MeterExportDayYear:     expDayY,
+		MeterExportNightYear:   expNightY,
+		DTS017ImportDay:        dImpDay,
+		DTS017ImportNight:      dImpNight,
+		DTS017ExportDay:        dExpDay,
+		DTS017ExportNight:      dExpNight,
+		DTS017ImportDayMonth:   dImpDayM,
+		DTS017ImportNightMonth: dImpNightM,
+		DTS017ExportDayMonth:   dExpDayM,
+		DTS017ExportNightMonth: dExpNightM,
+		DTS017ImportDayYear:    dImpDayY,
+		DTS017ImportNightYear:  dImpNightY,
+		DTS017ExportDayYear:    dExpDayY,
+		DTS017ExportNightYear:  dExpNightY,
+		Mercury:                mercury,
+		Devices:                devices,
 	})
 }
 

@@ -79,7 +79,11 @@ function energyOpts(unit, minRange){
 			legend:{ display:false },
 			// На touch встроенный tooltip отключён (хинт по тапу); __srTouched —
 			// страховка, если SR_COARSE на устройстве не сработал.
-			tooltip:{ enabled:!(SR_COARSE || window.__srTouched) },
+			// Значения потребления/отдачи в хинтах — целыми: не округляем, а
+			// отбрасываем десятичную дробь (Math.trunc).
+			tooltip:{ enabled:!(SR_COARSE || window.__srTouched), callbacks:{
+				label:function(ctx){ var n=Math.trunc(ctx.parsed.y||0); return ctx.dataset.label+': '+n+' kWh'; }
+			} },
 			zoom:{
 				pan:{ enabled:!SR_COARSE, mode:'x' },
 				zoom:{ wheel:{ enabled:!SR_COARSE, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:!SR_COARSE }, mode:'x' },

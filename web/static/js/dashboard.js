@@ -9,6 +9,7 @@ var showCE308 = document.body.dataset.showCe308 === '1';
 // Режим ce308.final_readings_only: мгновенная телеметрия (текущие данные) не
 // собирается/не отдаётся — рамка скрыта шаблоном, /api/ce308/current не опрашиваем.
 var ce308Final = document.body.dataset.ce308Final === '1';
+var showDTS017 = document.body.dataset.showDts017 === '1';
 
 // ---------- Утилиты ----------
 function esc(s){ return String(s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
@@ -263,7 +264,10 @@ function statHtml(p, values, stale){
 	}
 	var n=Number(raw), cls='val', txt;
 	if(isFinite(n)){
-		txt=n.toLocaleString('ru-RU',{maximumFractionDigits:2});
+		// Накопленные энергии (показания) — целыми: не округляем, а отбрасываем
+		// дробную часть (Math.trunc). Оперативные значения (V/I/P/Q/…) — как есть.
+		if(cumulative){ txt=Math.trunc(n).toLocaleString('ru-RU',{maximumFractionDigits:0}); }
+		else{ txt=n.toLocaleString('ru-RU',{maximumFractionDigits:2}); }
 		// Инверсия цвета мощностей: положительная (потребление) — красная (neg),
 		// отрицательная (отдача в сеть) — зелёная (pos).
 		if(signed){ cls+=' '+(n<0?' pos':' neg'); }
@@ -284,8 +288,11 @@ function groupTableHtml(rows, values, stale){
 	return h+'</table>';
 }
 // groupBoxHtml — вложенная рамка (необязательный заголовок) с одной таблицей.
-function groupBoxHtml(rows, values, stale, title){
-	return '<div class="stat-group">'+(title?'<div class="stat-group-title">'+esc(title)+'</div>':'')+
+// extraCls — дополнительный класс рамки (напр., ограничение ширины для длинного
+// заголовка «Меркурий»).
+function groupBoxHtml(rows, values, stale, title, extraCls){
+	return '<div class="stat-group'+(extraCls?' '+extraCls:'')+'">'+
+		(title?'<div class="stat-group-title">'+esc(title)+'</div>':'')+
 		groupTableHtml(rows, values, stale)+'</div>';
 }
 // renderGroupedStats рисует плашки снимка {timestamp, values} вложенными рамками:
@@ -306,7 +313,7 @@ function renderGroupedStats(statsId, tsId, snap, groups, staleMs){
 }
 // MERCURY_GROUPS — раскладка вложенной рамки «Меркурий — прогноз»: 2 столбца
 // (Импорт/Экспорт) × 2 строки (День/Ночь), значения — прогноз с /api/current.
-var MERCURY_TITLE='Меркурий — прогноз';
+var MERCURY_TITLE='Счетчик Меркурий 208 без возможности мониторинга. Прогноз на основе снятых вручную показаний + статистика DDS238';
 function mercuryGroupHtml(merc){
 	if(!merc) return '';
 	var vals={
@@ -317,7 +324,7 @@ function mercuryGroupHtml(merc){
 		[['mercury_import_day','Импорт · День','kWh',false,true],['mercury_export_day','Экспорт · День','kWh',false,true]],
 		[['mercury_import_night','Импорт · Ночь','kWh',false,true],['mercury_export_night','Экспорт · Ночь','kWh',false,true]]
 	];
-	return groupBoxHtml(rows, vals, false, MERCURY_TITLE);
+	return groupBoxHtml(rows, vals, false, MERCURY_TITLE, 'stat-group--mercury');
 }
 // renderMeter — статистики счётчика DDS238 (дом) из снимка устройства + вложенная
 // рамка «Меркурий — прогноз» (из top-level data.mercury, если раздел настроен).
@@ -385,7 +392,8 @@ function renderInvPlates(placements){
 // потребление, отрицательная — отдача в сеть.
 function ce308Num(v){ return (v===undefined || v===null || !isFinite(Number(v))) ? null : Number(v); }
 // ce308Fmt — 2 знака + разделители разрядов (для показаний энергии, левый столбец).
-function ce308Fmt(v){ var n=ce308Num(v); return n===null ? '—' : n.toLocaleString('ru-RU',{minimumFractionDigits:2, maximumFractionDigits:2}); }
+// Показания энергии показываем целыми (дробную часть отбрасываем, не округляем).
+function ce308Fmt(v){ var n=ce308Num(v); return n===null ? '—' : Math.trunc(n).toLocaleString('ru-RU',{maximumFractionDigits:0}); }
 function setCe308Cell(id, v, signed){
 	var el=document.getElementById(id);
 	if(!el) return;
@@ -542,11 +550,30 @@ async function tick(){
 			setKpi2('kpiImpNightY', data.meter_import_night_year);
 			setKpi2('kpiExpDayY', data.meter_export_day_year);
 			setKpi2('kpiExpNightY', data.meter_export_night_year);
-			// Заголовки рамок: «Потребление/Отдача за MM.YYYY» и «... за YYYY год».
+			// Заголовки рамок: «Дом. Потребление/Отдача за MM.YYYY» и «... за YYYY год».
 			var now=new Date();
 			function p2(x){ return (x<10?'0':'')+x; }
-			document.getElementById('tariffMonthTitle').textContent='Потребление/Отдача за '+p2(now.getMonth()+1)+'.'+now.getFullYear();
-			document.getElementById('tariffYearTitle').textContent='Потребление/Отдача за '+now.getFullYear()+' год';
+			document.getElementById('tariffMonthTitle').textContent='Дом. Потребление/Отдача за '+p2(now.getMonth()+1)+'.'+now.getFullYear();
+			document.getElementById('tariffYearTitle').textContent='Дом. Потребление/Отдача за '+now.getFullYear()+' год';
+			// Гараж (DTS017M) — те же 12 плашек из данных /api/current.
+			if(showDTS017){
+				setKpi2('gKpiImpDay', data.dts017m_import_day);
+				setKpi2('gKpiImpNight', data.dts017m_import_night);
+				setKpi2('gKpiExpDay', data.dts017m_export_day);
+				setKpi2('gKpiExpNight', data.dts017m_export_night);
+				setKpi2('gKpiImpDayM', data.dts017m_import_day_month);
+				setKpi2('gKpiImpNightM', data.dts017m_import_night_month);
+				setKpi2('gKpiExpDayM', data.dts017m_export_day_month);
+				setKpi2('gKpiExpNightM', data.dts017m_export_night_month);
+				setKpi2('gKpiImpDayY', data.dts017m_import_day_year);
+				setKpi2('gKpiImpNightY', data.dts017m_import_night_year);
+				setKpi2('gKpiExpDayY', data.dts017m_export_day_year);
+				setKpi2('gKpiExpNightY', data.dts017m_export_night_year);
+				var gm=document.getElementById('gTariffMonthTitle');
+				if(gm) gm.textContent='Гараж. Потребление/Отдача за '+p2(now.getMonth()+1)+'.'+now.getFullYear();
+				var gy=document.getElementById('gTariffYearTitle');
+				if(gy) gy.textContent='Гараж. Потребление/Отдача за '+now.getFullYear()+' год';
+			}
 			// Плашка электросчётчика (вверху).
 			var meter=null;
 			for(var i=0;i<data.devices.length;i++) if(isMeterDevice(data.devices[i])){ meter=data.devices[i]; break; }
@@ -567,13 +594,14 @@ function setKpi(id, v){
 		el.textContent='—';
 	}
 }
-// setKpi2 заполняет плашку kWh-величиной (до 2 знаков) или прочерком, если нет данных.
+// setKpi2 заполняет плашку kWh-величиной ЦЕЛЫМ числом (дробную часть отбрасываем,
+// не округляем) или прочерком, если нет данных.
 function setKpi2(id, v){
 	var el=document.getElementById(id);
 	if(!el) return;
 	var n=Number(v);
 	if(isFinite(n)){
-		el.textContent=n.toLocaleString('ru-RU',{maximumFractionDigits:2});
+		el.textContent=Math.trunc(n).toLocaleString('ru-RU',{maximumFractionDigits:0});
 	}else{
 		el.textContent='—';
 	}
