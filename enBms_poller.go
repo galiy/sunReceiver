@@ -48,10 +48,15 @@ const (
 	enbmsConnFailLogInterval = 10 * time.Minute
 	// enbmsRawLogInterval — минимальный интервал фонового (heartbeat) лога сырого
 	// payload Battery: пишем при каждом изменении хвоста (сигналы/аварии) и не
-	// реже одного раза в этот интервал. Нужен для калибровки раскладки хвоста.
+	// реже одного раза в этот интервал. Нужен был для калибровки раскладки хвоста.
 	enbmsRawLogInterval = 60 * time.Second
 	// enbmsRawTailLen — длина сигнального хвоста Battery (см. parseEnBmsTail).
 	enbmsRawTailLen = 39
+	// enbmsRawLog — сырой лог payload Battery/TeleMeter (`enbms: RAW ...`).
+	// ОТКЛЮЧЁН: раскладка хвоста откалибрована по снятым логам (2026-10-01…05:
+	// повторяющееся предупреждение ячейки 9, реже 16). Для повторной калибровки
+	// поставить true.
+	enbmsRawLog = false
 	// enbmsAlarmHistory — писать ли алармы EnBMS в device_errors. Включено: warn-область
 	// хвоста Battery откалибрована по APK и подтверждена живыми событиями (ячейки 9/16),
 	// ложных срабатываний на здоровом кадре нет. Опрос EnBMS при этом выключен
@@ -293,7 +298,9 @@ func pollEnBmsDevice(pg *pgStore, store *redisStore, acc *enbmsAccumulator, d *e
 	}
 
 	now := time.Now()
-	d.logEnBmsRaw(payload, now)
+	if enbmsRawLog {
+		d.logEnBmsRaw(payload, now)
+	}
 	snap := enbmsSnapshotFromParsed(d.cfg, parsed, now)
 	snap.Model = d.model
 	// Текущее состояние — в HASH (перезапись); каждое снятое показание — в

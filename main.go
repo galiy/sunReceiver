@@ -1050,6 +1050,12 @@ var (
 	deyeAlertLast = map[string]string{}
 )
 
+// deyeRawAlertLog — сырой лог Alert-регистров Deye (`deye alert ...`).
+// ОТКЛЮЧЁН: карта откалибрована по снятым логам (2026-10-01…05 — единственная
+// ненулевая аварийная область: рег. 0x69=0x0004 при status(0x3B)=4; 0x229-0x22E
+// всегда нули). Для повторной калибровки поставить true.
+const deyeRawAlertLog = false
+
 // logDeyeRawAlert пишет СЫРЫЕ Alert-регистры Deye (0x65–0x6A, 6×16 бит) в журнал
 // с временем снятия — для калибровки карты аварий. По нормам апстрима Alert
 // находится именно здесь (single-phase hybrid), для string-модели официальной
@@ -1570,8 +1576,10 @@ func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 				}
 				alertB = deyeRegsHex(m2, 0x0229, 6)
 			}
-			logDeyeRawAlert(t.IP, int(result[0x3B]), deyeRegsHex(result, 0x65, 6), alertB,
-				strings.Join(decodeDeyeWarnings(result), ", "))
+			if deyeRawAlertLog {
+				logDeyeRawAlert(t.IP, int(result[0x3B]), deyeRegsHex(result, 0x65, 6), alertB,
+					strings.Join(decodeDeyeWarnings(result), ", "))
+			}
 			res.Faults = decodeDeyeFaults(result)
 			res.Values = mapDeyeRegisters(result)
 			// Ядро (ac_active_power, рег. 0x56/0x57) обязано быть: без него values после
@@ -2214,7 +2222,8 @@ func main() {
 		}()
 	}
 
-	// Счётчик Энергомера CE308 — отдельный 2-сек цикл опроса по BLE (текущие
+	// Счётчик Энергомера CE308 — отдельный цикл опроса по BLE с периодом poll.ce308
+	// (в sample по умолчанию 5 с; текущие
 	// значения + история в Redis (каждое показание), усреднение до 1 записи за 5 мин в PG), см.
 	// ce308_poller.go и ce308_accumulator.go. Разовый снимок энергии — по сигналу.
 	// Раздел ce308 независим от счётчика DDS238 (meter) и запускается даже без него.
