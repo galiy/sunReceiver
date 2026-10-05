@@ -32,12 +32,17 @@ import (
 	"time"
 )
 
-// rangeCacheTTL — срок жизни кешированного набора снимков в loadRange. Страница
-// графиков делает fetch /api/series с общими from/to за цикл (60 с), и данные
-// Redis обновляются каждые ~10 с, поэтому 15 с — свежее окно кеша: повторные
-// (в т.ч. параллельные вкладки) запросы за тот же период сходятся в один
-// реальный read из Redis/PG.
-const rangeCacheTTL = 15 * time.Second
+// loadRangeFlightTTL — максимальное время жизни записи single-flight в loadRange:
+// если реальный read не завершился за это время, запись считается «протухшей» и
+// удаляется, а новые запросы за тем же периодом выполняют собственный read (не
+// блокируясь дольше 5 с на зависшем чтении).
+const loadRangeFlightTTL = 5 * time.Second
+
+// loadRangeFlightMax — предел одновременных записей single-flight (объём):
+// при его достижении новый запрос выполняется напрямую, без регистрации, чтобы
+// структура не росла неограниченно. Результаты между запросами НЕ удерживаются —
+// источник истины Redis/PG, а запись удаляется сразу после завершения чтения.
+const loadRangeFlightMax = 64
 
 // tariffCacheTTL — срок жизни кеша тарифных исходников (границ текущего дня и
 // сумм финализированных дней месяца/года). Главная страница обновляется каждую
@@ -107,10 +112,13 @@ type dashboardHandler struct {
 	// версией до его появления), поэтому группировку анимации строим по конфигу.
 	placeByIP map[string]string
 
-	// Кэш loadRange: 4 одинаковых запроса /api/series за цикл сойдутся в один
-	// read из Redis/PG. Ключ — от (start, end).
-	cacheMu sync.Mutex
-	cache   map[string]cachedRange
+	// single-flight loadRange: одновременные запросы за один и тот же период
+	// (например, /api/series и /api/agm/series с общим [from,to]) схлопываются в
+	// один read из Redis/PG. Результаты между запросами не кэшируются — запись
+	// живёт только пока идёт чтение (и не дольше loadRangeFlightTTL), поэтому
+	// структура не растёт при зуме/смене диапазонов. Ключ — от (start, end).
+	flightMu sync.Mutex
+	flight   map[string]*loadRangeCall
 
 	// Кэш тарифных исходников /api/current (TTL tariffCacheTTL): границы текущего
 	// дня и суммы финализированных прошедших дней месяца/года. Главная страница
@@ -152,10 +160,13 @@ type dashboardHandler struct {
 	ce308EnergyAt time.Time
 }
 
-// cachedRange — кешированный результат loadRange.
-type cachedRange struct {
-	at    time.Time
-	snaps []deviceSnapshot
+// loadRangeCall — одна запись single-flight loadRange: общий результат одного
+// реального чтения, который получают все ожидающие запросы за тем же периодом.
+type loadRangeCall struct {
+	started time.Time
+	done    chan struct{}
+	snaps   []deviceSnapshot
+	err     error
 }
 
 // currentResponse отвечает на GET /api/current.
@@ -3110,34 +3121,49 @@ func downsampleAGMSeries(pts []agmSeriesPoint, from, to time.Time) []agmSeriesPo
 // точки внутри окна — из Redis (полное разрешение). Если PG отключено,
 // возвращаются только данные из Redis в пределах окна удержания.
 //
-// Результат кешируется на rangeCacheTTL: повторные запросы /api/series за тот
-// же период за цикл (несколько вкладок, зум) сходятся в один read.
+// Одновременные запросы за один и тот же период схлопываются в один реальный
+// read (single-flight): результаты между запросами не удерживаются — источник
+// истины Redis/PG, а запись общая только на время чтения. Размер структуры
+// ограничен loadRangeFlightMax, время жизни записи — не дольше loadRangeFlightTTL.
 func (h *dashboardHandler) loadRange(start, end time.Time, now time.Time) ([]deviceSnapshot, error) {
 	key := fmt.Sprintf("%d|%d", start.UnixNano(), end.UnixNano())
-	h.cacheMu.Lock()
-	if c, ok := h.cache[key]; ok && now.Sub(c.at) < rangeCacheTTL {
-		h.cacheMu.Unlock()
-		return c.snaps, nil
-	}
-	// Чистим устаревшие записи, пока держим блокировку.
-	for k, c := range h.cache {
-		if now.Sub(c.at) >= rangeCacheTTL {
-			delete(h.cache, k)
+
+	h.flightMu.Lock()
+	// Убираем «протухшие» записи (в т.ч. зависшие чтения): не дольше TTL.
+	for k, c := range h.flight {
+		if time.Since(c.started) >= loadRangeFlightTTL {
+			delete(h.flight, k)
 		}
 	}
-	h.cacheMu.Unlock()
+	if c, ok := h.flight[key]; ok {
+		h.flightMu.Unlock()
+		select {
+		case <-c.done:
+			return c.snaps, c.err
+		case <-time.After(loadRangeFlightTTL):
+			// Лидер не уложился в TTL — не ждём его, читаем сами.
+			return h.loadRangeUncached(start, end, now)
+		}
+	}
+	if len(h.flight) >= loadRangeFlightMax {
+		// Достигнут предел объёма: не регистрируемся, читаем напрямую.
+		h.flightMu.Unlock()
+		return h.loadRangeUncached(start, end, now)
+	}
+	if h.flight == nil {
+		h.flight = map[string]*loadRangeCall{}
+	}
+	c := &loadRangeCall{started: time.Now(), done: make(chan struct{})}
+	h.flight[key] = c
+	h.flightMu.Unlock()
 
-	snaps, err := h.loadRangeUncached(start, end, now)
-	if err != nil {
-		return nil, err
-	}
-	h.cacheMu.Lock()
-	if h.cache == nil {
-		h.cache = map[string]cachedRange{}
-	}
-	h.cache[key] = cachedRange{at: now, snaps: snaps}
-	h.cacheMu.Unlock()
-	return snaps, nil
+	c.snaps, c.err = h.loadRangeUncached(start, end, now)
+
+	h.flightMu.Lock()
+	delete(h.flight, key)
+	h.flightMu.Unlock()
+	close(c.done)
+	return c.snaps, c.err
 }
 
 // loadRangeUncached — реальное чтение из PG (старая часть) и Redis (рецентная часть).
