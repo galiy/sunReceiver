@@ -25,10 +25,11 @@ dds238.json
 # основной конфигурационный файл (адреса, логин и пароль БД, устройства) — не коммитить
 sunReceiver.json
 
-# бинарники сборки
-sunReceiver
-sunReceiver-linux
-solarman-probe
+# бинарники сборки (якорь на корень репозитория: иначе правило совпадает с
+# каталогом cmd/sunreceiver при core.ignorecase=true и глушит новые файлы)
+/sunReceiver
+/sunReceiver-linux
+/solarman-probe
 *.log
 *.exe
 

@@ -514,6 +514,21 @@ func placeByIP(targets []invTarget) map[string]string {
 	return m
 }
 
+// inverterNameByIP — имя сетевого инвертора (Deye/Sofar) по IP. В PG device_errors
+// инверторы пишутся с device = IP; для дашборда показываем имя вместо адреса.
+func inverterNameByIP(targets []invTarget) map[string]string {
+	m := make(map[string]string)
+	for _, t := range targets {
+		if t.Kind != kindSofar && t.Kind != kindDeyeString {
+			continue
+		}
+		if t.IP != "" && t.Name != "" {
+			m[t.IP] = t.Name
+		}
+	}
+	return m
+}
+
 // dashboardAuthUser/dashboardAuthPass — учётные данные HTTP Basic для `/api/*`
 // дашборда (из конфига dashboard_user/dashboard_password). Пустые значения —
 // аутентификация не требуется. Заполняются в loadConfig.
@@ -1248,7 +1263,9 @@ var deyeWarnNames = map[int]string{
 
 // decodeDeyeWarnings декодирует предупреждения Deye из регистров 0x65/0x66
 // (младшее слово — 0x65), бит N-1 = W(N). Предупреждения — не аварии, в историю
-// ошибок не пишутся (только в сырой лог).
+// ошибок не пишутся (только в сырой лог). Решение (2026-10-06): W1–W32 остаются
+// информационными и показываются ТОЛЬКО в сыром логе (deyeRawAlertLog); запись в
+// device_errors не делается (много рутинных W — шум и ложная тревожность).
 func decodeDeyeWarnings(regs map[uint16]uint16) []string {
 	bitmap := uint32(regs[0x65]) | uint32(regs[0x66])<<16
 	if bitmap == 0 {
@@ -2430,7 +2447,7 @@ func main() {
 	bgWg.Add(1)
 	go func() {
 		defer bgWg.Done()
-		serveDashboard(dashboardAddr, store, pg, relayCtl, stopCtx, dash, placementOrder(targets), placeByIP(targets), dashboardAuthUser, dashboardAuthPass)
+		serveDashboard(dashboardAddr, store, pg, relayCtl, stopCtx, dash, placementOrder(targets), placeByIP(targets), inverterNameByIP(targets), dashboardAuthUser, dashboardAuthPass)
 	}()
 
 	// Windows-сборка сворачивается в трей (меню «Закрыть»); на POSIX (Linux)

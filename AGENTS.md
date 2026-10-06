@@ -201,8 +201,10 @@ inverter 10, map 1, meter 1, ce308 5, antbms 1. Период EnBMS задаёт�
 - **BMS EnBMS** (BLE и/или RS485) — `enBms.go`, `enBms_client.go` (BLE-транспорт),
   `enBms_rs485.go` (ASCII PACE: TCP-шлюз/COM), `enBms_poller.go`,
   `enBms_accumulator.go`, `enBms_store.go`: опрос BMS Enjie (EMU110x) — по BLE
-  блок Battery (CID2 `0x61`), по RS485 TeleMeter (CID2 `0x42`, та же раскладка
-  телеметрии). Метод задаётся у каждого устройства, поэтому BLE- и RS485-устройства
+  блок Battery (CID2 `0x61`; алармы — из сигнального хвоста), по RS485 TeleMeter
+  (CID2 `0x42`, та же раскладка телеметрии) плюс состояния/защиты TeleState
+  (CID2 `0x44`: алармы, ключи, балансировка, режим — `parseEnBmsState`).
+  Метод задаётся у каждого устройства, поэтому BLE- и RS485-устройства
   опрашиваются независимыми циклами со своими периодами
   (`poll_interval_ble`/`poll_interval_rs485`), внутри цикла — последовательно;
   постоянные соединения (структура BLE — из CE308, схема хранения/усреднения — из

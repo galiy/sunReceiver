@@ -238,3 +238,92 @@ function SR_descOf(code, msg){
   if(msg) return msg;
   return code || '';
 }
+
+// srCtrlDragZoom — универсальное управление зумом «Ctrl + выделение отрезка».
+// При зажатом Ctrl (или Cmd на macOS) ЛКМ на графике рисуется прямоугольник
+// выделения по оси X; по отпусканию вызывается cb(fromDate, toDate) — обычно
+// страница выставляет это окно как полный период всех своих графиков.
+// Работает поверх chartjs-plugin-zoom: capture-обработчик mousedown на document
+// гасит propagation, чтобы панорамирование плагина не мешало выделению.
+// Обработчик навешивается на canvas ОДИН раз (при повторных renderChart колбэк
+// просто заменяется).
+function srCtrlDragZoom(chart, cb){
+  if(!chart || !chart.canvas || typeof document==='undefined') return;
+  var canvas=chart.canvas;
+  // График пересоздаётся на том же canvas при каждой перезагрузке — храним
+  // ТЕКУЩИЙ объект chart и колбэк на canvas, а сами обработчики навешиваем один раз.
+  canvas.__srCtrlChart=chart;
+  canvas.__srCtrlCb=cb;
+  if(canvas.__srCtrlBound) return;
+  canvas.__srCtrlBound=true;
+
+  // Стиль выделения вставляем один раз.
+  if(!document.getElementById('srXselStyle')){
+    var st=document.createElement('style'); st.id='srXselStyle';
+    st.textContent='.sr-xsel{position:absolute;display:none;pointer-events:none;z-index:5;background:rgba(66,139,202,0.18);border:1px solid rgba(66,139,202,0.85);box-sizing:border-box}';
+    (document.head||document.documentElement).appendChild(st);
+  }
+
+  var drag=null, box=null;
+  function cur(){ return canvas.__srCtrlChart; }
+  function area(){ var ch=cur(); return (ch&&ch.chartArea) || {left:0,right:(ch?ch.width:canvas.width),top:0,bottom:(ch?ch.height:canvas.height)}; }
+  function rel(e){
+    var ch=cur();
+    if(ch && window.Chart && Chart.helpers && Chart.helpers.getRelativePosition){
+      return Chart.helpers.getRelativePosition(e, ch);
+    }
+    var r=canvas.getBoundingClientRect();
+    return { x:e.clientX-r.left, y:e.clientY-r.top };
+  }
+  function ensureBox(){
+    var parent=canvas.parentNode; if(!parent) return null;
+    if(getComputedStyle(parent).position==='static') parent.style.position='relative';
+    if(!box||box.parentNode!==parent){ box=document.createElement('div'); box.className='sr-xsel'; parent.appendChild(box); }
+    return box;
+  }
+  function xclamp(x){ var a=area(); return Math.max(a.left, Math.min(a.right, x)); }
+  function paint(){
+    if(!drag||!box) return;
+    var a=area();
+    var x0=xclamp(Math.min(drag.x0,drag.x1)), x1=xclamp(Math.max(drag.x0,drag.x1));
+    box.style.left=(canvas.offsetLeft+x0)+'px';
+    box.style.top=(canvas.offsetTop+a.top)+'px';
+    box.style.width=Math.max(0,x1-x0)+'px';
+    box.style.height=(a.bottom-a.top)+'px';
+    box.style.display='block';
+  }
+  function stop(e){ e.stopPropagation(); e.preventDefault(); }
+  function onDown(e){
+    if(!e.ctrlKey && !e.metaKey) return;
+    if(e.button!==0 || e.target!==canvas) return;
+    stop(e);
+    ensureBox();
+    var r=rel(e); drag={x0:r.x, x1:r.x};
+    canvas.style.cursor='crosshair';
+    paint();
+    document.addEventListener('mousemove', onMove, true);
+    document.addEventListener('mouseup', onUp, true);
+  }
+  function onMove(e){ if(!drag) return; stop(e); drag.x1=rel(e).x; paint(); }
+  function onUp(e){
+    if(!drag) return;
+    stop(e);
+    document.removeEventListener('mousemove', onMove, true);
+    document.removeEventListener('mouseup', onUp, true);
+    var x0=xclamp(Math.min(drag.x0,drag.x1)), x1=xclamp(Math.max(drag.x0,drag.x1));
+    drag=null; if(box) box.style.display='none'; canvas.style.cursor='';
+    if(x1-x0 < 8) return; // слишком короткое выделение — не зум
+    var ch=cur(); var sxx=ch && ch.scales && ch.scales.x; if(!sxx) return;
+    var v0=sxx.getValueForPixel(x0), v1=sxx.getValueForPixel(x1);
+    if(!isFinite(v0)||!isFinite(v1)) return;
+    var from=new Date(Math.min(v0,v1)), to=new Date(Math.max(v0,v1));
+    if(to-from < 60000) return; // минимум 1 минута (как limits зума)
+    if(typeof canvas.__srCtrlCb==='function') canvas.__srCtrlCb(from, to);
+  }
+  document.addEventListener('mousedown', onDown, true);
+  // На случай, если зум-плагин/SDK слушает pointer-события: гасим их при Ctrl,
+  // чтобы выделение не превращалось в панорамирование.
+  document.addEventListener('pointerdown', function(e){
+    if((e.ctrlKey||e.metaKey) && e.button===0 && e.target===canvas){ e.stopPropagation(); }
+  }, true);
+}

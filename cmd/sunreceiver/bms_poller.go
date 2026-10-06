@@ -64,6 +64,9 @@ type bmsDevice struct {
 	CycleAh     float64  `json:"cycle_ah,omitempty"`     // суммарная цикловая ёмкость, А·ч (ANT, addr 83)
 	Model       string   `json:"model,omitempty"`        // модель/протокол устройства (EnBMS BasicInfo)
 	Alarms      []string `json:"alarms,omitempty"`       // активные алармы/защиты (человекочитаемо)
+	Mode        string   `json:"mode,omitempty"`         // режим работы BMS (EnBMS, TeleState 0x44)
+	Keys        []string `json:"keys,omitempty"`         // включённые ключи (EnBMS, TeleState 0x44)
+	Balance     []string `json:"balance,omitempty"`      // балансируемые ячейки (EnBMS, TeleState 0x44)
 }
 
 // bmsKey — ключ BMS-устройства для HASH sunreceiver:bms, Redis-ряда, PG (name)

@@ -37,8 +37,13 @@ async function loadErrors(resetOffset){
     var h='<table class="pivot-table"><thead><tr><th>Время</th><th>Тип</th><th>Устройство</th><th>Код</th><th>Описание</th></tr></thead><tbody>';
     for(var i=0;i<rows.length;i++){
       var x=rows[i];
-      var desc=SR_descOf(x.code, x.msg);
-      if(x.msg && desc!==x.msg) desc=desc+' · '+x.msg;
+      // «Описание» = локализуемая часть по коду + детальный текст (msg) через « · ».
+      // Оба столбца локализуются; если описание совпадает с кодом (msg == code) —
+      // в «Описании» ставим «—», чтобы не дублировать.
+      var desc=SR_descOf(x.code, '');
+      if(!desc) desc=x.msg||x.code;
+      if(x.msg && x.msg!==desc) desc=desc+' · '+x.msg;
+      if(desc===x.code) desc='—'; // не дублировать «Код»
       h+='<tr><td>'+esc(fmtTs(x.ts))+'</td><td>'+esc(KIND_LABEL[x.kind]||x.kind)+'</td><td>'+esc(x.device)+'</td><td>'+esc(x.code)+'</td><td>'+esc(desc)+'</td></tr>';
     }
     h+='</tbody></table>';

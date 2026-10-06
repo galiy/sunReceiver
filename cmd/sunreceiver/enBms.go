@@ -538,8 +538,12 @@ type enbmsSnapshot struct {
 	MinCellIdx    int       `json:"min_cell_idx"`
 	MinCellV      float64   `json:"min_cell_v"`
 	AvgCellV      float64   `json:"avg_cell_v"`
-	Model         string    `json:"model,omitempty"`  // модель/протокол (BasicInfo 0x51)
-	Alarms        []string  `json:"alarms,omitempty"` // активные защиты/предупреждения
+	Model         string    `json:"model,omitempty"`         // модель/протокол (BasicInfo 0x51)
+	Alarms        []string  `json:"alarms,omitempty"`        // активные защиты/предупреждения
+	Mode          string    `json:"mode,omitempty"`          // режим работы (TeleState 0x44, Mode_Byte)
+	Keys          []string  `json:"keys,omitempty"`          // включённые ключи (TeleState 0x44, Ext_Bit)
+	Balance       []string  `json:"balance,omitempty"`       // балансируемые ячейки (TeleState 0x44, Ext_Bit)
+	BalanceCells  []int     `json:"balance_cells,omitempty"` // номера балансируемых ячеек (1-based)
 }
 
 // enbmsSnapshotFromParsed строит снимок из декодированного Battery: мощности
@@ -597,10 +601,15 @@ func enbmsSnapshotFromParsed(cfg enBmsDeviceConfig, r enbmsParsed, now time.Time
 // (`parseBody_Battery`, BmsMsgUtil.dart 0x3f3a18; порядок имён — `toJson`
 // 0x3def6c): после телеметрии идут warn-списки, затем статусы:
 //
-//	[batterynum]     список по ячейкам
-//	[tempnum-2]      список по температурам
+//	[batterynum]     batterywarnlist — предупреждения по ячейкам
+//	[tempnum-2]      tempwarnlist    — предупреждения по температурам
 //	+1 envtempwarn, +1 powertempwarn, +1 chargecurrentwarn, +1 customerwarnp
 //	далее статусы (ключи/баланс/режим) — в норме ненулевые.
+//
+// Имена уточнены (2026-10-06, energybms/protocol-BLE.md §5.1.1): первый список —
+// именно `batterywarnlist`, второй — `tempwarnlist`; `reservelist1` в кадре не
+// передаётся (резерв) — warn-область 16+4+4=24 байта не оставляет места третьему
+// списку. Смещения статусов (ключи/баланс/режим) не подтверждены — не декодируются.
 //
 // На ЗДОРОВОМ кадре warn-область нулевая; статусные байты после неё — не аварии
 // (см. PROTOCOL.md energybms §5.1.1).
@@ -641,9 +650,9 @@ func enbmsCellWarnBits(v int) []string {
 	return out
 }
 
-// parseEnBmsTail декодирует warn-область хвоста Battery. Раскладка хвоста зависит
-// от числа ячеек (cells) и датчиков температуры (temps): warn-байтов ячеек — cells,
-// температур — (temps-2) (первые два датчика в warn-область не входят), далее
+// parseEnBmsTail декодирует warn-область хвоста Battery. Первый список —
+// `batterywarnlist` (warn-байтов ячеек = cells), второй — `tempwarnlist`
+// (температур = temps-2; первые два датчика в warn-область не входят), далее
 // envtempwarn, powertempwarn, chargecurrentwarn, customerwarnp. Смещение начала
 // хвоста вычисляется из counts, а не из фиксированных «последних 39 байт», поэтому
 // поля не «разъезжаются» на моделях с другим числом ячеек/датчиков. Безопасно при
@@ -713,6 +722,272 @@ func parseEnBmsModel(p []byte) string {
 		}
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// enbmsModeNames — режим работы BMS (Mode_Byte блока TeleState 0x44).
+var enbmsModeNames = map[byte]string{
+	0x00: "Ожидание",
+	0x01: "Разряд",
+	0x02: "Заряд",
+	0x04: "Поддержание",
+	0x08: "Полный заряд",
+	0x10: "Ожидание (standby)",
+	0x20: "Выключение",
+}
+
+// enbmsModeName переводит Mode_Byte в текст (неизвестные — как «0xNN»).
+func enbmsModeName(b byte) string {
+	if n, ok := enbmsModeNames[b]; ok {
+		return n
+	}
+	return fmt.Sprintf("режим 0x%02X", b)
+}
+
+// enbmsExtBit — бит блока Ext_Bit блока TeleState (0x44): номер, имя (RU) и тип.
+type enbmsExtBit struct {
+	bit  int
+	name string
+	typ  string // "Warn" | "Protect" | "Key" | "Balance" | "Cfg"
+}
+
+// enbmsExtGroups — карта блоков Ext_Bit (TeleState CID2 0x44). Источник:
+// energybms/protocol-485.md §6.1 и редактор energybms-editor/telemetry.py
+// (EXT_GROUPS). Группы 0…13 (14 байт XML); группы 9…11 в XML не описаны.
+// Тип "Cfg" — сервисные флаги «игнорировать датчик/ключ», это не аварии, поэтому
+// в Alarms не попадают. "Key"/"Balance" — это нормальные состояния, а не аварии.
+var enbmsExtGroups = map[int]struct {
+	name string
+	bits []enbmsExtBit
+}{
+	0: {"Неисправности датчиков и ключей (игнорирование)", []enbmsExtBit{
+		{0, "Датчик напряжения неисправен", "Cfg"},
+		{1, "Датчик температуры неисправен", "Cfg"},
+		{2, "Датчик тока неисправен", "Cfg"},
+		{3, "Кнопка переключения неисправна", "Cfg"},
+		{4, "Датчик разности напряжений ячеек неисправен", "Cfg"},
+		{5, "Ключ заряда неисправен", "Cfg"},
+		{6, "Ключ разряда неисправен", "Cfg"},
+		{7, "Ключ ограничения тока неисправен", "Cfg"},
+	}},
+	1: {"Напряжение ячеек и сборки", []enbmsExtBit{
+		{0, "Ячейка: превышение напряжения", "Warn"},
+		{1, "Ячейка: защита по перенапряжению", "Protect"},
+		{2, "Ячейка: пониженное напряжение", "Warn"},
+		{3, "Ячейка: защита по пониженному напряжению", "Protect"},
+		{4, "Сборка: превышение напряжения", "Warn"},
+		{5, "Сборка: защита по перенапряжению", "Protect"},
+		{6, "Сборка: пониженное напряжение", "Warn"},
+		{7, "Сборка: защита по пониженному напряжению", "Protect"},
+	}},
+	2: {"Температура заряда/разряда", []enbmsExtBit{
+		{0, "Заряд: перегрев", "Warn"},
+		{1, "Заряд: защита по перегреву", "Protect"},
+		{2, "Заряд: низкая температура", "Warn"},
+		{3, "Заряд: защита по низкой температуре", "Protect"},
+		{4, "Разряд: перегрев", "Warn"},
+		{5, "Разряд: защита по перегреву", "Protect"},
+		{6, "Разряд: низкая температура", "Warn"},
+		{7, "Разряд: защита по низкой температуре", "Protect"},
+	}},
+	3: {"Среда, силовая часть, нагрев", []enbmsExtBit{
+		{0, "Среда: перегрев", "Warn"},
+		{1, "Среда: защита по перегреву", "Protect"},
+		{2, "Среда: низкая температура", "Warn"},
+		{3, "Среда: защита по низкой температуре", "Protect"},
+		{4, "Силовая часть: защита по перегреву", "Protect"},
+		{5, "Силовая часть: перегрев", "Warn"},
+		{6, "Ячейка: низкотемпературный подогрев", "Warn"},
+		{7, "Вторичная защита сработала", "Warn"},
+	}},
+	4: {"Токовые защиты", []enbmsExtBit{
+		{0, "Заряд: перегрузка по току", "Warn"},
+		{1, "Заряд: защита по току", "Protect"},
+		{2, "Разряд: перегрузка по току", "Warn"},
+		{3, "Разряд: защита по току", "Protect"},
+		{4, "Защита от импульсного тока", "Protect"},
+		{5, "Защита от КЗ на выходе", "Protect"},
+		{6, "Блокировка импульсной защиты", "Protect"},
+		{7, "Блокировка защиты от КЗ", "Protect"},
+	}},
+	5: {"Напряжение заряда, остаток, выход", []enbmsExtBit{
+		{0, "Заряд: защита по высокому напряжению", "Protect"},
+		{1, "Ожидание прерывистого питания", "Warn"},
+		{2, "Остаток ёмкости: предупреждение", "Warn"},
+		{3, "Остаток ёмкости: защита", "Protect"},
+		{4, "Запрет заряда при низком напряжении", "Protect"},
+		{5, "Защита от обратного подключения выхода", "Protect"},
+		{6, "Аэрозоль: неисправность", "Protect"},
+		{7, "Функция плавного пуска выхода", "Protect"},
+	}},
+	6: {"Состояние ключей", []enbmsExtBit{
+		{0, "Разрядный ключ включён", "Key"},
+		{1, "Зарядный ключ включён", "Key"},
+		{2, "Ключ ограничения тока включён", "Key"},
+		{3, "Ключ термоконтроля включён", "Key"},
+	}},
+	7: {"Балансировка ячеек 1–8", []enbmsExtBit{
+		{0, "Ячейка 1", "Balance"}, {1, "Ячейка 2", "Balance"},
+		{2, "Ячейка 3", "Balance"}, {3, "Ячейка 4", "Balance"},
+		{4, "Ячейка 5", "Balance"}, {5, "Ячейка 6", "Balance"},
+		{6, "Ячейка 7", "Balance"}, {7, "Ячейка 8", "Balance"},
+	}},
+	8: {"Балансировка ячеек 9–16", []enbmsExtBit{
+		{0, "Ячейка 9", "Balance"}, {1, "Ячейка 10", "Balance"},
+		{2, "Ячейка 11", "Balance"}, {3, "Ячейка 12", "Balance"},
+		{4, "Ячейка 13", "Balance"}, {5, "Ячейка 14", "Balance"},
+		{6, "Ячейка 15", "Balance"}, {7, "Ячейка 16", "Balance"},
+	}},
+	12: {"Ожидание заряда", []enbmsExtBit{
+		{4, "Ожидание автоматического заряда", "Warn"},
+		{5, "Ожидание ручного заряда", "Warn"},
+	}},
+	13: {"Системные ошибки", []enbmsExtBit{
+		{0, "Неисправность EEPROM", "Warn"},
+		{1, "Неисправность часов RTC", "Warn"},
+		{2, "Калибровка напряжения не выполнена", "Warn"},
+		{3, "Калибровка тока не выполнена", "Warn"},
+		{4, "Калибровка нуля не выполнена", "Warn"},
+		{5, "Вечный календарь не синхронизирован", "Warn"},
+	}},
+}
+
+// enbmsCellStateBits раскладывает байт состояния ячейки (TeleState 0x44) в
+// тексты битов. Учитываются только известные биты 0…3 (неизвестные 4…7 не
+// превращаются в алармы, чтобы не зашумлять device_errors).
+func enbmsCellStateBits(v int) []string {
+	if v == 0 {
+		return nil
+	}
+	names := map[int]string{
+		0: "высокое напряжение (предупреждение)",
+		1: "защита от перенапряжения",
+		2: "низкое напряжение (предупреждение)",
+		3: "защита от пониженного напряжения",
+	}
+	var out []string
+	for bit := 0; bit < 4; bit++ {
+		if v&(1<<uint(bit)) != 0 {
+			out = append(out, names[bit])
+		}
+	}
+	return out
+}
+
+// enbmsTempStateBits раскладывает байт состояния датчика температуры (TeleState
+// 0x44) в тексты битов (трактовка по аналогии с ячейками; protocol-485.md §6).
+// Учитываются только известные биты 0…3; неизвестные не превращаются в алармы.
+func enbmsTempStateBits(v int) []string {
+	if v == 0 {
+		return nil
+	}
+	names := map[int]string{
+		0: "перегрев (предупреждение)",
+		1: "защита от перегрева",
+		2: "переохлаждение (предупреждение)",
+		3: "защита от переохлаждения",
+	}
+	var out []string
+	for bit := 0; bit < 4; bit++ {
+		if v&(1<<uint(bit)) != 0 {
+			out = append(out, names[bit])
+		}
+	}
+	return out
+}
+
+// enbmsState — декодированный блок TeleState (RS485 CID2 0x44). Даёт защиты/
+// предупреждения ячеек и датчиков, блок Ext_Bit (защиты сборки/тока/температур,
+// состояние ключей и балансировки) и режим работы. На BLE недоступен: там те же
+// данные частично идут в сигнальном хвосте Battery (см. parseEnBmsTail).
+type enbmsState struct {
+	Alarms       []string
+	Keys         []string
+	Balance      []string
+	BalanceCells []int // номера балансируемых ячеек (1-based) — для маски/подсветки
+	Mode         string
+}
+
+// parseEnBmsState декодирует INFO блока TeleState (CID2 0x44, 49 байт). Раскладка
+// (energybms/protocol-485.md §6): header(2) + cellCount(1) + cellFlags[n] +
+// tempCount(1) + tempFlags[tn] + 2 байта (ток/напряжение) + extCount(1) +
+// extBytes[extCount-1] + Mode_Byte(1). Парсер устойчив к короткому/удлинённому
+// кадру (ext-байты, выходящие за границы, отбрасываются).
+func parseEnBmsState(p []byte) (enbmsState, error) {
+	var st enbmsState
+	if len(p) < 4 {
+		return st, fmt.Errorf("payload TeleState слишком короткий: %d Б", len(p))
+	}
+	n := int(p[2])
+	o := 3
+	if o+n > len(p) {
+		return st, fmt.Errorf("TeleState: не хватает %d байт состояний ячеек (len=%d)", n, len(p))
+	}
+	cellFlags := p[o : o+n]
+	o += n
+	if o >= len(p) {
+		return st, fmt.Errorf("TeleState: нет поля tempnum")
+	}
+	tn := int(p[o])
+	o++
+	if o+tn > len(p) {
+		return st, fmt.Errorf("TeleState: не хватает %d байт состояний датчиков (len=%d)", tn, len(p))
+	}
+	tempFlags := p[o : o+tn]
+	o += tn
+	o += 2 // GB-байты состояния измерения тока/напряжения
+	if o >= len(p) {
+		return st, fmt.Errorf("TeleState: нет счётчика Ext_Bit")
+	}
+	extLen := int(p[o]) - 1 // устройство передаёт count−1 (XML ByteNumAdjust=−1)
+	o++
+	if extLen < 0 {
+		extLen = 0
+	}
+	if o+extLen > len(p) {
+		extLen = len(p) - o
+	}
+	ext := p[o : o+extLen]
+	o += extLen
+	if o < len(p) {
+		st.Mode = enbmsModeName(p[o])
+	}
+
+	for i, b := range cellFlags {
+		for _, s := range enbmsCellStateBits(int(b)) {
+			st.Alarms = append(st.Alarms, fmt.Sprintf("Ячейка %d: %s", i+1, s))
+		}
+	}
+	for i, b := range tempFlags {
+		for _, s := range enbmsTempStateBits(int(b)) {
+			st.Alarms = append(st.Alarms, fmt.Sprintf("Датчик %d: %s", i+1, s))
+		}
+	}
+	for g, b := range ext {
+		grp, ok := enbmsExtGroups[g]
+		if !ok {
+			continue
+		}
+		for _, eb := range grp.bits {
+			if b&(1<<uint(eb.bit)) == 0 {
+				continue
+			}
+			switch eb.typ {
+			case "Warn", "Protect":
+				st.Alarms = append(st.Alarms, eb.name)
+			case "Key":
+				st.Keys = append(st.Keys, eb.name)
+			case "Balance":
+				st.Balance = append(st.Balance, eb.name)
+				// Номер ячейки: группа 7 → ячейки 1–8, группа 8 → 9–16.
+				base := 1
+				if g == 8 {
+					base = 9
+				}
+				st.BalanceCells = append(st.BalanceCells, base+eb.bit)
+			}
+		}
+	}
+	return st, nil
 }
 
 // Грубые границы валидности показаний EnBMS: отбрасываем очевидный мусор
@@ -799,12 +1074,29 @@ func bmsDeviceFromEnBms(s enbmsSnapshot) bmsDevice {
 		Cycles:        s.Cycles,
 		Model:         s.Model,
 		Alarms:        s.Alarms,
+		Mode:          s.Mode,
+		Keys:          s.Keys,
+		Balance:       s.Balance,
+		BalanceMask:   enbmsBalanceMask(s.BalanceCells),
 	}
 	if ts, err := time.Parse(time.RFC3339, s.Timestamp); err == nil {
 		d.Timestamp = ts.Unix()
 		d.Time = ts.Format("15:04:05")
 	}
 	return d
+}
+
+// enbmsBalanceMask собирает маску балансируемых ячеек (бит N-1 = ячейка N) для
+// совместимости с ANT BMS: дашборд подсвечивает балансируемые ячейки по
+// balance_mask одинаково для обоих типов.
+func enbmsBalanceMask(cells []int) uint32 {
+	var m uint32
+	for _, n := range cells {
+		if n >= 1 && n <= 32 {
+			m |= 1 << uint(n-1)
+		}
+	}
+	return m
 }
 
 // bmsSeriesPointFromEnBms приводит точку ряда EnBMS к форме ANT BMS

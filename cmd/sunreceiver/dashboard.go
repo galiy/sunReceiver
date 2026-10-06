@@ -112,6 +112,11 @@ type dashboardHandler struct {
 	// версией до его появления), поэтому группировку анимации строим по конфигу.
 	placeByIP map[string]string
 
+	// invNameByIP — имя сетевого инвертора (Deye/Sofar) по IP из конфига. В
+	// device_errors инверторы хранятся с device = IP; на дашборде (страница ошибок)
+	// показываем имя, а фильтр по имени транслируем в IP.
+	invNameByIP map[string]string
+
 	// single-flight loadRange: одновременные запросы за один и тот же период
 	// (например, /api/series и /api/agm/series с общим [from,to]) схлопываются в
 	// один read из Redis/PG. Результаты между запросами не кэшируются — запись
@@ -792,6 +797,15 @@ func (h *dashboardHandler) apiErrors(w http.ResponseWriter, r *http.Request) {
 	}
 	kind := r.URL.Query().Get("kind")
 	device := r.URL.Query().Get("device")
+	// Фильтр по имени инвертора транслируем в IP: в PG device_errors инверторы
+	// пишутся с device = IP (см. runInverterPoll), а пользователь ищет по имени.
+	if device != "" {
+		if _, isIP := h.invNameByIP[device]; !isIP {
+			if ip, ok := inverterIPByName(h.invNameByIP, device); ok {
+				device = ip
+			}
+		}
+	}
 	// Пагинация: limit/offset — числа; нечисловые/выходящие за границы значения
 	// заменяются безопасными (SQL-инъекция невозможна: параметры передаются через $n).
 	limit := 100
@@ -823,6 +837,16 @@ func (h *dashboardHandler) apiErrors(w http.ResponseWriter, r *http.Request) {
 			log.Printf("dashboard: errors count: %v", err)
 		}
 	}
+	// Наружу показываем имя инвертора вместо IP (в PG device_errors — IP).
+	if len(h.invNameByIP) > 0 {
+		for i := range rows {
+			if rows[i].Kind == "inverter" {
+				if n, ok := h.invNameByIP[rows[i].Device]; ok {
+					rows[i].Device = n
+				}
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -835,6 +859,16 @@ func (h *dashboardHandler) apiErrors(w http.ResponseWriter, r *http.Request) {
 		"total":  total,
 		"errors": rows,
 	})
+}
+
+// inverterIPByName возвращает IP инвертора по его имени (обратный invNameByIP).
+func inverterIPByName(m map[string]string, name string) (string, bool) {
+	for ip, n := range m {
+		if n == name {
+			return ip, true
+		}
+	}
+	return "", false
 }
 
 // errorsPage — отдельная страница истории ошибок всех устройств.
@@ -3658,8 +3692,8 @@ func writeJSONResponse(w http.ResponseWriter, v any) {
 // serveDashboard — HTTP-сервер веб-дашборда. При закрытии stop аккуратно
 // завершает сервер (http.Server.Shutdown, бюджет 5 с), чтобы main мог закрыть
 // пулы Redis/PG после завершения всех фоновых горутин (bgWg).
-func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayController, stop context.Context, flags dashFlags, placements []string, placeByIP map[string]string, authUser, authPass string) {
-	h := &dashboardHandler{store: store, pg: pg, flags: flags, relay: relay, placements: placements, placeByIP: placeByIP}
+func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayController, stop context.Context, flags dashFlags, placements []string, placeByIP map[string]string, invNameByIP map[string]string, authUser, authPass string) {
+	h := &dashboardHandler{store: store, pg: pg, flags: flags, relay: relay, placements: placements, placeByIP: placeByIP, invNameByIP: invNameByIP}
 	// Внутренние страницы (индекс/графики) открыты; данные и управление —
 	// в `/api/*`, защищаются HTTP Basic (если заданы учётные данные).
 	pages := map[string]http.HandlerFunc{

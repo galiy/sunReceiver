@@ -243,6 +243,20 @@ function srWindowChanged(chartId, isResetFromGesture){
 		loadAll();
 	},300);
 }
+// srApplySelection — применяет выделенный Ctrl+ЛКМ отрезок как новый полный
+// период страницы: обновляет selRange и поля «С/по», сбрасывает зум/пресеты и
+// перезагружает все графики. Используется общим обработчиком srCtrlDragZoom.
+function srApplySelection(from, to){
+	if(!(from instanceof Date)) from=new Date(from);
+	if(!(to instanceof Date)) to=new Date(to);
+	selRange.from=from; selRange.to=to; periodMode='custom';
+	preserveZoom=false; userZoomed=false;
+	var f=document.getElementById('fromPick'); if(f) f.value=toInputDateTime(from);
+	var t=document.getElementById('toPick'); if(t) t.value=toInputDateTime(to);
+	var d=document.getElementById('datePick'); if(d) d.value=toInputDate(from);
+	setActiveBtn(null);
+	loadAll();
+}
 function renderChart(id, datasets, opts){
 	var canvas=document.getElementById(id);
 	var old=window[id];
@@ -265,6 +279,8 @@ function renderChart(id, datasets, opts){
 	}
 	canvas.getContext('2d');
 	window[id]=new Chart(canvas,{ type:'line', data:{datasets:datasets}, options:opts, plugins:[cursorTooltipPlugin] });
+	// Ctrl+выделение отрезка → окно становится полным периодом страницы.
+	srCtrlDragZoom(window[id], srApplySelection);
 	if(!canvas.__srMLBound){ canvas.__srMLBound=true; canvas.addEventListener('mouseleave',function(){ delete hoverPix[id]; try{ window[id]&&window[id].update('none'); }catch(e){} }); }
 	var needUpdate=false;
 	if(preserveZoom && saved.min!==null && saved.max!==null){

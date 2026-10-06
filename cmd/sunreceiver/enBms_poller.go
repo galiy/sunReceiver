@@ -303,6 +303,26 @@ func pollEnBmsDevice(pg *pgStore, store *redisStore, acc *enbmsAccumulator, d *e
 	}
 	snap := enbmsSnapshotFromParsed(d.cfg, parsed, now)
 	snap.Model = d.model
+	// RS485: состояния/защиты читаются отдельным блоком TeleState (0x44) —
+	// у BLE их несёт сигнальный хвост Battery (уже разобран выше). Ошибка чтения
+	// 0x44 не отбрасывает снимок телеметрии: логируем (троттлинг) и продолжаем.
+	if d.method == enBmsMethodRS485 {
+		if info, serr := d.conn.readEnBmsState(); serr != nil {
+			d.logErrThrottled("опрос %s: чтение состояния (0x44): %v", d.cfg.Key, serr)
+		} else if st, perr := parseEnBmsState(info); perr != nil {
+			d.logErrThrottled("опрос %s: разбор состояния (0x44): %v", d.cfg.Key, perr)
+		} else {
+			if len(st.Alarms) > 0 {
+				snap.Alarms = append(snap.Alarms, st.Alarms...)
+			}
+			if st.Mode != "" {
+				snap.Mode = st.Mode
+			}
+			snap.Keys = st.Keys
+			snap.Balance = st.Balance
+			snap.BalanceCells = st.BalanceCells
+		}
+	}
 	// Текущее состояние — в HASH (перезапись); каждое снятое показание — в
 	// Redis-ряд (сырое, samples=1). 5-минутные средние для PG накапливает
 	// аккумулятор (как ANT BMS).

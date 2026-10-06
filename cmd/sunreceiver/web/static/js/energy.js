@@ -114,6 +114,8 @@ function renderEnergyChart(canvasId, datasets, opts){
 	if(pan&&pan.p.preserveZoom&&saved.min!==null&&saved.max!==null){ opts.scales.x.min=saved.min; opts.scales.x.max=saved.max; }
 	canvas.getContext('2d');
 	window[canvasId]=new Chart(canvas,{ type:'bar', data:{datasets:datasets}, options:opts });
+	// Ctrl+выделение отрезка → окно становится полным периодом этого графика.
+	srCtrlDragZoom(window[canvasId], function(f,t){ var pan=ENERGY_PANELS[canvasId]; if(pan&&pan.p) pan.p.setRange(f,t,null); });
 	var need=false;
 	if(pan&&pan.p.preserveZoom&&saved.min!==null&&saved.max!==null){ window[canvasId].options.scales.x.min=saved.min; window[canvasId].options.scales.x.max=saved.max; need=true; }
 	if(applyHidden(canvasId, window[canvasId])) need=true;

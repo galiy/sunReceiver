@@ -78,16 +78,37 @@ function renderTemps(d){
   document.getElementById('tempsWrap').innerHTML=h;
 }
 
+// balancingCells возвращает 1-based номера балансируемых ячеек из маски
+// balance_mask (бит N-1 = ячейка N) — одинаково для ANT и EnBMS.
+function balancingCells(d){
+  var m=Number(d.balance_mask)||0, out=[], n=Number(d.cell_count)||0;
+  for(var i=0;i<n && i<32;i++){ if((m>>>i)&1) out.push('Ячейка '+(i+1)); }
+  return out;
+}
+
+// renderEnBmsState — режим/ключи/балансировка EnBMS (блок TeleState 0x44; на BLE
+// данных нет — поля пустые). Тексты русские, перевод — словарём i18n по DOM.
+function renderEnBmsState(d){
+  var h='<span class="mos on">Режим: '+esc(d.mode||'—')+'</span>';
+  var keys=d.keys||[];
+  if(keys.length){ for(var i=0;i<keys.length;i++) h+='<span class="mos on">'+esc(keys[i])+'</span>'; }
+  else h+='<span class="mos">Ключи: нет данных</span>';
+  var bals=(d.balance||[]).length?d.balance:balancingCells(d);
+  h+='<span class="mos'+(bals.length?' on':'')+'">Балансировка: '+(bals.length?esc(bals.join(', ')):'не активна')+'</span>';
+  document.getElementById('mosWrap').innerHTML=h;
+}
+
 function renderMos(d){
-  // У EnBMS блок Battery не содержит состояний ключей/балансировки — блок скрыт.
-  if(BMS_KIND==='enbms') return;
+  if(BMS_KIND==='enbms'){ renderEnBmsState(d); return; }
   var ch={2:'Overvoltage protection',3:'Over current protection',5:'Total overpressure',6:'Battery overtemperature',7:'Power overtemperature',8:'Abnormal current',9:'Balanced line dropped',10:'Motherboard overtemperature',13:'Discharge tube abnormality'};
   var di={2:'Over-discharge protection',3:'Over current protection',5:'Total undervoltage',6:'Battery overtemperature',7:'Power overtemperature',8:'Abnormal current',9:'Balanced line dropped',10:'Motherboard overtemperature',12:'Short circuit protection',13:'Discharge tube abnormality',14:'Start exception'};
   var ba={0:'ВЫКЛ',1:'Exceeds limit',2:'Charge differential balance',3:'Balanced overtemperature',4:'Auto equalization',10:'Motherboard overtemperature'};
   function pill(label,code,map){ var t=(code===1)?'ВКЛ':(map[code]||('code '+code)); var on=(code===1); return '<span class="mos'+(on?' on':'')+'">'+label+': '+t+'</span>'; }
   var bc=Number(d.balancer)||0;
+  var bals=balancingCells(d); // аналогично EnBMS: перечисляем балансируемые ячейки
+  var balTxt=bals.length?bals.join(', '):(ba[bc]||('code '+bc));
   document.getElementById('mosWrap').innerHTML=pill('Заряд',Number(d.charge_mos)||0,ch)+pill('Разряд',Number(d.discharge_mos)||0,di)
-    +'<span class="mos'+(bc!==0?' on':'')+'">Балансировка: '+(ba[bc]||('code '+bc))+'</span>';
+    +'<span class="mos'+(bc!==0||bals.length?' on':'')+'">Балансировка: '+esc(balTxt)+'</span>';
 }
 
 function renderAlarms(d){
@@ -101,7 +122,8 @@ function renderAlarms(d){
 // applyBmsKind показывает/скрывает блоки, зависящие от типа BMS.
 function applyBmsKind(){
   var en = BMS_KIND==='enbms';
-  var mos=document.getElementById('bmsMosBlock'); if(mos) mos.style.display = en? 'none':'';
+  // У EnBMS блок теперь несёт режим/ключи/балансировку (RS485 TeleState 0x44).
+  var mos=document.getElementById('bmsMosBlock'); if(mos){ mos.style.display=''; var h2=mos.querySelector('h2'); if(h2) h2.textContent=en?'Режим, ключи и балансировка':'Ключи и балансировка'; }
   var tn=document.getElementById('bmsTnote'); if(tn) tn.style.display = en? 'none':'';
 }
 
@@ -122,13 +144,13 @@ async function load(){
     document.title=d.deviceName+' — SunReceiver';
     document.getElementById('bmsTitle').textContent=d.deviceName;
     if(BMS_KIND==='enbms'){
-      document.getElementById('bmsSub').textContent='EnBMS (BLE)'+(d.model?' · '+d.model:'')+' · актуально: '+(d.time||'—');
+      document.getElementById('bmsSub').textContent='EnBMS'+(d.model?' · '+d.model:'')+' · актуально: '+(d.time||'—');
     }else{
       document.getElementById('bmsSub').textContent='ANT BMS · порт '+d.port+' · актуально: '+d.time;
     }
     renderKPIs(d); renderCells(d); renderTemps(d); renderMos(d); renderAlarms(d);
     if(BMS_KIND==='enbms'){
-      document.getElementById('bmsFoot').textContent='EnBMS (BLE, MAC '+d.key+') · обновляется каждую секунду';
+      document.getElementById('bmsFoot').textContent='EnBMS, MAC '+d.key+' · обновляется каждую секунду';
     }else{
       document.getElementById('bmsFoot').textContent='Порт: '+d.port+' · счётчик кадров: '+d.frames+' · обновляется каждую секунду';
     }
@@ -465,6 +487,8 @@ function bmsRender(id, datasets, yTitle, legend, zero){
     plugins:[bmsZoomSyncPlugin],
     options:bmsOpts
   });
+  // Ctrl+выделение отрезка → окно становится полным периодом страницы BMS.
+  srCtrlDragZoom(BMS_CHARTS[id], function(f,t){ setPeriod(f,t,'custom',null); });
   // Сброс чёрточки курсора и хинтов при уходе мыши с графика (гаснут на всех).
   var bmsCanvasEl=document.getElementById(id);
   if(!bmsCanvasEl.__srMLBound){ bmsCanvasEl.__srMLBound=true; bmsCanvasEl.addEventListener('mouseleave',function(){ if(bmsCursor.active){ bmsCursor.active=false; bmsSyncTooltips(null); bmsUpdateAllCharts(); } }); }
@@ -702,8 +726,14 @@ async function loadBmsErrors(){
     if(!rows.length){ box.innerHTML='<span class="missing">Нет ошибок за период</span>'; return; }
     var h='<table class="pivot-table"><thead><tr><th>Время</th><th>Код</th><th>Описание</th></tr></thead><tbody>';
     for(var i=0;i<rows.length;i++){
-      var x=rows[i]; var desc=(typeof SR_descOf==='function')?SR_descOf(x.code,x.msg):x.code;
-      if(x.msg&&desc!==x.msg) desc=desc+' · '+x.msg;
+      var x=rows[i];
+      // «Описание» = локализуемая часть по коду + детальный текст (msg) через « · ».
+      // Оба столбца локализуются; если описание совпадает с кодом (msg == code) —
+      // в «Описании» ставим «—», чтобы не дублировать.
+      var desc=(typeof SR_descOf==='function')?SR_descOf(x.code,''):x.code;
+      if(!desc) desc=x.msg||x.code;
+      if(x.msg && x.msg!==desc) desc=desc+' · '+x.msg;
+      if(desc===x.code) desc='—'; // не дублировать «Код»
       h+='<tr><td>'+esc(bmsFmtTs(x.ts))+'</td><td>'+esc(x.code)+'</td><td>'+esc(desc)+'</td></tr>';
     }
     h+='</tbody></table>'; box.innerHTML=h;

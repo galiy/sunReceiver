@@ -46,6 +46,10 @@ import (
 type enbmsLink interface {
 	readEnBmsBattery() ([]byte, error)
 	readEnBmsBasicInfo() ([]byte, error)
+	// readEnBmsState читает блок состояния/защит (RS485 CID2 0x44 TeleState).
+	// По BLE недоступен (возвращает errEnBmsStateUnsupported): там состояния
+	// приходят в сигнальном хвосте Battery.
+	readEnBmsState() ([]byte, error)
 	Close() error
 }
 
@@ -56,6 +60,9 @@ const (
 	enBmsRS485CID2Meter = 0x42
 	// enBmsRS485CID2Manufacture — Manufacture (инфо/модель).
 	enBmsRS485CID2Manufacture = 0x51
+	// enBmsRS485CID2State — TeleState (состояния/защиты: ячейки, температуры,
+	// Ext_Bit, режим). Аналог части сигнального хвоста BLE Battery.
+	enBmsRS485CID2State = 0x44
 
 	// enBmsRS485ReadTimeout — ожидание ответа на кадр PACE. Шина проводная и
 	// отвечает быстро; короткий таймаут не задерживает 1-секундный цикл.
@@ -209,6 +216,16 @@ func (c *enbmsRS485Conn) readEnBmsBattery() ([]byte, error) {
 // readEnBmsBasicInfo читает Manufacture (CID2 0x51) для модели/протокола.
 func (c *enbmsRS485Conn) readEnBmsBasicInfo() ([]byte, error) {
 	return c.request(enBmsRS485CID2Manufacture, nil)
+}
+
+// readEnBmsState читает состояния/защиты (CID2 0x44 TeleState). На верхнем порту
+// (rs485) INFO не нужен; на RM485 для 0x44 требуется INFO=[00] (как для 0x42).
+func (c *enbmsRS485Conn) readEnBmsState() ([]byte, error) {
+	var info []byte
+	if c.portType == "rm485" {
+		info = []byte{0x00}
+	}
+	return c.request(enBmsRS485CID2State, info)
 }
 
 // request отправляет PACE-кадр и возвращает INFO ответа. Прерывается по

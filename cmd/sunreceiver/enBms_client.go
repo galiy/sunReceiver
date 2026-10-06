@@ -36,6 +36,11 @@ import (
 // пулер ретраит именно упавшее чтение, не разрывая постоянное соединение.
 var errEnBmsReadTimeout = errors.New("нет ответа BMS EnBMS по BLE (таймаут)")
 
+// errEnBmsStateUnsupported — блок состояния/защит (RS485 CID2 0x44 TeleState)
+// недоступен по BLE: у BLE-блока Battery (0x61) состояния идут в сигнальном
+// хвосте (parseEnBmsTail).
+var errEnBmsStateUnsupported = errors.New("TeleState (0x44) недоступен по BLE")
+
 // errEnBmsClosed — чтение прервано намеренно при остановке сервиса: пулер
 // должен немедленно выйти и корректно закрыть BLE-соединение.
 var errEnBmsClosed = errors.New("чтение EnBMS прервано (остановка сервиса)")
@@ -309,4 +314,10 @@ func (c *enbmsConn) readEnBmsBattery() ([]byte, error) {
 // readEnBmsBasicInfo читает блок BasicInfo (CID2 0x51): модель/активный протокол.
 func (c *enbmsConn) readEnBmsBasicInfo() ([]byte, error) {
 	return c.request(0x51, nil)
+}
+
+// readEnBmsState — по BLE блок TeleState (0x44) недоступен (см.
+// enbmsLink.readEnBmsState); состояния приходят в хвосте Battery (0x61).
+func (c *enbmsConn) readEnBmsState() ([]byte, error) {
+	return nil, errEnBmsStateUnsupported
 }
