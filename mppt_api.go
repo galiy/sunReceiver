@@ -301,11 +301,11 @@ func mapMPPTAPI(r mpptRaw) (valuesContract, time.Time, bool) {
 type mapRaw struct {
 	Timestamp int64
 	Uacc      string // Напряжение АКБ, В (_UAcc_med, 0x405/0x406)
-	Iacc      string // Ток АКБ, А (знак «+» = заряд, «−» = отдача) (_IAcc_med, 0x432/0x433)
+	Iacc      string // Ток АКБ, А (знак «+» = разряд, «−» = заряд — как battery_power) (_Iacc, 0x432/0x433)
 	UNet      string // Напряжение сети, В (0 = нет сети) (_UNET, 0x422)
 	PNetCalc  string // Расчётная мощность сети, Вт (_PNET_calc = _UNET × _INET) — ДОСТОВЕРНАЯ
 	PLoad     string // Мощность нагрузки по АКБ, Вт (_PLoad) — НЕ батарейная (нагрузка потребителя)
-	PLoadCalc string // Расчётная мощность батареи, Вт (_PLoad_calc = _Uacc × _Iacc) — ДОСТОВЕРНАЯ
+	PLoadCalc string // Расчётная мощность батареи, Вт (_PLoad_calc = _Uacc × _IAcc_med_A_u16) — ДОСТОВЕРНАЯ
 	TFNet     string // Частота сети, Гц (_TFNET)
 	// InetFlag — флаг ПО Малины (_Inet_flag): управляет ТОЛЬКО знаком, в котором
 	// mapd отдаёт _PNET_calc/_INET (1 = инвертировано относительно сырого знака).
@@ -521,11 +521,13 @@ func mapMAPAPI(r mapRaw) (valuesContract, time.Time, bool) {
 		// иначе battery_power не выставляем (заведомо недостоверный _PLoad не берём).
 		out["battery_power"] = -(uacc * iacc)
 	}
-	// Ток АКБ отдельным контрактным тегом battery_current. Сырой _Iacc API имеет
-	// знак «+» = заряд, «−» = отдача (обратный контракту), поэтому инвертируем —
-	// чтобы знак совпадал с battery_power (заряд −, отдача +) и с Modbus-веткой.
+	// Ток АКБ отдельным контрактным тегом battery_current. Сырой _Iacc API уже в
+	// контрактном знаке (как battery_power): battery_power = −_PLoad_calc = _Uacc × _Iacc,
+	// инверсия не нужна. Проверено на данных: _PLoad_calc считается по знаковому
+	// _IAcc_med_A_u16 (= −_Iacc), сейчас разряд _Iacc=+64 ↔ battery_power=+3382,
+	// ночью при заряде battery_power<0 ⇒ _Iacc<0.
 	if okI {
-		out["battery_current"] = -iacc
+		out["battery_current"] = iacc
 	}
 
 	// Температуры МАП (тор, радиатор транзисторов, внешний датчик АКБ). API отдаёт
