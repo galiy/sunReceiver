@@ -19,9 +19,10 @@
  *
  * Использование:
  *   mapgateway [-d device] [-b baud] [-p tcp_port] [-l listen_addr] [-v]
- *   device — путь к COM; по умолчанию автопоиск среди свободных
+ *   device — путь к COM; по умолчанию фоновый автопоиск среди свободных
  *            ttyUSB, ttyACM и serial-by-id в /dev с проверкой
- *            идентификации МАП (по одному кандидату за проход)
+ *            идентификации МАП (по одному кандидату за шаг, список
+ *            пересобирается каждый проход; проходы не чаще раза в 10 c)
  *   baud   — 9600|19200|38400|57600|115200 (по умолчанию 115200)
  *   tcp_port — по умолчанию 502
  *   --version / -V — печатает "mapgateway <VERSION>" и выходит
@@ -59,6 +60,7 @@
 #define DEF_LISTEN "0.0.0.0"
 #define DEVPATH_MAX  256
 #define PROBE_MS     400      /* короткий опрос устройства при поиске */
+#define SCAN_RETRY_MS 10000   /* пауза между проходами поиска, если МАП не найден */
 
 #define MAX_CLIENTS   16
 #define MAX_FRAME     512      /* MBAP + PDU максимум */
@@ -157,14 +159,9 @@ static int      g_letter = -1;               /* --sn-letter: ожидаемая 
 static char     g_override_dev[DEVPATH_MAX]; /* -d: устройство задано явно */
 static int      g_have_override = 0;
 static char     g_found_dev[DEVPATH_MAX];    /* устройство, найденное автоопределением */
-static uint64_t g_serial_retry_at = 0;
+static uint64_t g_scan_next_ms = 0;          /* когда делать очередной шаг фонового поиска */
+static uint64_t g_override_retry_at = 0;     /* -d: троттлинг повторных попыток open */
 static int      g_fail_streak = 0;
-
-static const char *dev_used(void)
-{
-    if (g_have_override) return g_override_dev;
-    return g_found_dev[0] ? g_found_dev : NULL;
-}
 
 static void port_configure(int fd)
 {
@@ -317,10 +314,12 @@ static int build_scan_candidates(glob_t *g)
 }
 
 /*
- * Сканируем свободные последовательные порты и ищем наш МАП.
- * За один вызов проверяется не более одного кандидата: так event loop не
- * блокируется на PROBE_MS * (число портов) при каждом сбое шины. Список
- * кандидатов сохраняется между вызовами до исчерпания или находки.
+ * Фоновый поиск МАП. Ищем ровно один прибор: пока порт найден и открыт,
+ * поиск не идёт; при потере порта — снова возвращаемся в режим поиска.
+ * Список кандидатов пересобирается в начале каждого прохода, поэтому
+ * появившиеся позже порты видны. За один вызов проверяется не более одного
+ * кандидата (проба до PROBE_MS), чтобы не блокировать event loop. Если проход
+ * исчерпан без находки — следующий проход не раньше, чем через SCAN_RETRY_MS.
  */
 static glob_t g_scan;
 static int    g_scan_active = 0;
@@ -345,62 +344,97 @@ static int scan_seen(dev_t rdev)
     return 0;
 }
 
-static int discover_device(char *out, size_t outn)
+/* Вход в режим поиска: сброс состояния и немедленный первый шаг.
+ * Вызывается на старте и при потере порта. */
+static void scan_start(void)
+{
+    scan_reset();
+    if (!g_have_override)
+        g_found_dev[0] = 0;
+    g_scan_next_ms = now_ms();
+}
+
+/*
+ * Один шаг фонового поиска (не более одного кандидата за вызов). Найдя МАП,
+ * открывает порт и «залипает» — дальнейший поиск не идёт, пока порт не потерян.
+ */
+static void scan_step(void)
 {
     if (!g_scan_active) {
-        if (build_scan_candidates(&g_scan) != 0)
-            return 0;
+        if (build_scan_candidates(&g_scan) != 0) {   /* свежий список каждый проход */
+            g_scan_next_ms = now_ms() + SCAN_RETRY_MS;
+            return;
+        }
         g_scan_active = 1;
         g_scan_idx = 0;
         g_scan_seen_n = 0;
     }
 
-    if (g_scan_idx >= g_scan.gl_pathc) {   /* список исчерпан — начнём заново */
+    if (g_scan_idx >= g_scan.gl_pathc) {   /* проход исчерпан — пауза перед новым */
         scan_reset();
-        return 0;
+        g_scan_next_ms = now_ms() + SCAN_RETRY_MS;
+        return;
     }
 
     const char *dev = g_scan.gl_pathv[g_scan_idx++];
 
     struct stat st;
     if (stat(dev, &st) != 0 || !S_ISCHR(st.st_mode))
-        return 0;                          /* пропал или не tty — следующий */
+        return;                            /* пропал или не tty — следующий */
     if (scan_seen(st.st_rdev))
-        return 0;                          /* уже проверяли в этом проходе */
+        return;                            /* уже проверяли в этом проходе */
     if (port_in_use_by_other(dev))
-        return 0;                          /* порт занят (daemons/bmslistener/mapd/…) */
+        return;                            /* порт занят (daemons/bmslistener/mapd/…) */
 
-    if (dev_is_map(dev)) {
-        snprintf(out, outn, "%s", dev);
-        GW_LOG("scan: МАП найден на %s\n", dev);
-        scan_reset();
-        return 1;
+    if (!dev_is_map(dev))
+        return;                            /* проверен один кандидат — вернём управление */
+
+    int fd = serial_open_path(dev);
+    if (fd < 0) {                          /* открылся при пробе, но не сейчас — повторим */
+        g_scan_next_ms = now_ms() + 1000;
+        return;
     }
-    return 0;   /* проверен один кандидат — вернём управление event loop */
+    snprintf(g_found_dev, sizeof g_found_dev, "%s", dev);   /* копия до globfree */
+    g_serial_fd = fd;
+    g_fail_streak = 0;
+    scan_reset();                          /* залипли на найденном — список не нужен */
+    g_scan_next_ms = 0;
+    /* dev указывает в освобождённый globfree список — логируем по копии. */
+    GW_LOG("scan: МАП найден на %s\n", g_found_dev);
+    GW_LOG("opened %s at %d baud\n", g_found_dev, g_baud);
 }
 
-/* Гарантирует открытый порт: берёт заданный/-найденный; иначе ищет среди свободных. */
+/* Возвращает открытый порт. Без -d устройство ищет фоновый scan_step();
+ * здесь только открываем уже заданный/найденный порт. */
 static int serial_ensure(void)
 {
     if (g_serial_fd >= 0)
         return g_serial_fd;
 
-    uint64_t t = now_ms();
-    if (t < g_serial_retry_at)
-        return -1;
-    g_serial_retry_at = t + 2000;   /* не чаще, чем раз в 2 c */
-
-    const char *dev = dev_used();
-    if (!dev) {
-        if (!discover_device(g_found_dev, sizeof g_found_dev))
+    if (g_have_override) {
+        /* Явный порт: пробуем открыть не чаще раза в 2 c — иначе при пропаже
+         * устройства каждый запрос писал бы ошибку open в лог. */
+        uint64_t t = now_ms();
+        if (t < g_override_retry_at)
             return -1;
-        dev = g_found_dev;
+        g_override_retry_at = t + 2000;
+
+        int fd = serial_open_path(g_override_dev);
+        if (fd < 0)
+            return -1;
+        g_serial_fd = fd;
+        g_fail_streak = 0;
+        GW_LOG("opened %s at %d baud\n", g_override_dev, g_baud);
+        return g_serial_fd;
     }
+
+    const char *dev = g_found_dev[0] ? g_found_dev : NULL;
+    if (!dev)
+        return -1;                       /* ещё не найден — ищет фоновый скан */
 
     int fd = serial_open_path(dev);
     if (fd < 0) {
-        if (!g_have_override)
-            g_found_dev[0] = 0;     /* устройство пропало — искать заново */
+        g_found_dev[0] = 0;              /* устройство пропало — искать заново */
         return -1;
     }
     g_serial_fd = fd;
@@ -416,6 +450,8 @@ static void serial_drop(const char *why)
         g_serial_fd = -1;
         GW_LOG("serial closed (%s)\n", why);
     }
+    if (!g_have_override && !g_stop)
+        scan_start();                    /* потеряли порт — снова искать (фон) */
 }
 
 /*
@@ -754,7 +790,10 @@ int main(int argc, char **argv)
 
     GW_LOG("started: dev=%s baud=%d unit=%d sn=%ld listen=%s:%d\n",
            g_have_override ? g_override_dev : "auto", baud, g_probe_unit, g_sn, listen_addr, tcp_port);
-    serial_ensure();   /* пробуем открыть сразу (не критично) */
+    if (g_have_override)
+        serial_ensure();   /* явный порт: открываем сразу */
+    else
+        scan_start();      /* авто: фоновый поиск МАП стартует немедленно */
 
     struct client cl[MAX_CLIENTS];
     memset(cl, 0, sizeof(cl));
@@ -762,6 +801,11 @@ int main(int argc, char **argv)
 
     while (!g_stop) {
         uint64_t now = now_ms();
+
+        /* Фоновый поиск МАП: пока порт не найден/не открыт — двигаем скан
+         * (один кандидат за итерацию), без внешних запросов. */
+        if (!g_have_override && g_serial_fd < 0 && now >= g_scan_next_ms)
+            scan_step();
 
         /* Слоты «мёртвых» и простаивающих клиентов не должны выедать MAX_CLIENTS. */
         for (int i = 0; i < MAX_CLIENTS; i++) {
