@@ -111,4 +111,4 @@ kind=`inverter`) только появлением. Сырой лог Alert (`de
 (32 бита, LSW-first), бит N−1 = W(N). В `sunReceiver` — `deyeWarnNames` (W1–W32, RU)
 и `decodeDeyeWarnings`; предупреждения **не пишутся в историю** (не аварии), а
 декодируются в сыром логе `deye alert …` (поле `warns=[ … ]`). Локализация ru/en/zh
-в `web/static/js/i18n.js`.
+в `cmd/sunreceiver/web/static/js/i18n.js`.

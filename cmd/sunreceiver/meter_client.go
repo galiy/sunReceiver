@@ -24,8 +24,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/galiy/sunReceiver/modbusmap"
-	"github.com/galiy/sunReceiver/solarman"
+	"github.com/galiy/sunReceiver/internal/modbusmap"
+	"github.com/galiy/sunReceiver/internal/solarman"
 )
 
 // meterClient — переиспользуемое TCP-соединение к электросчётчику DDS238

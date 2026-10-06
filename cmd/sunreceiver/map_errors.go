@@ -27,7 +27,7 @@ import (
 // МАП и пишет появление ошибок в PG device_errors. Телеметрию не трогает.
 //
 // Источник сырых значений — по выбранному в конфиге способу мониторинга:
-//   - Modbus (map.rs485.disabled=false) — через mapgateway/Modbus TCP;
+//   - Modbus (map.rs485.disabled=false) — через daemons/mapgateway/Modbus TCP;
 //   - веб-API ПАК «Малина» (true) — read_memory.php?offset=<ячейка>&count=<n>.
 //
 // Разметка — из protocol_MAP_cells_2026_07_15.doc (SVEN POWER MANAGER II).

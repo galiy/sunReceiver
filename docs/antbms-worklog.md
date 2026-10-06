@@ -3,13 +3,13 @@
 > **Статус: СЛУШАТЕЛЬ BMS В ПРОДЕ (2026-09-14, вечер).**
 > Протокол расшифрован и подтверждён: скорость 19200, live-кадр = классический
 > ANT `AA 55 AA FF` 140 байт (CRC сходится), запрос дисплея = `5A 5A 00 00 01 01`.
-> **C-демон `bmslistener/` (`/usr/sbin/bmslistener` на Малине, systemd
+> **C-демон `daemons/bmslistener/` (`/usr/sbin/bmslistener` на Малине, systemd
 > `bmslistener.service`) пассивно читает до 32 `/dev/ttyUSB*`, определяет ANT BMS
 > по непрерывному потоку 140-кадров и публикует коллекцию активных адаптеров в
 > System V shm **ключ 2018** (`{"updated":<epoch>,"devices":[...]}` + `#EOF`,
 > формат-коллекция как у mapd/mpptd). Проверено на
 > 2-х адаптерах (320 Ач SOC19% + 160 Ач SOC23%), кадры непрерывно растут.
-> Прошли три независимых ревью (`bmslistener/REVIEW.md`,
+> Прошли три независимых ревью (`daemons/bmslistener/REVIEW.md`,
 > `bmsl_ds_review.md`, `last_review.md`), замечания отработаны
 > (финал v8: `power_w`/температуры со знаком, backoff пробы 300 с +
 > лимит времени проб за scan, anti-spin, bad-кэш на read-error, SHM 32 КБ,
@@ -300,7 +300,7 @@ BMS через USB-адаптер на Малине. Результат и вы�
   - среднее ячейки 3.24 В (3240 мВ), ток 0.6–0.8 А, SOC 20%, мощность 31–41 Вт, 16 ячеек.
 
 ### Дальнейшие шаги (интеграция в sunReceiver)
-1. ✅ **Реализован C-демон `bmslistener/`** (пассивный слушатель) — см. ниже.
+1. ✅ **Реализован C-демон `daemons/bmslistener/`** (пассивный слушатель) — см. ниже.
 2. Аппаратно: оставить дисплей подключённым в проде + один USB-адаптер на жёлтой линии
    (RXD) как считыватель.
 3. Сохранить эталонные дампы (boot2_*) в репо `docs/antbms/data/` — по запросу.
@@ -313,7 +313,7 @@ PL2303 (`/dev/ttyUSB*`), на которых ANT BMS вещают 140-байтн
 **ключ 2018** (JSON-массив + `#EOF`, формат как у mapd/mpptd). Свой ключ shm → не конфликтует
 с mapd/mpptd и другими демонами. В порт ничего не пишет (TX аппаратно отключён).
 
-**Файлы (в git):** `bmslistener/bmslistener.c`, `Makefile`,
+**Файлы (в git):** `daemons/bmslistener/bmslistener.c`, `Makefile`,
 `bmslistener.service` (systemd-юнит: `Restart=on-failure`, `RestartSec=3`,
 `StartLimitIntervalSec=60`/`StartLimitBurst=5` — чтобы чистый `systemctl stop`
 не перезапускался; `Restart=always` не подходит), ревью — `REVIEW.md`,
@@ -382,7 +382,7 @@ PL2303 (`/dev/ttyUSB*`), на которых ANT BMS вещают 140-байтн
 91..101) — signed int16 (возможны отрицательные).
 
 **Независимое ревью — пройдено (2026-09-14, вечер):** три ревью
-(`bmslistener/REVIEW.md`, `bmsl_ds_review.md`, `last_review.md`), все важные
+(`daemons/bmslistener/REVIEW.md`, `bmsl_ds_review.md`, `last_review.md`), все важные
 замечания отработаны в коде (v7 + v8, в проде): `power_w`/temperatures — signed
 int32/int16, переполнение `RX_BUFLEN` со сдвигом окна и сохранением хвоста,
 усечение JSON + поле `updated`, backoff пробы 300 с + лимит времени проб за
@@ -396,7 +396,7 @@ scan (`PROBE_BUDGET_SEC 21`), анти-spin в `service_fds`, bad-кэш на re
 `shmget` на сегмент другого размера вернёт EINVAL.
 
 **Следующий этап — ВЫПОЛНЕН (2026-09-14, ночь):**
-- **web-api**: новый скрипт `read_bms.php` (исходник `bmslistener/web/read_bms.php`,
+- **web-api**: новый скрипт `read_bms.php` (исходник `daemons/bmslistener/web/read_bms.php`,
   развёрнут на Малине в `/settings/html/`) — читает shm 2018 по аналогии с
   `read_json.php` (`shmop_open(2018)` + обрезка по `#EOF`) и отдаёт коллекцию JSON;
   существующие скрипты Малины не модифицированы, та же Basic-auth.

@@ -18,4 +18,4 @@ bluetoothctl list 2>/dev/null || true
 echo
 
 exec go test -tags ce308probe -run '^TestCE308Probe$' -v -count=1 \
-  -timeout "${CE308_PROBE_TIMEOUT:-300s}" .
+  -timeout "${CE308_PROBE_TIMEOUT:-300s}" ./cmd/sunreceiver

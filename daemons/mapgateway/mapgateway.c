@@ -15,7 +15,7 @@
  *
  * Сборка (armv7, статически):
  *   zig cc -O2 -std=gnu99 -Wall -Wextra -target arm-linux-musleabihf -static \
- *       -DVERSION='"1.0.0"' -o mapgateway mapgateway/mapgateway.c
+ *       -DVERSION='"1.0.0"' -o mapgateway daemons/mapgateway/mapgateway.c
  *
  * Использование:
  *   mapgateway [-d device] [-b baud] [-p tcp_port] [-l listen_addr] [-v]
@@ -368,7 +368,7 @@ static int discover_device(char *out, size_t outn)
     if (scan_seen(st.st_rdev))
         return 0;                          /* уже проверяли в этом проходе */
     if (port_in_use_by_other(dev))
-        return 0;                          /* порт занят (bmslistener/mapd/…) */
+        return 0;                          /* порт занят (daemons/bmslistener/mapd/…) */
 
     if (dev_is_map(dev)) {
         snprintf(out, outn, "%s", dev);

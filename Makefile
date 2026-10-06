@@ -62,21 +62,22 @@ mapgateway: dist
 # артефакт отсутствует/устарел). Здесь НЕТ фантомных зависимостей (dist/vet/test),
 # иначе make всегда считал бы артефакт устаревшим и пересобирал бы его. На эти
 # цели опирается release — чтобы НЕ пересобирать уже собранные бинарники (N38).
-GO_SRC := $(wildcard *.go) go.mod go.sum
+GO_SRC := $(wildcard cmd/sunreceiver/*.go internal/*/*.go) go.mod go.sum \
+          $(shell find cmd/sunreceiver/web -type f 2>/dev/null)
 
 $(LINUX_ART): $(GO_SRC)
 	mkdir -p dist
 	rm -f $(LINUX_ART)
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "$(BLDFLAGS_LINUX)" -o $(LINUX_ART) .
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "$(BLDFLAGS_LINUX)" -o $(LINUX_ART) ./cmd/sunreceiver
 	@echo "OK: $(LINUX_ART)"
 
 $(WIN_ART): $(GO_SRC)
 	mkdir -p dist
 	rm -f $(WIN_ART)
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$(BLDFLAGS_WIN)" -o $(WIN_ART) .
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$(BLDFLAGS_WIN)" -o $(WIN_ART) ./cmd/sunreceiver
 	@echo "OK: $(WIN_ART)"
 
-$(BMS_ART): bmslistener/bmslistener.c
+$(BMS_ART): daemons/bmslistener/bmslistener.c
 	@if [ -z "$(ZIG_CMD)" ]; then \
 		echo "ERROR: zig не найден (command -v zig) — не могу собрать $(BMS_ART)"; \
 		exit 1; \
@@ -84,10 +85,10 @@ $(BMS_ART): bmslistener/bmslistener.c
 	mkdir -p dist
 	rm -f $(BMS_ART)
 	zig cc -O2 -std=gnu99 -Wall -Wextra -target arm-linux-musleabihf -static \
-		$(BLDFLAGS_BMS) -o $(BMS_ART) bmslistener/bmslistener.c
+		$(BLDFLAGS_BMS) -o $(BMS_ART) daemons/bmslistener/bmslistener.c
 	@echo "OK: $(BMS_ART)"
 
-$(MAPGW_ART): mapgateway/mapgateway.c
+$(MAPGW_ART): daemons/mapgateway/mapgateway.c
 	@if [ -z "$(ZIG_CMD)" ]; then \
 		echo "ERROR: zig не найден (command -v zig) — не могу собрать $(MAPGW_ART)"; \
 		exit 1; \
@@ -95,7 +96,7 @@ $(MAPGW_ART): mapgateway/mapgateway.c
 	mkdir -p dist
 	rm -f $(MAPGW_ART)
 	zig cc -O2 -std=gnu99 -Wall -Wextra -target arm-linux-musleabihf -static \
-		$(BLDFLAGS_MAPGW) -o $(MAPGW_ART) mapgateway/mapgateway.c
+		$(BLDFLAGS_MAPGW) -o $(MAPGW_ART) daemons/mapgateway/mapgateway.c
 	@echo "OK: $(MAPGW_ART)"
 
 # Релиз. N38: использует уже собранные $(LINUX_ART)/$(WIN_ART), а не пересобирает

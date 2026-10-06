@@ -58,5 +58,5 @@
 
 ## Связанные документы
 
-- [dashboard.md](dashboard.md) — веб-дашборд и встроенные веб-ассеты (`web/`).
+- [dashboard.md](dashboard.md) — веб-дашборд и встроенные веб-ассеты (`cmd/sunreceiver/web/`).
 - [../README.md](../README.md) — обзор, сборка релизов, деплой.

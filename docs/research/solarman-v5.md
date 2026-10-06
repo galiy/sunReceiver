@@ -101,7 +101,7 @@ PDU в payload — поиск `01 03 <vlen>`, а не по фиксирован�
 ## Находки по CRC (почему Sofar_LSW3.py несовместим с эталоном)
 
 - `libscrc.modbus` в Sofar_LSW3.py — стандартный CRC16-Modbus (init 0xFFFF,
-  poly 0xA001 отражённый, без invert); наш `CRC16Modbus` в `solarman/frame.go` —
+  poly 0xA001 отражённый, без invert); наш `CRC16Modbus` в `internal/solarman/frame.go` —
   то же самое. Проверено: CRC всех PDU живых ответов сходятся при вычислении по
   `01 03 <vlen> <data>` (vlen = bytecount) и записи LE.
 - В Sofar_LSW3.py CRC писался high-first — баг старой реализации, не воспроизводить.

@@ -26,7 +26,7 @@ import (
 // должен подключаться ПЕРЕД <script src> скрипта страницы — скрипты страниц
 // синхронно вызывают srTouchChart при загрузке, и при обратном порядке touch-жесты
 // (щипок-зум, панорама) не привязываются (ReferenceError). Так как JS теперь
-// вынесен в отдельные файлы (web/static/js), порядок проверяется по позициям
+// вынесен в отдельные файлы (cmd/sunreceiver/web/static/js), порядок проверяется по позициям
 // тегов <script src> в отрендеренном HTML.
 func TestMobileCommonScriptOrder(t *testing.T) {
 	data := map[string]any{"active": "home", "flags": dashFlags{ShowMap: true, ShowMeter: true, ShowBMS: true}, "CacheBust": "cafebabe1"}

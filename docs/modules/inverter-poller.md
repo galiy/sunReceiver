@@ -8,7 +8,7 @@
 ## Цели и конфиг
 
 Список целей читается из **`sunReceiver.json` рядом с бинарником**
-(`os.Executable()`; при `go run .` — fallback в CWD) через `loadConfig` в
+(`os.Executable()`; при `go run ./cmd/sunreceiver` — fallback в CWD) через `loadConfig` в
 `targets []invTarget` {IP, Name, LoggerSN, Kind}:
 
 - раздел `invertors` → `type` "deye"→`kindDeyeString`, "sofar"→`kindSofar`
@@ -75,7 +75,7 @@ defer'ы закрывают пулы Redis/PG — записи при остан
 
 ## Связанные документы
 
-- [Клиент Solarman V5](solarman-client.md) — пакет `solarman/`.
+- [Клиент Solarman V5](solarman-client.md) — пакет `internal/solarman/`.
 - [research/solarman-v5.md](../research/solarman-v5.md) — протокол и поведение живых
   логгеров.
 - [research/sofar-registers.md](../research/sofar-registers.md),

@@ -28,7 +28,7 @@ import (
 )
 
 // bmsDevice — одна ANT BMS из коллекции bmslistener (read_bms.php, System V
-// shm 2018 на ПАК «Малина»). Формат публикации — bmslistener/bmslistener.c
+// shm 2018 на ПАК «Малина»). Формат публикации — daemons/bmslistener/bmslistener.c
 // (publish_all); все поля присутствуют в ответе.
 type bmsDevice struct {
 	// Kind — тип BMS: "antbms" (read_bms.php) или "enbms" (BLE, Enjie). Пусто —

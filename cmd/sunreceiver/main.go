@@ -32,8 +32,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/galiy/sunReceiver/modbusmap"
-	"github.com/galiy/sunReceiver/solarman"
+	"github.com/galiy/sunReceiver/internal/modbusmap"
+	"github.com/galiy/sunReceiver/internal/solarman"
 )
 
 // Периоды опроса устройств (секунды в конфиге, раздел "poll"). Значения по
@@ -2618,7 +2618,7 @@ func describeResult(res DeviceResult) string {
 }
 
 // deyeErrCodeName — человекочитаемое имя кода ошибки heartbeat Deye/Sofar
-// (см. DeyeErrorCode в solarman/frame.go).
+// (см. DeyeErrorCode в internal/solarman/frame.go).
 // sofarFaultBits — битовая маска аварий Sofar (регистры 0x0001–0x0005, func 03).
 var sofarFaultBits = []struct {
 	bit uint16

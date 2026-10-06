@@ -5,7 +5,7 @@ Go-приложение, которое опрашивает solar-инверт�
 (с persistence RDB+AOF). При полностью пустом Redis данные восстанавливаются из
 PostgreSQL. Включает веб-дашборд текущих параметров.
 
-Язык/команды: Go 1.26, `go run .` — запуск, `go vet ./...` — проверки. Коммиты
+Язык/команды: Go 1.26, `go run ./cmd/sunreceiver` — запуск, `go vet ./...` — проверки. Коммиты
 писать по-русски, как в истории репо.
 
 ## Документация
@@ -18,7 +18,7 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 | Раздел | Где |
 |---|---|
 | Краткое описание всех модулей + навигация | [`docs/README.md`](docs/README.md) |
-| Клиент Solarman V5 (`solarman/`) | [`docs/modules/solarman-client.md`](docs/modules/solarman-client.md) |
+| Клиент Solarman V5 (`internal/solarman/`) | [`docs/modules/solarman-client.md`](docs/modules/solarman-client.md) |
 | Poller инверторов (`main.go`) | [`docs/modules/inverter-poller.md`](docs/modules/inverter-poller.md) |
 | Хранение (Redis/PG/аккумулятор) | [`docs/modules/storage.md`](docs/modules/storage.md) |
 | Веб-дашборд (`dashboard.go`) | [`docs/modules/dashboard.md`](docs/modules/dashboard.md) |
@@ -29,7 +29,7 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 | Счётчик энергосбыта «Меркурий» (прогноз) | [`docs/meter_mercury.md`](docs/meter_mercury.md) |
 | BMS EnBMS (Enjie EMU110x, BLE/RS485) | [`docs/modules/enbms.md`](docs/modules/enbms.md) |
 | ANT BMS | [`docs/antbms.md`](docs/antbms.md) |
-| Шлюз Modbus TCP↔RTU (`mapgateway/`, C) | [`mapgateway/README.md`](mapgateway/README.md) |
+| Шлюз Modbus TCP↔RTU (`daemons/mapgateway/`, C) | [`daemons/mapgateway/README.md`](daemons/mapgateway/README.md) |
 | Уведомления в MAX | [`docs/modules/notify.md`](docs/modules/notify.md) |
 | Сетевое реле SR-201 (лампы-индикаторы) | [`docs/relay_sr-201(2light).md`](docs/relay_sr-201(2light).md) |
 | Windows-трей и логирование (`tray_*.go`, `logfile_*.go`) | [`docs/modules/tray-logging.md`](docs/modules/tray-logging.md) |
@@ -54,7 +54,7 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 [`docs/research/`](docs/research/).
 
 Список опрашиваемых инверторов задаётся в **`sunReceiver.json` рядом с исполняемым
-файлом** (`os.Executable()`; при `go run .` — fallback в CWD). Структура: раздел
+файлом** (`os.Executable()`; при `go run ./cmd/sunreceiver` — fallback в CWD). Структура: раздел
 **`invertors`** — список инверторов `[{"ip", "name", "type": "deye"|"sofar",
 "logger_sn": uint32, "disabled": bool}]`; `name` — логическое имя (обязательно);
 **`disabled` — ОБЯЗАТЕЛЬНОЕ поле** (`false` = опрашивается, `true` = временно
@@ -158,7 +158,7 @@ inverter 10, map 1, meter 1, ce308 5, antbms 1. Период EnBMS задаёт�
 усреднённые точки) → дашборд (чтение)**. Опрос — независимые горутины. Дашборд только
 читает `current`/`series` (Redis) и `averages` (PG).
 
-- **`solarman/`** — клиент Solarman V5. Полное описание —
+- **`internal/solarman/`** — клиент Solarman V5. Полное описание —
   [`docs/modules/solarman-client.md`](docs/modules/solarman-client.md).
 - **`main.go`** — poller инверторов (Deye/Sofar) в независимых циклах `runInverterPoll`
   (раз в 10 с), маппинг регистров в `values`, серийные номера, чистое завершение.
@@ -168,7 +168,7 @@ inverter 10, map 1, meter 1, ce308 5, antbms 1. Период EnBMS задаёт�
   Полное описание — [`docs/modules/storage.md`](docs/modules/storage.md).
 - **Дашборд** — `dashboard.go`, HTTP + JSON API. Полное описание —
   [`docs/modules/dashboard.md`](docs/modules/dashboard.md).
-- **МАП + MPPT** — `mppt_api.go`, `modbusmap/`, `runMapPoll`. Полное описание —
+- **МАП + MPPT** — `mppt_api.go`, `internal/modbusmap/`, `runMapPoll`. Полное описание —
   [`docs/modules/map-mppt.md`](docs/modules/map-mppt.md). **Ошибки МАП читать только
   «сырыми»** — через Modbus (когда `map.rs485.disabled=false`) либо из Малины через
   `read_memory.php` (когда `map.rs485.disabled=true`, веб-API), в зависимости от
@@ -208,12 +208,12 @@ inverter 10, map 1, meter 1, ce308 5, antbms 1. Период EnBMS задаёт�
   постоянные соединения (структура BLE — из CE308, схема хранения/усреднения — из
   ANT BMS). Redis: current + каждое снятое показание; PG: 5-минутные средние.
   Полное описание — [`docs/modules/enbms.md`](docs/modules/enbms.md).
-- **ANT BMS** — `bms_poller.go`, `bms_accumulator.go`, `bmslistener/`. Полное описание —
+- **ANT BMS** — `bms_poller.go`, `bms_accumulator.go`, `daemons/bmslistener/`. Полное описание —
   [`docs/antbms.md`](docs/antbms.md). Демон bmslistener (установка на ПАК «Малина») —
   [`docs/modules/bms-listener.md`](docs/modules/bms-listener.md).
-- **Шлюз Modbus TCP↔RTU** — `mapgateway/mapgateway.c` (C, systemd на ПАК «Малина»):
+- **Шлюз Modbus TCP↔RTU** — `daemons/mapgateway/mapgateway.c` (C, systemd на ПАК «Малина»):
   публикует последовательный порт МАП как Modbus TCP (:502) для пулера. Сборка
-  (`make mapgateway`) и эксплуатация — [`mapgateway/README.md`](mapgateway/README.md).
+  (`make mapgateway`) и эксплуатация — [`daemons/mapgateway/README.md`](daemons/mapgateway/README.md).
 - **Уведомления в MAX** — `notify.go` (`maxClient` + трекер состояния МАП
   `mapTrack` + `runNotifyMonitor`): события мониторинга МАП (недоступен / нет
   напряжения сети) и восстановление, отправка через Bot API MAX с гистерезисом
@@ -248,12 +248,12 @@ inverter 10, map 1, meter 1, ce308 5, antbms 1. Период EnBMS задаёт�
   TCP/HTTP + слушает `:8080` >1024), поэтому root не требуется. Адрес сервера,
   SSH-доступ, команды деплоя и топология — **приватные**, см.
   `.kilo/AGENTS-private.md`.
-- Локальная разработка/тест — `go run .` (fallback конфигов в CWD). Локальный
+- Локальная разработка/тест — `go run ./cmd/sunreceiver` (fallback конфигов в CWD). Локальный
   пулер работает от конфига **`sunReceiver.json`** рядом с бинарником (все разделы:
   invertors, map, mppt, db, meter — в одном файле; файл приватный, в git не попадает).
 - **НЕ запускать инстансы sunReceiver на машине разработки без
   явного разрешения пользователя**: локальный конфиг `sunReceiver.json` указывает
-  `db.redis`/`db.pg` на прод-сервер, поэтому `go run .` на ней опрашивает реальное
+  `db.redis`/`db.pg` на прод-сервер, поэтому `go run ./cmd/sunreceiver` на ней опрашивает реальное
   железо и пишет в прод-Redis/PG — это второй писатель, и данные «оживают» даже при
   отключённых на проде пулерах. Прод-эксплуатация — только через systemd на прод-сервере;
   локальный запуск — с изолированным хранилищем и после согласования с пользователем.
@@ -275,7 +275,7 @@ scp поверх `/opt/sunreceiver/sunReceiver`, `systemctl restart sunreceiver.
 
 **Локализация дашборда** (обязательно): при любой модификации веб-дашборда
 (новые/изменённые подписи, плашки, кнопки, сообщения) сразу добавлять переводы на
-**английский и китайский** — словарь `web/static/js/i18n.js` (ключ = русская
+**английский и китайский** — словарь `cmd/sunreceiver/web/static/js/i18n.js` (ключ = русская
 фраза, блоки `DICT.en`/`DICT.zh`). Изменение дашборда без ru/en/zh-строк не готово.
 
 **История ошибок устройств** (правила):

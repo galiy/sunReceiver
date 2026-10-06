@@ -252,7 +252,7 @@ func TestNeedsRoundingMeterTags(t *testing.T) {
 
 // Публичный sample обязан парситься как configFile (в частности logger_sn ≤ uint32).
 func TestSampleConfigParses(t *testing.T) {
-	b, err := os.ReadFile("sunReceiver.sample.json")
+	b, err := os.ReadFile("../../sunReceiver.sample.json")
 	if err != nil {
 		t.Skipf("sample недоступен: %v", err)
 	}

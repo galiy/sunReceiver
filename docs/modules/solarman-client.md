@@ -1,4 +1,4 @@
-# Модуль `solarman/` — клиент протокола Solarman V5
+# Модуль `internal/solarman/` — клиент протокола Solarman V5
 
 Пакет-клиент WiFi-даталоггеров (Solarman LSW-3/LSE, TCP 8899). Работает поверх
 протокола, описанного в [research/solarman-v5.md](../research/solarman-v5.md)
@@ -51,7 +51,7 @@
 
 ## Диагностика
 
-`probe/main.go` — самостоятельный инструмент: `go run ./probe <ip> 8899 <sn hex32>
+`cmd/probe/main.go` — самостоятельный инструмент: `go run ./cmd/probe <ip> 8899 <sn hex32>
 [sn2...] <start hex> <count hex>` — строит Deye-кадр (`BuildDeyeReadFrame`) с каждым
 SN по очереди, шлёт, дробит ответ (`SplitFrames`), печатает регистры
 (`ParseModbusPDU`) и код Deye-ошибки (`DeyeErrorCode`). Перебор unit-адресов — через

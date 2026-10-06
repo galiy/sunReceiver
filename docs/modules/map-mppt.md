@@ -23,7 +23,7 @@
   сети** МАП на дашборд. Цель `MAP (батарея/сеть)` (192.168.0.74, unit 1).
   Пер-слотовый MPPT через Modbus больше не опрашивается. Источник задаёт
   обязательное поле `disabled` подраздела `map.rs485` (отсутствие = ошибка конфига):
-  - `false` — **Modbus TCP/RS485** (`modbusmap/` + `mapClientFor`), блоки 0x400/0x580;
+  - `false` — **Modbus TCP/RS485** (`internal/modbusmap/` + `mapClientFor`), блоки 0x400/0x580;
   - `true` — пулер по Modbus НЕ запускается, параметры из **веб-API ПАК «Малина»**
     `read_json.php?device=map` (`mpptSite.FetchMAP` + `mapMAPAPI`); обязателен полный
     раздел `map` (поля веб-API, иначе `log.Fatal` при старте). Ключ устройства (devKey)

@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/galiy/sunReceiver/solarman"
+	"github.com/galiy/sunReceiver/internal/solarman"
 )
 
 // startFakeMeterServer поднимает TCP-сервер, который на один запрос отвечает

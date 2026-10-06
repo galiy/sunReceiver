@@ -20,7 +20,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 (горячие данные, последние 2 календарных суток) + PostgreSQL (вся история —
 5-минутные усреднённые точки). Встроенный веб-дашборд.
 
-Язык/команды: Go 1.26, `go run .` — запуск, `go vet ./...` — проверки.
+Язык/команды: Go 1.26, `go run ./cmd/sunreceiver` — запуск, `go vet ./...` — проверки.
 Коммиты — по-русски (как в истории репо).
 
 ## Архитектура (кратко)
@@ -35,19 +35,19 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 
 | Модуль | Что делает | Подробное описание |
 |---|---|---|
-| **solarman/** | Клиент протокола Solarman V5: сборка кадра (Sofar/Deye), разбор ответа, CRC/checksum, чтение регистров, коды ошибок логгера | [modules/solarman-client.md](modules/solarman-client.md) |
+| **internal/solarman/** | Клиент протокола Solarman V5: сборка кадра (Sofar/Deye), разбор ответа, CRC/checksum, чтение регистров, коды ошибок логгера | [modules/solarman-client.md](modules/solarman-client.md) |
 | **Poller инверторов** (`main.go`) | Опрос Deye/Sofar раз в 10 с в независимых циклах, маппинг регистров в `values` (Sofar/Deye), серийные номера, чистое завершение | [modules/inverter-poller.md](modules/inverter-poller.md) |
 | **Хранение** (`redis_store.go`, `pg_store.go`, `accumulator.go`, `bms_accumulator.go`, `enBms_accumulator.go`, `ce308_accumulator.go`) | Redis (2 суток, live) + PG (5-мин средние, вечно), фоновые аккумуляторы/очистка, реставрация Redis из PG при пустом старте | [modules/storage.md](modules/storage.md) |
-| **Веб-дашборд** (`dashboard.go`, `web/`, `go:embed`) | HTML + JSON API (`/`, `/charts`, `/energy`, `/bms/<name>`) поверх Redis/PG, зум/панорама, offline-индикация, mobile-раскладка; шаблоны/статика (`web/templates`, `web/static/js`) встроены в бинарник | [modules/dashboard.md](modules/dashboard.md) |
-| **МАП + MPPT** (`mppt_api.go`, `modbusmap/`) | МАП (батарея/сеть) через Modbus TCP или веб-API; MPPT-контроллеры через `read_json.php?device=mppt` (динамический состав) | [modules/map-mppt.md](modules/map-mppt.md) |
+| **Веб-дашборд** (`dashboard.go`, `cmd/sunreceiver/web/`, `go:embed`) | HTML + JSON API (`/`, `/charts`, `/energy`, `/bms/<name>`) поверх Redis/PG, зум/панорама, offline-индикация, mobile-раскладка; шаблоны/статика (`cmd/sunreceiver/web/templates`, `cmd/sunreceiver/web/static/js`) встроены в бинарник | [modules/dashboard.md](modules/dashboard.md) |
+| **МАП + MPPT** (`mppt_api.go`, `internal/modbusmap/`) | МАП (батарея/сеть) через Modbus TCP или веб-API; MPPT-контроллеры через `read_json.php?device=mppt` (динамический состав) | [modules/map-mppt.md](modules/map-mppt.md) |
 | **Счётчик DDS238** (`meter_*.go`) | Мгновенные значения `meter_*` + посуточные тарифы «День/Ночь» (`daily_tariffs`) с добором пропущенных границ; транспорт — Modbus TCP (`tcp`) или Modbus RTU через прозрачный шлюз (`rtu`) | [dds238-meter.md](dds238-meter.md) |
 | **Счётчик DTS017M** (`dts017_*.go`) | Трёхфазный счётчик (Modbus RTU через прозрачный шлюз): телеметрия/энергии → **собственные** ключи/ряд Redis и **собственные** таблицы PG; посуточные тарифы «День/Ночь» считаются сами (историю счётчика не читаем); рамка «Гараж» и графики на странице «Электроэнергия», `/api/dts017m/current|tariffs` | [dts017m-meter.md](dts017m-meter.md) |
 | **Счётчик «Меркурий»** (энергосбыт, без мониторинга; прогноз) | Последовательно с DDS238; показания снимаются **вручную** (раздел конфига `mercury`), прогноз на текущий момент по последней ручной точке + статистике DDS238 (`mercury.go` → `/api/current` → рамка «Меркурий — прогноз») | [meter_mercury.md](meter_mercury.md) |
 | **Счётчик Энергомера CE308** (`ce308_*.go`) | Опрос по BLE (2 с): напряжения/токи/мощности по фазам + разовый снимок накопленной энергии по сигналу; в Redis — каждое показание (~2 с), в PG — 5-мин средние | [modules/ce308.md](modules/ce308.md) |
 | **BMS EnBMS** (`enBms_*.go`) | Опрос BMS Enjie (EMU110x) по BLE (Battery, CID2 `0x61`) или RS485 (TeleMeter, CID2 `0x42`, ASCII PACE через TCP-шлюз/COM); метод и период — в конфиге; устройства последовательно, постоянные соединения; в Redis — каждое показание, в PG — 5-мин средние | [modules/enbms.md](modules/enbms.md) |
 | **Проброс Bluetooth (usbip)** (вне кода, ОТКЛЮЧЕНО 2026-09-24) | Историческая схема: проброс BLE-контроллера MediaTek с `.9` на `.253` через usbip; на `.253` теперь физический USB-адаптер | [ce308-bluetooth/README.md](ce308-bluetooth/README.md) |
-| **ANT BMS** (`bms_poller.go`, `bmslistener/`) | Опрос батарей через `read_bms.php` → shm bmslistener; в Redis — каждое показание, в PG — 5-мин средние | [antbms.md](antbms.md), [modules/bms-listener.md](modules/bms-listener.md) |
-| **Шлюз Modbus TCP↔RTU** (`mapgateway/`, C) | Публикует последовательный порт МАП как Modbus TCP (:502) для пулера; systemd на ПАК «Малина» | [mapgateway/README.md](../mapgateway/README.md) |
+| **ANT BMS** (`bms_poller.go`, `daemons/bmslistener/`) | Опрос батарей через `read_bms.php` → shm bmslistener; в Redis — каждое показание, в PG — 5-мин средние | [antbms.md](antbms.md), [modules/bms-listener.md](modules/bms-listener.md) |
+| **Шлюз Modbus TCP↔RTU** (`daemons/mapgateway/`, C) | Публикует последовательный порт МАП как Modbus TCP (:502) для пулера; systemd на ПАК «Малина» | [daemons/mapgateway/README.md](../daemons/mapgateway/README.md) |
 | **Уведомления в MAX** (`notify.go`) | Отправка событий мониторинга МАП (недоступен / нет напряжения сети) в мессенджер MAX через Bot API, с гистерезисом и дедупликацией | [modules/notify.md](modules/notify.md) |
 | **Сетевое реле SR-201** (`relay_control.go`) | Управление двойным реле по UDP (белая/красная лампы): поддержка состояния (вкл/выкл/мигание 2 Гц) + автоиндикаторы (отдача в сеть, наличие напряжения сети) | [relay_sr-201(2light).md](relay_sr-201(2light).md) |
 | **Windows-трей и логирование** (`tray_*.go`, `logfile_*.go`) | Сворачивание в системный трей (`fyne.io/systray`) и запись лога в `sunReceiver.log` рядом с exe; на POSIX `runTray`/`setupLogging` — no-op | [modules/tray-logging.md](modules/tray-logging.md) |
@@ -110,7 +110,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 ## Конфигурация
 
 Один файл **`sunReceiver.json`** рядом с бинарником (`os.Executable()`; при
-`go run .` — fallback в CWD). Разделы: `dashboard_port` (обязательное) и
+`go run ./cmd/sunreceiver` — fallback в CWD). Разделы: `dashboard_port` (обязательное) и
 необязательные `dashboard_user`/`dashboard_password`, `invertors`, `map`
 (с подразделом `rs485`), `db`, `meter`, `dts017m`, `ce308`, `enBms`, `notify`,
 `relay`, `mercury`.
@@ -146,7 +146,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 ```sh
 go build -o sunReceiver .   # сборка
 ./sunReceiver               # запуск (persistent-процесс)
-go run .                     # запуск из исходников (конфиг из CWD)
+go run ./cmd/sunreceiver                     # запуск из исходников (конфиг из CWD)
 ```
 
 Все настройки задаются только в `sunReceiver.json` (флагов командной строки нет,

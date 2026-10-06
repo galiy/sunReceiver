@@ -27,12 +27,12 @@ make VERSION=0.1.0 mapgateway      # -> dist/mapgateway-armv7l-0.1.0 (armv7, sta
 
 ```sh
 zig cc -O2 -std=gnu99 -Wall -Wextra -target arm-linux-musleabihf -static \
-    -DVERSION='"0.1.0"' -o dist/mapgateway-armv7l-0.1.0 mapgateway/mapgateway.c
+    -DVERSION='"0.1.0"' -o dist/mapgateway-armv7l-0.1.0 daemons/mapgateway/mapgateway.c
 ```
 
 Быстрая нативная сборка для отладки на Linux/PC:
 ```sh
-gcc -O2 -std=gnu99 -Wall -Wextra -DVERSION='"dev"' -o /tmp/mapgateway mapgateway/mapgateway.c
+gcc -O2 -std=gnu99 -Wall -Wextra -DVERSION='"dev"' -o /tmp/mapgateway daemons/mapgateway/mapgateway.c
 ```
 
 ## Установка на Малину (`.60`)
@@ -43,7 +43,7 @@ gcc -O2 -std=gnu99 -Wall -Wextra -DVERSION='"dev"' -o /tmp/mapgateway mapgateway
 scp dist/mapgateway-armv7l-0.1.0 root@192.0.2.60:/settings/daemons/mapgateway
 ssh root@192.0.2.60 'chmod 755 /settings/daemons/mapgateway'
 # юнит:
-scp mapgateway/mapgateway.service root@192.0.2.60:/etc/systemd/system/mapgateway.service
+scp daemons/mapgateway/mapgateway.service root@192.0.2.60:/etc/systemd/system/mapgateway.service
 ssh root@192.0.2.60 'systemctl daemon-reload && systemctl enable --now mapgateway.service'
 ```
 

@@ -11,7 +11,7 @@
 шину/shared-memory экосистему. Данные читает `web/read_bms.php` (см.
 [`antbms.md`](../antbms.md)), а в sunReceiver — `bms_poller.go` (модуль ANT BMS).
 
-Исходники: [`bmslistener/`](../../bmslistener/) → `bmslistener.c`, `Makefile`,
+Исходники: [`daemons/bmslistener/`](../../daemons/bmslistener/) → `bmslistener.c`, `Makefile`,
 `bmslistener.service`, `web/read_bms.php` (web-api-эндпоинт).
 
 Конечная цель демона — **не только** публикация параметров в shm, а **выдача данных
@@ -32,7 +32,7 @@
 ## Установка (на ПАК «Малина»)
 
 Выполняется **на Малине** (arm, Raspberry Pi), рядом с существующими сервисами.
-Требуется `gcc` (компилятор C, стандарт gnu99). Скопировать каталог `bmslistener/` на
+Требуется `gcc` (компилятор C, стандарт gnu99). Скопировать каталог `daemons/bmslistener/` на
 Малину и в нём:
 
 ```sh

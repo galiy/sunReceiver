@@ -26,7 +26,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/galiy/sunReceiver/solarman"
+	"github.com/galiy/sunReceiver/internal/solarman"
 )
 
 func main() {
