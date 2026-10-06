@@ -88,7 +88,7 @@
 
 Ниже — инверторные общие теги: обе марки отдают их в одинаковых единицах. Помимо них
 в `values` входят теги МАП (`grid_voltage`, `grid_power`, `battery_voltage`,
-`battery_power`) и счётчика DDS238 (`meter_voltage`, `meter_current`,
+`battery_current`, `battery_power`) и счётчика DDS238 (`meter_voltage`, `meter_current`,
 `meter_active_power`, `meter_reactive_power`, `meter_power_factor`, `meter_frequency`,
 `meter_import`, `meter_export`, `meter_total`). Порядок в файле — как в
 `commonContractTags` (PV → AC → фазы → энергия → МАП → счётчик).
@@ -242,11 +242,15 @@
   - `grid_voltage` = `_UNET` 0x422 (0 → нет сети, иначе +100 В);
   - `grid_power` = `_PNET` 0x59A/0x59B (знак по `_PNET_Sign_P` 0x587), Вт;
   - `battery_voltage` = `_UAcc_med` 0x405/0x406 `(VH*256+VL)/10`, В;
+  - `battery_current` = `_IAcc_med` 0x432/0x433 `(L + H*256)/16`, А, со знаком
+    (заряд — отрицательный, отдача — положительный; в Modbus-ветке знак
+    выставляется по `MODE` 0x400, в ветке веб-API — `−_Iacc`); на дашборде плашка
+    «Ток батареи» (рамка «Данные МАП»);
   - `battery_power` = `I_АКБ × U_АКБ` со знаком (заряд — отрицательная, отдача — положительная);
     в ветке веб-API — `−_PLoad_calc` (та же семантика);
   - `l1_voltage` = напряжение АКБ. **`l1_current`/`ac_active_power` у МАП не выставляются** —
     это теги AC-инверторов; для МАП они дублировали ток/мощность АКБ и не использовались
-    (плашки/графики МАП — на `battery_power`/`grid_power`).
+    (плашки/графики МАП — на `battery_power`/`grid_power`/`battery_current`).
 
 **Семантика знаков мощностей (плашки и графики):**
 - `grid_power` (сеть): `_PNET_Sign_P` 0x587 = 1 → **положительная** (потребляем из сети),

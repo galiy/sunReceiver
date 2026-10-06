@@ -526,13 +526,15 @@ async function tick(){
 		}
 		var subEl=document.getElementById('invPlatesSub');
 		if(subEl) subEl.textContent=invCount ? (invCount+' '+invPlural(invCount)+' онлайн') : 'Нет данных';
-		// Плашки МАП: напряжение/мощность сети и батареи.
+		// Плашки МАП: напряжение/ток/мощность сети и батареи. Мощности и ток
+		// подсвечиваются по знаку: «+» — красный, «−» — зелёный.
 		if(showMap){
 			setKpi('kpiGridV', data.map_grid_voltage);
-			setKpi('kpiGridP', data.map_grid_power);
+			setKpiSigned('kpiGridP', data.map_grid_power);
 			setKpi('kpiBatV', data.map_battery_voltage);
-			setKpi('kpiBatP', data.map_battery_power);
-			setKpi('kpiConsP', data.house_power);
+			setKpiSigned('kpiBatI', data.map_battery_current);
+			setKpiSigned('kpiBatP', data.map_battery_power);
+			setKpiSigned('kpiConsP', data.house_power);
 		}
 		// Плашки «Потребление/Отдача за сегодня» (kWh): считаются из актуальных
 		// показаний счётчика и фиксированных граничных точек тарифов.
@@ -596,6 +598,21 @@ function setKpi(id, v){
 }
 // setKpi2 заполняет плашку kWh-величиной ЦЕЛЫМ числом (дробную часть отбрасываем,
 // не округляем) или прочерком, если нет данных.
+// setKpiSigned — как setKpi, но подсвечивает значение по знаку: положительное —
+// красным (.pos), отрицательное — зелёным (.neg). Для мощностей/тока МАП.
+function setKpiSigned(id, v){
+	var el=document.getElementById(id);
+	if(!el) return;
+	el.classList.remove('pos','neg');
+	var n=Number(v);
+	if(isFinite(n)){
+		el.textContent=n.toLocaleString('ru-RU',{maximumFractionDigits:1});
+		if(n>0) el.classList.add('pos');
+		else if(n<0) el.classList.add('neg');
+	}else{
+		el.textContent='—';
+	}
+}
 function setKpi2(id, v){
 	var el=document.getElementById(id);
 	if(!el) return;

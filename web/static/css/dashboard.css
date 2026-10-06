@@ -56,6 +56,9 @@ h1 { font-size:22px; margin:0 0 4px; }
 .plate .sub, .meter-stat .sub, .kpi-sub { font-size:11px; color:#6b7785; }
 .meter-stat .pos { color:#37b24d; } /* положительная величина / потребление */
 .meter-stat .neg { color:#C8385A; } /* отрицательная величина / отдача в сеть */
+/* Плашки МАП: знак мощности/тока — «+» красный, «−» зелёный. */
+.plate .val .pos { color:#d9534f; } /* положительная мощность/ток */
+.plate .val .neg { color:#37b24d; } /* отрицательная мощность/ток */
 .meter-stat .off { color:#f08c00; } /* нулевое/неопределённое */
 .meter-ts { font-size:12px; color:#6b7785; }
 .meter-note { font-size:11px; color:#6b7785; margin-top:8px; }

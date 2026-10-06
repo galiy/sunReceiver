@@ -726,6 +726,7 @@ var commonContractTags = []string{
 	"grid_voltage",
 	"grid_power",
 	"battery_voltage",
+	"battery_current",
 	"battery_power",
 	// Электросчётчик DDS238: мгновенные значения (V, A, W, var, Hz, kWh)
 	"meter_voltage",
@@ -1434,9 +1435,11 @@ func mapMAPRegisters(cells map[uint16]byte) valuesContract {
 		mapMode = m
 	}
 	var iAcc float64
+	hasIAcc := false
 	if l, okL := cells[0x432]; okL {
 		if h, okH := cells[0x433]; okH {
 			iAcc = float64(uint16(h)<<8|uint16(l)) / 16
+			hasIAcc = true
 		}
 	}
 	if mapMode == 4 {
@@ -1444,8 +1447,12 @@ func mapMAPRegisters(cells map[uint16]byte) valuesContract {
 	}
 
 	// NB: l1_current/ac_active_power для МАП НЕ выставляем — это теги AC-инверторов;
-	// для МАП они дублировали ток/мощность АКБ и нигде не используются (плашки/графики
-	// МАП — на battery_power/grid_power). Ток iAcc далее идёт только в battery_power.
+	// для МАП они дублировали ток/мощность АКБ и нигде не используются. Ток АКБ отдаём
+	// отдельным контрактным тегом battery_current (знак как у battery_power: заряд −,
+	// отдача +) для плашки «Ток батареи» на дашборде.
+	if hasIAcc {
+		out["battery_current"] = iAcc
+	}
 	out["grid_frequency"] = 0.0
 
 	// ---- Данные батареи и сети МАП (для дашборда КЭС) ----

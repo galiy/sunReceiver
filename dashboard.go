@@ -181,6 +181,7 @@ type currentResponse struct {
 	MapGridV   float64          `json:"map_grid_voltage"`
 	MapGridP   float64          `json:"map_grid_power"`
 	MapBatV    float64          `json:"map_battery_voltage"`
+	MapBatI    float64          `json:"map_battery_current"`
 	MapBatP    float64          `json:"map_battery_power"`
 	// HousePower — текущая мощность Дома (та же формула, что у ряда «Мощность дома»
 	// на графике и у схемы анимации): Σac(инверторы Дома) + grid_power + battery_power.
@@ -1100,8 +1101,8 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	var total float64
 	var totalPV float64
 	var placements []placementPower
-	// Напряжение/мощность сети и батареи МАП — из снимков устройства МАП (батарея/сеть).
-	var gridV, gridP, batV, batP float64
+	// Напряжение/ток/мощность сети и батареи МАП — из снимков устройства МАП (батарея/сеть).
+	var gridV, gridP, batV, batI, batP float64
 	// Устройство считаем «живым», если снимок не старше 20 минут (то же окно
 	// STALE_MS, что на дашборде): инвертор, выключенный ночью, в текущую сумму
 	// не входит, а его устаревшее значение (напр. 9 Вт заката) не выставляется
@@ -1128,6 +1129,9 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 		if v, ok := snapFloat(d.Values, "battery_voltage"); ok {
 			batV = v
 		}
+		if v, ok := snapFloat(d.Values, "battery_current"); ok {
+			batI = v
+		}
 		if v, ok := snapFloat(d.Values, "battery_power"); ok {
 			batP = v
 		}
@@ -1135,6 +1139,7 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	gridV = math.Round(gridV*10) / 10
 	gridP = math.Round(gridP*10) / 10
 	batV = math.Round(batV*10) / 10
+	batI = math.Round(batI*10) / 10
 	batP = math.Round(batP*10) / 10
 
 	// Мощность Дома — как на графике «Мощность дома» и в схеме анимации:
@@ -1276,6 +1281,7 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 		MapGridV:               gridV,
 		MapGridP:               gridP,
 		MapBatV:                batV,
+		MapBatI:                batI,
 		MapBatP:                batP,
 		HousePower:             housePower,
 		MeterImportDay:         impDay,

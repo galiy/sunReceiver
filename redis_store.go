@@ -206,7 +206,7 @@ func mergeMAPSnap(snap deviceSnapshot, prevMember string) deviceSnapshot {
 	for k, v := range snap.Values {
 		out[k] = v
 	}
-	for _, tag := range []string{"grid_voltage", "grid_power", "battery_voltage", "battery_power"} {
+	for _, tag := range []string{"grid_voltage", "grid_power", "battery_voltage", "battery_current", "battery_power"} {
 		if _, ok := out[tag]; !ok {
 			if pv, ok2 := prev.Values[tag]; ok2 {
 				out[tag] = pv
