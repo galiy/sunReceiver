@@ -713,16 +713,37 @@ bmsRefreshOrderBtns();
 function bmsPad(x){ return (x<10?'0':'')+x; }
 function bmsToInput(d){ return d.getFullYear()+'-'+bmsPad(d.getMonth()+1)+'-'+bmsPad(d.getDate())+'T'+bmsPad(d.getHours())+':'+bmsPad(d.getMinutes()); }
 function bmsFmtTs(s){ var d=new Date(s); if(isNaN(d)) return s; return d.getFullYear()+'-'+bmsPad(d.getMonth()+1)+'-'+bmsPad(d.getDate())+' '+bmsPad(d.getHours())+':'+bmsPad(d.getMinutes())+':'+bmsPad(d.getSeconds()); }
-async function loadBmsErrors(){
+// Размер страницы журнала ошибок (только 25/50/100/200), хранится в localStorage.
+var bmsErrOffset=0, bmsErrLimit=25, bmsErrTotal=0;
+var BMS_ERR_LIMITS=[25,50,100,200];
+function bmsErrLimitLoad(){
+  var v=0; try{ v=parseInt(localStorage.getItem('bmsErrLimit'),10)||0; }catch(e){}
+  if(BMS_ERR_LIMITS.indexOf(v)<0) v=25;
+  bmsErrLimit=v;
+}
+function bmsErrLimitSave(v){ try{ localStorage.setItem('bmsErrLimit', String(v)); }catch(e){} }
+function bmsUpdatePager(){
+  var pages=bmsErrTotal>0?Math.ceil(bmsErrTotal/bmsErrLimit):1;
+  var page=Math.floor(bmsErrOffset/bmsErrLimit)+1;
+  var info=document.getElementById('errPageInfo');
+  if(info) info.textContent='Стр. '+page+' из '+pages+' ('+bmsErrTotal+')';
+  var pv=document.getElementById('errPrev'), nx=document.getElementById('errNext');
+  if(pv) pv.disabled=bmsErrOffset<=0;
+  if(nx) nx.disabled=(bmsErrOffset+bmsErrLimit)>=bmsErrTotal;
+}
+async function loadBmsErrors(resetOffset){
   var box=document.getElementById('bmsErrors'); if(!box) return;
+  if(resetOffset) bmsErrOffset=0;
   var f=document.getElementById('errFrom'), t=document.getElementById('errTo');
-  var q=['device='+encodeURIComponent(NAME)];
+  var q=['device='+encodeURIComponent(NAME),'limit='+bmsErrLimit,'offset='+bmsErrOffset];
   if(f&&f.value) q.push('from='+encodeURIComponent(new Date(f.value).toISOString()));
   if(t&&t.value) q.push('to='+encodeURIComponent(new Date(t.value).toISOString()));
   try{
     var r=await fetch('/api/errors?'+q.join('&'));
     if(!r.ok){ box.innerHTML='<span class="missing">ошибка запроса</span>'; return; }
     var d=await r.json(); var rows=d.errors||[];
+    bmsErrTotal=d.total||0;
+    bmsUpdatePager();
     if(!rows.length){ box.innerHTML='<span class="missing">Нет ошибок за период</span>'; return; }
     var h='<table class="pivot-table"><thead><tr><th>Время</th><th>Код</th><th>Описание</th></tr></thead><tbody>';
     for(var i=0;i<rows.length;i++){
@@ -742,6 +763,14 @@ async function loadBmsErrors(){
 (function(){ var to=new Date(), from=new Date(); from.setDate(from.getDate()-7);
   var f=document.getElementById('errFrom'), t=document.getElementById('errTo');
   if(f) f.value=bmsToInput(from); if(t) t.value=bmsToInput(to);
-  var b=document.getElementById('errApply'); if(b) b.addEventListener('click', loadBmsErrors);
-  loadBmsErrors();
+  var b=document.getElementById('errApply'); if(b) b.addEventListener('click', function(){ loadBmsErrors(true); });
+  bmsErrLimitLoad();
+  var lim=document.getElementById('errLimit');
+  if(lim){ lim.value=String(bmsErrLimit);
+    lim.addEventListener('change', function(){ bmsErrLimit=parseInt(this.value,10)||25; bmsErrLimitSave(bmsErrLimit); loadBmsErrors(true); }); }
+  var pv=document.getElementById('errPrev');
+  if(pv) pv.addEventListener('click', function(){ if(bmsErrOffset>0){ bmsErrOffset=Math.max(0,bmsErrOffset-bmsErrLimit); loadBmsErrors(false); } });
+  var nx=document.getElementById('errNext');
+  if(nx) nx.addEventListener('click', function(){ if((bmsErrOffset+bmsErrLimit)<bmsErrTotal){ bmsErrOffset+=bmsErrLimit; loadBmsErrors(false); } });
+  loadBmsErrors(true);
 })();

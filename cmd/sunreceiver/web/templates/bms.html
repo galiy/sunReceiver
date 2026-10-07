@@ -48,16 +48,6 @@
   <div id="bmsAlarms"><span class="ok">—</span></div>
 </div>
 
-<div class="card">
-  <h2>История ошибок</h2>
-  <div class="chart-toolbar">
-    <span>С</span><input type="datetime-local" id="errFrom">
-    <span>по</span><input type="datetime-local" id="errTo">
-    <button id="errApply" type="button">Показать</button>
-  </div>
-  <div id="bmsErrors"><span class="missing">—</span></div>
-</div>
-
 <h2 class="bms-charts-title">Графики (Redis — сырые показания, PG — 5-мин средние)</h2>
 <div class="period-panel">
   <button id="btn24h">24 часа</button>
@@ -121,6 +111,28 @@
     <div class="chart-toolbar"><span id="bmsTempChartRange"></span><span>Зум: Ctrl+колесо / Ctrl+выделение / drag&ndash;панорама</span></div>
     <div class="lg-chips" id="bmsTempChartLg"></div>
     <div class="chart-wrap"><canvas id="bmsTempChart"></canvas></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>История ошибок</h2>
+  <div class="chart-toolbar">
+    <span>С</span><input type="datetime-local" id="errFrom">
+    <span>по</span><input type="datetime-local" id="errTo">
+    <button id="errApply" type="button">Показать</button>
+  </div>
+  <div id="bmsErrors"><span class="missing">—</span></div>
+  <div class="period-panel" id="bmsErrPager">
+    <button id="errPrev" type="button">← Назад</button>
+    <span id="errPageInfo" class="lbl">—</span>
+    <button id="errNext" type="button">Вперёд →</button>
+    <span class="lbl">На странице</span>
+    <select id="errLimit">
+      <option value="25" selected>25</option>
+      <option value="50">50</option>
+      <option value="100">100</option>
+      <option value="200">200</option>
+    </select>
   </div>
 </div>
 
