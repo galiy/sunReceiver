@@ -201,19 +201,26 @@ type meterSection struct {
 // MPPT-контроллеров и МАП (через read_json.php). Пароль хранится в открытом виде
 // (sunReceiver.json — приватный, в git не выгружается).
 // Disabled — ОБЯЗАТЕЛЬНОЕ поле (отсутствие = ошибка конфига): true отключает ВСЕ
-// пулеры раздела map (МАП Modbus/веб-API, MPPT-контроллеры и BMS); на пулеры
-// сетевых инверторов не влияет. BMSDisabled — ОБЯЗАТЕЛЬНОЕ поле: true отключает
-// только пулер ANT BMS (плашки-батарейки на дашборде скрываются).
+// пулеры раздела map (МАП Modbus/веб-API и MPPT-контроллеры); на пулеры
+// сетевых инверторов не влияет. Опрос ANT BMS вынесен в отдельный раздел antBms.
 type mapSection struct {
-	RS485       *mapRS485Section `json:"rs485"`
-	BaseURL     string           `json:"base_url"`
-	MPPTPath    string           `json:"mppt_path"` // путь к read_json.php?device=mppt (КЭС/MPPT-контроллеры)
-	MapPath     string           `json:"map_path"`  // путь к read_json.php?device=map (МАП, батарея/сеть); пусто = выводится из mppt_path
-	BMSPath     string           `json:"bms_path"`  // путь к read_bms.php (ANT BMS); пусто — BMS не опрашивается
-	Login       string           `json:"login"`
-	Password    string           `json:"password"`
-	Disabled    *bool            `json:"disabled"`
-	BMSDisabled *bool            `json:"bms_disabled"`
+	RS485    *mapRS485Section `json:"rs485"`
+	BaseURL  string           `json:"base_url"`
+	MPPTPath string           `json:"mppt_path"` // путь к read_json.php?device=mppt (КЭС/MPPT-контроллеры)
+	MapPath  string           `json:"map_path"`  // путь к read_json.php?device=map (МАП, батарея/сеть); пусто = выводится из mppt_path
+	Login    string           `json:"login"`
+	Password string           `json:"password"`
+	Disabled *bool            `json:"disabled"`
+}
+
+// antBmsSection — раздел "antBms" sunReceiver.json: ANT BMS через веб-API ПАК
+// «Малина» (read_bms.php). URL — ПОЛНЫЙ адрес эндпоинта (хост и путь; при
+// необходимости учётные данные Basic-auth в виде http://user:pass@host/path).
+// Disabled — ОБЯЗАТЕЛЬНОЕ поле (отсутствие = ошибка конфига): false — опрос идёт,
+// true — пулер ANT BMS не запускается (плашки-батарейки на дашборде скрываются).
+type antBmsSection struct {
+	URL      string `json:"url"`
+	Disabled *bool  `json:"disabled"`
 }
 
 // pollSection — периоды опроса устройств в СЕКУНДАХ (обязательный раздел "poll").
@@ -236,6 +243,7 @@ type configFile struct {
 	Meter         *meterSection    `json:"meter"`
 	Ce308         *ce308Section    `json:"ce308"`
 	EnBms         *enBmsSection    `json:"enBms"`
+	AntBms        *antBmsSection   `json:"antBms"`
 	Dts017        *dts017Section   `json:"dts017m"`
 	Mercury       []mercurySection `json:"mercury"` // ручные снятия показаний счётчика энергосбыта «Меркурий»
 	Notify        *notifySection   `json:"notify"`
@@ -350,19 +358,27 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	// МАП (батарея/сеть) — вложенный блок "rs485" раздела "map". Disabled обязателен:
 	// false — Modbus TCP (RS485), true — данные берутся из веб-API ПАК «Малина»
 	// (mapAPI). При true цель в targets не добавляется (Modbus-пулер не запускается).
-	// Обязательные флаги раздела map: верхнеуровневый disabled (отключает ВСЕ пулеры
-	// map/mppt/bms) и bms_disabled (отключает только пулер ANT BMS).
+	// Обязательный флаг раздела map: верхнеуровневый disabled (отключает ВСЕ пулеры
+	// map/mppt).
 	if cf.Map != nil {
 		if cf.Map.Disabled == nil {
 			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано обязательное поле disabled (false/true)", path)
 		}
-		if cf.Map.BMSDisabled == nil {
-			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано обязательное поле bms_disabled (false/true)", path)
-		}
 		if *cf.Map.Disabled {
-			log.Printf("config: map disabled=true — пулеры МАП, MPPT и BMS не запускаются")
+			log.Printf("config: map disabled=true — пулеры МАП и MPPT не запускаются")
 		}
 	}
+	// ANT BMS (раздел "antBms") — отдельный веб-API read_bms.php ПАК «Малина».
+	// Disabled обязателен; при активном разделе требуется непустой url.
+	if cf.AntBms != nil {
+		if cf.AntBms.Disabled == nil {
+			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе antBms не задано обязательное поле disabled (false/true)", path)
+		}
+		if !*cf.AntBms.Disabled && cf.AntBms.URL == "" {
+			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе antBms не задан url", path)
+		}
+	}
+	antBmsSec = cf.AntBms
 	if cf.Meter != nil && cf.Meter.Disabled == nil {
 		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе meter не задано обязательное поле disabled (false/true)", path)
 	}
@@ -682,6 +698,10 @@ var mppt *mpptSite
 // (IP МАП из конфига, тот же devKey, что у МАП по Modbus). Если nil — МАП
 // опрашивается через Modbus по-прежнему.
 var mapAPI *mapAPISource
+
+// antBmsSec — раздел "antBms" sunReceiver.json, заполняется в loadConfig.
+// Используется в main() для сборки клиента read_bms.php (см. loadBmsSite).
+var antBmsSec *antBmsSection
 
 type mapAPISource struct {
 	name  string
@@ -2056,7 +2076,7 @@ func main() {
 	mppt = loadMPPTSite(mapSec)
 	// ANT BMS (ANT BMS, web-API read_bms.php ПАК «Малина») — отдельный 1-сек цикл,
 	// актуальное состояние в отдельном Redis-ключе (HASH sunreceiver:bms).
-	bmsSite = loadBmsSite(mapSec)
+	bmsSite = loadBmsSite(antBmsSec)
 	if bmsSite != nil {
 		log.Printf("bms: опрос ANT BMS через %s (1 раз в секунду, ключ Redis %s)", bmsSite.url, redisBMSKey)
 	}
@@ -2095,7 +2115,7 @@ func main() {
 	// Флаги видимости блоков дашборда, вычисленные из конфигурации:
 	//   - ShowMap — МАП/MPPT включены (map.disabled != true);
 	//   - ShowMeter — счётчик реально опрашивается (не disabled и не «неполный»);
-	//   - ShowBMS — пулер ANT BMS запущен (bms_disabled != true, заполнен bms_path);
+	//   - ShowBMS — пулер ANT BMS запущен (раздел antBms с disabled=false и url);
 	//   - ShowRelay — контроллер ламп SR-201 включен (relay.disabled != true).
 	dash := dashFlags{
 		ShowMap:                mapSec != nil && (mapSec.Disabled == nil || !*mapSec.Disabled),

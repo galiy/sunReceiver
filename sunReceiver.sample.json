@@ -22,14 +22,16 @@
 	],
 	"map": {
 		"disabled": false,
-		"bms_disabled": false,
 		"rs485": { "name": "MAP (батарея/сеть)", "ip": "192.168.0.20", "unit": 1, "disabled": false },
 		"base_url": "http://192.168.0.30",
 		"mppt_path": "/read_json.php?device=mppt",
 		"map_path": "/read_json.php?device=map",
-		"bms_path": "/read_bms.php",
 		"login": "admin",
 		"password": "CHANGE_ME"
+	},
+	"antBms": {
+		"disabled": false,
+		"url": "http://admin:CHANGE_ME@192.168.0.30/read_bms.php"
 	},
 	"db": {
 		"redis": "192.168.0.253:6379",

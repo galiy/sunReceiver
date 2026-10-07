@@ -70,8 +70,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
   (у каждого флаг `disabled`, обязательное поле).
 - **МАП** — подраздел `map.rs485`; источник задаёт обязательное поле `disabled`
   (`false`=Modbus/RS485, `true`=веб-API ПАК «Малина»). Верхнеуровневый `map.disabled`
-  (обязательное) отключает ВСЕ пулеры раздела (МАП, MPPT, BMS); `map.bms_disabled`
-  (обязательное) отключает только пулер ANT BMS.
+  (обязательное) отключает ВСЕ пулеры раздела (МАП, MPPT).
 - **MPPT/МАП веб-API** — раздел `map` (доступ к ПАК «Малина»); состав контроллеров
   **динамический** по ответу веб-API (появляется/исчезает на дашборде).
 - **Счётчик** — раздел `meter` (legacy: файл `dds238.json`); обязательное поле
@@ -86,8 +85,10 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
   собственные таблицы PG (`dts017m_averages`, `dts017m_daily_tariffs`) и отдельный
   аккумулятор; общие ключи/таблицы DDS238 не используются. Историю счётчика не читаем —
   посуточные тарифы считаем сами. См. [`dts017m-meter.md`](dts017m-meter.md).
-- **BMS** — поле `map.bms_path`; состав батарей динамический по ответу `read_bms.php`.
-  При `map.bms_disabled=true` пулер отключён, батарейки с дашборда скрыты.
+- **BMS** — раздел `antBms` (поле `url` — полный адрес `read_bms.php`, в т.ч. с
+  Basic-auth `http://user:pass@host/read_bms.php`); состав батарей динамический по
+  ответу `read_bms.php`. При `antBms.disabled=true` пулер отключён, батарейки с
+  дашборда скрыты.
 - **Уведомления** — раздел `notify` (бот MAX): события мониторинга МАП
   (недоступен / напряжение сети ниже порога) + восстановление, с гистерезисом
   `stable_window` и дедупликацией. Работают **только** когда включён опрос МАП.
@@ -124,7 +125,8 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 | `dashboard_port` | порт веб-дашборда (обязательное) |
 | `dashboard_user` / `dashboard_password` | HTTP Basic для `/api/*` (необязательные; если не заданы — API без авторизации) |
 | `invertors[]` | `ip`, `name`, `type` (`deye`/`sofar`), `logger_sn`, `disabled` (обязательное), `placement` (необязательное — размещение для формул «Дом/Гараж») |
-| `map` | `disabled` (обязательное: `true` — все пулеры МАП/MPPT/BMS отключены, плашки МАП скрыты), `bms_disabled` (обязательное: `true` — пулер ANT BMS отключён, батарейки скрыты), `rs485` (подраздел: `name`, `ip`, `unit` (Modbus, умолч. 1), `disabled` (обязательное: `false`=Modbus/RS485, `true`=веб-API ПАК «Малина»)); веб-API: `base_url`, `mppt_path`, `map_path` (необязательный — путь к read_json.php?device=map), `bms_path` (включает опрос ANT BMS), `login`, `password` |
+| `map` | `disabled` (обязательное: `true` — все пулеры МАП/MPPT отключены, плашки МАП скрыты), `rs485` (подраздел: `name`, `ip`, `unit` (Modbus, умолч. 1), `disabled` (обязательное: `false`=Modbus/RS485, `true`=веб-API ПАК «Малина»)); веб-API: `base_url`, `mppt_path`, `map_path` (необязательный — путь к read_json.php?device=map), `login`, `password` |
+| `antBms` | `disabled` (обязательное: `true` — пулер ANT BMS отключён, батарейки скрыты), `url` (полный адрес `read_bms.php`, при необходимости с Basic-auth `http://user:pass@host/read_bms.php`) |
 | `db` | `redis` (host:port), `pg` (DSN с паролем), `pg_restore_window` (необязательный duration окна реставрации Redis из PG; пусто/нет — 30 суток) |
 | `meter` | `disabled` (обязательное: `true` — пулеры отключены, плашки/кнопка «Электроэнергия» скрыты), `name`, `ip`, `port`, `unit`, `first_reg` (должен быть `0`), `register_count` (`0` → 27; иначе ≥ 18) |
 | `dts017m` | `disabled` (обязательное), `name`, `ip`, `port` (умолч. 502), `unit` (умолч. 1), `protocol` (`rtu`/`tcp`, умолч. `rtu`), `poll_interval` (сек, умолч. 1) — см. [dts017m-meter.md](dts017m-meter.md) |

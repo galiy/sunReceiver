@@ -24,6 +24,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -102,9 +103,8 @@ type bmsCollection struct {
 	Devices []bmsDevice `json:"devices"`
 }
 
-// bmsApiClient — доступ к read_bms.php (веб-API ПАК «Малина»). Тот же хост и
-// Basic-auth, что и у read_json.php (раздел "mppt" sunReceiver.json); путь
-// эндпоинта задаётся полем mppt.bms_path.
+// bmsApiClient — доступ к read_bms.php (веб-API ПАК «Малина»). Адрес и
+// учётные данные Basic-auth задаются полным url раздела antBms sunReceiver.json.
 type bmsApiClient struct {
 	url     string
 	client  *http.Client
@@ -112,32 +112,40 @@ type bmsApiClient struct {
 }
 
 // bmsSite — глобальный доступ к read_bms.php; заполняется в main() из раздела
-// "map" sunReceiver.json (поле bms_path). nil — опрос BMS отключён.
+// "antBms" sunReceiver.json. nil — опрос BMS отключён.
 var bmsSite *bmsApiClient
 
-// loadBmsSite собирает bmsApiClient из раздела "map", если в нём задано bms_path.
-// Если поле отсутствует или раздел неполный — nil (BMS не опрашивается).
-func loadBmsSite(sec *mapSection) *bmsApiClient {
-	if sec == nil || sec.BMSPath == "" {
+// loadBmsSite собирает bmsApiClient из раздела "antBms". nil — опрос отключён
+// (раздел отсутствует, disabled=true или пустой url). Если в url заданы
+// user:pass (http://user:pass@host/path), они используются как Basic-auth и
+// убираются из адреса запроса.
+func loadBmsSite(sec *antBmsSection) *bmsApiClient {
+	if sec == nil {
 		return nil
 	}
 	if sec.Disabled != nil && *sec.Disabled {
-		log.Printf("bms: раздел map disabled=true — опрос BMS отключён")
+		log.Printf("antBms: disabled=true — опрос ANT BMS отключён")
 		return nil
 	}
-	if sec.BMSDisabled != nil && *sec.BMSDisabled {
-		log.Printf("bms: bms_disabled=true — опрос BMS отключён")
+	if sec.URL == "" {
+		log.Printf("antBms: не задан url — опрос ANT BMS отключён")
 		return nil
 	}
-	if sec.BaseURL == "" || sec.Login == "" || sec.Password == "" {
-		log.Printf("bms: раздел map неполный (нужны base_url, login, password) — опрос BMS отключён")
+	u, err := url.Parse(sec.URL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		log.Printf("antBms: неверный url %q — опрос ANT BMS отключён", sec.URL)
 		return nil
 	}
-	tok := base64.StdEncoding.EncodeToString([]byte(sec.Login + ":" + sec.Password))
+	authHdr := ""
+	if u.User != nil {
+		pass, _ := u.User.Password()
+		authHdr = "Basic " + base64.StdEncoding.EncodeToString([]byte(u.User.Username()+":"+pass))
+		u.User = nil
+	}
 	return &bmsApiClient{
-		url:     sec.BaseURL + sec.BMSPath,
+		url:     u.String(),
 		client:  &http.Client{Timeout: 5 * time.Second},
-		authHdr: "Basic " + tok,
+		authHdr: authHdr,
 	}
 }
 
@@ -150,7 +158,9 @@ func (s *bmsApiClient) fetch(ctx context.Context) (*bmsCollection, error) {
 	rctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	req = req.WithContext(rctx)
-	req.Header.Set("Authorization", s.authHdr)
+	if s.authHdr != "" {
+		req.Header.Set("Authorization", s.authHdr)
+	}
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("bms api get %s: %w", s.url, err)

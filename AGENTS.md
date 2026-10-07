@@ -65,12 +65,14 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 `true` = пулер по Modbus НЕ запускается, а параметры батареи/сети берутся из веб-API
 ПАК «Малина» `read_json.php?device=map`). MPPT-контроллеры и доступ к ПАК «Малина» —
 **раздел `map`** (те же поля, что и у `rs485`, плюс веб-API) `{"rs485", "base_url",
-"mppt_path", "map_path", "login", "password", "bms_path"}` (пароль в открытом виде, файл
+"mppt_path", "map_path", "login", "password"}` (пароль в открытом виде, файл
 в git не выгружается): `mppt_path` — путь к `read_json.php?device=mppt`; `map_path`
 (необязательное, напр. `/read_json.php?device=map`) — явный путь к данным МАП, при
-отсутствии выводится из `mppt_path` подменой параметра `device`; `bms_path`
-(необязательное, напр. `/read_bms.php`) включает опрос ANT BMS — тот же хост/Basic-auth,
-что и MPPT. Расположение баз — раздел **`db`**
+отсутствии выводится из `mppt_path` подменой параметра `device`. Опрос **ANT BMS**
+вынесен в отдельный раздел **`antBms`** `{"url", "disabled"}` (**`disabled` —
+ОБЯЗАТЕЛЬНОЕ** поле: `false` — ANT BMS опрашивается, `true` — опрос отключён;
+`url` — **полный** адрес `read_bms.php` ПАК «Малина», при необходимости с Basic-auth
+прямо в URL: `http://user:pass@host/read_bms.php`). Расположение баз — раздел **`db`**
 `{"redis": "host:port", "pg": "DSN", "pg_restore_window": "720h"}` (адреса напрямую из
 конфига; `pg_restore_window` — duration-строка окна реставрации Redis из PG, пусто/нет =
 дефолт 30 суток; пароль PG — в DSN, конфиг приватный). Порт веб-дашборда — корневое поле

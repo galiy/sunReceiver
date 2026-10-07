@@ -403,7 +403,8 @@ scan (`PROBE_BUDGET_SEC 21`), анти-spin в `service_fds`, bad-кэш на re
 - **bmslistener v9**: поле `deviceName` = `AntBms <ёмкость> A/h` — ПЕРВОЕ поле объекта
   устройства (мягкий идентификатор: серийника у ANT BMS нет, батареи различаются
   ёмкостью).
-- **sunReceiver**: отдельный 1-сек пулер `bms_poller.go` (конфиг `mppt.bms_path`)
+- **sunReceiver**: отдельный 1-сек пулер `bms_poller.go` (конфиг раздела `antBms`,
+  поле `url` — полный адрес `read_bms.php`)
   пишет актуальное состояние в отдельный Redis-ключ HASH `sunreceiver:bms`
   (поле = deviceName). Дашборд: крупные кнопки-батарейки вверху главной (SOC,
   обновление 1 мин, `/api/bms`) + страница деталей `/bms/<name>` (1 с,
