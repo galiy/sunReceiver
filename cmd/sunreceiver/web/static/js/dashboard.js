@@ -618,7 +618,7 @@ function setKpi2(id, v){
 	if(!el) return;
 	var n=Number(v);
 	if(isFinite(n)){
-		el.textContent=Math.trunc(n).toLocaleString('ru-RU',{maximumFractionDigits:0});
+		el.textContent=n.toLocaleString('ru-RU',{maximumFractionDigits:2});
 	}else{
 		el.textContent='—';
 	}

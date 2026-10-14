@@ -502,17 +502,17 @@ function layoutHouse(data){
       getValue:function(d){ var s=0; for(var i=0;i<d.kes.length;i++) s+=d.kes[i].ac; return s; }});
     edges.push({bus:true, x1:kx1-14, x2:kx2+14, y:KESBUS, bolts:kesXs.concat([battX])});
     for(var j=0;j<k;j++){
-      var kx=kesXs[j], kes=kes[j];
-      nodes.push({key:'kes',cx:kx,cy:KESY,label:kes.name,
+      var kx=kesXs[j], ks=kes[j];
+      nodes.push({key:'kes',cx:kx,cy:KESY,label:ks.name,
         staleOf:(function(idx){return function(d){return d.kes[idx].stale;};})(j)});
       nodes.push({key:'panel',cx:kx,cy:KPANY,label:''});
       edges.push({pts:[[kx,KESY+sprH('kes')/2],[kx,KESBUS]], rule:{greenSign:1,greenDir:'toEnd',labelSign:-1},
-        label:{x:kx+38,y:(KESY+37+KESBUS)/2}, stale:kes.stale,
+        label:{x:kx+38,y:(KESY+37+KESBUS)/2}, stale:ks.stale,
         getValue:(function(idx){return function(d){return d.kes[idx].ac;};})(j)});
       var kPvTop=KESY-sprH('kes')/2, kPvBot=KPANY+31;
       // выработка: от панели (верх) вниз к КЭС (toStart)
       edges.push({pts:[[kx,kPvTop],[kx,kPvBot]], rule:{greenSign:1,greenDir:'toStart',labelSign:-1},
-        label:{x:kx+38,y:(kPvTop+kPvBot)/2}, stale:kes.stale,
+        label:{x:kx+38,y:(kPvTop+kPvBot)/2}, stale:ks.stale,
         getValue:(function(idx){return function(d){return d.kes[idx].pv;};})(j)});
     }
   }

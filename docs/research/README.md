@@ -8,7 +8,7 @@
 | solarman-client, inverter-poller | [solarman-v5.md](solarman-v5.md) |
 | inverter-poller (Sofar) | [sofar-registers.md](sofar-registers.md) |
 | inverter-poller (Deye) | [deye-registers.md](deye-registers.md) |
-| map-mppt | [../read_json.md](../read_json.md), [../malina-web-api.md](../malina-web-api.md), [`../map/`](../map/) |
+| map-mppt | [../read_json.md](../read_json.md), [../malina-web-api.md](../malina-web-api.md), [map-signs-audit.md](map-signs-audit.md), [`../map/`](../map/) |
 | meter | [../dds238-meter.md](../dds238-meter.md) |
 | bms | [../antbms.md](../antbms.md), [../antbms-worklog.md](../antbms-worklog.md), [`../antbms/`](../antbms/) |
 
@@ -16,3 +16,7 @@
   12/15-байтный datafield, коды ошибок, поведение живых логгеров, находки по CRC.
 - [sofar-registers.md](sofar-registers.md) — маппинг регистров Sofar K-TLX.
 - [deye-registers.md](deye-registers.md) — маппинг регистров Deye string.
+- [map-signs-audit.md](map-signs-audit.md) — аудит знаков/типов параметров МАП
+  (батарея/сеть): кодировки ячеек, костыли инверсии знака в двух ветках опроса
+  (Modbus и веб-API), эталон `mapread.py`, открытые вопросы и (отложенный) план
+  рефакторинга.
