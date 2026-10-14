@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -67,6 +68,11 @@ type redisStore struct {
 	// МАП нестабильно отдаёт блоки. Запись каждого показания не подавляется.
 	mapMu  sync.Mutex
 	mapWin map[string]mapWinMember
+
+	// legacyMPPTCleaned — одноразовая зачистка устаревших MPPT-ключей старого
+	// формата; выполняется при первом вызове PruneLegacyMPPT (после реставрации
+	// Redis из PG), далее — no-op.
+	legacyMPPTCleaned atomic.Bool
 }
 
 type mapWinMember struct {
@@ -217,10 +223,42 @@ func mergeMAPSnap(snap deviceSnapshot, prevMember string) deviceSnapshot {
 	return snap
 }
 
-// PruneMPPT удаляет из HASH current все MPPT-ключи (содержащие "#mppt"), которых
-// нет в active (множество актуальных devKey каждого MPPT, присутствующем в ответе
-// ПАК «Малина»). Нужно, чтобы исчезнувшие с МАП контроллеры переставали считаться
-// «актуальными» на дашборде, но их история во временном ряду сохранялась.
+// PruneLegacyMPPT удаляет из HASH current устаревшие MPPT-ключи старого формата
+// (содержащие "#mppt", вид "<host>#mppt-<uid>"). Новый формат ключа — "mppt-<serial>"
+// (без host), такие ключи в active-множестве PruneMPPT и здесь не трогаются.
+// Выполняется ОДИН РАЗ за жизнь процесса (при первом вызове, после реставрации
+// Redis из PG) — вызывается из горячего секундного цикла, поэтому повторные
+// HGetAll-вычитки исключены флагом.
+func (s *redisStore) PruneLegacyMPPT() {
+	if !s.legacyMPPTCleaned.CompareAndSwap(false, true) {
+		return
+	}
+	m, err := s.rdb.HGetAll(s.ctx, redisCurrentKey).Result()
+	if err != nil {
+		log.Printf("redis prune legacy mppt HGETALL: %v", err)
+		return
+	}
+	var keys []string
+	for ip := range m {
+		if strings.Contains(ip, "#mppt") {
+			keys = append(keys, ip)
+		}
+	}
+	if len(keys) == 0 {
+		return
+	}
+	if err := s.rdb.HDel(s.ctx, redisCurrentKey, keys...).Err(); err != nil {
+		log.Printf("redis prune legacy mppt HDEL: %v", err)
+		return
+	}
+	log.Printf("redis: удалены устаревшие MPPT-ключи (%d)", len(keys))
+}
+
+// PruneMPPT удаляет из HASH current все MPPT-ключи (начинающиеся с "mppt-"),
+// которых нет в active (множество актуальных devKey каждого MPPT, присутствующем в
+// ответе ПАК «Малина»/«Малина26»). Нужно, чтобы исчезнувшие с МАП контроллеры
+// переставали считаться «актуальными» на дашборде, но их история во временном ряду
+// сохранялась.
 func (s *redisStore) PruneMPPT(active map[string]struct{}) {
 	m, err := s.rdb.HGetAll(s.ctx, redisCurrentKey).Result()
 	if err != nil {
@@ -229,7 +267,7 @@ func (s *redisStore) PruneMPPT(active map[string]struct{}) {
 	}
 	var keys []string
 	for ip := range m {
-		if !strings.Contains(ip, "#mppt") {
+		if !strings.HasPrefix(ip, "mppt-") {
 			continue
 		}
 		if _, ok := active[ip]; ok {

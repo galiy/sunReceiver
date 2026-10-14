@@ -22,12 +22,21 @@
 	],
 	"map": {
 		"disabled": false,
-		"rs485": { "name": "MAP (батарея/сеть)", "ip": "192.168.0.20", "unit": 1, "disabled": false },
-		"base_url": "http://192.168.0.30",
-		"mppt_path": "/read_json.php?device=mppt",
-		"map_path": "/read_json.php?device=map",
-		"login": "admin",
-		"password": "CHANGE_ME"
+		"method": "rs485",
+		"rs485": { "name": "MAP (батарея/сеть)", "ip": "192.168.0.20", "unit": 1 },
+		"malina": {
+			"base_url": "http://192.168.0.30",
+			"mppt_path": "/read_json.php?device=mppt",
+			"map_path": "/read_json.php?device=map",
+			"login": "admin",
+			"password": "CHANGE_ME"
+		},
+		"malina26": {
+			"host": "192.168.0.30",
+			"port": 80,
+			"password": "CHANGE_ME_PASSWORD",
+			"serial": "12345"
+		}
 	},
 	"antBms": {
 		"disabled": false,

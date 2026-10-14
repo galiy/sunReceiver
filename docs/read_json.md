@@ -18,9 +18,9 @@ read_json.php?device=mppt
 read_json.php?device=bat
 ```
 
-Путь MPPT-эндпоинта задан в разделе `map` файла `sunReceiver.json` как `mppt_path`,
+Путь MPPT-эндпоинта задан в блоке `map.malina` файла `sunReceiver.json` как `mppt_path`,
 путь к данным МАП — как `map_path` (при отсутствии выводится из `mppt_path` подменой
-параметра `device`); полный URL = `map.base_url` + `mppt_path` / + `map_path`.
+параметра `device`); полный URL = `map.malina.base_url` + `mppt_path` / + `map_path`.
 
 **Важно:** в отличие от Modbus-гейта МАП (порт 502), `read_json.php?device=mppt` отдаёт
 **полные индивидуальные параметры каждого MPPT-контроллера** (`Vc_PV`, `Ic_PV`, `V_Bat`,
@@ -31,12 +31,12 @@ read_json.php?device=bat
 
 ## `device=map` — параметры МАП Титанатор
 
-> **Источник данных kindMAP (батарея/сеть) при `map.rs485.disabled=true` в `sunReceiver.json`.**
+> **Источник данных kindMAP (батарея/сеть) при `method=malina` в `sunReceiver.json`.**
 > В этом режиме Modbus-пулер МАП не запускается, а контрактные теги
 > (`battery_voltage`, `battery_power`, `grid_voltage`, `grid_power`, `l1_voltage`,
 > `l1_current`, `ac_active_power`, `grid_frequency`) строятся из этого ответа
 > (`mpptSite.FetchMAP` + `mapMAPAPI` в `mppt_api.go`). Источник общий с MPPT —
-> раздел `map` (`base_url` + `mppt_path`/`map_path` + Basic-auth); `mppt_path`
+> блок `map.malina` (`base_url` + `mppt_path`/`map_path` + Basic-auth); `mppt_path`
 > указывает на `read_json.php?device=mppt`, `map_path` (или производный от `mppt_path`)
 > — на `read_json.php?device=map` через `mpptSite.apiURL`.
 
@@ -100,7 +100,7 @@ read_json.php?device=bat
 > каждого MPPT-контроллера, которых нет в Modbus-гейте МАП (Vc_PV/Ic_PV/P_PV, V_Bat,
 > I_Ch, P_Out). Состав контроллеров определяется **динамически** по массиву ответа
 > (индекс = слот, 0..N-1); в `sunReceiver.json` MPPT не регистрируются. `mpptSite`
-> собирается из раздела `map` `sunReceiver.json` (`base_url` + `mppt_path` + Basic-auth).
+> собирается из блока `map.malina` `sunReceiver.json` (`base_url` + `mppt_path` + Basic-auth).
 > Время актуальности данных — поле `timestamp` ответа (Unix), им же помечается снимок.
 
 Массив из N объектов — по одному на каждый подключённый MPPT-контроллер (в нашей системе — 3:
@@ -209,9 +209,9 @@ UID 1097, 1750, 1751, соответствуют MPPT-1/2/3). Поля совп�
 ## Авторизация
 
 Без авторизации возвращается `401/403` (Basic realm «Restricted»). Работает Basic Auth
-`admin` / пароль из раздела `mppt` в `sunReceiver.json`. Пример запроса:
+`admin` / пароль из блока `map.malina` в `sunReceiver.json`. Пример запроса:
 
 ```
-curl -u "admin:$(jq -r .mppt.password sunReceiver.json)" \
+curl -u "admin:$(jq -r .map.malina.password sunReceiver.json)" \
      "http://192.168.0.60/read_json.php?device=mppt"
 ```

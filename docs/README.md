@@ -14,7 +14,8 @@
 
 Go-приложение мониторинга домашней солнечной станции. Опрашивает инверторы
 (Deye, Sofar) через их WiFi-даталоггеры (Solarman V5, TCP 8899), МАП Титанатор
-(батарея/сеть), MPPT-контроллеры «КЭС» (веб-API ПАК «Малина») и электросчётчик
+(батарея/сеть), MPPT-контроллеры «КЭС» (веб-API ПАК «Малина» или новый API
+«Малина26») и электросчётчик
 DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), нормализует всё в единый
 контракт значений и хранит в Redis
 (горячие данные, последние 2 календарных суток) + PostgreSQL (вся история —
@@ -27,8 +28,9 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 
 Данные текут: **устройство → poller → Redis (сразу) → аккумулятор → PG (5-мин
 усреднённые точки) → дашборд (чтение)**. Опрос ведут независимые горутины
-(инверторы — раз в 10 с; MPPT/счётчик/BMS — раз в 1 с; МАП — цикл 1 с, но фактически
-~6 с из-за 2 последовательных чтений Modbus-блоков, см. [map-mppt.md](modules/map-mppt.md)). Дашборд только читает
+(инверторы — раз в 10 с; MPPT/счётчик/BMS — раз в 1 с; МАП — цикл 1 с, но при
+`method=rs485` фактически ~6 с из-за 2 последовательных чтений Modbus-блоков, см.
+[map-mppt.md](modules/map-mppt.md)). Дашборд только читает
 `current`/`series` (Redis) и `averages` (PG).
 
 ## Модули системы
@@ -39,7 +41,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 | **Poller инверторов** (`main.go`) | Опрос Deye/Sofar раз в 10 с в независимых циклах, маппинг регистров в `values` (Sofar/Deye), серийные номера, чистое завершение | [modules/inverter-poller.md](modules/inverter-poller.md) |
 | **Хранение** (`redis_store.go`, `pg_store.go`, `accumulator.go`, `bms_accumulator.go`, `enBms_accumulator.go`, `ce308_accumulator.go`) | Redis (2 суток, live) + PG (5-мин средние, вечно), фоновые аккумуляторы/очистка, реставрация Redis из PG при пустом старте | [modules/storage.md](modules/storage.md) |
 | **Веб-дашборд** (`dashboard.go`, `cmd/sunreceiver/web/`, `go:embed`) | HTML + JSON API (`/`, `/charts`, `/energy`, `/bms/<name>`) поверх Redis/PG, зум/панорама, offline-индикация, mobile-раскладка; шаблоны/статика (`cmd/sunreceiver/web/templates`, `cmd/sunreceiver/web/static/js`) встроены в бинарник | [modules/dashboard.md](modules/dashboard.md) |
-| **МАП + MPPT** (`mppt_api.go`, `internal/modbusmap/`) | МАП (батарея/сеть) через Modbus TCP или веб-API; MPPT-контроллеры через `read_json.php?device=mppt` (динамический состав) | [modules/map-mppt.md](modules/map-mppt.md) |
+| **МАП + MPPT** (`mppt_api.go`, `malina26.go`, `internal/modbusmap/`) | МАП (батарея/сеть) через Modbus TCP / веб-API / API «Малина26»; MPPT-контроллеры через `read_json.php?device=mppt` или `/api/kes/raw` (динамический состав) | [modules/map-mppt.md](modules/map-mppt.md) |
 | **Счётчик DDS238** (`meter_*.go`) | Мгновенные значения `meter_*` + посуточные тарифы «День/Ночь» (`daily_tariffs`) с добором пропущенных границ; транспорт — Modbus TCP (`tcp`) или Modbus RTU через прозрачный шлюз (`rtu`) | [dds238-meter.md](dds238-meter.md) |
 | **Счётчик DTS017M** (`dts017_*.go`) | Трёхфазный счётчик (Modbus RTU через прозрачный шлюз): телеметрия/энергии → **собственные** ключи/ряд Redis и **собственные** таблицы PG; посуточные тарифы «День/Ночь» считаются сами (историю счётчика не читаем); рамка «Гараж» и графики на странице «Электроэнергия», `/api/dts017m/current|tariffs` | [dts017m-meter.md](dts017m-meter.md) |
 | **Счётчик «Меркурий»** (энергосбыт, без мониторинга; прогноз) | Последовательно с DDS238; показания снимаются **вручную** (раздел конфига `mercury`), прогноз на текущий момент по последней ручной точке + статистике DDS238 (`mercury.go` → `/api/current` → рамка «Меркурий — прогноз») | [meter_mercury.md](meter_mercury.md) |
@@ -59,7 +61,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 |---|---|---|---|
 | Инверторы Deye / Sofar | Solarman V5 (TCP 8899) | 10 с | PV, AC, энергия, частота, фазы, температуры |
 | МАП Титанатор | Modbus TCP (502) или веб-API | 1 с | напряжение/мощность сети и батареи |
-| MPPT-контроллеры «КЭС» | веб-API read_json.php (HTTP) | 1 с | PV панели, заряд АКБ, выработка за сутки |
+| MPPT-контроллеры «КЭС» | веб-API read_json.php или API «Малина26» (HTTP) | 1 с | PV панели, заряд АКБ, выработка за сутки |
 | Счётчик DDS238 | Modbus TCP или Modbus RTU через прозрачный шлюз (502) | 1 с | мгновенные значения + посуточные тарифы «День/Ночь» |
 | Счётчик DTS017M | Modbus RTU через прозрачный шлюз (502, unit 1, fn 03/04) | 1 с | напряжения/токи/мощности/энергии + посуточные тарифы «День/Ночь» |
 | Счётчик Энергомера CE308 | BLE (Энергомера/IEC 61107) | 2 с | напряжения/токи/мощности по фазам + разовый снимок энергии |
@@ -68,11 +70,12 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 
 - **Инверторы** — раздел `invertors` конфига, нормализуются в контракт `values`
   (у каждого флаг `disabled`, обязательное поле).
-- **МАП** — подраздел `map.rs485`; источник задаёт обязательное поле `disabled`
-  (`false`=Modbus/RS485, `true`=веб-API ПАК «Малина»). Верхнеуровневый `map.disabled`
-  (обязательное) отключает ВСЕ пулеры раздела (МАП, MPPT).
-- **MPPT/МАП веб-API** — раздел `map` (доступ к ПАК «Малина»); состав контроллеров
-  **динамический** по ответу веб-API (появляется/исчезает на дашборде).
+- **МАП** — раздел `map`; способ опроса задаёт общее поле `method`
+  (`rs485`=Modbus/RS485, `malina`=веб-API ПАК «Малина», `malina26`=новый HTTP-API
+  «Малина26»). Верхнеуровневый `map.disabled` (обязательное) отключает ВСЕ пулеры
+  раздела (МАП, КЭС).
+- **КЭС/MPPT** — при `rs485`/`malina` через блок `map.malina`; при `malina26` — из
+  `/api/kes/*`. Состав контроллеров **динамический** по ответу API.
 - **Счётчик** — раздел `meter` (legacy: файл `dds238.json`); обязательное поле
   `meter.disabled` (`true` — пулеры отключены, плашки/кнопка «Электроэнергия» скрыты).
   Поле `meter.protocol` задаёт транспорт: `"tcp"` (Modbus TCP, по умолчанию) или
@@ -125,7 +128,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 | `dashboard_port` | порт веб-дашборда (обязательное) |
 | `dashboard_user` / `dashboard_password` | HTTP Basic для `/api/*` (необязательные; если не заданы — API без авторизации) |
 | `invertors[]` | `ip`, `name`, `type` (`deye`/`sofar`), `logger_sn`, `disabled` (обязательное), `placement` (необязательное — размещение для формул «Дом/Гараж») |
-| `map` | `disabled` (обязательное: `true` — все пулеры МАП/MPPT отключены, плашки МАП скрыты), `rs485` (подраздел: `name`, `ip`, `unit` (Modbus, умолч. 1), `disabled` (обязательное: `false`=Modbus/RS485, `true`=веб-API ПАК «Малина»)); веб-API: `base_url`, `mppt_path`, `map_path` (необязательный — путь к read_json.php?device=map), `login`, `password` |
+| `map` | `disabled` (обязательное: `true` — все пулеры МАП/КЭС отключены, плашки МАП скрыты), `method` (`rs485`/`malina`/`malina26`, обязательное при `disabled=false`); блоки способов: `rs485` (`name`, `ip`, `unit` умолч. 1); `malina` (`base_url`, `mppt_path`, `map_path` необязательный, `login`, `password`); `malina26` (`host`, `port` 80/443, `password`, `serial`) |
 | `antBms` | `disabled` (обязательное: `true` — пулер ANT BMS отключён, батарейки скрыты), `url` (полный адрес `read_bms.php`, при необходимости с Basic-auth `http://user:pass@host/read_bms.php`) |
 | `db` | `redis` (host:port), `pg` (DSN с паролем), `pg_restore_window` (необязательный duration окна реставрации Redis из PG; пусто/нет — 30 суток) |
 | `meter` | `disabled` (обязательное: `true` — пулеры отключены, плашки/кнопка «Электроэнергия» скрыты), `name`, `ip`, `port`, `unit`, `first_reg` (должен быть `0`), `register_count` (`0` → 27; иначе ≥ 18) |

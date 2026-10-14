@@ -39,6 +39,9 @@ dist/
 # справочные материалы МАП (не закоммичены, лежат локально)
 docs/map/
 
+# требования/спеки на новые фичи (приватные: реальные serial/адреса/конфиг) — вне git
+docs/requirements/
+
 # рабочая папка с результатами настройки BLE/Bluetooth CE308 — вне git
 docs/ce308-bluetooth/
 
@@ -49,8 +52,8 @@ tools/
 archive/
 
 # рабочие отчёты код-ревью (содержат ссылки на реальные идентификаторы) — вне git
-review-*.md
 daemons/mapgateway/review-*
+review/
 
 .kilo/gh-token.txt
 

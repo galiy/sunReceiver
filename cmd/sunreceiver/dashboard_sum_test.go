@@ -91,7 +91,7 @@ func TestPlacementTotals(t *testing.T) {
 		device("Sofar B", "10.0.0.2", "Гараж", now, 50, 60),
 		device("Deye C", "10.0.0.3", "Дом", now, 7, 8),
 		// MPPT (КЭС), счётчик и МАП — не участвуют.
-		{Name: "MPPT 0", IP: "host#mppt0", Timestamp: now.Format(time.RFC3339), Placement: "Дом",
+		{Name: "MPPT 0", IP: "mppt-0", Timestamp: now.Format(time.RFC3339), Placement: "Дом",
 			Values: valuesContract{"ac_active_power": 999, "pv1_power": 999}},
 		{Name: "Meter", IP: "10.0.0.9", Timestamp: now.Format(time.RFC3339), Placement: "Дом",
 			Values: valuesContract{"meter_voltage": 230.0}},
@@ -136,7 +136,7 @@ func TestPlacementOrder(t *testing.T) {
 	targets := []invTarget{
 		{Name: "Sofar A", Kind: kindSofar, Placement: "Гараж"},
 		{Name: "MAP", Kind: kindMAP},
-		{Name: "MPPT 0", Kind: kindMPPT, IP: "host#mppt0"},
+		{Name: "MPPT 0", Kind: kindMPPT, IP: "mppt-0"},
 		{Name: "Deye B", Kind: kindDeyeString, Placement: "Гараж"},
 		{Name: "Sofar C", Kind: kindSofar, Placement: ""}, // пусто → «Дом»
 	}

@@ -54,29 +54,35 @@ type mpptSite struct {
 	authHdr string // "Basic base64(login:password)"
 }
 
-// loadMPPTSite собирает mpptSite из раздела "map" sunReceiver.json (mapSection,
-// веб-API ПАК «Малина»). Если секция отсутствует или поля не полностью заданы —
-// возвращает nil (MPPT-контроллеры не опрашиваются).
+// loadMPPTSite собирает mpptSite из блока map.malina sunReceiver.json (legacy
+// веб-API ПАК «Малина»). Если блок не задан или неполный — возвращает nil
+// (MPPT-контроллеры через legacy не опрашиваются; при method=malina26 их берёт
+// новый клиент).
 func loadMPPTSite(sec *mapSection) *mpptSite {
-	if sec == nil {
+	if sec == nil || (sec.Disabled != nil && *sec.Disabled) {
 		return nil
 	}
-	if sec.Disabled != nil && *sec.Disabled {
-		log.Printf("map site: раздел map disabled=true — мониторинг MPPT отключён")
+	if sec.Method == "malina26" {
+		// Новый метод: КЭС и МАП берутся из API «Малина26», legacy-блок не используется.
 		return nil
 	}
-	if sec.BaseURL == "" || sec.MPPTPath == "" || sec.Login == "" || sec.Password == "" {
-		log.Printf("map site: раздел map неполный (нужны base_url, mppt_path, login, password) — мониторинг MPPT отключён")
+	m := sec.Malina
+	if m == nil {
+		log.Printf("map site: блок map.malina не задан — legacy-мониторинг MPPT отключён")
 		return nil
 	}
-	tok := base64.StdEncoding.EncodeToString([]byte(sec.Login + ":" + sec.Password))
-	host := hostOf(sec.BaseURL)
+	if m.BaseURL == "" || m.MPPTPath == "" || m.Login == "" || m.Password == "" {
+		log.Printf("map site: блок map.malina неполный (нужны base_url, mppt_path, login, password) — legacy-мониторинг MPPT отключён")
+		return nil
+	}
+	tok := base64.StdEncoding.EncodeToString([]byte(m.Login + ":" + m.Password))
+	host := hostOf(m.BaseURL)
 	return &mpptSite{
-		BaseURL:  sec.BaseURL,
-		MPPTPath: sec.MPPTPath,
-		MapPath:  sec.MapPath,
-		Login:    sec.Login,
-		Password: sec.Password,
+		BaseURL:  m.BaseURL,
+		MPPTPath: m.MPPTPath,
+		MapPath:  m.MapPath,
+		Login:    m.Login,
+		Password: m.Password,
 		Host:     host,
 		client:   &http.Client{Timeout: 5 * time.Second},
 		authHdr:  "Basic " + tok,

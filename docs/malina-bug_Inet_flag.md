@@ -2,7 +2,7 @@
 
 > Исследование 2026-09-25, после замены ПАК «Малина». Касается ветки веб-API
 > `read_json.php?device=map` (используется, когда в `sunReceiver.json` задано
-> `map.rs485.disabled=true`). Modbus-ветка (`mapMAPRegisters`, порт МАП 502) не
+> `method=malina`). Modbus-ветка (`mapMAPRegisters`, порт МАП 502) не
 > затронута — она всегда берёт знак из `_PNET_Sign_P`.
 
 ## 1. Кратко

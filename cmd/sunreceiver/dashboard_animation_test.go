@@ -71,7 +71,7 @@ func TestBuildAnimationResponse(t *testing.T) {
 		animSnapKind("Deye Гараж1", "10.0.0.3", "Гараж", now, map[string]float64{"ac_active_power": 30, "dc_total_power": 35}, "deye"),
 		animSnapKind("Sofar Гараж2", "10.0.0.4", "Гараж", now, map[string]float64{"ac_active_power": 20, "pv1_power": 25}, "sofar"),
 		// MPPT (КЭС) — всегда в Дом, под батареей.
-		animSnapKind("КЭС1", "host#mppt0", "", now, map[string]float64{"ac_active_power": 200, "pv1_power": 210}, "kes"),
+		animSnapKind("КЭС1", "mppt-0", "", now, map[string]float64{"ac_active_power": 200, "pv1_power": 210}, "kes"),
 		// МАП (батарея/сеть): маркер batter_voltage; сеть и батарея.
 		animSnap("МАП", "10.0.0.8", "", now, map[string]float64{"battery_voltage": 52, "grid_power": 300, "battery_power": -150}),
 		// Счётчик: маркер meter_voltage.

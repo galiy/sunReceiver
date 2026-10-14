@@ -226,8 +226,11 @@
 
 ## Теги МАП/MPPT (ПАК «Малина»)
 
-Помимо Deye/Sofar, в `values` попадают теги МАП Титанатор (Modbus TCP) и MPPT-контроллеров
-(КЭС, веб-API `read_json.php?device=mppt`). Они добавлены в общий контракт `commonContractTags`,
+Помимо Deye/Sofar, в `values` попадают теги МАП Титанатор и MPPT-контроллеров
+(КЭС). Источник МАП/КЭС зависит от `method` раздела `map`: legacy веб-API
+`read_json.php?device=mppt` (`method=rs485`/`malina`, `mapMPPTAPI`/`mapMAPAPI`) либо
+новый API «Малина26» (`method=malina26`, `decodeMalina26KES`/`decodeMalina26Map`).
+Набор тегов одинаков. Они добавлены в общий контракт `commonContractTags`,
 но появляются только у соответствующих устройств:
 
 - **MPPT API (`kindMPPT`, `mapMPPTAPI`)** — один контроллер = одна цель (слот):

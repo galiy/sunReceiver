@@ -26,9 +26,10 @@ import (
 // Пулер ОШИБОК МАП (Титанатор). Отдельный цикл, читает только сырые ячейки-ошибки
 // МАП и пишет появление ошибок в PG device_errors. Телеметрию не трогает.
 //
-// Источник сырых значений — по выбранному в конфиге способу мониторинга:
-//   - Modbus (map.rs485.disabled=false) — через daemons/mapgateway/Modbus TCP;
-//   - веб-API ПАК «Малина» (true) — read_memory.php?offset=<ячейка>&count=<n>.
+// Источник сырых значений — по выбранному в конфиге способу мониторинга (`method`):
+//   - rs485 — Modbus (daemons/mapgateway/Modbus TCP), блок 0x41C..0x449;
+//   - malina — веб-API ПАК «Малина» read_memory.php?offset=<ячейка>&count=<n>;
+//   - malina26 — бинарный контракт MapData (/api/map/raw), ячейки по id.
 //
 // Разметка — из protocol_MAP_cells_2026_07_15.doc (SVEN POWER MANAGER II).
 const mapErrPollInterval = 30 * time.Second
@@ -154,6 +155,10 @@ func readMapErrCells(ctx context.Context, t *invTarget) (map[uint16]byte, error)
 			}
 		}
 		return cells, nil
+	}
+	if malina26 != nil {
+		// method=malina26: ошибки — из бинарного контракта MapData (/api/map/raw).
+		return malina26.mapErrCells(ctx)
 	}
 	if mppt == nil {
 		return nil, errNoMapErrSource

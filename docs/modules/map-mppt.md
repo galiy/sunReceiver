@@ -6,34 +6,41 @@
 
 ## Источники данных
 
-- **MPPT-контроллеры** (`kindMPPT`) — **веб-API ПАК «Малина»**
-  `read_json.php?device=mppt` (HTTP Basic-auth; конфиг — раздел **`map`**
-  `sunReceiver.json`, поля веб-API; пароль в открытом виде, файл в git не выгружается;
-  для разработки SSH — `.kilo/malina-ssh.json`). В `sunReceiver.json` MPPT **не
-  регистрируются**: состав определяется динамически по факту подключения
+- **MPPT-контроллеры** (`kindMPPT`) — при `method=rs485`/`malina`: **веб-API ПАК
+  «Малина»** `read_json.php?device=mppt` (HTTP Basic-auth; блок `map.malina`
+  `sunReceiver.json`); при `method=malina26`: новый API «Малина26»
+  (`/api/kes/*`, см. `malina26.go`). Пароль в открытом виде, файл в git не
+  выгружается; для разработки SSH — `.kilo/malina-ssh.json`. В `sunReceiver.json` MPPT
+  **не регистрируются**: состав определяется динамически по факту подключения
   контроллеров из ответа API. Контроллер появляется на дашборде, когда приходит в
   ответе, и исчезает, когда перестаёт отвечать (ключ удаляется из `current` через
   `PruneMPPT`; чистка — только при УСПЕШНОМ ответе API: при ошибке запроса
-  предыдущий состав сохраняется). Имя — `MPPT-<slot+1>`. Напрямую видны параметры
-  панелей, которых нет в Modbus-гейте: `Vc_PV`, `Ic_PV`, `P_PV`, `V_Bat`, `I_Ch`,
-  `P_Out` + `timestamp`. Реализация — `mppt_api.go` (`mpptSite`, `FetchMPPTs`,
-  `mapMPPTAPI`) + сбор в `pollAndSaveMap`; коннектор к `read_json.php` — в
+  предыдущий состав сохраняется). Имя — `MPPT-<serial>`, ключ — `mppt-<serial>`.
+  Напрямую видны параметры панелей, которых нет в Modbus-гейте: `Vc_PV`, `Ic_PV`,
+  `P_PV`, `V_Bat`, `I_Ch`, `P_Out` + `timestamp`. Реализация — `mppt_api.go`
+  (`mpptSite`, `FetchMPPTs`, `mapMPPTAPI`) и `malina26.go` (`malina26Source`,
+  `decodeMalina26KES`) + сбор в `pollAndSaveMap`; коннектор к `read_json.php` — в
   [../read_json.md](../read_json.md).
-- **МАП (`kindMAP`)** — подраздел **`map.rs485`** конфига, оставлен для данных **батареи и
-  сети** МАП на дашборд. Цель `MAP (батарея/сеть)` (192.168.0.74, unit 1).
-  Пер-слотовый MPPT через Modbus больше не опрашивается. Источник задаёт
-  обязательное поле `disabled` подраздела `map.rs485` (отсутствие = ошибка конфига):
-  - `false` — **Modbus TCP/RS485** (`internal/modbusmap/` + `mapClientFor`), блоки 0x400/0x580;
-  - `true` — пулер по Modbus НЕ запускается, параметры из **веб-API ПАК «Малина»**
-    `read_json.php?device=map` (`mpptSite.FetchMAP` + `mapMAPAPI`); обязателен полный
-    раздел `map` (поля веб-API, иначе `log.Fatal` при старте). Ключ устройства (devKey)
-    и имя — те же (IP МАП из конфига), поэтому история на дашборде преемственна при
-    переключении режимов. Путь к `read_json.php?device=map` — поле `map_path` раздела
-    `map` (при отсутствии выводится из `mppt_path` подменой `device`).
+- **МАП (`kindMAP`)** — данные **батареи и сети** МАП на дашборд. Раздел `map` имеет
+  общий `method` (`rs485` | `malina` | `malina26`), способы — равнозначные блоки:
+  - `method=rs485` — **Modbus TCP/RS485** (блок `rs485`, `internal/modbusmap/` +
+    `mapClientFor`), блоки 0x400/0x580;
+  - `method=malina` — legacy **веб-API ПАК «Малина»** `read_json.php?device=map`
+    (блок `malina`; `mpptSite.FetchMAP` + `mapMAPAPI`). Путь — `map_path` (иначе
+    выводится из `mppt_path` подменой `device`);
+  - `method=malina26` — новый **HTTP-API «Малина26»** (блок `malina26`): токен
+    (`POST /api/token`) + бинарный контракт `MapData` из `/api/map/raw`. Реализация —
+    `malina26.go` (`malina26Source`, `decodeMalina26Map`).
+
+  Ключ устройства (`devKey`) — `"map"`, имя — из блока, поэтому история на дашборде
+  преемственна при переключении методов.
+
+  КЭС/MPPT: при `rs485`/`malina` — через блок `malina` (`read_json.php?device=mppt`);
+  при `malina26` — из того же API (`/api/kes/raw`, `decodeMalina26KES`).
 
 Верхнеуровневый **`map.disabled`** (обязательное поле раздела `map`) — мастер-выключатель
-всего раздела: при `true` НЕ запускаются пулеры МАП (и Modbus, и веб-API) и MPPT, блок
-«Данные МАП» на дашборде скрывается; на пулеры сетевых инверторов не влияет.
+всего раздела: при `true` НЕ запускаются пулеры МАП и КЭС, блок «Данные МАП» на дашборде
+скрывается; на пулеры сетевых инверторов не влияет.
 Опрос ANT BMS вынесен в отдельный раздел **`antBms`** `{"url", "disabled"}` (см.
 [`bms-listener.md`](bms-listener.md)) и от `map.disabled` не зависит.
 
@@ -52,7 +59,7 @@
   отрицательная, при отдаче положительная). `_PLoad` 0x59E/0x59F НЕ используется — это
   мощность нагрузки, не батареи. Для дашборда: `grid_voltage` (`_UNET` 0x422, 0 → нет
   сети, иначе +100 В), `grid_power` (`_PNET` 0x59A/0x59B, знак `_PNET_Sign_P` 0x587).
-- **MAP API** (`mapMAPAPI`, при `map.rs485.disabled=true`): тот же контракт из
+- **MAP API** (`mapMAPAPI`, при `method=malina`): тот же контракт из
   `read_json.php?device=map`: `battery_voltage`/`l1_voltage` = `_Uacc`, `grid_frequency`
   = `_TFNET`, `grid_voltage` = `_UNET` (уже в В, без смещения +100), `grid_power` =
   `±|_PNET_calc|` (= `_UNET`×`_INET`, достоверная; сырой `_PNET` у МАП занижен ~в 5 раз
@@ -69,13 +76,27 @@
   `_Uacc×_Iacc` положительна при заряде; контракт требует заряд отрицательным). Время снимка
   — текущее время опроса, а не `timestamp` ответа API (МАП отдаёт его
   устаревшим/некорректным, что увело бы точки на годы в прошлое).
+- **MAP/KES malina26** (`malina26.go`, `method=malina26`): МАП из `/api/map/raw`
+  (`decodeMalina26Map`) теми же формулами, что rs485-ветка (адреса ячеек совпадают):
+  `battery_voltage`/`l1_voltage` = `UAcc_med_VH/VL` (0x405/0x406), `battery_current` =
+  `(L+H*256)/16` со знаком заряд− (`MODE_RAM` 0x400 == 4), `battery_power` = `U×I`,
+  `grid_voltage` = `UNET`+100, `grid_power` = `PNET_8/8×100` (знак `PNET_Sign_P`),
+  `grid_frequency` = `6250/TFNET`, `map_temp_*` = `Grad0/1/2 − 50` (`Temp_off`-биты).
+  КЭС из `/api/kes/raw` (`decodeMalina26KES`, `KESR`): `pv1_*`, `l1_*`, `ac_active_power`,
+  `energy_today` = `PwrKW + PwrW/10000`. Версии контрактов пиннятся
+  (`MapData version=5/402`, `KESR version=1`), при расхождении payload отвергается.
 
 ## Ключ устройства и цикл опроса
 
-- **Ключ в Redis/PG = `devKey(t)`**: для kindMPPT и kindMAP с slot —
-  `IP#mppt-<UID>` (напр. `192.168.0.60#mppt-1097`, UID из ответа веб-API), чтобы
-  контроллеры не сливались в одну колонку/ряд. `slot<0` у kindMAP — база батареи/сети
-  (ключ = IP).
+- **Ключ в Redis/PG = `devKey(t)`**: для kindMPPT — `mppt-<UID>` (напр. `mppt-1097`,
+  UID = серийник КЭС: legacy `UID`/`KESE.Serial`), без host; для kindMAP — `"map"`
+  (единственная колонка/ряд батареи-сети, не зависит от метода опроса); для
+  инверторов — их IP.
+  **Смена формата ключа КЭС (`<host>#mppt-*` → `mppt-<serial>`) — осознанное решение,
+  история НЕ мигрируется** (по аналогии с `migrateMeterDeviceKey` миграция не делалась):
+  из `current` старые ключи вычищаются при старте (`PruneLegacyMPPT`), а старые ряды
+  `sunreceiver:series:*` и колонки `averages` в PG остаются под прежним ключом и с
+  новым не связаны — на дашборде это «новое» устройство КЭС с нуля (идентичность = serial).
 - **Опрос — 1 раз в секунду** (отдельный цикл `runMapPoll`, не в 10-сек циклах
   инверторов). `PollDevice` (case `kindMAP`) читает блоки `modbusmap`: 0x400
   (0x20 слов = 0x400..0x43F) и 0x580 (`_PNET_Sign_P` 0x587, `_PNET` 0x59A/0x59B,
@@ -103,11 +124,13 @@
 ## Ошибки МАП (правило, к реализации)
 
 Ошибки МАП читать **только «сырыми»**, в зависимости от выбранного в конфиге
-способа мониторинга (`map.rs485.disabled`):
+способа мониторинга (`method`):
 
-- `map.rs485.disabled=false` — по **Modbus** (Modbus TCP/RTU через `mapgateway`);
-- `map.rs485.disabled=true` — из Малины через **`read_memory.php?offset=<байт>&count=<n>`**
+- `method=rs485` — по **Modbus** (Modbus TCP/RTU через `mapgateway`);
+- `method=malina` — из Малины через **`read_memory.php?offset=<байт>&count=<n>`**
   (RAM МАП, байт-ячейки 0x000..0x7FF, тот же хост/Basic-auth, что у MPPT).
+- `method=malina26` — из бинарного контракта `MapData` (`/api/map/raw`), ячейки по
+  адресам (см. `.kilo/malina26-contracts.md`).
 
 Никаких агрегирующих эндпоинтов с готовыми текстами (`map_errors.php` и т.п.) не
 использовать. Запись — в `device_errors` по устройству «МАП», по правилу истории
@@ -138,6 +161,7 @@ _F_Acc_Over, _F_Net_Over, _TFNET_Limit, _UNET_Limit`.
 | 0x448 | `_I2C_Err` | ошибки I2C (Ack/Sum/Size/Protocol) — адрес **предположительный** |
 
 Наш пулер ошибок (`map_errors.go`) читает эти ячейки **сырыми** отдельным циклом
-(≤1/30 с): через Modbus (`map.rs485.disabled=false`, блок 0x41C..0x449) либо через
-`read_memory.php` (web-API). Пишет появление ошибок в `device_errors`
-(device=`map`), телеметрию не трогает.
+(≤1/30 с): через Modbus (`method=rs485`, блок 0x41C..0x449), через
+`read_memory.php` (`method=malina`, web-API) либо из бинарного `MapData`
+(`method=malina26`, ячейки 0x41C..0x449 по id). Пишет появление ошибок в
+`device_errors` (device=`map`), телеметрию не трогает.

@@ -13,11 +13,11 @@
 
 - раздел `invertors` → `type` "deye"→`kindDeyeString`, "sofar"→`kindSofar`
   (поле `disabled` обязательно; `true` — пропускается);
-- подраздел `map.rs485` → `kindMAP` (MPPT — `kindMPPT` — в конфиг НЕ задаётся, появляется
-  динамически, см. [map-mppt.md](map-mppt.md)).
+- блок `map` (`method=rs485`) → `kindMAP` (КЭС — `kindMPPT` — в конфиг НЕ задаётся,
+  появляется динамически, см. [map-mppt.md](map-mppt.md)).
 
 Название — «логическое имя» инвертора (обязательное поле, напр. `Deye Left`,
-`Sofar-2.5`, `Bineos Right`; для MPPT генерируется как `MPPT-<slot+1>`). Опрос:
+`Sofar-2.5`, `Bineos Right`; для КЭС/MPPT генерируется как `MPPT-<serial>`). Опрос:
 Deye — реальный SN даталоггера (`ReadRegistersDeye`); Sofar — тоже
 `ReadRegistersDeye` с 15-байтным datafield и реальным SN (12-байтный
 `ReadRegisters`/`BuildReadFrame` Sofar LSW-3 отвечает только heartbeat с кодом 0x05).

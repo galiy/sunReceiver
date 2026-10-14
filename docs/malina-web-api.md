@@ -130,13 +130,14 @@
 
 | Поле | Назначение |
 |---|---|
-| `mppt.base_url` | адрес ПАК «Малина», например `http://192.168.0.60` |
-| `mppt.mppt_path` | путь к эндпоинту, `/read_json.php?device=mppt` |
-| `mppt.login` | логин Basic-auth (обычно `admin`) |
-| `mppt.password` | пароль Basic-auth (в открытом виде; `sunReceiver.json` в git не попадает) |
+| `map.malina.base_url` | адрес ПАК «Малина», например `http://192.168.0.60` |
+| `map.malina.mppt_path` | путь к эндпоинту, `/read_json.php?device=mppt` |
+| `map.malina.login` | логин Basic-auth (обычно `admin`) |
+| `map.malina.password` | пароль Basic-auth (в открытом виде; `sunReceiver.json` в git не попадает) |
 
 Без полного набора полей (`base_url` + `mppt_path` + `login` + `password`)
-`loadMPPTSite` вернёт `nil` и мониторинг MPPT отключится.
+`loadMPPTSite` вернёт `nil` и legacy-мониторинг MPPT отключится (также `nil` при
+`method=malina26` — там КЭС берутся из нового API, см. `docs/modules/map-mppt.md`).
 
 SSH-доступ к хосту ПАК хранится **отдельно** в `.kilo/malina-ssh.json` (исключён из
 git) и используется только при разработке (реверс протокола, чтение ФС хоста) —

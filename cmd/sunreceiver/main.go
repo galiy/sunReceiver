@@ -156,17 +156,34 @@ type configInverter struct {
 	Disabled  *bool  `json:"disabled"`
 }
 
-// mapRS485Section — настройка МАП Титанатор по Modbus TCP/RS485 внутри раздела "map".
+// mapRS485Section — блок способа опроса МАП по Modbus TCP/RS485 (method=rs485).
 // Не входит в invertors: это устройство Modbus TCP (RS485), а не инвертор.
-// Disabled — ОБЯЗАТЕЛЬНОЕ поле (отсутствие = ошибка конфига): false = МАП
-// опрашивается через Modbus TCP (как раньше); true = пулер по Modbus НЕ запускается,
-// а все параметры МАП (батарея/сеть) берутся из веб-API ПАК «Малина»
-// read_json.php?device=map.
 type mapRS485Section struct {
-	Name     string `json:"name"`
-	IP       string `json:"ip"`
-	Unit     int    `json:"unit,omitempty"`
-	Disabled *bool  `json:"disabled"`
+	Name string `json:"name"`
+	IP   string `json:"ip"`
+	Unit int    `json:"unit,omitempty"`
+}
+
+// mapMalinaSection — блок legacy веб-API ПАК «Малина» (method=malina): чтение МАП
+// (read_json.php?device=map) и MPPT-контроллеров (read_json.php?device=mppt).
+// Пароль в открытом виде (sunReceiver.json — приватный, в git не выгружается).
+type mapMalinaSection struct {
+	BaseURL  string `json:"base_url"`
+	MPPTPath string `json:"mppt_path"`
+	MapPath  string `json:"map_path"`
+	Login    string `json:"login"`
+	Password string `json:"password"`
+}
+
+// mapMalina26Section — блок нового HTTP-API «Малина26» (method=malina26): токен по
+// паролю + бинарные контракты МАП (`/api/map/raw`) и КЭС (`/api/kes/raw`).
+// host — IP или имя; port — 80/443; serial — серийник МАП (число строкой), по нему
+// ищем «свой» МАП в `/api/map/devices`. Логин не нужен (API принимает только пароль).
+type mapMalina26Section struct {
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Password string `json:"password"`
+	Serial   string `json:"serial"`
 }
 
 // dbConfig — расположение баз данных. Задаётся в sunReceiver.json в разделе "db".
@@ -196,21 +213,22 @@ type meterSection struct {
 	Disabled    *bool  `json:"disabled"`
 }
 
-// mapSection — раздел "map" sunReceiver.json: настройка МАП Титанатор (вложенный
-// подраздел rs485 — Modbus TCP/RS485) и веб-API ПАК «Малина» для мониторинга
-// MPPT-контроллеров и МАП (через read_json.php). Пароль хранится в открытом виде
-// (sunReceiver.json — приватный, в git не выгружается).
+// mapSection — раздел "map" sunReceiver.json. Общие поля: disabled (обязателен) и
+// method. Способы опроса МАП — равнозначные блоки: rs485 (Modbus TCP/RS485),
+// malina (legacy веб-API ПАК «Малина»), malina26 (новый HTTP-API «Малина26»).
+// Обязателен только блок выбранного method.
+//   - method=rs485   → МАП по Modbus (map.rs485.ip); КЭС — через блок malina;
+//   - method=malina  → МАП и КЭС через блок malina (read_json.php);
+//   - method=malina26→ МАП и КЭС через блок malina26 (токен + бинарные контракты).
+//
 // Disabled — ОБЯЗАТЕЛЬНОЕ поле (отсутствие = ошибка конфига): true отключает ВСЕ
-// пулеры раздела map (МАП Modbus/веб-API и MPPT-контроллеры); на пулеры
-// сетевых инверторов не влияет. Опрос ANT BMS вынесен в отдельный раздел antBms.
+// пулеры раздела map (МАП и КЭС); на пулеры сетевых инверторов не влияет.
 type mapSection struct {
-	RS485    *mapRS485Section `json:"rs485"`
-	BaseURL  string           `json:"base_url"`
-	MPPTPath string           `json:"mppt_path"` // путь к read_json.php?device=mppt (КЭС/MPPT-контроллеры)
-	MapPath  string           `json:"map_path"`  // путь к read_json.php?device=map (МАП, батарея/сеть); пусто = выводится из mppt_path
-	Login    string           `json:"login"`
-	Password string           `json:"password"`
-	Disabled *bool            `json:"disabled"`
+	Disabled *bool               `json:"disabled"`
+	Method   string              `json:"method"` // "rs485" | "malina" | "malina26"
+	RS485    *mapRS485Section    `json:"rs485"`
+	Malina   *mapMalinaSection   `json:"malina"`
+	Malina26 *mapMalina26Section `json:"malina26"`
 }
 
 // antBmsSection — раздел "antBms" sunReceiver.json: ANT BMS через веб-API ПАК
@@ -355,18 +373,13 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 		nextOrder++
 	}
 
-	// МАП (батарея/сеть) — вложенный блок "rs485" раздела "map". Disabled обязателен:
-	// false — Modbus TCP (RS485), true — данные берутся из веб-API ПАК «Малина»
-	// (mapAPI). При true цель в targets не добавляется (Modbus-пулер не запускается).
-	// Обязательный флаг раздела map: верхнеуровневый disabled (отключает ВСЕ пулеры
-	// map/mppt).
-	if cf.Map != nil {
-		if cf.Map.Disabled == nil {
-			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано обязательное поле disabled (false/true)", path)
-		}
-		if *cf.Map.Disabled {
-			log.Printf("config: map disabled=true — пулеры МАП и MPPT не запускаются")
-		}
+	// Раздел "map" — обязательный общий флаг disabled (отключает все пулеры
+	// МАП и КЭС). Способ опроса (method) и блоки валидируются ниже.
+	if cf.Map != nil && cf.Map.Disabled == nil {
+		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано обязательное поле disabled (false/true)", path)
+	}
+	if cf.Map != nil && *cf.Map.Disabled {
+		log.Printf("config: map disabled=true — пулеры МАП и КЭС не запускаются")
 	}
 	// ANT BMS (раздел "antBms") — отдельный веб-API read_bms.php ПАК «Малина».
 	// Disabled обязателен; при активном разделе требуется непустой url.
@@ -428,22 +441,21 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе relay не задан ip устройства relay-sr201-2l", path)
 		}
 	}
-	if cf.Map != nil && cf.Map.RS485 != nil && !*cf.Map.Disabled {
-		rs485 := cf.Map.RS485
-		if rs485.Disabled == nil {
-			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в подразделе map.rs485 не задано обязательное поле disabled (false/true)", path)
-		}
-		if rs485.IP == "" {
-			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустой ip в подразделе map.rs485", path)
-		}
-		name := rs485.Name
-		if name == "" {
-			name = "MAP (батарея/сеть)"
-		}
-		if *rs485.Disabled {
-			log.Printf("config: МАП (%s) disabled=true — опрашивается через веб-API ПАК «Малина», а не через Modbus", name)
-			mapAPI = &mapAPISource{name: name, ip: rs485.IP, order: nextOrder}
-		} else {
+	// МАП (батарея/сеть) и КЭС — раздел "map". Способ опроса — общее поле method:
+	//   rs485    — МАП по Modbus TCP (цель kindMAP); КЭС через блок malina (legacy);
+	//   malina   — МАП и КЭС через блок malina (read_json.php);
+	//   malina26 — МАП и КЭС через блок malina26 (токен + бинарные контракты).
+	if cf.Map != nil && !*cf.Map.Disabled {
+		switch cf.Map.Method {
+		case "rs485":
+			if cf.Map.RS485 == nil || cf.Map.RS485.IP == "" {
+				return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: method=rs485 требует непустой map.rs485.ip", path)
+			}
+			rs485 := cf.Map.RS485
+			name := rs485.Name
+			if name == "" {
+				name = "MAP (батарея/сеть)"
+			}
 			if prev, dup := seenIP[rs485.IP]; dup {
 				return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: дублирующийся ip %s (%s и %s)", path, rs485.IP, prev, name)
 			}
@@ -454,19 +466,27 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 			}
 			targets = append(targets, invTarget{IP: rs485.IP, Name: name, Kind: kindMAP, Unit: unit, Slot: -1, Order: nextOrder})
 			nextOrder++
+		case "malina":
+			if m := cf.Map.Malina; m == nil || m.BaseURL == "" || m.MPPTPath == "" || m.Login == "" || m.Password == "" {
+				return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: method=malina требует map.malina (base_url, mppt_path, login, password)", path)
+			}
+			name := "MAP (батарея/сеть)"
+			mapAPI = &mapAPISource{name: name, ip: hostOf(cf.Map.Malina.BaseURL), order: nextOrder}
+			nextOrder++
+		case "malina26":
+			if m := cf.Map.Malina26; m == nil || m.Host == "" || m.Password == "" || strings.TrimSpace(m.Serial) == "" {
+				return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: method=malina26 требует map.malina26 (host, password, serial)", path)
+			}
+		default:
+			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано/некорректно поле method (ожидается rs485|malina|malina26, получено %q)", path, cf.Map.Method)
 		}
 	}
 
 	meterActive := cf.Meter != nil && cf.Meter.Disabled != nil && !*cf.Meter.Disabled
 	relayActive := cf.Relay != nil && cf.Relay.Disabled != nil && !*cf.Relay.Disabled
-	if len(targets) == 0 && mapAPI == nil && ce308Cfg == nil && !meterActive && !relayActive && dts017Cfg == nil {
-		// Если активными остались только MPPT-контроллеры из API ПАК «Малина»,
-		// targets может быть пуст — это допустимо: цели собираются динамически.
-		mpptOk := cf.Map != nil && cf.Map.BaseURL != "" && cf.Map.MPPTPath != "" &&
-			cf.Map.Login != "" && cf.Map.Password != ""
-		if !mpptOk {
-			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: нет ни одного активного устройства", path)
-		}
+	mapActive := cf.Map != nil && (cf.Map.Disabled == nil || !*cf.Map.Disabled)
+	if len(targets) == 0 && mapAPI == nil && !mapActive && ce308Cfg == nil && !meterActive && !relayActive && dts017Cfg == nil {
+		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: нет ни одного активного устройства", path)
 	}
 	// Периоды опроса устройств (секунды) — обязательный раздел "poll".
 	if err := applyPollConfig(cf.Poll); err != nil {
@@ -634,18 +654,18 @@ const mapDevKey = "map"
 
 // devKey возвращает ключ устройства в хранилище (поле IP снимка): для обычных
 // инверторов это IP; для МАП (kindMAP) — константа "map" (адрес не важен);
-// для kindMPPT — IP с суффиксом контроллера (например, 192.0.2.60#mppt-1097),
-// чтобы разные контроллеры одного гейта не сливались в одну колонку/ряд Redis и PG.
-// Для kindMPPT ключ строится по UID контроллера (стабильный идентификатор), а не
-// по индексу в массиве API: отвал контроллера с меньшим индексом сдвигает остальных
-// в ответе, и индексный ключ склеил бы ряды двух разных аппаратов. Подстрока "#mppt"
-// сохраняется (PruneMPPT ищет ключи по strings.Contains(ip, "#mppt")).
+// для kindMPPT — "mppt-<UID>" (UID = серийник контроллера), без host, чтобы один и
+// тот же контроллер не «переезжал» при смене адреса/хостинга ПАК. Ключ строится по
+// UID (стабильный серийник), а не по индексу в массиве API: отвал контроллера с
+// меньшим индексом сдвигает остальных в ответе, и индексный ключ склеил бы ряды
+// двух разных аппаратов. Префикс "mppt-" сохраняется (isMPPTKey/PruneMPPT/
+// PruneLegacyMPPT ищут ключи по strings.HasPrefix(ip, "mppt-")).
 func devKey(t invTarget) string {
 	if t.Kind == kindMPPT {
 		if t.UID != "" {
-			return fmt.Sprintf("%s#mppt-%s", t.IP, t.UID)
+			return fmt.Sprintf("mppt-%s", t.UID)
 		}
-		return fmt.Sprintf("%s#mppt%d", t.IP, t.Slot)
+		return fmt.Sprintf("mppt-%d", t.Slot)
 	}
 	if t.Kind == kindMAP {
 		return mapDevKey
@@ -669,6 +689,9 @@ func mapSourceIdentity() (string, string) {
 	if mapAPI != nil {
 		return mapDevKey, mapAPI.name
 	}
+	if malina26 != nil {
+		return mapDevKey, malina26.name
+	}
 	return "", ""
 }
 
@@ -681,6 +704,9 @@ func mapSourceName() string {
 	}
 	if mapAPI != nil {
 		return "веб-API ПАК «Малина»"
+	}
+	if malina26 != nil {
+		return "API «Малина26»"
 	}
 	return "нет источника"
 }
@@ -1989,6 +2015,15 @@ func pollAndSaveMap(ctx context.Context, store *redisStore, pg *pgStore, now tim
 			saveWindowSnapshot(store, pg, t, pollMAPAPI(ctx), now, errState)
 		}()
 	}
+	// МАП через новый API «Малина26» (method=malina26): цель kindMAP с ключом "map".
+	if malina26 != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			t := invTarget{IP: malina26.host, Name: malina26.name, Kind: kindMAP, Slot: -1, Order: malina26MapOrder}
+			saveWindowSnapshot(store, pg, t, pollMAPMalina26(ctx), now, errState)
+		}()
+	}
 	// MPPT-контроллеры — по факту подключённых из API. Состав определяется
 	// фактически подключёнными к ПАК «Малина» контроллерами (один HTTP-запрос
 	// FetchMPPTs переиспользуется для всех слотов за цикл). Каждый контроллер
@@ -2026,12 +2061,35 @@ func pollAndSaveMap(ctx context.Context, store *redisStore, pg *pgStore, now tim
 			pruneMPPT = state.shouldPrune(len(arr) == 0)
 		}
 	}
+	// КЭС через новый API «Малина26» (method=malina26): все контроллеры, один пулер,
+	// последовательно. Ключ устройства — mppt-<serial>.
+	if malina26 != nil {
+		readings, err := malina26.FetchKES(ctx)
+		if err != nil {
+			log.Printf("kes malina26: %v", err)
+		} else {
+			for _, k := range readings {
+				name := "MPPT-" + k.UID
+				t := invTarget{IP: malina26.host, Name: name, Kind: kindMPPT, Slot: k.Slot, UID: k.UID, Order: mpptOrderBase + k.Slot}
+				activeMPPT[devKey(t)] = struct{}{}
+				wg.Add(1)
+				go func(t invTarget, res DeviceResult) {
+					defer wg.Done()
+					saveWindowSnapshot(store, pg, t, res, now, errState)
+				}(t, k.Result)
+			}
+			pruneMPPT = state.shouldPrune(len(readings) == 0)
+		}
+	}
 	wg.Wait()
 	// Исчезнувшие MPPT-контроллеры (не в ответе API) убираем из HASH current, чтобы
 	// их строка не показывалась на дашборде как актуальная.
 	if pruneMPPT {
 		store.PruneMPPT(activeMPPT)
 	}
+	// Разовая зачистка устаревших ключей старого формата "<host>#mppt-*" (внутри
+	// защищена флагом: реально выполняет HGetAll только при первом вызове).
+	store.PruneLegacyMPPT()
 }
 
 func main() {
@@ -2071,19 +2129,26 @@ func main() {
 
 	log.Printf("poller started: version=%s config=%s targets=%v period=%s", version, cfgPath, targets, pollPeriod)
 
-	// Конфигурация веб-API ПАК «Малина» для мониторинга MPPT (КЭС) — раздел "map"
-	// sunReceiver.json (бывший malina.json).
+	// Конфигурация веб-API ПАК «Малина» для мониторинга MPPT (КЭС) — блок map.malina
+	// (legacy read_json.php). При method=malina26 блок malina не задан → nil (КЭС
+	// опрашивает новый клиент malina26).
 	mppt = loadMPPTSite(mapSec)
+	// Новый HTTP-API «Малина26» (method=malina26) — МАП и КЭС (токен + бинарные
+	// контракты). nil при другом method.
+	malina26 = loadMalina26(mapSec)
+	if malina26 != nil {
+		log.Printf("map malina26: опрос через %s (serial %s)", malina26.baseURL, malina26.serial)
+	}
 	// ANT BMS (ANT BMS, web-API read_bms.php ПАК «Малина») — отдельный 1-сек цикл,
 	// актуальное состояние в отдельном Redis-ключе (HASH sunreceiver:bms).
 	bmsSite = loadBmsSite(antBmsSec)
 	if bmsSite != nil {
 		log.Printf("bms: опрос ANT BMS через %s (1 раз в секунду, ключ Redis %s)", bmsSite.url, redisBMSKey)
 	}
-	// Если МАП опрашивается через веб-API (map.rs485.disabled=true), обязателен доступ
-	// к ПАК «Малина» (раздел "map") — иначе неоткуда взять параметры батареи/сети.
+	// Если МАП опрашивается через legacy веб-API (method=malina), обязателен доступ
+	// к ПАК «Малина» (блок map.malina) — иначе неоткуда взять параметры батареи/сети.
 	if mapAPI != nil && mppt == nil {
-		log.Fatalf("config: МАП настроен через веб-API (map.rs485.disabled=true), но раздел map неполный — нужны base_url, mppt_path, login, password")
+		log.Fatalf("config: method=malina, но блок map.malina неполный — нужны base_url, mppt_path, login, password")
 	}
 	// Конфигурация электросчётчика DDS238 — раздел "meter" sunReceiver.json
 	// или файл dds238.json (обратная совместимость).
@@ -2270,7 +2335,7 @@ func main() {
 	// показанием (см. SaveSnapshotMAP). Быстрый 1-сек цикл
 	// запускается только если есть хоть один источник МАП/MPPT: при map.disabled=true
 	// (или отсутствии источников) горутина не стартует вовсе.
-	hasMapSource := mapAPI != nil || mppt != nil
+	hasMapSource := mapAPI != nil || mppt != nil || malina26 != nil
 	if !hasMapSource {
 		for _, t := range targets {
 			if t.Kind == kindMAP {
@@ -2294,7 +2359,7 @@ func main() {
 				break
 			}
 		}
-		if pg != nil && (mapErrTarget != nil || mppt != nil) {
+		if pg != nil && (mapErrTarget != nil || mppt != nil || malina26 != nil) {
 			bgWg.Add(1)
 			go func() {
 				defer bgWg.Done()
