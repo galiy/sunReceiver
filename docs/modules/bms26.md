@@ -100,9 +100,12 @@ HTTP-клиент и токен (см. [`map-mppt.md`](map-mppt.md)). Пулер
    - **AntBMS**: коды MOS (charge/discharge/balancer) + `system log`; незнакомые коды
      не теряются (`code N`). По-ячеечных бит в alarm нет.
    - Показ на странице BMS (`#bmsAlarms`, `renderAlarms` — раскладка по категориям),
-     плюс режим (`mode`) и номинальная ёмкость (`rated_mah`) плашками. Появление тревоги
+     плюс режим (`mode`), номинальная ёмкость (`rated_mah`), напряжение пакета из
+     контракта (`total_cv`) и напряжение порта (`port_cv`) плашками. Появление тревоги
      пишется в `device_errors` (`kind="bms"`, `device=serial`, только появление) — видно
      и в истории на странице BMS, и на общей странице «Ошибки» (`/errors`).
+   - Тексты тревог переведены (ru/en/zh): i18n `i18n.js` переводит и сами фразы
+     (`высокое напряжение…`, `защита от…`, одиночные warn, Ext_Bit), и подписи групп.
 3. **Миграция истории** (сделано): `bms26_migrate.go` (`migrateBms26History`,
    идемпотентно по маркеру `sunreceiver:migrated:bms26`) переносит ряды из
    `sunreceiver:bms:series:*`/`enbms:series:*` и PG `bms_averages`/`enbms_averages` в

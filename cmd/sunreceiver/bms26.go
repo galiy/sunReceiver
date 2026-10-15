@@ -339,6 +339,8 @@ func bmsDeviceFromBms26(sn bms26Snapshot) bmsDevice {
 		Port:          sn.BmsType,
 		CellCount:     sn.CellCount,
 		CellsV:        sn.CellsV,
+		TotalV:        sn.TotalV,
+		PortV:         sn.PortV,
 		CurrentA:      sn.CurrentA,
 		Soc:           int(math.Round(sn.Soc)),
 		CapacityAh:    sn.CapacityAh,

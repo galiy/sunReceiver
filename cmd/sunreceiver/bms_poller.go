@@ -43,6 +43,8 @@ type bmsDevice struct {
 	Time          string    `json:"time"`           // локальное время HH:MM:SS
 	CellCount     int       `json:"cell_count"`     // число ячеек (S)
 	CellsV        []float64 `json:"cells_v"`        // напряжения ячеек, V
+	TotalV        float64   `json:"total_voltage_v,omitempty"` // напряжение пакета (контракт total_cv), V
+	PortV         float64   `json:"port_voltage_v,omitempty"`  // напряжение порта/клемм (контракт port_cv), V
 	CurrentA      float64   `json:"current_a"`      // ток, A (знаковый)
 	Soc           int       `json:"soc"`            // State of Charge, %
 	CapacityAh    float64   `json:"capacity_ah"`    // ёмкость, А·ч

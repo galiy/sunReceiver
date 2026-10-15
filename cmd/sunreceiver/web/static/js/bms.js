@@ -20,7 +20,8 @@ function renderKPIs(d){
   var soc=Math.max(0,Math.min(100,Number(d.soc)||0));
   var socCol= soc<20?'#d9534f':(soc<50?'#f08c00':(soc<80?'#f0ad4e':'#37b24d'));
   var cells=(d.cells_v||[]).slice(0,d.cell_count);
-  var packV=0; for(var i=0;i<cells.length;i++) packV+=cells[i];
+  var packV=Number(d.total_voltage_v)||0;
+  if(!packV){ for(var i=0;i<cells.length;i++) packV+=cells[i]; }
   var iCls= d.current_a>=0? 'pos':'neg';
   var pCls= d.power_w>=0? 'pos':'neg';
   var h='';
@@ -30,6 +31,7 @@ function renderKPIs(d){
     +'<div class="sub">остаток '+fmtNum(d.remaining_ah,1)+' А·ч из '+fmtNum(d.capacity_ah,0)+' А·ч</div></div>';
   h+='<div class="kpi"><div class="lbl">Напряжение пакета</div><div class="val">'+fmtNum(packV,2)+'<span class="unit">V</span></div>'
     +'<div class="sub">'+d.cell_count+' ячеек, сред. '+fmtNum(d.avg_cell_v,3)+' В/яч</div></div>';
+  if(Number(d.port_voltage_v)>0){ h+='<div class="kpi"><div class="lbl">Напряжение порта</div><div class="val">'+fmtNum(d.port_voltage_v,2)+'<span class="unit">V</span></div></div>'; }
   h+='<div class="kpi"><div class="lbl">Ток</div><div class="val '+iCls+'">'+fmtNum(d.current_a,1)+'<span class="unit">A</span></div></div>';
   h+='<div class="kpi"><div class="lbl">Мощность</div><div class="val '+pCls+'">'+fmtNum(d.power_w,1)+'<span class="unit">W</span></div></div>';
   h+='<div class="kpi"><div class="lbl">Ёмкость</div><div class="val">'+fmtNum(d.capacity_ah,0)+'<span class="unit">А·ч</span></div></div>';
