@@ -2321,6 +2321,8 @@ func main() {
 	// Однократный перенос ключей КЭС старым форматом "<host>#mppt-<uid>" → "mppt-<serial>"
 	// (current/ряд Redis + строки PG averages). До пулеров/аккумулятора.
 	migrateMPPTDeviceKeys(store, pg, time.Now())
+	// Однократный перенос истории BMS на ключ/схему bms26 (current-HASH не трогаем).
+	migrateBms26History(store, pg, time.Now())
 	// Однократный перенос истории DTS017M на стабильный ключ (идемпотентно).
 	migrateDts017AverageKey(pg, dts017Cfg)
 

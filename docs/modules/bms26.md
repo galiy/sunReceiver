@@ -103,9 +103,13 @@ HTTP-клиент и токен (см. [`map-mppt.md`](map-mppt.md)). Пулер
      плюс режим (`mode`) и номинальная ёмкость (`rated_mah`) плашками. Появление тревоги
      пишется в `device_errors` (`kind="bms"`, `device=serial`, только появление) — видно
      и в истории на странице BMS, и на общей странице «Ошибки» (`/errors`).
-3. **Ошибки/миграция** (осталось): миграция истории из старых ключей
-   (`sunreceiver:bms*`, `sunreceiver:enbms:*`) в `sunreceiver:bms26:*` и PG
-   `bms26_averages`.
+3. **Миграция истории** (сделано): `bms26_migrate.go` (`migrateBms26History`,
+   идемпотентно по маркеру `sunreceiver:migrated:bms26`) переносит ряды из
+   `sunreceiver:bms:series:*`/`enbms:series:*` и PG `bms_averages`/`enbms_averages` в
+   `sunreceiver:bms26:*`/`bms26_averages` (JSON приводится к форме `bms26Snapshot`;
+   дедуп). Связка id: ANT — по ёмкости (`AntBms <cap> A/h` → `AntBMS-DSP-<cap>-NNNNN`),
+   EnBMS — единственный MAC → единственный EnBMS-serial. `current` не мигрируется
+   (перезаписывается пулером). Старые данные удалены (`pruneBms26Legacy`).
 
 ## Связанные документы
 

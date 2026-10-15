@@ -14,10 +14,6 @@
    **Сделано** (`bms26_alarm.go`, `device_errors` kind=`bms`). Осталось только
    i18n: тексты тревог — как и на прежних BMS-страницах — составные/динамические,
    автоматический словарь их не переводит; при необходимости локализовать отдельно.
-4. **BMS malina26 — миграция истории (этап 3).** Перенести ряды/историю из старых
-   ключей (`sunreceiver:bms*`, `sunreceiver:enbms:*`) и PG (`bms_averages`,
-   `enbms_averages`) в `sunreceiver:bms26:*` + `bms26_averages`, с пересборкой JSON в
-   форму `bms26Snapshot`. Связка идентификаторов: ANT — по ёмкости из старого имени
-   (`AntBms <cap> A/h`) → `serial` (`AntBMS-DSP-<cap>-NNNNN`); EnBMS — единственный MAC
-   → единственный EnBMS-serial (при >1 — не мигрировать, неоднозначно). Идемпотентно
-   по маркеру, как `migrateMPPTDeviceKeys`/`migrateMeterDeviceKey`.
+4. ~~BMS malina26 — миграция истории (этап 3).~~ **Сделано** (`bms26_migrate.go`,
+   `migrateBms26History`+`pruneBms26Legacy`): история перенесена в `bms26`, старые
+   данные удалены.
