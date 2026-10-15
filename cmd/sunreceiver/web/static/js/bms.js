@@ -38,6 +38,8 @@ function renderKPIs(d){
   h+='<div class="kpi"><div class="lbl">Δ ячеек</div><div class="val">'+fmtNum((d.max_cell_v-d.min_cell_v),3)+'<span class="unit">V</span></div></div>';
   if(Number(d.soh)>0){ h+='<div class="kpi"><div class="lbl">SOH</div><div class="val">'+fmtNum(d.soh,1)+'<span class="unit">%</span></div></div>'; }
   if(Number(d.cycles)>0){ h+='<div class="kpi"><div class="lbl">Циклы</div><div class="val">'+d.cycles+'</div></div>'; }
+  if(d.mode){ h+='<div class="kpi"><div class="lbl">Режим</div><div class="val">'+esc(d.mode)+'</div></div>'; }
+  if(Number(d.rated_ah)>0){ h+='<div class="kpi"><div class="lbl">Номинал</div><div class="val">'+fmtNum(d.rated_ah,0)+'<span class="unit">А·ч</span></div></div>'; }
   document.getElementById('kpiRow').innerHTML=h;
 }
 
@@ -45,10 +47,13 @@ function renderCells(d){
   var cells=(d.cells_v||[]).slice(0,d.cell_count);
   var h='';
   var bal=Number(d.balance_mask)||0;
+  var warn=Number(d.cell_warn_mask)||0, prot=Number(d.cell_prot_mask)||0;
   for(var i=0;i<cells.length;i++){
     var c=cellColor(d,i);
     var isBal=((bal>>>i)&1)===1;
-    h+='<div class="cell '+c+(isBal?' bal':'')+'">'
+    var isProt=((prot>>>i)&1)===1, isWarn=((warn>>>i)&1)===1;
+    var extra=(isBal?' bal':'')+(isProt?' prot':(isWarn?' warn':''));
+    h+='<div class="cell '+c+extra+'">'
       +'<div class="cell-batt"><div class="cell-fill" style="height:'+cellFillPct(cells[i])+'%;background:'+CELL_COLOR[c]+'"></div></div>'
       +'<div class="mv">'+cells[i].toFixed(3)+'</div>'
       +'<div class="idx">'+(i+1)+'</div>'
@@ -65,13 +70,15 @@ var TEMP_NAMES=['Батарея 1','Батарея 2','Силовая плата
 function tempName(i){ if(BMS_KIND==='enbms'||BMS_KIND==='bms26') return 'Датчик '+(i+1); return TEMP_NAMES[i]||('датчик '+(i+1)); }
 function renderTemps(d){
   var t=d.temperatures_c||[];
+  var tw=Number(d.temp_warn_mask)||0, tp=Number(d.temp_prot_mask)||0;
   var h='';
   for(var i=0;i<t.length;i++){
     var v=Number(t[i]);
     var w=Math.max(2,Math.min(100,v/60*100));
     var col= v<15?'#428bca':(v<=40?'#37b24d':(v<=55?'#f08c00':'#d9534f'));
     var n=tempName(i);
-    h+='<div class="trow"><span class="tname">T'+(i+1)+' · '+n+'</span>'
+    var extra=(((tp>>>i)&1)?' prot':(((tw>>>i)&1)?' warn':''));
+    h+='<div class="trow'+extra+'"><span class="tname">T'+(i+1)+' · '+n+'</span>'
       +'<span class="tbar"><span class="tbar-fill" style="width:'+w+'%;background:'+col+';display:block"></span></span>'
       +'<span class="tval">'+fmtNum(v,0)+' &deg;C</span></div>';
   }
@@ -111,11 +118,37 @@ function renderMos(d){
     +'<span class="mos'+(bc!==0||bals.length?' on':'')+'">Балансировка: '+esc(balTxt)+'</span>';
 }
 
+// renderAlarms раскладывает человекочитаемые тревоги (типозависимые: EnBMS —
+// ячейки/датчики/Ext_Bit, AntBMS — коды MOS/system log) по категориям.
 function renderAlarms(d){
   var box=document.getElementById('bmsAlarms'); if(!box) return;
   var a=d.alarms||[];
-  if(!a.length){ box.innerHTML='<span class="ok">Нет активных алармов</span>'; return; }
-  var h='<ul class="alarm-list">'; for(var i=0;i<a.length;i++) h+='<li>'+esc((typeof SR_descOf==='function')?SR_descOf(a[i],''):a[i])+'</li>'; h+='</ul>';
+  var type='<div class="alarm-type">Тип: '+esc(d.model||BMS_KIND||'')+'</div>';
+  if(!a.length){ box.innerHTML=type+'<span class="ok">Нет активных алармов</span>'; return; }
+  function txt(s){ return esc((typeof SR_descOf==='function')?SR_descOf(s,''):s); }
+  var cats=[
+    ['Ячейки',      function(s){ return s.indexOf('Ячейка')===0; }],
+    ['Датчики',     function(s){ return s.indexOf('Датчик')===0; }],
+    ['Заряд (MOS)', function(s){ return s.indexOf('Charge:')===0; }],
+    ['Разряд (MOS)',function(s){ return s.indexOf('Discharge:')===0; }],
+    ['Балансировка',function(s){ return s.indexOf('Balance:')===0; }],
+    ['System log',  function(s){ return s.indexOf('System log:')===0; }]
+  ];
+  var used={}, h=type;
+  function group(title, items){
+    if(!items.length) return '';
+    var g='<div class="alarm-group"><div class="alarm-group-h">'+esc(title)+' ('+items.length+')</div><ul class="alarm-list">';
+    for(var j=0;j<items.length;j++) g+='<li>'+txt(items[j])+'</li>';
+    return g+'</ul></div>';
+  }
+  for(var c=0;c<cats.length;c++){
+    var items=[];
+    for(var i=0;i<a.length;i++){ if(!used[i] && cats[c][1](a[i])){ items.push(a[i]); used[i]=1; } }
+    h+=group(cats[c][0], items);
+  }
+  var rest=[];
+  for(var i=0;i<a.length;i++) if(!used[i]) rest.push(a[i]);
+  h+=group('Прочее', rest);
   box.innerHTML=h;
 }
 

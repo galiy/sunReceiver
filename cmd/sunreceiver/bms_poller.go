@@ -61,6 +61,11 @@ type bmsDevice struct {
 	// Дополнительно (по типам BMS):
 	Soh         float64  `json:"soh,omitempty"`          // SOH, % (EnBMS)
 	Cycles      int      `json:"cycles,omitempty"`       // число циклов (EnBMS)
+	RatedAh     float64  `json:"rated_ah,omitempty"`     // номинальная ёмкость, А·ч (EnBMS/контракт rated_mah)
+	CellWarnMask uint32  `json:"cell_warn_mask,omitempty"` // бит i: предупреждение ячейки i+1 (BMS26/EnBMS)
+	CellProtMask uint32  `json:"cell_prot_mask,omitempty"` // бит i: защита ячейки i+1 (BMS26/EnBMS)
+	TempWarnMask uint32  `json:"temp_warn_mask,omitempty"` // бит i: предупреждение датчика i+1 (BMS26/EnBMS)
+	TempProtMask uint32  `json:"temp_prot_mask,omitempty"` // бит i: защита датчика i+1 (BMS26/EnBMS)
 	BalanceMask uint32   `json:"balance_mask,omitempty"` // маска балансируемых ячеек (ANT, addr 132)
 	CycleAh     float64  `json:"cycle_ah,omitempty"`     // суммарная цикловая ёмкость, А·ч (ANT, addr 83)
 	Model       string   `json:"model,omitempty"`        // модель/протокол устройства (EnBMS BasicInfo)

@@ -90,10 +90,22 @@ HTTP-клиент и токен (см. [`map-mppt.md`](map-mppt.md)). Пулер
    единый тип. Снимок `bms26Snapshot` адаптируется в прежнюю форму `bmsDevice`
    (`bmsDeviceFromBms26`, `kind="bms26"`), поэтому страница/JS переиспользованы; при
    `method=malina26` legacy ANT/EnBMS-ключи не подмешиваются (их пулеры отключены).
-3. **Ошибки** (не сделано): регистрация в `device_errors` и трактовка `alarm` по
-   `bms_type` (раскладка AntBMS 28 бит / EnBMS 147 бит — `docs/bms/*`), миграция истории
-   из старых ключей (`sunreceiver:bms*`, `sunreceiver:enbms:*`) в `sunreceiver:bms26:*`
-   и PG `bms26_averages`.
+2.5. **Тревоги/ошибки** (сделано): `alarm` (19 Б) трактуется по `bms_type`
+   (`bms26_alarm.go`); человекочитаемый список кладётся в `bms26Snapshot.alarms`
+   (Redis/PG, страница BMS) и группируется на странице по категориям.
+   - **EnBMS**: ячейки (4 бита/ячейку: HVwarn/OVprot/LVwarn/UVprot), датчики (4 бита),
+     одиночные warn (биты 96..99), `Ext_Bit` Byte0..5 (Warn/Protect). По-ячеечные и
+     по-датчиковые маски (`cell_*_mask`/`temp_*_mask`) подсвечивают проблемные ячейки
+     (красная рамка — защита, оранжевая — предупреждение) и датчики.
+   - **AntBMS**: коды MOS (charge/discharge/balancer) + `system log`; незнакомые коды
+     не теряются (`code N`). По-ячеечных бит в alarm нет.
+   - Показ на странице BMS (`#bmsAlarms`, `renderAlarms` — раскладка по категориям),
+     плюс режим (`mode`) и номинальная ёмкость (`rated_mah`) плашками. Появление тревоги
+     пишется в `device_errors` (`kind="bms"`, `device=serial`, только появление) — видно
+     и в истории на странице BMS, и на общей странице «Ошибки» (`/errors`).
+3. **Ошибки/миграция** (осталось): миграция истории из старых ключей
+   (`sunreceiver:bms*`, `sunreceiver:enbms:*`) в `sunreceiver:bms26:*` и PG
+   `bms26_averages`.
 
 ## Связанные документы
 

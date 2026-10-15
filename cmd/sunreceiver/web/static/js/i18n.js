@@ -538,6 +538,9 @@
     wrap.appendChild(sel); nav.appendChild(wrap);
   }
   window.SR_i18n={ get lang(){return LANG;}, t:t, apply:apply, set:function(l){ LANG=l; try{localStorage.setItem('lang',l);}catch(e){} comp={}; apply(); } };
+  // BMS26: подписи типозависимой раскладки алармов и новых плашек (ru/en/zh).
+  Object.assign(DICT.en,{"Тип":"Type","Ячейки":"Cells","Датчики":"Sensors","Заряд (MOS)":"Charge (MOS)","Разряд (MOS)":"Discharge (MOS)","Балансировка":"Balancing","System log":"System log","Прочее":"Other","Режим":"Mode","Номинал":"Rated","Нет активных алармов":"No active alarms"});
+  Object.assign(DICT.zh,{"Тип":"类型","Ячейки":"电芯","Датчики":"传感器","Заряд (MOS)":"充电 (MOS)","Разряд (MOS)":"放电 (MOS)","Балансировка":"均衡","System log":"系统日志","Прочее":"其他","Режим":"模式","Номинал":"额定","Нет активных алармов":"无活动告警"});
   function init(){ buildSwitcher(); apply(); startObserver(); setInterval(translateCharts,3000); }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',init); else init();
 })();

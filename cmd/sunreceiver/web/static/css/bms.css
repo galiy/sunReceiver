@@ -76,6 +76,16 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#e
 
 /* Подсветка балансируемой ячейки и список алармов. */
 .cell.bal { outline: 2px solid #f0ad4e; outline-offset: 1px; }
+.cell.warn { outline: 2px solid #f0ad4e; outline-offset: 1px; } /* предупреждение ячейки (EnBMS) */
+.cell.prot { outline: 2px solid #d9534f; outline-offset: 1px; } /* защита ячейки (EnBMS) */
+.trow.warn { outline: 2px solid #f0ad4e; outline-offset: 1px; border-radius: 3px; } /* предупреждение датчика */
+.trow.prot { outline: 2px solid #d9534f; outline-offset: 1px; border-radius: 3px; } /* защита датчика */
 .alarm-list { margin: 6px 0 0; padding-left: 18px; }
 .alarm-list li { color: #d9534f; }
 .ok { color: #37b24d; }
+
+/* Типозависимая раскладка алармов: тип BMS + группы (ячейки/датчики/MOS/…). */
+.alarm-type { color: #6b7280; font-size: 12px; margin-bottom: 8px; }
+.alarm-group { margin-bottom: 10px; }
+.alarm-group-h { font-weight: 600; font-size: 13px; color: #374151; margin-bottom: 2px; }
+.alarm-group .alarm-list { margin-top: 2px; }

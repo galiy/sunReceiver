@@ -101,8 +101,13 @@ type bms26Snapshot struct {
 	TotalV        float64   `json:"total_voltage_v"`
 	PortV         float64   `json:"port_voltage_v"`
 	BalanceMask   uint32    `json:"balance_mask"`
-	Mode          int       `json:"mode"`         // канонический код (0..5)
-	AlarmBytes    []int     `json:"alarm_bytes"`  // 19 Б битфилда (для трактовки по типу)
+	CellWarnMask  uint32    `json:"cell_warn_mask,omitempty"` // бит i: предупреждение ячейки i+1 (EnBMS)
+	CellProtMask  uint32    `json:"cell_prot_mask,omitempty"` // бит i: защита ячейки i+1 (EnBMS)
+	TempWarnMask  uint32    `json:"temp_warn_mask,omitempty"` // бит i: предупреждение датчика i+1 (EnBMS)
+	TempProtMask  uint32    `json:"temp_prot_mask,omitempty"` // бит i: защита датчика i+1 (EnBMS)
+	Mode          int       `json:"mode"`        // канонический код (0..5)
+	AlarmBytes    []int     `json:"alarm_bytes"` // 19 Б битфилда (для трактовки по типу)
+	Alarms        []string  `json:"alarms,omitempty"` // человекочитаемые тревоги (по bms_type)
 	// Производные по ячейкам (вычисляются, в контракте не хранятся).
 	MaxCellIdx int     `json:"max_cell_idx"`
 	MaxCellV   float64 `json:"max_cell_v"`
@@ -214,6 +219,7 @@ func (s *bms26Source) fetchBmsRaw(ctx context.Context, id int, gen uint64) ([]by
 // (sunreceiver.bms26_averages, аккумулятор в памяти процесса).
 func runBms26Poll(store *redisStore, pg *pgStore, ctx context.Context) {
 	acc := newBms26Accumulator()
+	lastAlarms := map[string]map[string]bool{} // serial -> активные тревоги (для истории)
 	ticker := time.NewTicker(bms26.pollInterval)
 	defer ticker.Stop()
 	log.Printf("bms26: опрос через %s (период %v, Redis current %s, PG %v)",
@@ -235,6 +241,22 @@ func runBms26Poll(store *redisStore, pg *pgStore, ctx context.Context) {
 						log.Printf("bms26 redis series %s: %v", sn.Serial, err)
 					}
 					acc.add(sn, now)
+					// История ошибок: пишем только ПОЯВЛЕНИЕ новой тревоги.
+					if pg != nil {
+						curAlarms := map[string]bool{}
+						for _, al := range sn.Alarms {
+							curAlarms[al] = true
+						}
+						prev := lastAlarms[sn.Serial]
+						for al := range curAlarms {
+							if prev == nil || !prev[al] {
+								if err := pg.InsertDeviceError(sn.Serial, "bms", al, al, now); err != nil {
+									log.Printf("bms26 error pg %s: %v", sn.Serial, err)
+								}
+							}
+						}
+						lastAlarms[sn.Serial] = curAlarms
+					}
 				}
 				if err := store.SaveBms26Current(cur); err != nil {
 					log.Printf("bms26 redis current: %v", err)
@@ -278,6 +300,9 @@ func pollBms26Once(ctx context.Context) []bms26Snapshot {
 		sn.Framing = d.Framing
 		sn.DeviceName = d.Serial
 		sn.Timestamp = now.Format(time.RFC3339)
+		sn.Alarms = decodeBms26Alarms(sn)
+		sn.CellWarnMask, sn.CellProtMask = bms26CellMasks(sn)
+		sn.TempWarnMask, sn.TempProtMask = bms26TempMasks(sn)
 		out = append(out, sn)
 	}
 	return out
@@ -330,9 +355,15 @@ func bmsDeviceFromBms26(sn bms26Snapshot) bmsDevice {
 		AvgCellV:      sn.AvgCellV,
 		Soh:           sn.Soh,
 		Cycles:        sn.Cycles,
+		RatedAh:       sn.RatedAh,
 		BalanceMask:   sn.BalanceMask,
+		CellWarnMask:  sn.CellWarnMask,
+		CellProtMask:  sn.CellProtMask,
+		TempWarnMask:  sn.TempWarnMask,
+		TempProtMask:  sn.TempProtMask,
 		Model:         sn.BmsType,
 		Mode:          bms26ModeName(sn.Mode),
+		Alarms:        sn.Alarms,
 	}
 	if ts, err := time.Parse(time.RFC3339, sn.Timestamp); err == nil {
 		d.Timestamp = ts.Unix()
