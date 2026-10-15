@@ -111,8 +111,10 @@ HTTP-клиент и токен (см. [`map-mppt.md`](map-mppt.md)). Пулер
    `sunreceiver:bms:series:*`/`enbms:series:*` и PG `bms_averages`/`enbms_averages` в
    `sunreceiver:bms26:*`/`bms26_averages` (JSON приводится к форме `bms26Snapshot`;
    дедуп). Связка id: ANT — по ёмкости (`AntBms <cap> A/h` → `AntBMS-DSP-<cap>-NNNNN`),
-   EnBMS — единственный MAC → единственный EnBMS-serial. `current` не мигрируется
-   (перезаписывается пулером). Старые данные удалены (`pruneBms26Legacy`).
+   EnBMS — единственный MAC → единственный EnBMS-serial. Также переносится **история
+   ошибок** `device_errors`: `kind='antbms'`/`'enbms'` → `kind='bms'`, `device` → serial.
+   `current` не мигрируется (перезаписывается пулером). Старые данные удалены
+   (`pruneBms26Legacy`; старые строки `device_errors` удаляются в ходе миграции ошибок).
 
 ## Связанные документы
 

@@ -124,6 +124,10 @@ func migrateBms26History(store *redisStore, pg *pgStore, now time.Time) {
 			log.Printf("bms26 migrate: pg: %v — маркер не ставлю", err)
 			return
 		}
+		if err := migrateBms26Errors(pg, antSer, enSer); err != nil {
+			log.Printf("bms26 migrate: device_errors: %v — маркер не ставлю", err)
+			return
+		}
 	}
 	if err := store.rdb.Set(store.ctx, bms26MigrateMarkerKey, "1", 0).Err(); err != nil {
 		log.Printf("bms26 migrate: запись маркера: %v", err)
@@ -309,4 +313,59 @@ func pruneBms26Legacy(store *redisStore, pg *pgStore) {
 			}
 		}
 	}
+}
+
+// migrateBms26Errors переносит историю ошибок BMS в device_errors: строки
+// kind='antbms' (device = старое имя) → kind='bms', device=serial (по ёмкости);
+// kind='enbms' (device = MAC) → kind='bms', device=enbms-serial. Перенос «как есть»
+// (INSERT ... SELECT ON CONFLICT DO NOTHING), затем удаление старых строк.
+func migrateBms26Errors(pg *pgStore, antSer map[int]string, enSer string) error {
+	type kindMap struct {
+		kind string
+		ser  func(device string) string
+	}
+	var maps []kindMap
+	maps = append(maps, kindMap{"antbms", func(dev string) string {
+		cap, ok := antCapFromName(dev)
+		if !ok {
+			return ""
+		}
+		return antSer[cap]
+	}})
+	if enSer != "" {
+		maps = append(maps, kindMap{"enbms", func(string) string { return enSer }})
+	}
+	for _, km := range maps {
+		rows, err := pg.pool.Query(pg.ctx,
+			`SELECT DISTINCT device FROM sunreceiver.device_errors WHERE kind=$1`, km.kind)
+		if err != nil {
+			return fmt.Errorf("select device_errors %s: %w", km.kind, err)
+		}
+		var devs []string
+		for rows.Next() {
+			var d string
+			if rows.Scan(&d) == nil {
+				devs = append(devs, d)
+			}
+		}
+		rows.Close()
+		for _, dev := range devs {
+			serial := km.ser(dev)
+			if serial == "" {
+				continue
+			}
+			if _, err := pg.pool.Exec(pg.ctx, `
+INSERT INTO sunreceiver.device_errors (device, kind, code, msg, ts)
+SELECT $1, 'bms', code, msg, ts FROM sunreceiver.device_errors
+ WHERE device=$2 AND kind=$3
+ON CONFLICT (device, kind, code, ts) DO NOTHING`, serial, dev, km.kind); err != nil {
+				return fmt.Errorf("migrate device_errors %s=%s: %w", km.kind, dev, err)
+			}
+			if _, err := pg.pool.Exec(pg.ctx,
+				`DELETE FROM sunreceiver.device_errors WHERE device=$1 AND kind=$2`, dev, km.kind); err != nil {
+				return fmt.Errorf("delete device_errors %s=%s: %w", km.kind, dev, err)
+			}
+		}
+	}
+	return nil
 }
