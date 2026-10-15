@@ -546,26 +546,39 @@ func (h *dashboardHandler) energy(w http.ResponseWriter, r *http.Request) {
 // EnBMS HASH sunreceiver:enbms:current) для батареек на главной странице
 // (обновление раз в минуту). EnBMS приводится к форме bmsDevice с kind="enbms".
 func (h *dashboardHandler) apiBMS(w http.ResponseWriter, r *http.Request) {
-	m, err := h.store.BMSCurrent()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	devs := make([]bmsDevice, 0, len(m))
-	for _, raw := range m {
-		var d bmsDevice
-		if err := json.Unmarshal([]byte(raw), &d); err != nil {
-			continue
+	devs := []bmsDevice{}
+	if bms26 != nil {
+		// Единый тип BMS через malina26 (ANT+EnBMS). Legacy-ключи (ANT/EnBMS) не
+		// подмешиваем — их пулеры отключены, данные протухли.
+		snaps, err := h.store.Bms26Current()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
-		d.Kind = "antbms"
-		devs = append(devs, d)
-	}
-	// EnBMS (BLE) — из отдельного ключа, в форме bmsDevice.
-	if ec, eerr := h.store.EnBmsCurrent(); eerr != nil {
-		log.Printf("dashboard: enbms current: %v", eerr)
+		for _, sn := range snaps {
+			devs = append(devs, bmsDeviceFromBms26(sn))
+		}
 	} else {
-		for _, s := range ec {
-			devs = append(devs, bmsDeviceFromEnBms(s))
+		m, err := h.store.BMSCurrent()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, raw := range m {
+			var d bmsDevice
+			if err := json.Unmarshal([]byte(raw), &d); err != nil {
+				continue
+			}
+			d.Kind = "antbms"
+			devs = append(devs, d)
+		}
+		// EnBMS (BLE) — из отдельного ключа, в форме bmsDevice.
+		if ec, eerr := h.store.EnBmsCurrent(); eerr != nil {
+			log.Printf("dashboard: enbms current: %v", eerr)
+		} else {
+			for _, s := range ec {
+				devs = append(devs, bmsDeviceFromEnBms(s))
+			}
 		}
 	}
 	// Сортировка батареек на главной — по отображаемому имени; при равенстве —
@@ -614,6 +627,20 @@ func (h *dashboardHandler) apiBMSOne(w http.ResponseWriter, r *http.Request) {
 	if strings.HasSuffix(name, "/series") {
 		h.apiBMSSeries(w, r, strings.TrimSuffix(name, "/series"))
 		return
+	}
+	// BMS malina26 (единый тип ANT+EnBMS): имя в URL — serial.
+	if bms26 != nil {
+		sn, serr := h.store.Bms26One(name)
+		if serr != nil {
+			http.Error(w, serr.Error(), http.StatusInternalServerError)
+			return
+		}
+		if sn != nil {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			_ = json.NewEncoder(w).Encode(bmsDeviceFromBms26(*sn))
+			return
+		}
 	}
 	raw, err := h.store.BMSOne(name)
 	if err != nil {
@@ -677,6 +704,46 @@ func (h *dashboardHandler) apiBMSSeries(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	cutoff := recentCutoff(now)
+	// BMS malina26 (единый тип): имя в URL — serial. Старая часть периода — из
+	// pg.bms26_averages, рецентная — из Redis-ряда bms26.
+	if bms26 != nil {
+		var pts []bms26Snapshot
+		pgStart, pgEnd, pgOK, rStart, rEnd, rOK := seamWindows(from, to, cutoff)
+		if h.pg != nil && pgOK {
+			old, err := h.pg.Bms26Averages(name, pgStart, pgEnd)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			pts = append(pts, old...)
+		}
+		if rOK {
+			recent, err := h.store.QueryBms26Series(name, rStart, rEnd)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			pts = append(pts, recent...)
+		}
+		out := make([]bmsSeriesPoint, 0, len(pts))
+		for _, p := range pts {
+			out = append(out, bmsSeriesPointFromBms26(p))
+		}
+		out = downsampleBMSSeries(out, from, to)
+		if out == nil {
+			out = []bmsSeriesPoint{}
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"name":   name,
+			"kind":   "bms26",
+			"from":   from.Format(time.RFC3339),
+			"to":     to.Format(time.RFC3339),
+			"points": out,
+		})
+		return
+	}
 	// EnBMS (BLE): имя в URL — MAC устройства (есть в enbms:current). Ряд читаем
 	// из pg.enbms_averages (старая часть) + Redis-ряда EnBMS и приводим к форме
 	// bmsSeriesPoint.

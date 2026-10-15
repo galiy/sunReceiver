@@ -2145,6 +2145,9 @@ func main() {
 	if bmsSite != nil {
 		log.Printf("bms: опрос ANT BMS через %s (1 раз в секунду, ключ Redis %s)", bmsSite.url, redisBMSKey)
 	}
+	// BMS через malina26 (единый тип ANT+EnBMS): используем общий клиент
+	// method=malina26 (те же host/port/password и токен), отдельного раздела нет.
+	bms26 = newBms26Source(malina26)
 	// Если МАП опрашивается через legacy веб-API (method=malina), обязателен доступ
 	// к ПАК «Малина» (блок map.malina) — иначе неоткуда взять параметры батареи/сети.
 	if mapAPI != nil && mppt == nil {
@@ -2185,7 +2188,7 @@ func main() {
 	dash := dashFlags{
 		ShowMap:                mapSec != nil && (mapSec.Disabled == nil || !*mapSec.Disabled),
 		ShowMeter:              meterCfg != nil,
-		ShowBMS:                bmsSite != nil || enBmsCfg != nil,
+		ShowBMS:                bmsSite != nil || enBmsCfg != nil || bms26 != nil,
 		ShowRelay:              relaySec != nil && (relaySec.Disabled == nil || !*relaySec.Disabled),
 		ShowCE308:              ce308Cfg != nil,
 		CE308FinalReadingsOnly: ce308Cfg != nil && ce308Cfg.FinalReadingsOnly,
@@ -2395,6 +2398,15 @@ func main() {
 		go func() {
 			defer bgWg.Done()
 			runBmsPoll(store, pg, stopCtx)
+		}()
+	}
+	// BMS через malina26 (единый тип ANT+EnBMS): отдельный цикл, Redis
+	// sunreceiver:bms26:* + PG bms26_averages, см. bms26.go.
+	if bms26 != nil {
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			runBms26Poll(store, pg, stopCtx)
 		}()
 	}
 	// Электросчётчик DDS238 — 1 раз в секунду (мгновенные значения в Redis +

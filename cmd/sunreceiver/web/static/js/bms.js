@@ -62,7 +62,7 @@ function renderCells(d){
 // Подписи каналов T1–T6 (реконструкция — см. docs/antbms/antbms-protocol-status-frame.md).
 var TEMP_NAMES=['Батарея 1','Батарея 2','Силовая плата','Плата управления','Резерв','Резерв'];
 // Для EnBMS соответствие каналов не восстанавливалось — нейтральные подписи.
-function tempName(i){ if(BMS_KIND==='enbms') return 'Датчик '+(i+1); return TEMP_NAMES[i]||('датчик '+(i+1)); }
+function tempName(i){ if(BMS_KIND==='enbms'||BMS_KIND==='bms26') return 'Датчик '+(i+1); return TEMP_NAMES[i]||('датчик '+(i+1)); }
 function renderTemps(d){
   var t=d.temperatures_c||[];
   var h='';
@@ -145,12 +145,16 @@ async function load(){
     document.getElementById('bmsTitle').textContent=d.deviceName;
     if(BMS_KIND==='enbms'){
       document.getElementById('bmsSub').textContent='EnBMS'+(d.model?' · '+d.model:'')+' · актуально: '+(d.time||'—');
+    }else if(BMS_KIND==='bms26'){
+      document.getElementById('bmsSub').textContent=(d.model||'BMS')+(d.port?' · '+d.port:'')+' · актуально: '+(d.time||'—');
     }else{
       document.getElementById('bmsSub').textContent='ANT BMS · порт '+d.port+' · актуально: '+d.time;
     }
     renderKPIs(d); renderCells(d); renderTemps(d); renderMos(d); renderAlarms(d);
     if(BMS_KIND==='enbms'){
       document.getElementById('bmsFoot').textContent='EnBMS, MAC '+d.key+' · обновляется каждую секунду';
+    }else if(BMS_KIND==='bms26'){
+      document.getElementById('bmsFoot').textContent=(d.model||'BMS')+' · '+d.deviceName+' · обновляется каждую секунду';
     }else{
       document.getElementById('bmsFoot').textContent='Порт: '+d.port+' · счётчик кадров: '+d.frames+' · обновляется каждую секунду';
     }

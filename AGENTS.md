@@ -28,6 +28,7 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 | Счётчик Энергомера CE308 (BLE) | [`docs/modules/ce308.md`](docs/modules/ce308.md) |
 | Счётчик энергосбыта «Меркурий» (прогноз) | [`docs/meter_mercury.md`](docs/meter_mercury.md) |
 | BMS EnBMS (Enjie EMU110x, BLE/RS485) | [`docs/modules/enbms.md`](docs/modules/enbms.md) |
+| BMS через malina26 (ANT+EnBMS, единый тип) | [`docs/modules/bms26.md`](docs/modules/bms26.md) |
 | ANT BMS | [`docs/antbms.md`](docs/antbms.md) |
 | Шлюз Modbus TCP↔RTU (`daemons/mapgateway/`, C) | [`daemons/mapgateway/README.md`](daemons/mapgateway/README.md) |
 | Уведомления в MAX | [`docs/modules/notify.md`](docs/modules/notify.md) |
@@ -73,11 +74,19 @@ PostgreSQL. Включает веб-дашборд текущих парамет
   (токен по паролю + бинарные контракты): `host` — IP/имя, `port` — 80/443, `serial` —
   серийник «своего» МАП (число строкой). КЭС берутся из того же API (блок `malina` при
   `malina26` не используется). Пароли в открытом виде (файл в git не выгружается).
-  При `method=malina26` ключ КЭС в хранилище — `mppt-<serial>` (без host). Опрос
-  **ANT BMS** вынесен в отдельный раздел **`antBms`** `{"url", "disabled"}` (**`disabled` —
-ОБЯЗАТЕЛЬНОЕ** поле: `false` — ANT BMS опрашивается, `true` — опрос отключён;
-`url` — **полный** адрес `read_bms.php` ПАК «Малина», при необходимости с Basic-auth
-прямо в URL: `http://user:pass@host/read_bms.php`). Расположение баз — раздел **`db`**
+  При `method=malina26` ключ КЭС в хранилище — `mppt-<serial>` (без host). BMS (ANT +
+  EnBMS) через «Малина26» — **отдельного раздела конфига нет**: используется уже
+  имеющийся блок **`map.malina26`** (host/port/password + общий токен), пулер
+  запускается при `method=malina26`. Контракт телеметрии — единый бинарный 107 Б,
+  **копия** пакета `internal/bmscontract` (оригинал —
+  `github.com/galiy/malina-26/daemons/lib/bmscontract`; см.
+  [`docs/modules/bms26.md`](docs/modules/bms26.md)); хранение — Redis
+  `sunreceiver:bms26:*` + PG `bms26_averages`. Старые разделы **`antBms`**
+  `{"url", "disabled"}` (**`disabled` — ОБЯЗАТЕЛЬНОЕ**: `false` — ANT BMS
+  опрашивается, `true` — опрос отключён; `url` — **полный** адрес `read_bms.php` ПАК
+  «Малина», при необходимости с Basic-auth прямо в URL:
+  `http://user:pass@host/read_bms.php`) и **`enBms`** (BLE/RS485 напрямую) сохранены в
+  коде, но на проде отключены (`disabled=true`). Расположение баз — раздел **`db`**
 `{"redis": "host:port", "pg": "DSN", "pg_restore_window": "720h"}` (адреса напрямую из
 конфига; `pg_restore_window` — duration-строка окна реставрации Redis из PG, пусто/нет =
 дефолт 30 суток; пароль PG — в DSN, конфиг приватный). Порт веб-дашборда — корневое поле
@@ -217,6 +226,12 @@ inverter 10, map 1, meter 1, ce308 5, antbms 1. Период EnBMS задаёт�
   постоянные соединения (структура BLE — из CE308, схема хранения/усреднения — из
   ANT BMS). Redis: current + каждое снятое показание; PG: 5-минутные средние.
   Полное описание — [`docs/modules/enbms.md`](docs/modules/enbms.md).
+- **BMS через malina26** (единый тип ANT+EnBMS) — `bms26.go`, `bms26_store.go`:
+  опрос через HTTP-API «Малина26» (`/api/bms/devices` + `/api/bms/raw`), бинарный
+  контракт 107 Б — копия пакета `internal/bmscontract` (оригинал —
+  `github.com/galiy/malina-26/daemons/lib/bmscontract`). Redis current `sunreceiver:bms26:current`
+  + ряд `sunreceiver:bms26:series:*`; PG `bms26_averages` (5-мин средние). Полное
+  описание — [`docs/modules/bms26.md`](docs/modules/bms26.md).
 - **ANT BMS** — `bms_poller.go`, `bms_accumulator.go`, `daemons/bmslistener/`. Полное описание —
   [`docs/antbms.md`](docs/antbms.md). Демон bmslistener (установка на ПАК «Малина») —
   [`docs/modules/bms-listener.md`](docs/modules/bms-listener.md).

@@ -146,6 +146,18 @@ CREATE TABLE IF NOT EXISTS sunreceiver.enbms_averages (
 CREATE INDEX IF NOT EXISTS enbms_averages_ts_idx ON sunreceiver.enbms_averages (ts);`); err != nil {
 		return fmt.Errorf("pg enbms_averages schema: %w", err)
 	}
+	// Таблица 5-минутных усреднённых точек BMS через malina26 (единый тип BMS:
+	// ANT + EnBMS). PK (name, ts); name = serial BMS.
+	if _, err := s.pool.Exec(s.ctx, `
+CREATE TABLE IF NOT EXISTS sunreceiver.bms26_averages (
+	name   text        NOT NULL,
+	ts     timestamptz NOT NULL,
+	values jsonb       NOT NULL DEFAULT '{}'::jsonb,
+	PRIMARY KEY (name, ts)
+);
+CREATE INDEX IF NOT EXISTS bms26_averages_ts_idx ON sunreceiver.bms26_averages (ts);`); err != nil {
+		return fmt.Errorf("pg bms26_averages schema: %w", err)
+	}
 	// История ошибок ВСЕХ устройств (инверторы/МАП/счётчик/CE308/BMS): запись —
 	// только при ПОЯВЛЕНИИ ошибки (переход «не было → есть»), без дублей.
 	if _, err := s.pool.Exec(s.ctx, `
@@ -612,6 +624,42 @@ ORDER BY ts ASC`, start.UTC(), end.UTC())
 // за период [start, end] включительно, по возрастанию ts. Используется для
 // реставрации Redis-ряда sunreceiver:enbms:series из PG при полностью пустом
 // Redis (см. restoreRedisFromPG).
+// Bms26Averages возвращает 5-минутные усреднённые точки одной BMS malina26
+// (по serial) за период [start, end] из sunreceiver.bms26_averages.
+func (s *pgStore) Bms26Averages(name string, start, end time.Time) ([]bms26Snapshot, error) {
+	rows, err := s.pool.Query(s.ctx, `
+SELECT ts, values
+FROM sunreceiver.bms26_averages
+WHERE name = $1 AND ts >= $2 AND ts <= $3
+ORDER BY ts ASC`, name, start.UTC(), end.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("pg query bms26 averages: %w", err)
+	}
+	defer rows.Close()
+
+	out := []bms26Snapshot{}
+	for rows.Next() {
+		var ts time.Time
+		var vals json.RawMessage
+		if err := rows.Scan(&ts, &vals); err != nil {
+			return nil, fmt.Errorf("pg scan bms26 avg: %w", err)
+		}
+		var sn bms26Snapshot
+		if len(vals) > 0 {
+			if err := json.Unmarshal(vals, &sn); err != nil {
+				continue
+			}
+		}
+		sn.Serial = name
+		sn.Timestamp = ts.Format(time.RFC3339)
+		out = append(out, sn)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pg rows bms26 avg: %w", err)
+	}
+	return out, nil
+}
+
 func (s *pgStore) EnBmsAveragesAll(start, end time.Time) ([]enbmsSeriesPoint, error) {
 	rows, err := s.pool.Query(s.ctx, `
 SELECT name, ts, values
