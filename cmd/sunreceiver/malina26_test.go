@@ -196,3 +196,16 @@ func TestDecodeMalina26KESEnergyRanges(t *testing.T) {
 		}
 	}
 }
+
+// deviceSerial: предпочитает явное поле serial (новый контракт списка), при его
+// отсутствии — второй токен label (старые сборки).
+func TestDeviceSerial(t *testing.T) {
+	withField := malina26Device{Serial: "623", Label: "KES · 999 · /dev/ttyUSB9 · 115200"}
+	if got := deviceSerial(withField); got != "623" {
+		t.Fatalf("deviceSerial с полем serial = %q, want 623", got)
+	}
+	noField := malina26Device{Label: "Titanator · 51510 · /dev/ttyAMA0 · 115200"}
+	if got := deviceSerial(noField); got != "51510" {
+		t.Fatalf("deviceSerial без поля serial = %q, want 51510", got)
+	}
+}

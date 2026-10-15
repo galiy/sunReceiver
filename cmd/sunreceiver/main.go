@@ -2315,6 +2315,9 @@ func main() {
 	// СИНХРОННО до запуска пулеров и runAccumulator — иначе backfill агрегации успел
 	// бы обработать ряд под старыми IP-ключами.
 	migrateMeterDeviceKey(store, pg, time.Now())
+	// Однократный перенос ключей КЭС старым форматом "<host>#mppt-<uid>" → "mppt-<serial>"
+	// (current/ряд Redis + строки PG averages). До пулеров/аккумулятора.
+	migrateMPPTDeviceKeys(store, pg, time.Now())
 	// Однократный перенос истории DTS017M на стабильный ключ (идемпотентно).
 	migrateDts017AverageKey(pg, dts017Cfg)
 

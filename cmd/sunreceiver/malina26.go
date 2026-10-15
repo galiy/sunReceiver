@@ -202,11 +202,15 @@ func (s *malina26Source) get(ctx context.Context, path string) (int, []byte, err
 }
 
 // malina26Device — запись списка /api/{type}/devices.
+// malina26Device — запись списка /api/{type}/devices.
+// serial — числовой серийник (без буквы) отдельным полем; введён в API «Малина26»
+// позже — на старых сборках поля нет, тогда серийник берётся из label (см. deviceSerial).
 type malina26Device struct {
-	Type  string `json:"type"`
-	ID    int    `json:"id"`
-	Gen   uint64 `json:"gen"`
-	Label string `json:"label"`
+	Type   string `json:"type"`
+	ID     int    `json:"id"`
+	Gen    uint64 `json:"gen"`
+	Serial string `json:"serial"`
+	Label  string `json:"label"`
 }
 
 // devices запрашивает список устройств типа typ ("map"|"kes").
@@ -223,6 +227,15 @@ func (s *malina26Source) devices(ctx context.Context, typ string) ([]malina26Dev
 		return nil, fmt.Errorf("malina26 %s/devices: json: %w", typ, err)
 	}
 	return out, nil
+}
+
+// deviceSerial возвращает серийник устройства: явное поле serial, если сервер его
+// отдаёт (новый контракт списка), иначе — второй токен метки label (старые сборки).
+func deviceSerial(d malina26Device) string {
+	if s := strings.TrimSpace(d.Serial); s != "" {
+		return s
+	}
+	return serialFromLabel(d.Label)
 }
 
 // serialFromLabel извлекает серийник из метки label = "<...> · <serial> · <port> · <baud>".
@@ -284,7 +297,7 @@ func (s *malina26Source) fetchMapRaw(ctx context.Context) ([]byte, error) {
 		}
 		found := false
 		for _, d := range devs {
-			if serialFromLabel(d.Label) == s.serial {
+			if deviceSerial(d) == s.serial {
 				s.mu.Lock()
 				s.mapID, s.mapGen, s.haveMap = d.ID, d.Gen, true
 				s.mu.Unlock()
@@ -398,7 +411,7 @@ func (s *malina26Source) FetchKES(ctx context.Context) ([]kesReading, error) {
 			log.Printf("kes malina26: id=%d: битый payload (len=%d)", d.ID, len(b))
 		}
 		// fallback: UID из метки, чтобы ключ не терялся при сбое декода.
-		out = append(out, kesReading{UID: serialFromLabel(d.Label), Slot: i, Result: r})
+		out = append(out, kesReading{UID: deviceSerial(d), Slot: i, Result: r})
 	}
 	return out, nil
 }

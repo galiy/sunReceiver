@@ -61,12 +61,12 @@ function renderPivot(devices){
 	if(!devices || !devices.length) return '<div class="missing">No data in Redis</div>';
 	// Разбиваем колонки на две группы: сетевые инверторы (первые) и MPPT-контроллеры (последние).
 	// Устройство МАП (батарея/сеть) в сводной таблице не показываем — у него нет солнечных
-	// панелей; оно нужно только для верхних плашек и графиков. Маркер MPPT — ip вида host#mpptN.
+	// панелей; оно нужно только для верхних плашек и графиков. Маркер MPPT — ключ mppt-<serial>.
 	var grid=[], mpts=[];
 	for(var i=0;i<devices.length;i++){
 		var d=devices[i];
 		if(isMAPDeviceJS(d) || isMeterDevice(d)) continue;
-		if(String(d.ip||'').indexOf('#mppt')>=0) mpts.push(d); else grid.push(d);
+		if(isMPPTDev(d)) mpts.push(d); else grid.push(d);
 	}
 	if(!grid.length && !mpts.length) return '<div class="missing">No data in Redis</div>';
 	// Единая таблица: общий первый столбец (заголовки строк и единиц), затем колонки
@@ -148,6 +148,15 @@ function edgeCell(color,isFirst,isLast){
 function isMeterDevice(d){ return !!(d && d.values && d.values.meter_voltage !== undefined); }
 // isMAPDeviceJS — маркер устройства МАП (батарея/сеть) в JS (аналог isMAPDevice в Go).
 function isMAPDeviceJS(d){ return !!(d && d.values && d.values.battery_voltage !== undefined); }
+// isMPPTDev — маркер MPPT-контроллера (КЭС) в JS (аналог isMPPTKey в Go): ключ
+// устройства вида "mppt-<serial>" (новый формат, без host). Поддержан и старый
+// формат "<host>#mppt-<uid>" — на случай снимков, не прошедших миграцию ключей.
+// Используется, чтобы токи/мощности КЭС не подмешивались к сетевым инверторам в
+// сводной таблице и не считались в «инверторах онлайн».
+function isMPPTDev(d){
+	var ip=(d && d.ip) ? String(d.ip) : '';
+	return ip.lastIndexOf('mppt-',0)===0 || ip.indexOf('#mppt')>=0;
+}
 // STALE_MS — окно «молчания» устройства: если последний снимок старше 20 минут
 // (то же окно, что TOOLTIP_MAX_GAP на графиках), устройство считаем оффлайн —
 // напр. ночью, когда инверторы выключены и перестали присылать данные.
@@ -519,7 +528,7 @@ async function tick(){
 		// MPPT-контроллеров (КЭС) и offline-устройств (снимок старше STALE_MS, напр.
 		// ночью). Отображается под первой плашкой:
 		var invCount=0;
-		for(var i=0;i<data.devices.length;i++) if(!isMAPDeviceJS(data.devices[i]) && !isMeterDevice(data.devices[i]) && String(data.devices[i].ip||'').indexOf('#mppt')<0 && !isStaleDev(data.devices[i])) invCount++;
+		for(var i=0;i<data.devices.length;i++) if(!isMAPDeviceJS(data.devices[i]) && !isMeterDevice(data.devices[i]) && !isMPPTDev(data.devices[i]) && !isStaleDev(data.devices[i])) invCount++;
 		for(var i=0;i<placements.length;i++){
 			setKpi('kpiPlaceP'+i, placements[i].power);
 			setKpi('kpiPlacePV'+i, placements[i].pv);
