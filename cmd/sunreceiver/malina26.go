@@ -66,10 +66,10 @@ type malina26Source struct {
 
 	client *http.Client
 
-	mu     sync.Mutex
-	token  string
-	mapID  int
-	mapGen uint64
+	mu      sync.Mutex
+	token   string
+	mapID   int
+	mapGen  uint64
 	haveMap bool
 }
 
@@ -420,19 +420,19 @@ func (s *malina26Source) FetchKES(ctx context.Context) ([]kesReading, error) {
 
 // id-позиции нужных ячеек МАП в documentedCells (cells.go, version=5).
 const (
-	mapCellMODE_RAM         = 131 // 0x400 (копия MODE; ==4 → заряд)
-	mapCellUAccMedVH        = 135 // 0x405
-	mapCellUAccMedVL        = 136 // 0x406
-	mapCellUNET             = 147 // 0x422
-	mapCellTFNET            = 150 // 0x425
-	mapCellTempGrad0        = 159 // 0x42E (АКБ)
-	mapCellTempGrad1        = 160 // 0x42F (тор)
-	mapCellTempGrad2        = 161 // 0x430 (транзисторы)
-	mapCellIAccMedU16L      = 163 // 0x432
-	mapCellIAccMedU16H      = 164 // 0x433
-	mapCellTempOff          = 166 // 0x43C
-	mapCellPNETSignP        = 382 // 0x587
-	mapCellPNET8            = 387 // 0x59A, 2Б
+	mapCellMODE_RAM    = 131 // 0x400 (копия MODE; ==4 → заряд)
+	mapCellUAccMedVH   = 135 // 0x405
+	mapCellUAccMedVL   = 136 // 0x406
+	mapCellUNET        = 147 // 0x422
+	mapCellTFNET       = 150 // 0x425
+	mapCellTempGrad0   = 159 // 0x42E (АКБ)
+	mapCellTempGrad1   = 160 // 0x42F (тор)
+	mapCellTempGrad2   = 161 // 0x430 (транзисторы)
+	mapCellIAccMedU16L = 163 // 0x432
+	mapCellIAccMedU16H = 164 // 0x433
+	mapCellTempOff     = 166 // 0x43C
+	mapCellPNETSignP   = 382 // 0x587
+	mapCellPNET8       = 387 // 0x59A, 2Б
 )
 
 // malina26ErrCellIDs — адрес ячейки ошибок МАП → id в documentedCells (cells.go, v5).

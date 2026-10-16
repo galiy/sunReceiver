@@ -542,44 +542,17 @@ func (h *dashboardHandler) energy(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// apiBMS отдаёт актуальное состояние всех BMS (ANT BMS HASH sunreceiver:bms и
-// EnBMS HASH sunreceiver:enbms:current) для батареек на главной странице
-// (обновление раз в минуту). EnBMS приводится к форме bmsDevice с kind="enbms".
+// apiBMS отдаёт актуальное состояние всех BMS (единое хранилище bms26) для
+// батареек на главной странице (обновление раз в минуту).
 func (h *dashboardHandler) apiBMS(w http.ResponseWriter, r *http.Request) {
 	devs := []bmsDevice{}
-	if bms26 != nil {
-		// Единый тип BMS через malina26 (ANT+EnBMS). Legacy-ключи (ANT/EnBMS) не
-		// подмешиваем — их пулеры отключены, данные протухли.
-		snaps, err := h.store.Bms26Current()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		for _, sn := range snaps {
-			devs = append(devs, bmsDeviceFromBms26(sn))
-		}
-	} else {
-		m, err := h.store.BMSCurrent()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		for _, raw := range m {
-			var d bmsDevice
-			if err := json.Unmarshal([]byte(raw), &d); err != nil {
-				continue
-			}
-			d.Kind = "antbms"
-			devs = append(devs, d)
-		}
-		// EnBMS (BLE) — из отдельного ключа, в форме bmsDevice.
-		if ec, eerr := h.store.EnBmsCurrent(); eerr != nil {
-			log.Printf("dashboard: enbms current: %v", eerr)
-		} else {
-			for _, s := range ec {
-				devs = append(devs, bmsDeviceFromEnBms(s))
-			}
-		}
+	snaps, err := h.store.Bms26Current()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for _, sn := range snaps {
+		devs = append(devs, bmsDeviceFromBms26(sn))
 	}
 	// Сортировка батареек на главной — по отображаемому имени; при равенстве —
 	// по ключу (bmsKey), для стабильного порядка.
@@ -629,39 +602,15 @@ func (h *dashboardHandler) apiBMSOne(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// BMS malina26 (единый тип ANT+EnBMS): имя в URL — serial.
-	if bms26 != nil {
-		sn, serr := h.store.Bms26One(name)
-		if serr != nil {
-			http.Error(w, serr.Error(), http.StatusInternalServerError)
-			return
-		}
-		if sn != nil {
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.Header().Set("Cache-Control", "no-store")
-			_ = json.NewEncoder(w).Encode(bmsDeviceFromBms26(*sn))
-			return
-		}
-	}
-	raw, err := h.store.BMSOne(name)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	sn, serr := h.store.Bms26One(name)
+	if serr != nil {
+		http.Error(w, serr.Error(), http.StatusInternalServerError)
 		return
 	}
-	if raw != "" {
+	if sn != nil {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		_, _ = w.Write([]byte(raw))
-		return
-	}
-	// EnBMS (BLE): имя в URL — MAC устройства. Снимок приводим к форме bmsDevice
-	// (kind="enbms"), чтобы та же страница/JS отрисовали его.
-	if es, eerr := h.store.EnBmsOne(name); eerr != nil {
-		http.Error(w, eerr.Error(), http.StatusInternalServerError)
-		return
-	} else if es != nil {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		_ = json.NewEncoder(w).Encode(bmsDeviceFromEnBms(*es))
+		_ = json.NewEncoder(w).Encode(bmsDeviceFromBms26(*sn))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -703,94 +652,13 @@ func (h *dashboardHandler) apiBMSSeries(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "from >= to", http.StatusBadRequest)
 		return
 	}
-	cutoff := recentCutoff(now)
-	// BMS malina26 (единый тип): имя в URL — serial. Старая часть периода — из
+	cutoff := seriesReadCutoff(from, now)
+	// Единый тип BMS: имя в URL — serial. Старая часть периода — из
 	// pg.bms26_averages, рецентная — из Redis-ряда bms26.
-	if bms26 != nil {
-		var pts []bms26Snapshot
-		pgStart, pgEnd, pgOK, rStart, rEnd, rOK := seamWindows(from, to, cutoff)
-		if h.pg != nil && pgOK {
-			old, err := h.pg.Bms26Averages(name, pgStart, pgEnd)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			pts = append(pts, old...)
-		}
-		if rOK {
-			recent, err := h.store.QueryBms26Series(name, rStart, rEnd)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			pts = append(pts, recent...)
-		}
-		out := make([]bmsSeriesPoint, 0, len(pts))
-		for _, p := range pts {
-			out = append(out, bmsSeriesPointFromBms26(p))
-		}
-		out = downsampleBMSSeries(out, from, to)
-		if out == nil {
-			out = []bmsSeriesPoint{}
-		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"name":   name,
-			"kind":   "bms26",
-			"from":   from.Format(time.RFC3339),
-			"to":     to.Format(time.RFC3339),
-			"points": out,
-		})
-		return
-	}
-	// EnBMS (BLE): имя в URL — MAC устройства (есть в enbms:current). Ряд читаем
-	// из pg.enbms_averages (старая часть) + Redis-ряда EnBMS и приводим к форме
-	// bmsSeriesPoint.
-	if es, eerr := h.store.EnBmsOne(name); eerr == nil && es != nil {
-		var epts []enbmsSeriesPoint
-		pgStart, pgEnd, pgOK, rStart, rEnd, rOK := seamWindows(from, to, cutoff)
-		if h.pg != nil && pgOK {
-			old, err := h.pg.EnBmsAverages(name, pgStart, pgEnd)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			epts = append(epts, old...)
-		}
-		if rOK {
-			recent, err := h.store.QueryEnBmsSeries(name, rStart, rEnd)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			epts = append(epts, recent...)
-		}
-		out := make([]bmsSeriesPoint, 0, len(epts))
-		for _, p := range epts {
-			out = append(out, bmsSeriesPointFromEnBms(p))
-		}
-		out = downsampleBMSSeries(out, from, to)
-		if out == nil {
-			out = []bmsSeriesPoint{}
-		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"name":   name,
-			"kind":   "enbms",
-			"from":   from.Format(time.RFC3339),
-			"to":     to.Format(time.RFC3339),
-			"points": out,
-		})
-		return
-	}
-	var pts []bmsSeriesPoint
-	// Старая часть периода (старше cutoff) — из PostgreSQL (5-мин средние);
-	// рецентная — из Redis-ряда (сырые показания). Границы — общий seamWindows.
+	var pts []bms26Snapshot
 	pgStart, pgEnd, pgOK, rStart, rEnd, rOK := seamWindows(from, to, cutoff)
 	if h.pg != nil && pgOK {
-		old, err := h.pg.BMSAverages(name, pgStart, pgEnd)
+		old, err := h.pg.Bms26Averages(name, pgStart, pgEnd)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -798,25 +666,29 @@ func (h *dashboardHandler) apiBMSSeries(w http.ResponseWriter, r *http.Request, 
 		pts = append(pts, old...)
 	}
 	if rOK {
-		recent, err := h.store.QueryBMSSeries(name, rStart, rEnd)
+		recent, err := h.store.QueryBms26Series(name, rStart, rEnd)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		pts = append(pts, recent...)
 	}
-	pts = downsampleBMSSeries(pts, from, to)
-	if pts == nil {
-		pts = []bmsSeriesPoint{}
+	out := make([]bmsSeriesPoint, 0, len(pts))
+	for _, p := range pts {
+		out = append(out, bmsSeriesPointFromBms26(p))
+	}
+	out = downsampleBMSSeries(out, from, to)
+	if out == nil {
+		out = []bmsSeriesPoint{}
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"name":   name,
-		"kind":   "antbms",
+		"kind":   "bms26",
 		"from":   from.Format(time.RFC3339),
 		"to":     to.Format(time.RFC3339),
-		"points": pts,
+		"points": out,
 	})
 }
 
@@ -2647,19 +2519,10 @@ func (h *dashboardHandler) apiAGMCurrent(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}
-	if m, err := h.store.BMSCurrent(); err == nil {
-		for _, raw := range m {
-			var d bmsDevice
-			if json.Unmarshal([]byte(raw), &d) == nil {
-				agmCur -= d.CurrentA
-				agmPwr -= d.PowerW
-			}
-		}
-	}
-	if m, err := h.store.EnBmsCurrent(); err == nil {
-		for _, s := range m {
-			agmCur -= s.CurrentA
-			agmPwr -= s.PowerW
+	if snaps, err := h.store.Bms26Current(); err == nil {
+		for _, d := range snaps {
+			agmCur -= d.CurrentA
+			agmPwr -= d.PowerW
 		}
 	}
 	soc := 0
@@ -2808,7 +2671,7 @@ func (h *dashboardHandler) apiAGMSeries(w http.ResponseWriter, r *http.Request) 
 // Кандидатные моменты — объединение таймстемпов всех источников. Ток AGM =
 // МАП − Σ BMS; МАП=0 трактуется как реальное значение (не гард).
 func (h *dashboardHandler) agmSeries(from, to, now time.Time) ([]agmSeriesPoint, []agmSeriesPoint) {
-	cutoff := recentCutoff(now)
+	cutoff := seriesReadCutoff(from, now)
 	snaps, err := h.loadRange(from, to, now)
 	if err != nil {
 		log.Printf("dashboard: agm loadRange: %v", err)
@@ -3090,50 +2953,29 @@ func (h *dashboardHandler) agmLoadBMS(from, to, cutoff time.Time) []agmDevValues
 		d.i = append(d.i, cur)
 		d.p = append(d.p, pwr)
 	}
-	// ANT BMS — все устройства из текущего HASH.
-	if m, err := h.store.BMSCurrent(); err == nil {
-		for name := range m {
-			var d agmDevValues
-			if h.pg != nil && pgOK {
-				if pts, err := h.pg.BMSAverages(name, pgStart, pgEnd); err == nil {
-					for _, p := range pts {
-						add(&d, p.Ts, fmt.Sprintf("%+v", p.bmsAveraged), p.CurrentA, p.PowerW)
-					}
+	// Все BMS — из единого хранилища bms26 (ANT+EnBMS), по serial.
+	snaps, err := h.store.Bms26Current()
+	if err != nil {
+		return devs
+	}
+	for _, sn := range snaps {
+		var d agmDevValues
+		if h.pg != nil && pgOK {
+			if pts, err := h.pg.Bms26Averages(sn.Serial, pgStart, pgEnd); err == nil {
+				for i := range pts {
+					add(&d, pts[i].Timestamp, fmt.Sprintf("%+v", pts[i]), pts[i].CurrentA, pts[i].PowerW)
 				}
-			}
-			if rOK {
-				if pts, err := h.store.QueryBMSSeries(name, rStart, rEnd); err == nil {
-					for _, p := range pts {
-						add(&d, p.Ts, fmt.Sprintf("%+v", p.bmsAveraged), p.CurrentA, p.PowerW)
-					}
-				}
-			}
-			if len(d.ts) > 0 {
-				devs = append(devs, d)
 			}
 		}
-	}
-	// EnBMS — все устройства по MAC (заморозку значения проверяем только тут).
-	if m, err := h.store.EnBmsCurrent(); err == nil {
-		for mac := range m {
-			var d agmDevValues
-			if h.pg != nil && pgOK {
-				if pts, err := h.pg.EnBmsAverages(mac, pgStart, pgEnd); err == nil {
-					for _, p := range pts {
-						add(&d, p.Ts, fmt.Sprintf("%+v", p.enbmsAveraged), p.CurrentA, p.PowerW)
-					}
+		if rOK {
+			if pts, err := h.store.QueryBms26Series(sn.Serial, rStart, rEnd); err == nil {
+				for i := range pts {
+					add(&d, pts[i].Timestamp, fmt.Sprintf("%+v", pts[i]), pts[i].CurrentA, pts[i].PowerW)
 				}
 			}
-			if rOK {
-				if pts, err := h.store.QueryEnBmsSeries(mac, rStart, rEnd); err == nil {
-					for _, p := range pts {
-						add(&d, p.Ts, fmt.Sprintf("%+v", p.enbmsAveraged), p.CurrentA, p.PowerW)
-					}
-				}
-			}
-			if len(d.ts) > 0 {
-				devs = append(devs, d)
-			}
+		}
+		if len(d.ts) > 0 {
+			devs = append(devs, d)
 		}
 	}
 	return devs
@@ -3275,7 +3117,9 @@ func (h *dashboardHandler) loadRange(start, end time.Time, now time.Time) ([]dev
 
 // loadRangeUncached — реальное чтение из PG (старая часть) и Redis (рецентная часть).
 func (h *dashboardHandler) loadRangeUncached(start, end time.Time, now time.Time) ([]deviceSnapshot, error) {
-	cutoff := recentCutoff(now)
+	// Redis-часть — только последние seriesRawWindow (иначе полный скан месячных
+	// общих ZSET = десятки секунд); остальное окно — из PG (5-мин средние).
+	cutoff := seriesReadCutoff(start, now)
 	pgStart, pgEnd, pgOK, rStart, rEnd, rOK := seamWindows(start, end, cutoff)
 	var all []deviceSnapshot
 	// Старая часть периода (старше cutoff) — из PostgreSQL (5-мин средние).
@@ -3561,7 +3405,7 @@ func (h *dashboardHandler) apiCE308Series(w http.ResponseWriter, r *http.Request
 		http.Error(w, "нет данных CE308", http.StatusNotFound)
 		return
 	}
-	cutoff := recentCutoff(now)
+	cutoff := seriesReadCutoff(from, now)
 	var pts []seriesPoint
 	// Старая часть — из PostgreSQL (5-мин средние), рецентная — из Redis-ряда
 	// (сырые показания). Границы — общий seamWindows.
@@ -3631,7 +3475,7 @@ func (h *dashboardHandler) ce308SeriesRange(from, to time.Time, now time.Time) (
 		vals map[string]float64
 	}
 	var recs []rec
-	cutoff := recentCutoff(now)
+	cutoff := seriesReadCutoff(from, now)
 	// Старая часть — из PostgreSQL (5-мин средние), рецентная — из Redis-ряда
 	// (сырые показания). Границы — общий seamWindows.
 	pgStart, pgEnd, pgOK, rStart, rEnd, rOK := seamWindows(from, to, cutoff)
@@ -3693,7 +3537,7 @@ func (h *dashboardHandler) dts017SeriesRange(from, to time.Time, now time.Time) 
 		vals map[string]float64
 	}
 	var recs []rec
-	cutoff := recentCutoff(now)
+	cutoff := seriesReadCutoff(from, now)
 	pgStart, pgEnd, pgOK, rStart, rEnd, rOK := seamWindows(from, to, cutoff)
 	if h.pg != nil && pgOK {
 		old, err := h.pg.Dts017AveragesAll(pgStart, pgEnd)

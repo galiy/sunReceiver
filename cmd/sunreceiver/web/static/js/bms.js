@@ -4,10 +4,6 @@ function esc(s){ return String(s).replace(/[&<>"]/g,function(c){ return {'&':'&a
 function fmtNum(n,digits){ return isFinite(n)? n.toLocaleString('ru-RU',{maximumFractionDigits:digits}) : '—'; }
 
 var NAME = decodeURIComponent(location.pathname.replace(/^\/bms\//,''));
-// Тип BMS: 'antbms' (read_bms.php) или 'enbms' (Enjie, BLE). Приходит из API
-// (поле kind); по умолчанию — ANT (обратная совместимость). Управляет подписями
-// и скрытием блоков, которых у EnBMS нет (мощностные ключи).
-var BMS_KIND = 'antbms';
 
 // Цвет заполнения ячейки: max — красная, min — синяя, остальные — зелёные.
 var CELL_COLOR={ max:'#d9534f', min:'#428bca', normal:'#37b24d' };
@@ -69,7 +65,7 @@ function renderCells(d){
 // Подписи каналов T1–T6 (реконструкция — см. docs/antbms/antbms-protocol-status-frame.md).
 var TEMP_NAMES=['Батарея 1','Батарея 2','Силовая плата','Плата управления','Резерв','Резерв'];
 // Для EnBMS соответствие каналов не восстанавливалось — нейтральные подписи.
-function tempName(i){ if(BMS_KIND==='enbms'||BMS_KIND==='bms26') return 'Датчик '+(i+1); return TEMP_NAMES[i]||('датчик '+(i+1)); }
+function tempName(i){ return 'Датчик '+(i+1); }
 function renderTemps(d){
   var t=d.temperatures_c||[];
   var tw=Number(d.temp_warn_mask)||0, tp=Number(d.temp_prot_mask)||0;
@@ -95,20 +91,7 @@ function balancingCells(d){
   return out;
 }
 
-// renderEnBmsState — режим/ключи/балансировка EnBMS (блок TeleState 0x44; на BLE
-// данных нет — поля пустые). Тексты русские, перевод — словарём i18n по DOM.
-function renderEnBmsState(d){
-  var h='<span class="mos on">Режим: '+esc(d.mode||'—')+'</span>';
-  var keys=d.keys||[];
-  if(keys.length){ for(var i=0;i<keys.length;i++) h+='<span class="mos on">'+esc(keys[i])+'</span>'; }
-  else h+='<span class="mos">Ключи: нет данных</span>';
-  var bals=(d.balance||[]).length?d.balance:balancingCells(d);
-  h+='<span class="mos'+(bals.length?' on':'')+'">Балансировка: '+(bals.length?esc(bals.join(', ')):'не активна')+'</span>';
-  document.getElementById('mosWrap').innerHTML=h;
-}
-
 function renderMos(d){
-  if(BMS_KIND==='enbms'){ renderEnBmsState(d); return; }
   var ch={2:'Overvoltage protection',3:'Over current protection',5:'Total overpressure',6:'Battery overtemperature',7:'Power overtemperature',8:'Abnormal current',9:'Balanced line dropped',10:'Motherboard overtemperature',13:'Discharge tube abnormality'};
   var di={2:'Over-discharge protection',3:'Over current protection',5:'Total undervoltage',6:'Battery overtemperature',7:'Power overtemperature',8:'Abnormal current',9:'Balanced line dropped',10:'Motherboard overtemperature',12:'Short circuit protection',13:'Discharge tube abnormality',14:'Start exception'};
   var ba={0:'ВЫКЛ',1:'Exceeds limit',2:'Charge differential balance',3:'Balanced overtemperature',4:'Auto equalization',10:'Motherboard overtemperature'};
@@ -125,7 +108,7 @@ function renderMos(d){
 function renderAlarms(d){
   var box=document.getElementById('bmsAlarms'); if(!box) return;
   var a=d.alarms||[];
-  var type='<div class="alarm-type">Тип: '+esc(d.model||BMS_KIND||'')+'</div>';
+  var type='<div class="alarm-type">Тип: '+esc(d.model||'BMS')+'</div>';
   if(!a.length){ box.innerHTML=type+'<span class="ok">Нет активных алармов</span>'; return; }
   function txt(s){ return esc((typeof SR_descOf==='function')?SR_descOf(s,''):s); }
   var cats=[
@@ -154,12 +137,10 @@ function renderAlarms(d){
   box.innerHTML=h;
 }
 
-// applyBmsKind показывает/скрывает блоки, зависящие от типа BMS.
+// applyBmsKind — фиксированные подписи блоков (единый тип BMS26).
 function applyBmsKind(){
-  var en = BMS_KIND==='enbms';
-  // У EnBMS блок теперь несёт режим/ключи/балансировку (RS485 TeleState 0x44).
-  var mos=document.getElementById('bmsMosBlock'); if(mos){ mos.style.display=''; var h2=mos.querySelector('h2'); if(h2) h2.textContent=en?'Режим, ключи и балансировка':'Ключи и балансировка'; }
-  var tn=document.getElementById('bmsTnote'); if(tn) tn.style.display = en? 'none':'';
+  var mos=document.getElementById('bmsMosBlock'); if(mos){ mos.style.display=''; var h2=mos.querySelector('h2'); if(h2) h2.textContent='Ключи и балансировка'; }
+  var tn=document.getElementById('bmsTnote'); if(tn) tn.style.display='';
 }
 
 async function load(){
@@ -174,25 +155,12 @@ async function load(){
     }
     if(!r.ok) return;
     var d=await r.json();
-    BMS_KIND = d.kind || 'antbms';
     applyBmsKind();
     document.title=d.deviceName+' — SunReceiver';
     document.getElementById('bmsTitle').textContent=d.deviceName;
-    if(BMS_KIND==='enbms'){
-      document.getElementById('bmsSub').textContent='EnBMS'+(d.model?' · '+d.model:'')+' · актуально: '+(d.time||'—');
-    }else if(BMS_KIND==='bms26'){
-      document.getElementById('bmsSub').textContent=(d.model||'BMS')+(d.port?' · '+d.port:'')+' · актуально: '+(d.time||'—');
-    }else{
-      document.getElementById('bmsSub').textContent='ANT BMS · порт '+d.port+' · актуально: '+d.time;
-    }
+    document.getElementById('bmsSub').textContent=(d.model||'BMS')+(d.port?' · '+d.port:'')+' · актуально: '+(d.time||'—');
     renderKPIs(d); renderCells(d); renderTemps(d); renderMos(d); renderAlarms(d);
-    if(BMS_KIND==='enbms'){
-      document.getElementById('bmsFoot').textContent='EnBMS, MAC '+d.key+' · обновляется каждую секунду';
-    }else if(BMS_KIND==='bms26'){
-      document.getElementById('bmsFoot').textContent=(d.model||'BMS')+' · '+d.deviceName+' · обновляется каждую секунду';
-    }else{
-      document.getElementById('bmsFoot').textContent='Порт: '+d.port+' · счётчик кадров: '+d.frames+' · обновляется каждую секунду';
-    }
+    document.getElementById('bmsFoot').textContent=(d.model||'BMS')+' · '+d.deviceName+' · обновляется каждую секунду';
   }catch(e){}
 }
 // ---------- Графики (Redis — сырые показания, PG — 5-мин средние) ----------
@@ -612,7 +580,6 @@ async function loadBmsCharts(){
     var r=await fetch(url);
     if(!r.ok) return;
     var data=await r.json();
-    if(data.kind) BMS_KIND = data.kind;
     bmsCaptureState();
     destroyBmsCharts();
     bmsRebuilding=true;

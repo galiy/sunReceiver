@@ -36,45 +36,45 @@ type bmsDevice struct {
 	// читать как ANT (обратная совместимость записей без поля). Дашборд по нему
 	// скрывает поля, которых у EnBMS нет (MOS/балансировка, счётчик кадров).
 	Kind          string    `json:"kind,omitempty"`
-	DeviceName    string    `json:"deviceName"`     // "AntBms <ёмкость> A/h"
-	Port          string    `json:"port"`           // USB-порт адаптера (позиционный)
-	Key           string    `json:"key"`            // ключ устройства (bmsKey): deviceName или "deviceName@Port"; для запросов/URL
-	Timestamp     int64     `json:"timestamp"`      // Unix-время последнего валидного кадра
-	Time          string    `json:"time"`           // локальное время HH:MM:SS
-	CellCount     int       `json:"cell_count"`     // число ячеек (S)
-	CellsV        []float64 `json:"cells_v"`        // напряжения ячеек, V
+	DeviceName    string    `json:"deviceName"`                // "AntBms <ёмкость> A/h"
+	Port          string    `json:"port"`                      // USB-порт адаптера (позиционный)
+	Key           string    `json:"key"`                       // ключ устройства (bmsKey): deviceName или "deviceName@Port"; для запросов/URL
+	Timestamp     int64     `json:"timestamp"`                 // Unix-время последнего валидного кадра
+	Time          string    `json:"time"`                      // локальное время HH:MM:SS
+	CellCount     int       `json:"cell_count"`                // число ячеек (S)
+	CellsV        []float64 `json:"cells_v"`                   // напряжения ячеек, V
 	TotalV        float64   `json:"total_voltage_v,omitempty"` // напряжение пакета (контракт total_cv), V
 	PortV         float64   `json:"port_voltage_v,omitempty"`  // напряжение порта/клемм (контракт port_cv), V
-	CurrentA      float64   `json:"current_a"`      // ток, A (знаковый)
-	Soc           int       `json:"soc"`            // State of Charge, %
-	CapacityAh    float64   `json:"capacity_ah"`    // ёмкость, А·ч
-	RemainingAh   float64   `json:"remaining_ah"`   // остаточная ёмкость, А·ч
-	TemperaturesC []float64 `json:"temperatures_c"` // температуры, °C (до 6 датчиков)
-	ChargeMos     int       `json:"charge_mos"`     // MOS зарядки: 1 = включён
-	DischargeMos  int       `json:"discharge_mos"`  // MOS разряда: 1 = включён
-	Balancer      int       `json:"balancer"`       // балансировка: 1 = активна
-	PowerW        float64   `json:"power_w"`        // мощность, W (знаковая)
-	MaxCellIdx    int       `json:"max_cell_idx"`   // индекс ячейки с максимальным напряжением
-	MaxCellV      float64   `json:"max_cell_v"`     // напряжение максимальной ячейки, V
-	MinCellIdx    int       `json:"min_cell_idx"`   // индекс ячейки с минимальным напряжением
-	MinCellV      float64   `json:"min_cell_v"`     // напряжение минимальной ячейки, V
-	AvgCellV      float64   `json:"avg_cell_v"`     // среднее напряжение ячейки, V
-	Frames        uint32    `json:"frames"`         // счётчик валидных кадров с запуска слушателя
+	CurrentA      float64   `json:"current_a"`                 // ток, A (знаковый)
+	Soc           int       `json:"soc"`                       // State of Charge, %
+	CapacityAh    float64   `json:"capacity_ah"`               // ёмкость, А·ч
+	RemainingAh   float64   `json:"remaining_ah"`              // остаточная ёмкость, А·ч
+	TemperaturesC []float64 `json:"temperatures_c"`            // температуры, °C (до 6 датчиков)
+	ChargeMos     int       `json:"charge_mos"`                // MOS зарядки: 1 = включён
+	DischargeMos  int       `json:"discharge_mos"`             // MOS разряда: 1 = включён
+	Balancer      int       `json:"balancer"`                  // балансировка: 1 = активна
+	PowerW        float64   `json:"power_w"`                   // мощность, W (знаковая)
+	MaxCellIdx    int       `json:"max_cell_idx"`              // индекс ячейки с максимальным напряжением
+	MaxCellV      float64   `json:"max_cell_v"`                // напряжение максимальной ячейки, V
+	MinCellIdx    int       `json:"min_cell_idx"`              // индекс ячейки с минимальным напряжением
+	MinCellV      float64   `json:"min_cell_v"`                // напряжение минимальной ячейки, V
+	AvgCellV      float64   `json:"avg_cell_v"`                // среднее напряжение ячейки, V
+	Frames        uint32    `json:"frames"`                    // счётчик валидных кадров с запуска слушателя
 	// Дополнительно (по типам BMS):
-	Soh         float64  `json:"soh,omitempty"`          // SOH, % (EnBMS)
-	Cycles      int      `json:"cycles,omitempty"`       // число циклов (EnBMS)
-	RatedAh     float64  `json:"rated_ah,omitempty"`     // номинальная ёмкость, А·ч (EnBMS/контракт rated_mah)
-	CellWarnMask uint32  `json:"cell_warn_mask,omitempty"` // бит i: предупреждение ячейки i+1 (BMS26/EnBMS)
-	CellProtMask uint32  `json:"cell_prot_mask,omitempty"` // бит i: защита ячейки i+1 (BMS26/EnBMS)
-	TempWarnMask uint32  `json:"temp_warn_mask,omitempty"` // бит i: предупреждение датчика i+1 (BMS26/EnBMS)
-	TempProtMask uint32  `json:"temp_prot_mask,omitempty"` // бит i: защита датчика i+1 (BMS26/EnBMS)
-	BalanceMask uint32   `json:"balance_mask,omitempty"` // маска балансируемых ячеек (ANT, addr 132)
-	CycleAh     float64  `json:"cycle_ah,omitempty"`     // суммарная цикловая ёмкость, А·ч (ANT, addr 83)
-	Model       string   `json:"model,omitempty"`        // модель/протокол устройства (EnBMS BasicInfo)
-	Alarms      []string `json:"alarms,omitempty"`       // активные алармы/защиты (человекочитаемо)
-	Mode        string   `json:"mode,omitempty"`         // режим работы BMS (EnBMS, TeleState 0x44)
-	Keys        []string `json:"keys,omitempty"`         // включённые ключи (EnBMS, TeleState 0x44)
-	Balance     []string `json:"balance,omitempty"`      // балансируемые ячейки (EnBMS, TeleState 0x44)
+	Soh          float64  `json:"soh,omitempty"`            // SOH, % (EnBMS)
+	Cycles       int      `json:"cycles,omitempty"`         // число циклов (EnBMS)
+	RatedAh      float64  `json:"rated_ah,omitempty"`       // номинальная ёмкость, А·ч (EnBMS/контракт rated_mah)
+	CellWarnMask uint32   `json:"cell_warn_mask,omitempty"` // бит i: предупреждение ячейки i+1 (BMS26/EnBMS)
+	CellProtMask uint32   `json:"cell_prot_mask,omitempty"` // бит i: защита ячейки i+1 (BMS26/EnBMS)
+	TempWarnMask uint32   `json:"temp_warn_mask,omitempty"` // бит i: предупреждение датчика i+1 (BMS26/EnBMS)
+	TempProtMask uint32   `json:"temp_prot_mask,omitempty"` // бит i: защита датчика i+1 (BMS26/EnBMS)
+	BalanceMask  uint32   `json:"balance_mask,omitempty"`   // маска балансируемых ячеек (ANT, addr 132)
+	CycleAh      float64  `json:"cycle_ah,omitempty"`       // суммарная цикловая ёмкость, А·ч (ANT, addr 83)
+	Model        string   `json:"model,omitempty"`          // модель/протокол устройства (EnBMS BasicInfo)
+	Alarms       []string `json:"alarms,omitempty"`         // активные алармы/защиты (человекочитаемо)
+	Mode         string   `json:"mode,omitempty"`           // режим работы BMS (EnBMS, TeleState 0x44)
+	Keys         []string `json:"keys,omitempty"`           // включённые ключи (EnBMS, TeleState 0x44)
+	Balance      []string `json:"balance,omitempty"`        // балансируемые ячейки (EnBMS, TeleState 0x44)
 }
 
 // bmsKey — ключ BMS-устройства для HASH sunreceiver:bms, Redis-ряда, PG (name)
@@ -255,36 +255,24 @@ func runBmsPoll(store *redisStore, pg *pgStore, ctx context.Context) {
 	}
 }
 
-// saveBMSReading пишет МГНОВЕННОЕ (одно снятое) показание ANT BMS в Redis-ряд
-// (month ZSET, score = секунда, samples=1). 5-минутные средние для PG считает
-// bms_accumulator.go; в Redis-ряду средних больше нет — только сырые показания.
+// saveBMSReading пишет МГНОВЕННОЕ показание ANT BMS сразу в ряд bms26 (через
+// шим, новый serial). 5-минутные средние — общий bms26Accumulator.
 func saveBMSReading(store *redisStore, d bmsDevice, ts time.Time) {
-	// Устройства без DeviceName (пустая запись) в ряд не пишем — их же
-	// пропускает и аккумулятор (bmsAccumulator.add).
 	if d.DeviceName == "" {
 		return
 	}
-	sp := bmsSeriesPoint{Name: bmsKey(d), Display: d.DeviceName, Ts: ts.Format(time.RFC3339)}
-	sp.bmsAveraged = bmsAveraged{
-		CurrentA:     d.CurrentA,
-		PowerW:       d.PowerW,
-		Soc:          float64(d.Soc),
-		CapacityAh:   d.CapacityAh,
-		RemainingAh:  d.RemainingAh,
-		MaxCellV:     d.MaxCellV,
-		MinCellV:     d.MinCellV,
-		AvgCellV:     d.AvgCellV,
-		CellsV:       d.CellsV,
-		Temperatures: d.TemperaturesC,
-		CellCount:    d.CellCount,
-		ChargeMos:    d.ChargeMos,
-		DischargeMos: d.DischargeMos,
-		Balancer:     d.Balancer,
-		Frames:       d.Frames,
-		Samples:      1,
+	cap, ok := antCapFromName(d.DeviceName)
+	if !ok {
+		return
 	}
-	if err := store.SaveBMSSeries(sp, ts); err != nil {
-		log.Printf("bms redis series %s: %v", bmsKey(d), err)
+	serial := legacyAntSerial(cap)
+	if serial == "" {
+		return
+	}
+	sn := antDeviceToBms26(d, serial)
+	sn.Timestamp = ts.Format(time.RFC3339)
+	if err := store.SaveBms26Series(sn, ts); err != nil {
+		log.Printf("bms26 series %s: %v", serial, err)
 	}
 }
 
@@ -296,60 +284,6 @@ var bmsEmptyTolerance = 3
 // устойчивости (K1): одиночная/короткая пустота (перезапуск bmslistener,
 // временный сбой shm) не должна стирать весь дашборд батарей.
 var bmsEmptyStreak int
-
-/* УСТАРЕЛО: старый путь записи 5-мин средних BMS — оставлено для справки, не вызывается
-   (runBmsPoll кормит общий bms26Accumulator и пишет через saveBms26ClosedBuckets).
-// saveBMSClosedBuckets пишет готовые 5-минутные усреднённые точки BMS в PG
-// (sunreceiver.bms_averages, вечно) — гранулярность PG = 1 запись / 5 минут.
-// В Redis-ряд 5-минутные средние НЕ пишутся: там лежат сырые показания, которые
-// пулер пишет сам (saveBMSReading).
-// saveBMSClosedBuckets — БЫЛО (старый код, оставлен для справки; писал в PG sunreceiver.bms_averages):
-//	... внутри retryPg/withTx:
-//		for _, r := range pgRows {
-//			if err := insertBMSAveragedExec(q, pg.ctx, r.name, r.start, r.avg); err != nil {
-//				return err
-//			}
-//		}
-func saveBMSClosedBuckets(pg *pgStore, pts []bmsAvgPoint) {
-	if pg == nil {
-		return
-	}
-	type row struct {
-		name  string
-		start time.Time
-		avg   bmsAveraged
-	}
-	pgRows := make([]row, 0, len(pts))
-	for _, p := range pts {
-		if p.avg.Samples == 0 {
-			continue
-		}
-		pgRows = append(pgRows, row{name: p.name, start: p.start, avg: p.avg})
-	}
-	if len(pgRows) == 0 {
-		return
-	}
-	// Набор точек одного вызова пишем ОДНОЙ транзакцией с ограниченным retry:
-	// кратковременный сбой PG не должен оставлять «дыру» в 5-минутном ряде BMS
-	// (для BMS история восстанавливается только живым опросом — потеря необратима).
-	if err := retryPg(func() error {
-		return pg.withTx(func(q pgExecer) error {
-			for _, r := range pgRows {
-				sn, ok := antAveragedToBms26(r.name, r.avg, r.start.Format(time.RFC3339))
-				if !ok {
-					continue
-				}
-				if err := insertBms26AveragedExec(q, pg.ctx, sn.Serial, r.start, sn); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-	}, 3); err != nil {
-		log.Printf("bms avg pg: %v", err)
-	}
-}
-*/
 
 // recomputeMinMaxCells пересчитывает индексы и напряжения max/min ячеек из
 // фактического массива ячеек (cells_v), а не из меток, заявленных BMS в кадре

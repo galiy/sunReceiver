@@ -1081,50 +1081,6 @@ func enbmsParsedValid(r enbmsParsed) bool {
 // общего API/дашборда: фронт читает те же поля. Чего в блоке Battery нет
 // (MOS/балансировка, счётчик кадров) — остаётся нулевым, а kind="enbms" велит
 // фронту эти блоки не показывать.
-func bmsDeviceFromEnBms(s enbmsSnapshot) bmsDevice {
-	// Отображаемое имя — имя + MAC: у EnBMS заводское BLE-имя не уникально,
-	// MAC однозначно идентифицирует устройство (видно и на главной, и на /bms/<mac>).
-	name := s.Name
-	if s.MAC != "" && !strings.Contains(name, s.MAC) {
-		name = strings.TrimSpace(name + " " + s.MAC)
-	}
-	d := bmsDevice{
-		Kind:          "enbms",
-		DeviceName:    name,
-		Key:           s.MAC,
-		Port:          "BLE",
-		CellCount:     s.CellCount,
-		CellsV:        s.CellsV,
-		CurrentA:      s.CurrentA,
-		Soc:           int(math.Round(s.Soc)),
-		CapacityAh:    s.CapacityAh,
-		RemainingAh:   s.RemainingAh,
-		TemperaturesC: s.TemperaturesC,
-		PowerW:        s.PowerW,
-		MaxCellIdx:    s.MaxCellIdx,
-		MaxCellV:      s.MaxCellV,
-		MinCellIdx:    s.MinCellIdx,
-		MinCellV:      s.MinCellV,
-		AvgCellV:      s.AvgCellV,
-		Soh:           s.Soh,
-		Cycles:        s.Cycles,
-		Model:         s.Model,
-		Alarms:        s.Alarms,
-		Mode:          s.Mode,
-		Keys:          s.Keys,
-		Balance:       s.Balance,
-		BalanceMask:   enbmsBalanceMask(s.BalanceCells),
-	}
-	if ts, err := time.Parse(time.RFC3339, s.Timestamp); err == nil {
-		d.Timestamp = ts.Unix()
-		d.Time = ts.Format("15:04:05")
-	}
-	return d
-}
-
-// enbmsBalanceMask собирает маску балансируемых ячеек (бит N-1 = ячейка N) для
-// совместимости с ANT BMS: дашборд подсвечивает балансируемые ячейки по
-// balance_mask одинаково для обоих типов.
 func enbmsBalanceMask(cells []int) uint32 {
 	var m uint32
 	for _, n := range cells {
@@ -1138,24 +1094,3 @@ func enbmsBalanceMask(cells []int) uint32 {
 // bmsSeriesPointFromEnBms приводит точку ряда EnBMS к форме ANT BMS
 // (bmsSeriesPoint): совпадающие поля переносятся 1:1, отсутствующие у EnBMS —
 // нулевые. Используется общим API /api/bms/<mac>/series и графиками страницы BMS.
-func bmsSeriesPointFromEnBms(p enbmsSeriesPoint) bmsSeriesPoint {
-	return bmsSeriesPoint{
-		Name:    p.Name,
-		Display: p.Display,
-		Ts:      p.Ts,
-		bmsAveraged: bmsAveraged{
-			CurrentA:     p.CurrentA,
-			PowerW:       p.PowerW,
-			Soc:          p.Soc,
-			CapacityAh:   p.CapacityAh,
-			RemainingAh:  p.RemainingAh,
-			MaxCellV:     p.MaxCellV,
-			MinCellV:     p.MinCellV,
-			AvgCellV:     p.AvgCellV,
-			CellsV:       p.CellsV,
-			Temperatures: p.Temperatures,
-			CellCount:    p.CellCount,
-			Samples:      p.Samples,
-		},
-	}
-}

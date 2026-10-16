@@ -53,7 +53,7 @@ func TestDecodeBms26AlarmsDispatch(t *testing.T) {
 
 func TestBms26CellMasks(t *testing.T) {
 	sn := bms26Snapshot{BmsType: "EnBMS-RS485", CellCount: 3, AlarmBytes: make([]int, 19)}
-	setBits(sn.AlarmBytes, 0, 4, 2) // ячейка1: protect (OVprot)
+	setBits(sn.AlarmBytes, 0, 4, 2)   // ячейка1: protect (OVprot)
 	setBits(sn.AlarmBytes, 2*4, 4, 1) // ячейка3: warn (HVwarn)
 	w, p := bms26CellMasks(sn)
 	if p != 0x1 {

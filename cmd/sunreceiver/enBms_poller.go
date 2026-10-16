@@ -361,27 +361,14 @@ func pollEnBmsDevice(pg *pgStore, store *redisStore, acc *bms26Accumulator, d *e
 // (month ZSET, score = секунда, samples=1). 5-минутные средние для PG считает
 // enBms_accumulator.go; в Redis-ряду средних нет — только сырые показания.
 func saveEnBmsReading(store *redisStore, s enbmsSnapshot, ts time.Time) {
-	sp := enbmsSeriesPoint{Name: s.MAC, Display: s.Name, Ts: ts.Format(time.RFC3339)}
-	sp.enbmsAveraged = enbmsAveraged{
-		CurrentA:      s.CurrentA,
-		PowerW:        s.PowerW,
-		Soc:           s.Soc,
-		CapacityAh:    s.CapacityAh,
-		RemainingAh:   s.RemainingAh,
-		TotalVoltageV: s.TotalVoltageV,
-		PortVoltageV:  s.PortVoltageV,
-		Soh:           s.Soh,
-		MaxCellV:      s.MaxCellV,
-		MinCellV:      s.MinCellV,
-		AvgCellV:      s.AvgCellV,
-		CellsV:        s.CellsV,
-		Temperatures:  s.TemperaturesC,
-		CellCount:     s.CellCount,
-		Cycles:        s.Cycles,
-		Samples:       1,
+	serial := legacyEnbmsSerial()
+	if serial == "" {
+		return
 	}
-	if err := store.SaveEnBmsSeries(sp, ts); err != nil {
-		logEnBms("redis series %s: %v", s.MAC, err)
+	sn := enbmsSnapshotToBms26(s, serial)
+	sn.Timestamp = ts.Format(time.RFC3339)
+	if err := store.SaveBms26Series(sn, ts); err != nil {
+		logEnBms("redis series %s: %v", serial, err)
 	}
 }
 

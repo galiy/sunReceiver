@@ -282,71 +282,6 @@ func TestEnBmsParsedValidRejectsGarbage(t *testing.T) {
 	}
 }
 
-func TestEnBmsAccumulatorDrain(t *testing.T) {
-	start := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
-	acc := newEnBmsAccumulator()
-	snap := enbmsSnapshot{
-		Name: "BP00", MAC: "AA:BB:CC:DD:EE:00", Timestamp: start.Format(time.RFC3339),
-		CellCount: 1, CellsV: []float64{3.3}, TemperaturesC: []float64{25},
-		CurrentA: 1, Soc: 50, CapacityAh: 100, RemainingAh: 50, TotalVoltageV: 3.3,
-		MaxCellV: 3.3, MinCellV: 3.3, AvgCellV: 3.3,
-	}
-	acc.add(snap, start)
-	// Неполный бакет (до границы 5 мин) уходит только при drain (остановка).
-	if pts := acc.closed(start.Add(time.Minute)); len(pts) != 0 {
-		t.Fatalf("closed вернул незавершённый бакет: %+v", pts)
-	}
-	pts := acc.drain()
-	if len(pts) != 1 || pts[0].avg.Samples != 1 || pts[0].name != snap.MAC {
-		t.Fatalf("drain = %+v", pts)
-	}
-	if len(acc.drain()) != 0 {
-		t.Fatalf("повторный drain должен быть пуст")
-	}
-}
-
-func TestEnBmsMappingToBMSSeries(t *testing.T) {
-	snap := enbmsSnapshot{
-		Name: "BMS BP00", MAC: "AA:BB:CC:DD:EE:00",
-		Timestamp: "2026-09-30T19:34:22+03:00", CellCount: 2, CellsV: []float64{3.2, 3.3},
-		TemperaturesC: []float64{25, 26}, CurrentA: -10.5, PowerW: -545.4, Soc: 24.6,
-		CapacityAh: 314, RemainingAh: 78.4, TotalVoltageV: 51.9, PortVoltageV: 51.9,
-		Soh: 100, Cycles: 2, MaxCellIdx: 2, MaxCellV: 3.3, MinCellIdx: 1, MinCellV: 3.2, AvgCellV: 3.25,
-	}
-	d := bmsDeviceFromEnBms(snap)
-	if d.Kind != "enbms" || d.DeviceName != "BMS BP00 AA:BB:CC:DD:EE:00" || d.Key != "AA:BB:CC:DD:EE:00" {
-		t.Fatalf("id: %+v", d)
-	}
-	if d.Soc != 25 { // округление 24.6 → 25
-		t.Fatalf("soc = %d, want 25", d.Soc)
-	}
-	if d.Time != "19:34:22" || d.Timestamp == 0 {
-		t.Fatalf("time/ts: %q %d", d.Time, d.Timestamp)
-	}
-	if d.CurrentA != -10.5 || d.PowerW != -545.4 || d.CellCount != 2 {
-		t.Fatalf("поля: %+v", d)
-	}
-	// Поля ANT, которых нет у EnBMS, остаются нулевыми (фронт их скрывает по kind).
-	if d.ChargeMos != 0 || d.DischargeMos != 0 || d.Balancer != 0 || d.Frames != 0 {
-		t.Fatalf("MOS/frames должны быть нулевыми: %+v", d)
-	}
-
-	sp := bmsSeriesPointFromEnBms(enbmsSeriesPoint{
-		Name: "AA:BB:CC:DD:EE:00", Display: "BMS BP00", Ts: "2026-09-30T19:30:00+03:00",
-		enbmsAveraged: enbmsAveraged{
-			CurrentA: -10, PowerW: -520, Soc: 25, CapacityAh: 314, RemainingAh: 79,
-			MaxCellV: 3.3, MinCellV: 3.2, AvgCellV: 3.25, CellsV: []float64{3.2, 3.3},
-			Temperatures: []float64{25}, CellCount: 2, Cycles: 2, Samples: 300,
-		},
-	})
-	if sp.Name != "AA:BB:CC:DD:EE:00" || sp.Display != "BMS BP00" || sp.Samples != 300 || sp.Soc != 25 {
-		t.Fatalf("series point: %+v", sp)
-	}
-	if sp.ChargeMos != 0 || sp.Frames != 0 {
-		t.Fatalf("MOS/frames в точке должны быть нулевыми: %+v", sp)
-	}
-}
-
 func TestEnBmsConfigFromSection(t *testing.T) {
 	bleSec := func() *enBmsSection {
 		return &enBmsSection{Disabled: boolPtr(false), PollIntervalBLE: 3, PollIntervalRS485: 1}
@@ -431,42 +366,5 @@ func TestEnBmsConfigFromSection(t *testing.T) {
 		RS485: &enBmsRS485Section{Transport: "tcp"}}}
 	if _, err := enBmsConfigFromSection(s); err == nil {
 		t.Fatalf("rs485 tcp без address должен давать ошибку")
-	}
-}
-
-func TestEnBmsAccumulatorBucket(t *testing.T) {
-	start := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
-	acc := newEnBmsAccumulator()
-	mk := func(ts time.Time, cur, soc float64) enbmsSnapshot {
-		return enbmsSnapshot{
-			Name: "BP00", MAC: "AA:BB:CC:DD:EE:00", Timestamp: ts.Format(time.RFC3339),
-			CellCount: 2, CellsV: []float64{3.2, 3.3}, TemperaturesC: []float64{25.0},
-			CurrentA: cur, Soc: soc, CapacityAh: 100, RemainingAh: 50,
-			TotalVoltageV: 52.0, PortVoltageV: 52.1, Soh: 100, Cycles: 3,
-			MaxCellV: 3.3, MinCellV: 3.2, AvgCellV: 3.25,
-		}
-	}
-	acc.add(mk(start.Add(1*time.Second), 10, 50), start.Add(1*time.Second))
-	acc.add(mk(start.Add(2*time.Second), 20, 52), start.Add(2*time.Second))
-	// Снимок следующего 5-минутного окна закрывает предыдущий бакет.
-	acc.add(mk(start.Add(5*time.Minute+1*time.Second), 30, 54), start.Add(5*time.Minute+1*time.Second))
-	closed := acc.closed(start.Add(5*time.Minute + 2*time.Second))
-	found := false
-	for _, p := range closed {
-		if p.start.Equal(start) {
-			found = true
-			if p.avg.Samples != 2 {
-				t.Fatalf("samples = %d, want 2", p.avg.Samples)
-			}
-			if p.avg.CurrentA != 15.0 || p.avg.Soc != 51.0 {
-				t.Fatalf("avg = %+v", p.avg)
-			}
-			if len(p.avg.CellsV) != 2 || p.avg.CellsV[1] != 3.3 {
-				t.Fatalf("cells = %v", p.avg.CellsV)
-			}
-		}
-	}
-	if !found {
-		t.Fatalf("закрытый бакет не найден: %+v", closed)
 	}
 }

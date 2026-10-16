@@ -2143,7 +2143,7 @@ func main() {
 	// актуальное состояние в отдельном Redis-ключе (HASH sunreceiver:bms).
 	bmsSite = loadBmsSite(antBmsSec)
 	if bmsSite != nil {
-		log.Printf("bms: опрос ANT BMS через %s (1 раз в секунду, ключ Redis %s)", bmsSite.url, redisBMSKey)
+		log.Printf("bms: опрос ANT BMS через %s (1 раз в секунду)", bmsSite.url)
 	}
 	// BMS через malina26 (единый тип ANT+EnBMS): используем общий клиент
 	// method=malina26 (те же host/port/password и токен), отдельного раздела нет.
@@ -2321,8 +2321,6 @@ func main() {
 	// Однократный перенос ключей КЭС старым форматом "<host>#mppt-<uid>" → "mppt-<serial>"
 	// (current/ряд Redis + строки PG averages). До пулеров/аккумулятора.
 	migrateMPPTDeviceKeys(store, pg, time.Now())
-	// Однократный перенос истории BMS на ключ/схему bms26 (current-HASH не трогаем).
-	migrateBms26History(store, pg, time.Now())
 	// Кэш serial BMS26 (BASE→serial, EnBMS) — для «костыля» старых пулеров.
 	loadBms26SerialCache(store)
 	// Однократный перенос истории DTS017M на стабильный ключ (идемпотентно).
@@ -2795,30 +2793,22 @@ const restoreLockTTL = 30 * time.Minute
 // Снимается после полностью успешной реставрации.
 const redisRestoreIncompleteKey = "sunreceiver:restore:incomplete"
 
-// redisBMSDataPresent — true, если в Redis есть данные внешних BMS: ANT BMS
-// (HASH sunreceiver:bms или ряд sunreceiver:bms:series:*) либо EnBMS (HASH
-// sunreceiver:enbms:current или ряд sunreceiver:enbms:series:*). Отдельно от
+// redisBMSDataPresent — true, если в Redis есть данные BMS (bms26): HASH
+// sunreceiver:bms26:current или ряд sunreceiver:bms26:series:*. Отдельно от
 // IsEmpty, т.к. тот учитывает только инверторное current/series.
 func redisBMSDataPresent(store *redisStore) (bool, error) {
-	for _, key := range []string{redisBMSKey, redisEnBmsCurrentKey} {
-		n, err := store.rdb.HLen(store.ctx, key).Result()
-		if err != nil {
-			return false, err
-		}
-		if n > 0 {
-			return true, nil
-		}
+	n, err := store.rdb.HLen(store.ctx, redisBms26CurrentKey).Result()
+	if err != nil {
+		return false, err
 	}
-	for _, prefix := range []string{redisBMSSeriesPrefix + "*", redisEnBmsSeriesPrefix + "*"} {
-		keys, err := store.scanPrefixKeys(prefix)
-		if err != nil {
-			return false, err
-		}
-		if len(keys) > 0 {
-			return true, nil
-		}
+	if n > 0 {
+		return true, nil
 	}
-	return false, nil
+	keys, err := store.scanPrefixKeys(redisBms26SeriesPrefix + "*")
+	if err != nil {
+		return false, err
+	}
+	return len(keys) > 0, nil
 }
 
 // redisDts017DataPresent — true, если в Redis есть данные счётчика DTS017M
@@ -2864,10 +2854,8 @@ func redisCE308DataPresent(store *redisStore) (bool, error) {
 // Запускается в фоне при пустом Redis. Восстанавливаются ОБА ряда:
 //   - снимки инверторов/МАП/счётчика (pg.Averages) — SaveSnapshot в месячный
 //     ZSET ряда;
-//   - точки ANT BMS (pg.BMSAveragesAll) — SaveBMSSeries в ряд
-//     sunreceiver:bms:series:<YYYY-MM>;
-//   - точки EnBMS (pg.EnBmsAveragesAll) — SaveEnBmsSeries в ряд
-//     sunreceiver:enbms:series:<YYYY-MM>;
+//   - точки BMS (pg.Bms26AveragesAll) — SaveBms26Series в ряд
+//     sunreceiver:bms26:series:<YYYY-MM>;
 //   - точки DTS017M (pg.Dts017AveragesAll) — SaveDts017Series/SaveDts017Current в
 //     обособленный ряд sunreceiver:dts017m:series:<YYYY-MM>;
 //   - точки CE308 (pg.CE308AveragesAll) — SaveCE308History/SaveCE308Current в
@@ -2929,64 +2917,33 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, re
 		log.Printf("pg restore: завершено, восстановлено точек: %d", restored)
 	}
 
-	// Ряд ANT BMS — из pg.bms_averages (5-мин средние) в
-	// sunreceiver:bms:series:<YYYY-MM> (то же окно удержания).
-	bmsPts, err := pg.BMSAveragesAll(start, end)
+	// Ряд BMS (единый тип ANT+EnBMS) — из pg.bms26_averages (5-мин средние) в
+	// sunreceiver:bms26:series:<YYYY-MM> (то же окно удержания).
+	bmsPts, err := pg.Bms26AveragesAll(start, end)
 	if err != nil {
-		log.Printf("pg restore: bms query: %v", err)
+		log.Printf("pg restore: bms26 query: %v", err)
 		complete = false
 	} else {
 		var bmsRestored int
-		for _, p := range bmsPts {
+		for i := range bmsPts {
 			select {
 			case <-stop.Done():
 				log.Printf("pg restore: остановлено по сигналу (BMS восстановлено точек: %d)", bmsRestored)
 				return false
 			default:
 			}
-			ts, perr := time.Parse(time.RFC3339, p.Ts)
+			ts, perr := time.Parse(time.RFC3339, bmsPts[i].Timestamp)
 			if perr != nil {
 				continue
 			}
-			// Ключ месяца (bmsSeriesKey) приводим к локальной зоне, как живая запись.
 			ts = ts.In(time.Local)
-			if serr := store.SaveBMSSeries(p, ts); serr != nil {
-				log.Printf("pg restore: bms save %s: %v", p.Name, serr)
+			if serr := store.SaveBms26Series(bmsPts[i], ts); serr != nil {
+				log.Printf("pg restore: bms26 save %s: %v", bmsPts[i].Serial, serr)
 				continue
 			}
 			bmsRestored++
 		}
 		log.Printf("pg restore: BMS восстановлено точек: %d", bmsRestored)
-	}
-
-	// Ряд EnBMS — из pg.enbms_averages (5-мин средние) в
-	// sunreceiver:enbms:series:<YYYY-MM> (то же окно удержания).
-	enbmsPts, err := pg.EnBmsAveragesAll(start, end)
-	if err != nil {
-		log.Printf("pg restore: enbms query: %v", err)
-		complete = false
-	} else {
-		var enbmsRestored int
-		for _, p := range enbmsPts {
-			select {
-			case <-stop.Done():
-				log.Printf("pg restore: остановлено по сигналу (EnBMS восстановлено точек: %d)", enbmsRestored)
-				return false
-			default:
-			}
-			ts, perr := time.Parse(time.RFC3339, p.Ts)
-			if perr != nil {
-				continue
-			}
-			// Ключ месяца (enbmsSeriesKey) приводим к локальной зоне, как живая запись.
-			ts = ts.In(time.Local)
-			if serr := store.SaveEnBmsSeries(p, ts); serr != nil {
-				log.Printf("pg restore: enbms save %s: %v", p.Name, serr)
-				continue
-			}
-			enbmsRestored++
-		}
-		log.Printf("pg restore: EnBMS восстановлено точек: %d", enbmsRestored)
 	}
 
 	// Ряд DTS017M — из pg.dts017m_averages (5-мин средние) в

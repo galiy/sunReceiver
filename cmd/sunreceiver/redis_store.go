@@ -41,21 +41,6 @@ const (
 	// Месячная сегментация: чтение произвольного периода — это несколько ZRANGEBYSCORE
 	// по затронутым месяцам, отсортированных по времени.
 	redisSeriesPrefix = "sunreceiver:series:"
-	// redisBMSKey — HASH текущего состояния ANT BMS (bmslistener → read_bms.php
-	// ПАК «Малина»): поле = ключ bmsKey (deviceName или "deviceName@Port", см.
-	// bms_poller.go), значение = JSON устройства bmsDevice (содержит deviceName
-	// для отображения и port). Отдельный ключ — BMS не входит в общий снимок
-	// sunreceiver:current (нет универсального контракта значений). Пишется
-	// BMS-пулером 1 раз в секунду (bms_poller.go), чистится при исчезновении
-	// устройства из коллекции.
-	redisBMSKey = "sunreceiver:bms"
-	// redisBMSSeriesPrefix — временной ряд МГНОВЕННЫХ (каждое снятое показание)
-	// точек ANT BMS. Ключи вида sunreceiver:bms:series:<YYYY-MM>, каждый — ZSET:
-	// score=Unix (сек. снятия), member=JSON bmsSeriesPoint (name + ts + значения,
-	// samples=1). Пишется каждым опросом (~1/с). Хранятся последние 2 календарных
-	// суток (чистка PurgeOld), как и ряд инверторов. 5-минутные средние для PG
-	// считает bms_accumulator.go.
-	redisBMSSeriesPrefix = "sunreceiver:bms:series:"
 )
 
 // redisStore — тонкая обёртка над клиентом Redis для текущих значений и временного ряда.
@@ -110,12 +95,6 @@ func (s *redisStore) SetCtx(ctx context.Context) {
 // redisSeriesKey возвращает ключ месячного сегмента временного ряда для ts.
 func redisSeriesKey(ts time.Time) string {
 	return redisSeriesPrefix + ts.Format("2006-01")
-}
-
-// bmsSeriesKey возвращает ключ месячного сегмента ряда мгновенных (сырых)
-// показаний BMS для ts.
-func bmsSeriesKey(ts time.Time) string {
-	return redisBMSSeriesPrefix + ts.Format("2006-01")
 }
 
 // SaveSnapshot пишет снимок в Redis одной транзакцией:
@@ -294,31 +273,6 @@ func (s *redisStore) PruneMPPT(active map[string]struct{}) {
 // транзакцией: пишет все активные (поле = ключ bmsKey, значение = JSON bmsDevice)
 // и удаляет те, которых нет в active (устройство исчезло из коллекции —
 // адаптер отключился/замолчал, bmslistener уже забыл его).
-// SetBMS — БЫЛО (старый код, оставлен для справки; писал в sunreceiver:bms):
-//
-//	func (s *redisStore) SetBMS(active map[string]string) error {
-//		cur, err := s.rdb.HGetAll(s.ctx, redisBMSKey).Result()
-//		if err != nil {
-//			return fmt.Errorf("bms HGETALL: %w", err)
-//		}
-//		var stale []string
-//		for k := range cur {
-//			if _, ok := active[k]; !ok {
-//				stale = append(stale, k)
-//			}
-//		}
-//		pipe := s.rdb.TxPipeline()
-//		for k, v := range active {
-//			pipe.HSet(s.ctx, redisBMSKey, k, v)
-//		}
-//		if len(stale) > 0 {
-//			pipe.HDel(s.ctx, redisBMSKey, stale...)
-//		}
-//		if _, err := pipe.Exec(s.ctx); err != nil {
-//			return fmt.Errorf("bms set: %w", err)
-//		}
-//		return nil
-//	}
 func (s *redisStore) SetBMS(active map[string]string) error {
 	// КОСТЫЛЬ: старый ANT-пулер пишет не в sunreceiver:bms, а в ряды bms26
 	// (sunreceiver:bms26:current) с новым serial (ANT — по ёмкости). См. bms26_legacy.go.
@@ -350,120 +304,6 @@ func (s *redisStore) SetBMS(active map[string]string) error {
 
 // BMSCurrent возвращает текущее состояние всех BMS-устройств (поле = ключ
 // bmsKey, значение = JSON bmsDevice).
-func (s *redisStore) BMSCurrent() (map[string]string, error) {
-	m, err := s.rdb.HGetAll(s.ctx, redisBMSKey).Result()
-	if err != nil {
-		return nil, fmt.Errorf("bms HGETALL: %w", err)
-	}
-	return m, nil
-}
-
-// BMSOne возвращает текущее состояние одного BMS-устройства по ключу (bmsKey,
-// см. bms_poller.go); пустая строка, если устройство отсутствует.
-func (s *redisStore) BMSOne(name string) (string, error) {
-	v, err := s.rdb.HGet(s.ctx, redisBMSKey, name).Result()
-	if errors.Is(err, redis.Nil) {
-		return "", nil
-	}
-	return v, err
-}
-
-// SaveBMSSeries кладёт МГНОВЕННУЮ (сырую) точку ANT BMS в месячный ZSET ряда
-// (score = Unix-секунды снятия). Хранение — последние 2 календарных суток
-// (чистка PurgeOld), как и ряд инверторов. 5-минутные средние для PG считает
-// bms_accumulator.go — в Redis-ряду их нет.
-//
-// Тот же (устройство, секунда) может записываться дважды (повторный опрос в
-// пределах секунды). Голый ZADD оставил бы в ZSET два разных member с
-// одинаковым score — две точки в один и тот же момент времени на графике
-// («ступенька»). Поэтому перед записью удаляются старые версии того же
-// устройства на этом score: остаётся ровно одна точка на (устройство, секунда).
-// SaveBMSSeries — БЫЛО (старый код, оставлен для справки; писал в sunreceiver:bms:series):
-//
-//	func (s *redisStore) SaveBMSSeries(p bmsSeriesPoint, ts time.Time) error {
-//		b, err := json.Marshal(p)
-//		if err != nil {
-//			return fmt.Errorf("marshal bms series %s: %w", p.Name, err)
-//		}
-//		key := bmsSeriesKey(ts)
-//		score := strconv.FormatInt(ts.Unix(), 10)
-//		old, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: score, Max: score}).Result()
-//		if err != nil {
-//			return fmt.Errorf("bms series dedup %s: %w", key, err)
-//		}
-//		var stale []any
-//		for _, m := range old {
-//			var q bmsSeriesPoint
-//			if json.Unmarshal([]byte(m), &q) != nil {
-//				continue
-//			}
-//			if q.Name == p.Name {
-//				stale = append(stale, m)
-//			}
-//		}
-//		pipe := s.rdb.TxPipeline()
-//		if len(stale) > 0 {
-//			pipe.ZRem(s.ctx, key, stale...)
-//		}
-//		pipe.ZAdd(s.ctx, key, redis.Z{Score: float64(ts.Unix()), Member: string(b)})
-//		pipe.Expire(s.ctx, key, 40*24*time.Hour)
-//		_, err = pipe.Exec(s.ctx)
-//		if err != nil {
-//			return fmt.Errorf("save bms series %s: %w", p.Name, err)
-//		}
-//		return nil
-//	}
-func (s *redisStore) SaveBMSSeries(p bmsSeriesPoint, ts time.Time) error {
-	// КОСТЫЛЬ: старый ANT-пулер пишет точки в ряд bms26 (по новому serial).
-	sn, ok := antAveragedToBms26(p.Name, p.bmsAveraged, p.Ts)
-	if !ok {
-		return nil
-	}
-	return s.SaveBms26Series(sn, ts)
-}
-
-// QueryBMSSeries возвращает сырые показания одной BMS (по ключу bmsKey) за
-// период [start, end] включительно из Redis-ряда, по возрастанию времени.
-// Читает месячные сегменты ZRANGEBYSCORE (в пределах окна удержания 2
-// календарных суток); отфильтрованные по имени точки — точный срез для графиков.
-func (s *redisStore) QueryBMSSeries(name string, start, end time.Time) ([]bmsSeriesPoint, error) {
-	if start.After(end) {
-		return nil, errors.New("start after end")
-	}
-	min := strconv.FormatInt(start.Unix(), 10)
-	max := strconv.FormatInt(end.Unix(), 10)
-	var all []bmsSeriesPoint
-	var queryErr error
-	eachMonth(start, end, func(y int, m time.Month) bool {
-		key := bmsSeriesKey(time.Date(y, m, 1, 0, 0, 0, 0, time.Local))
-		vals, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{
-			Min: min,
-			Max: max,
-		}).Result()
-		if err != nil {
-			queryErr = err
-			return false
-		}
-		for _, v := range vals {
-			var p bmsSeriesPoint
-			if e := json.Unmarshal([]byte(v), &p); e != nil {
-				continue
-			}
-			if p.Name != name {
-				continue
-			}
-			all = append(all, p)
-		}
-		return true
-	})
-	if queryErr != nil {
-		return nil, queryErr
-	}
-	return all, nil
-}
-
-// eachMonth вызывает fn для каждого года/месяца, покрывающего [start, end] включительно.
-// Возвращает false, если fn хочет остановиться.
 func eachMonth(start, end time.Time, fn func(y int, m time.Month) bool) {
 	y, m := start.Year(), start.Month()
 	for {
@@ -538,6 +378,24 @@ func recentCutoff(t time.Time) time.Time {
 	return startOfToday.AddDate(0, 0, -1)
 }
 
+// seriesRawWindow — сколько «свежего» времени отдаём из Redis СЫРЫМИ (1 с), а всё
+// более старое в окне запроса — из PG (5-мин средние). Ряды лежат общими месячными
+// ZSET (сотни тысяч членов на все устройства), поэтому чтение широкого окна из Redis
+// — это полный скан с JSON-разбором каждого члена (десятки секунд). Ограничиваем
+// Redis-хвост небольшим окном: детализация 1 с нужна только для «зума», для обзорных
+// графиков достаточно 5-мин средних из PG.
+const seriesRawWindow = 1 * time.Hour
+
+// seriesReadCutoff — граница Redis/PG для чтения ряда по запросу [start, now]:
+// Redis покрывает только последние seriesRawWindow, остальное — PG.
+func seriesReadCutoff(start, now time.Time) time.Time {
+	c := now.Add(-seriesRawWindow)
+	if c.Before(start) {
+		c = start
+	}
+	return c
+}
+
 // PurgeOld удаляет из временных рядов Redis (месячные сегменты инверторов и
 // сырых показаний ANT BMS/EnBMS, мгновенных значений CE308) все точки, timestamp
 // которых строго старше окна последних 2 календарных суток (recentCutoff).
@@ -552,10 +410,10 @@ func (s *redisStore) PurgeOld(now time.Time) {
 		log.Printf("redis cleanup keys: %v", err)
 		return
 	}
-	// Ряд сырых показаний BMS чистится тем же окном.
-	bmsKeys, err := s.scanPrefixKeys(redisBMSSeriesPrefix + "*")
+	// Ряд BMS (bms26) чистится тем же окном.
+	bmsKeys, err := s.scanPrefixKeys(redisBms26SeriesPrefix + "*")
 	if err != nil {
-		log.Printf("redis cleanup bms keys: %v", err)
+		log.Printf("redis cleanup bms26 keys: %v", err)
 	} else {
 		keys = append(keys, bmsKeys...)
 	}
@@ -565,14 +423,6 @@ func (s *redisStore) PurgeOld(now time.Time) {
 		log.Printf("redis cleanup ce308 keys: %v", err)
 	} else {
 		keys = append(keys, ce308Keys...)
-	}
-	// Ряд сырых показаний EnBMS (то же окно 2 календарных суток;
-	// 40-суточный Expire — лишь страховка, эффективное окно задаёт PurgeOld).
-	enbmsKeys, err := s.scanPrefixKeys(redisEnBmsSeriesPrefix + "*")
-	if err != nil {
-		log.Printf("redis cleanup enbms keys: %v", err)
-	} else {
-		keys = append(keys, enbmsKeys...)
 	}
 	// Обособленный ряд счётчика DTS017M (окно 2 календарных суток).
 	dts017Keys, err := s.scanPrefixKeys(redisDts017SeriesPrefix + "*")

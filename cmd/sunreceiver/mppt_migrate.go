@@ -38,8 +38,9 @@ func isLegacyMPPTKey(ip string) bool {
 }
 
 // newMPPTKeyFromLegacy переводит старый ключ КЭС в новый.
-//   "<host>#mppt-<uid>" → "mppt-<uid>"
-//   "<host>#mppt<slot>" → "mppt-<slot>"
+//
+//	"<host>#mppt-<uid>" → "mppt-<uid>"
+//	"<host>#mppt<slot>" → "mppt-<slot>"
 func newMPPTKeyFromLegacy(old string) (string, bool) {
 	i := strings.Index(old, "#mppt")
 	if i < 0 {

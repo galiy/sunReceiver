@@ -18,9 +18,32 @@ package main
 
 import (
 	"log"
+	"regexp"
+	"strconv"
 	"sync"
 	"time"
 )
+
+// antNameCap — ёмкость из старого имени ANT-устройства ("AntBms 160 A/h ...").
+var antNameCap = regexp.MustCompile(`AntBms\s+(\d+)\s*A/h`)
+
+// antBaseCap — ёмкость из нового BASE bms26 ("AntBMS-DSP-160").
+var antBaseCap = regexp.MustCompile(`AntBMS-DSP-(\d+)`)
+
+func antCapFromName(name string) (int, bool) { return capFromRe(antNameCap, name) }
+func antCapFromBase(base string) (int, bool) { return capFromRe(antBaseCap, base) }
+
+func capFromRe(re *regexp.Regexp, s string) (int, bool) {
+	m := re.FindStringSubmatch(s)
+	if m == nil {
+		return 0, false
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
 
 // КОСТЫЛЬ: если временно включаются СТАРЫЕ пулеры BMS (ANT read_bms.php / EnBMS
 // BLE/RS485 напрямую), они пишут не в старые ключи, а в НОВЫЕ ряды bms26
@@ -170,54 +193,6 @@ func enbmsSnapshotToBms26(s enbmsSnapshot, serial string) bms26Snapshot {
 }
 
 // antAveragedToBms26 — 5-мин среднее ANT → bms26Snapshot (name → serial по ёмкости).
-func antAveragedToBms26(name string, a bmsAveraged, ts string) (bms26Snapshot, bool) {
-	cap, ok := antCapFromName(name)
-	if !ok {
-		return bms26Snapshot{}, false
-	}
-	serial := legacyAntSerial(cap)
-	if serial == "" {
-		return bms26Snapshot{}, false
-	}
-	flags := 0
-	if a.ChargeMos != 0 {
-		flags |= 1
-	}
-	if a.DischargeMos != 0 {
-		flags |= 2
-	}
-	if a.Balancer != 0 {
-		flags |= 4
-	}
-	sn := bms26Snapshot{
-		Serial: serial, BmsType: "AntBMS-DSP", DeviceName: serial, Timestamp: ts,
-		CellCount: a.CellCount, CellsV: a.CellsV, TemperaturesC: a.Temperatures,
-		CurrentA: a.CurrentA, PowerW: a.PowerW, Soc: a.Soc,
-		CapacityAh: a.CapacityAh, RemainingAh: a.RemainingAh, Flags: flags,
-		AlarmBytes: antAlarmBytesFromCodes(a.ChargeMos, a.DischargeMos, a.Balancer),
-		MaxCellV:   a.MaxCellV, MinCellV: a.MinCellV, AvgCellV: a.AvgCellV,
-	}
-	finalizeBms26(&sn)
-	return sn, true
-}
-
-// enbmsAveragedToBms26 — 5-мин среднее EnBMS → bms26Snapshot (MAC → единственный serial).
-func enbmsAveragedToBms26(a enbmsAveraged, ts string) (bms26Snapshot, bool) {
-	serial := legacyEnbmsSerial()
-	if serial == "" {
-		return bms26Snapshot{}, false
-	}
-	return bms26Snapshot{
-		Serial: serial, BmsType: "EnBMS-RS485", DeviceName: serial, Timestamp: ts,
-		CellCount: a.CellCount, CellsV: a.CellsV, TemperaturesC: a.Temperatures,
-		CurrentA: a.CurrentA, PowerW: a.PowerW, Soc: a.Soc, Soh: a.Soh,
-		CapacityAh: a.CapacityAh, RemainingAh: a.RemainingAh,
-		TotalV: a.TotalVoltageV, PortV: a.PortVoltageV, Cycles: a.Cycles,
-		MaxCellV: a.MaxCellV, MinCellV: a.MinCellV, AvgCellV: a.AvgCellV,
-	}, true
-}
-
-// itoa — маленький локальный int→string (без импорта strconv в этом файле).
 func itoa(n int) string {
 	if n == 0 {
 		return "0"

@@ -110,9 +110,9 @@ type bms26Bucket struct {
 	sumTotal float64
 	sumPort  float64
 	// OR-поля
-	flags    int
-	balMask  uint32
-	alrm     [19]int
+	flags   int
+	balMask uint32
+	alrm    [19]int
 }
 
 func newBms26Accumulator() *bms26Accumulator {

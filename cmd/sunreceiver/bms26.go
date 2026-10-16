@@ -105,9 +105,9 @@ type bms26Snapshot struct {
 	CellProtMask  uint32    `json:"cell_prot_mask,omitempty"` // бит i: защита ячейки i+1 (EnBMS)
 	TempWarnMask  uint32    `json:"temp_warn_mask,omitempty"` // бит i: предупреждение датчика i+1 (EnBMS)
 	TempProtMask  uint32    `json:"temp_prot_mask,omitempty"` // бит i: защита датчика i+1 (EnBMS)
-	Mode          int       `json:"mode"`        // канонический код (0..5)
-	AlarmBytes    []int     `json:"alarm_bytes"` // 19 Б битфилда (для трактовки по типу)
-	Alarms        []string  `json:"alarms,omitempty"` // человекочитаемые тревоги (по bms_type)
+	Mode          int       `json:"mode"`                     // канонический код (0..5)
+	AlarmBytes    []int     `json:"alarm_bytes"`              // 19 Б битфилда (для трактовки по типу)
+	Alarms        []string  `json:"alarms,omitempty"`         // человекочитаемые тревоги (по bms_type)
 	// Производные по ячейкам (вычисляются, в контракте не хранятся).
 	MaxCellIdx int     `json:"max_cell_idx"`
 	MaxCellV   float64 `json:"max_cell_v"`
