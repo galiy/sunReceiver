@@ -108,9 +108,16 @@ function renderMos(d){
 function renderAlarms(d){
   var box=document.getElementById('bmsAlarms'); if(!box) return;
   var a=d.alarms||[];
+  var prot=d.protections||[];
   var type='<div class="alarm-type">Тип: '+esc(d.model||'BMS')+'</div>';
-  if(!a.length){ box.innerHTML=type+'<span class="ok">Нет активных алармов</span>'; return; }
+  if(!a.length && !prot.length){ box.innerHTML=type+'<span class="ok">Нет активных алармов</span>'; return; }
   function txt(s){ return esc((typeof SR_descOf==='function')?SR_descOf(s,''):s); }
+  function list(title, items){
+    if(!items.length) return '';
+    var g='<div class="alarm-group"><div class="alarm-group-h">'+esc(title)+' ('+items.length+')</div><ul class="alarm-list">';
+    for(var j=0;j<items.length;j++) g+='<li>'+txt(items[j])+'</li>';
+    return g+'</ul></div>';
+  }
   var cats=[
     ['Ячейки',      function(s){ return s.indexOf('Ячейка')===0; }],
     ['Датчики',     function(s){ return s.indexOf('Датчик')===0; }],
@@ -120,20 +127,15 @@ function renderAlarms(d){
     ['System log',  function(s){ return s.indexOf('System log:')===0; }]
   ];
   var used={}, h=type;
-  function group(title, items){
-    if(!items.length) return '';
-    var g='<div class="alarm-group"><div class="alarm-group-h">'+esc(title)+' ('+items.length+')</div><ul class="alarm-list">';
-    for(var j=0;j<items.length;j++) g+='<li>'+txt(items[j])+'</li>';
-    return g+'</ul></div>';
-  }
+  h+=list('Защиты', prot); // защиты — по подтипу, отдельным блоком
   for(var c=0;c<cats.length;c++){
     var items=[];
     for(var i=0;i<a.length;i++){ if(!used[i] && cats[c][1](a[i])){ items.push(a[i]); used[i]=1; } }
-    h+=group(cats[c][0], items);
+    h+=list(cats[c][0], items);
   }
   var rest=[];
   for(var i=0;i<a.length;i++) if(!used[i]) rest.push(a[i]);
-  h+=group('Прочее', rest);
+  h+=list('Прочее', rest);
   box.innerHTML=h;
 }
 

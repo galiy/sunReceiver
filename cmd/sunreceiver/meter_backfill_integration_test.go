@@ -93,7 +93,7 @@ func TestMeterBackfillNearest(t *testing.T) {
 	b := time.Date(2026, 9, 8, 7, 0, 0, 0, loc) // граница 07:00 сегодня
 	day := time.Date(2026, 9, 8, 0, 0, 0, 0, loc)
 
-	pgc.pool.Exec(ctx, `DELETE FROM sunreceiver.daily_tariffs WHERE day = $1`, day)
+	pgc.pool.Exec(ctx, `DELETE FROM sunreceiver.dds238_daily_tariffs WHERE day = $1`, day)
 	rdb.HDel(ctx, redisCurrentKey, meterTestIP)
 	members := seedMeterSeries(t, store, cfg, []struct {
 		ts  time.Time
@@ -106,7 +106,7 @@ func TestMeterBackfillNearest(t *testing.T) {
 	})
 	defer func() {
 		cleanMeterSeeded(rdb, ctx, members)
-		pgc.pool.Exec(ctx, `DELETE FROM sunreceiver.daily_tariffs WHERE day = $1`, day)
+		pgc.pool.Exec(ctx, `DELETE FROM sunreceiver.dds238_daily_tariffs WHERE day = $1`, day)
 	}()
 
 	imp, exp, ok := nearestMeterReading(store, cfg, b)
@@ -165,7 +165,7 @@ func TestMeterBackfillEndToEnd(t *testing.T) {
 	by, bmo, bd := boundary.In(loc).Date()
 	day := time.Date(by, bmo, bd, 0, 0, 0, 0, loc)
 
-	pgc.pool.Exec(ctx, `DELETE FROM sunreceiver.daily_tariffs WHERE day = $1`, day)
+	pgc.pool.Exec(ctx, `DELETE FROM sunreceiver.dds238_daily_tariffs WHERE day = $1`, day)
 	rdb.HDel(ctx, redisCurrentKey, meterTestIP)
 	members := seedMeterSeries(t, store, cfg, []struct {
 		ts  time.Time
@@ -177,7 +177,7 @@ func TestMeterBackfillEndToEnd(t *testing.T) {
 	})
 	defer func() {
 		cleanMeterSeeded(rdb, ctx, members)
-		pgc.pool.Exec(ctx, `DELETE FROM sunreceiver.daily_tariffs WHERE day = $1`, day)
+		pgc.pool.Exec(ctx, `DELETE FROM sunreceiver.dds238_daily_tariffs WHERE day = $1`, day)
 	}()
 
 	backfillMeterBoundaries(store, pgc, cfg, now)
@@ -187,7 +187,7 @@ func TestMeterBackfillEndToEnd(t *testing.T) {
 	}
 	var imp *float64
 	if err := pgc.pool.QueryRow(ctx,
-		`SELECT "`+meterBoundaryImportCol(boundary.Hour())+`" FROM sunreceiver.daily_tariffs WHERE day=$1`,
+		`SELECT "`+meterBoundaryImportCol(boundary.Hour())+`" FROM sunreceiver.dds238_daily_tariffs WHERE day=$1`,
 		day).Scan(&imp); err != nil {
 		t.Fatal(err)
 	}

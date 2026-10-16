@@ -365,7 +365,32 @@ func (s *redisStore) IsEmpty() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return len(keys) == 0, nil
+	if len(keys) > 0 {
+		return false, nil
+	}
+	// Обособленные данные DDS238 (current/ряд) тоже означают «не пусто».
+	if n, err := s.rdb.HLen(s.ctx, redisDds238CurrentKey).Result(); err != nil {
+		return false, err
+	} else if n > 0 {
+		return false, nil
+	}
+	if ks, err := s.scanPrefixKeys(redisDds238SeriesPrefix + "*"); err != nil {
+		return false, err
+	} else if len(ks) > 0 {
+		return false, nil
+	}
+	// Обособленные данные МАП (current/ряд).
+	if n, err := s.rdb.HLen(s.ctx, redisMapCurrentKey).Result(); err != nil {
+		return false, err
+	} else if n > 0 {
+		return false, nil
+	}
+	if ks, err := s.scanPrefixKeys(redisMapSeriesPrefix + "*"); err != nil {
+		return false, err
+	} else if len(ks) > 0 {
+		return false, nil
+	}
+	return true, nil
 }
 
 // recentCutoff возвращает момент начала вторых из последних двух календарных
@@ -417,6 +442,20 @@ func (s *redisStore) PurgeOld(now time.Time) {
 	} else {
 		keys = append(keys, bmsKeys...)
 	}
+	// Ряд DDS238 (обособленный) — то же окно удержания.
+	ddsKeys, err := s.scanPrefixKeys(redisDds238SeriesPrefix + "*")
+	if err != nil {
+		log.Printf("redis cleanup dds238 keys: %v", err)
+	} else {
+		keys = append(keys, ddsKeys...)
+	}
+	// Ряд МАП (обособленный) — то же окно удержания.
+	mapKeys, err := s.scanPrefixKeys(redisMapSeriesPrefix + "*")
+	if err != nil {
+		log.Printf("redis cleanup map keys: %v", err)
+	} else {
+		keys = append(keys, mapKeys...)
+	}
 	// Ряд мгновенных значений CE308 (окно удержания — те же 2 календарных суток).
 	ce308Keys, err := s.scanPrefixKeys(redisCE308SeriesPrefix + "*")
 	if err != nil {
@@ -464,7 +503,21 @@ func (s *redisStore) Current() ([]deviceSnapshot, error) {
 		if e := json.Unmarshal([]byte(v), &snap); e != nil {
 			continue
 		}
+		if snap.IP == meterDeviceKey {
+			continue // старое поле DDS238 в общем current — игнорируем (см. dds238:current)
+		}
+		if snap.IP == mapDevKey {
+			continue // старое поле МАП в общем current — игнорируем (см. map:current)
+		}
 		snaps = append(snaps, snap)
+	}
+	// DDS238 хранится обособленно — подмешиваем его снимок прозрачно.
+	if d, derr := s.Dds238Current(); derr == nil && d != nil {
+		snaps = append(snaps, *d)
+	}
+	// МАП хранится обособленно — подмешиваем прозрачно.
+	if m, merr := s.MapCurrent(); merr == nil && m != nil {
+		snaps = append(snaps, *m)
 	}
 	// Сортируем по логическому имени — стабильный порядок карточек.
 	for i := 1; i < len(snaps); i++ {
@@ -514,12 +567,26 @@ func (s *redisStore) QuerySeries(start, end time.Time) ([]deviceSnapshot, error)
 			if e := json.Unmarshal([]byte(v), &snap); e != nil {
 				continue
 			}
+			if snap.IP == meterDeviceKey {
+				continue // старые точки DDS238 в общем ряду — игнорируем (см. dds238:series)
+			}
+			if snap.IP == mapDevKey {
+				continue // старые точки МАП в общем ряду — игнорируем (см. map:series)
+			}
 			all = append(all, snap)
 		}
 		return true
 	})
 	if queryErr != nil {
 		return nil, queryErr
+	}
+	// DDS238 хранится обособленным рядом — подмешиваем прозрачно.
+	if d, derr := s.QueryDds238Series(start, end); derr == nil {
+		all = append(all, d...)
+	}
+	// МАП хранится обособленным рядом — подмешиваем прозрачно.
+	if m, merr := s.QueryMapSeries(start, end); merr == nil {
+		all = append(all, m...)
 	}
 	return all, nil
 }

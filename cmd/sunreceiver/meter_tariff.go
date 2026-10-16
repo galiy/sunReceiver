@@ -189,7 +189,7 @@ func (s *pgStore) StoreMeterBoundary(b time.Time, imp, exp float64) error {
 // applyMeterBoundary пишет одно граничное показание в строку дня (UPSERT).
 func applyMeterBoundary(e meterExecer, ctx context.Context, day time.Time, colImp, colExp string, imp, exp float64) error {
 	q := fmt.Sprintf(`
-INSERT INTO sunreceiver.daily_tariffs (day, "%s", "%s")
+INSERT INTO sunreceiver.dds238_daily_tariffs (day, "%s", "%s")
 VALUES ($1, $2, $3)
 ON CONFLICT (day) DO UPDATE SET "%s"=EXCLUDED."%s", "%s"=EXCLUDED."%s"`,
 		colImp, colExp, colImp, colImp, colExp, colExp)
@@ -207,7 +207,7 @@ func finalizeMeterDay(e meterExecer, ctx context.Context, day time.Time) error {
 	err := e.QueryRow(ctx, `
 SELECT import_0000, import_0700, import_2300, import_next,
        export_0000, export_0700, export_2300, export_next
-FROM sunreceiver.daily_tariffs
+FROM sunreceiver.dds238_daily_tariffs
 WHERE day = $1`, day).Scan(
 		&import0000, &import0700, &import2300, &importNext,
 		&export0000, &export0700, &export2300, &exportNext)
@@ -262,7 +262,7 @@ WHERE day = $1`, day).Scan(
 	}
 
 	_, err = e.Exec(ctx, `
-UPDATE sunreceiver.daily_tariffs
+UPDATE sunreceiver.dds238_daily_tariffs
 SET import_day=$2, import_night=$3, export_day=$4, export_night=$5, finalized=now()
 WHERE day=$1`, day, round3(impDay), round3(impNight), round3(expDay), round3(expNight))
 	return err
@@ -271,7 +271,7 @@ WHERE day=$1`, day, round3(impDay), round3(impNight), round3(expDay), round3(exp
 // ensureMeterTariffSchema создаёт таблицу посуточных тарифных значний DDS238.
 func ensureMeterTariffSchema(s *pgStore) error {
 	_, err := s.pool.Exec(s.ctx, `
-CREATE TABLE IF NOT EXISTS sunreceiver.daily_tariffs (
+CREATE TABLE IF NOT EXISTS sunreceiver.dds238_daily_tariffs (
 	day          date PRIMARY KEY,
 	-- граничные показания (kWh): на 00:00, 07:00, 23:00 и на 00:00 следующего дня
 	import_0000  double precision,

@@ -108,6 +108,7 @@ type bms26Snapshot struct {
 	Mode          int       `json:"mode"`                     // канонический код (0..5)
 	AlarmBytes    []int     `json:"alarm_bytes"`              // 19 Б битфилда (для трактовки по типу)
 	Alarms        []string  `json:"alarms,omitempty"`         // человекочитаемые тревоги (по bms_type)
+	Protections   []string  `json:"protections,omitempty"`    // защиты (по подтипу; EnBMS)
 	// Производные по ячейкам (вычисляются, в контракте не хранятся).
 	MaxCellIdx int     `json:"max_cell_idx"`
 	MaxCellV   float64 `json:"max_cell_v"`
@@ -241,11 +242,14 @@ func runBms26Poll(store *redisStore, pg *pgStore, ctx context.Context) {
 						log.Printf("bms26 redis series %s: %v", sn.Serial, err)
 					}
 					acc.add(sn, now)
-					// История ошибок: пишем только ПОЯВЛЕНИЕ новой тревоги.
+					// История ошибок: пишем только ПОЯВЛЕНИЕ новой тревоги/защиты.
 					if pg != nil {
 						curAlarms := map[string]bool{}
 						for _, al := range sn.Alarms {
 							curAlarms[al] = true
+						}
+						for _, pr := range sn.Protections {
+							curAlarms[pr] = true
 						}
 						prev := lastAlarms[sn.Serial]
 						for al := range curAlarms {
@@ -300,9 +304,7 @@ func pollBms26Once(ctx context.Context) []bms26Snapshot {
 		sn.Framing = d.Framing
 		sn.DeviceName = d.Serial
 		sn.Timestamp = now.Format(time.RFC3339)
-		sn.Alarms = decodeBms26Alarms(sn)
-		sn.CellWarnMask, sn.CellProtMask = bms26CellMasks(sn)
-		sn.TempWarnMask, sn.TempProtMask = bms26TempMasks(sn)
+		finalizeBms26(&sn)
 		cacheBms26Snapshot(sn) // костыль: кэш serial для старых пулеров
 		out = append(out, sn)
 	}
@@ -367,6 +369,7 @@ func bmsDeviceFromBms26(sn bms26Snapshot) bmsDevice {
 		Model:         sn.BmsType,
 		Mode:          bms26ModeName(sn.Mode),
 		Alarms:        sn.Alarms,
+		Protections:   sn.Protections,
 	}
 	if ts, err := time.Parse(time.RFC3339, sn.Timestamp); err == nil {
 		d.Timestamp = ts.Unix()

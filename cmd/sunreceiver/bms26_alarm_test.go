@@ -32,21 +32,24 @@ func TestDecodeBms26AlarmsEn(t *testing.T) {
 	setBits(sn.AlarmBytes, 0, 4, 1) // ячейка1: высокое напряжение (warn)
 	// Ext_Bit Byte1 (группа 1) бит0 → "Ячейка: превышение напряжения"
 	sn.AlarmBytes[(100+1*8+0)/8] |= 1 << uint((100+1*8+0)%8)
-	out := decodeEnBms26Alarms(sn)
+	alarms, prot := decodeEnBms26Alarms(sn)
 	got := map[string]bool{}
-	for _, s := range out {
+	for _, s := range alarms {
 		got[s] = true
 	}
 	if !got["Ячейка 1: высокое напряжение (предупреждение)"] {
-		t.Fatalf("нет тревоги ячейки: %v", out)
+		t.Fatalf("нет тревоги ячейки: %v", alarms)
 	}
 	if !got["Ячейка: превышение напряжения"] {
-		t.Fatalf("нет Ext_Bit тревоги: %v", out)
+		t.Fatalf("нет Ext_Bit тревоги: %v", alarms)
+	}
+	if len(prot) != 0 {
+		t.Fatalf("защит быть не должно: %v", prot)
 	}
 }
 
 func TestDecodeBms26AlarmsDispatch(t *testing.T) {
-	if decodeBms26Alarms(bms26Snapshot{BmsType: "unknown", AlarmBytes: make([]int, 19)}) != nil {
+	if a, p := decodeBms26Alarms(bms26Snapshot{BmsType: "unknown", AlarmBytes: make([]int, 19)}); a != nil || p != nil {
 		t.Fatal("неизвестный тип — без тревог")
 	}
 }
@@ -65,5 +68,17 @@ func TestBms26CellMasks(t *testing.T) {
 	// ANT: масок нет
 	if w2, p2 := bms26CellMasks(bms26Snapshot{BmsType: "AntBMS-DSP", CellCount: 2, AlarmBytes: make([]int, 19)}); w2 != 0 || p2 != 0 {
 		t.Fatal("ant не должен давать per-cell масок")
+	}
+}
+
+func TestDecodeBms26ProtectionsEn(t *testing.T) {
+	sn := bms26Snapshot{CellCount: 1, BmsType: "EnBMS-RS485", AlarmBytes: make([]int, 19)}
+	setBits(sn.AlarmBytes, 1, 4, 1) // ячейка1, бит1 ниббла = OVprot
+	alarms, prot := decodeEnBms26Alarms(sn)
+	if len(alarms) != 0 {
+		t.Fatalf("alarms=%v, want пусто", alarms)
+	}
+	if len(prot) != 1 || prot[0] != "Ячейка 1: защита от перенапряжения" {
+		t.Fatalf("prot=%v", prot)
 	}
 }

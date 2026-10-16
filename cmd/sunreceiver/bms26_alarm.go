@@ -16,7 +16,10 @@
 
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Трактовка бинарного `alarm` (19 Б) контракта BMS по типу устройства.
 // Раскладка — зеркало упаковки BMS-Receiver (malina-26): биты нумеруются от 0,
@@ -55,15 +58,37 @@ func alarmNibble(a []int, base int) int {
 	return v
 }
 
-// decodeBms26Alarms возвращает человекочитаемые тревоги по типу BMS.
-func decodeBms26Alarms(sn bms26Snapshot) []string {
-	switch sn.BmsType {
-	case "AntBMS-DSP":
-		return decodeAntBms26Alarms(sn.AlarmBytes)
-	case "EnBMS-RS485":
+// bmsSubtype — подтип в рамках единого контракта BMS26 (поле bms_type). От
+// подтипа зависят раскладка тревог/защит/ошибок.
+type bmsSubtype string
+
+const (
+	bmsSubtypeAntDSP     bmsSubtype = "AntBMS-DSP"
+	bmsSubtypeEnbmsRS485 bmsSubtype = "EnBMS-RS485"
+	bmsSubtypeUnknown    bmsSubtype = "unknown"
+)
+
+func bmsSubtypeOf(bmsType string) bmsSubtype {
+	switch strings.TrimSpace(bmsType) {
+	case string(bmsSubtypeAntDSP):
+		return bmsSubtypeAntDSP
+	case string(bmsSubtypeEnbmsRS485):
+		return bmsSubtypeEnbmsRS485
+	default:
+		return bmsSubtypeUnknown
+	}
+}
+
+// decodeBms26Alarms типозависимо разбивает alarm на предупреждения (alarms) и
+// защиты (protections). У AntBMS отдельных «защит» нет — всё в alarms.
+func decodeBms26Alarms(sn bms26Snapshot) (alarms, protections []string) {
+	switch bmsSubtypeOf(sn.BmsType) {
+	case bmsSubtypeAntDSP:
+		return decodeAntBms26Alarms(sn.AlarmBytes), nil
+	case bmsSubtypeEnbmsRS485:
 		return decodeEnBms26Alarms(sn)
 	default:
-		return nil
+		return nil, nil
 	}
 }
 
@@ -82,8 +107,6 @@ func decodeAntBms26Alarms(a []int) []string {
 	}
 	bal := map[int]string{3: "Balance overtemperature", 10: "Motherboard overtemperature"}
 	var out []string
-	// Коды MOS: 0=выкл, 1=вкл — норма; всё прочее — тревога/неисправность.
-	// Незнакомые коды не теряем (иначе часть ошибок ANT была бы невидима).
 	pick := func(code int, m map[int]string) string {
 		if s, ok := m[code]; ok {
 			return s
@@ -99,7 +122,6 @@ func decodeAntBms26Alarms(a []int) []string {
 	if c := alarmNibble(a, 8); c >= 2 {
 		out = append(out, "Balance: "+pick(c, bal))
 	}
-	// system log: биты 12..27 (u16, LSB-first) — показываем всегда, когда ненулевой.
 	sys := 0
 	for k := 0; k < 16; k++ {
 		if alarmBit(a, 12+k) {
@@ -113,21 +135,59 @@ func decodeAntBms26Alarms(a []int) []string {
 	return out
 }
 
-// decodeEnBms26Alarms — ячейки/датчики (4 бита) + Ext_Bit Byte0..5 EnBMS.
-func decodeEnBms26Alarms(sn bms26Snapshot) []string {
+// enbmsCellBitText/enbmsTempBitText — текст и класс (protect) по биту ниббла.
+var enbmsCellBitText = [4]struct {
+	text string
+	prot bool
+}{
+	{"высокое напряжение (предупреждение)", false},
+	{"защита от перенапряжения", true},
+	{"низкое напряжение (предупреждение)", false},
+	{"защита от пониженного напряжения", true},
+}
+
+var enbmsTempBitText = [4]struct {
+	text string
+	prot bool
+}{
+	{"перегрев (предупреждение)", false},
+	{"защита от перегрева", true},
+	{"переохлаждение (предупреждение)", false},
+	{"защита от переохлаждения", true},
+}
+
+// decodeEnBms26Alarms — ячейки/датчики (ниббл: 0/2 — warn, 1/3 — protect),
+// одиночные warn (96..99), Ext_Bit Byte0..5 (Warn→alarms, Protect→protections).
+func decodeEnBms26Alarms(sn bms26Snapshot) (alarms, protections []string) {
 	a := sn.AlarmBytes
-	var out []string
 	for i := 0; i < sn.CellCount && i < 16; i++ {
-		for _, s := range enbmsCellStateBits(alarmNibble(a, i*4)) {
-			out = append(out, fmt.Sprintf("Ячейка %d: %s", i+1, s))
+		v := alarmNibble(a, i*4)
+		for b := 0; b < 4; b++ {
+			if v&(1<<uint(b)) == 0 {
+				continue
+			}
+			msg := fmt.Sprintf("Ячейка %d: %s", i+1, enbmsCellBitText[b].text)
+			if enbmsCellBitText[b].prot {
+				protections = append(protections, msg)
+			} else {
+				alarms = append(alarms, msg)
+			}
 		}
 	}
 	for i := 0; i < sn.TempCount && i < 8; i++ {
-		for _, s := range enbmsTempStateBits(alarmNibble(a, 64+i*4)) {
-			out = append(out, fmt.Sprintf("Датчик %d: %s", i+1, s))
+		v := alarmNibble(a, 64+i*4)
+		for b := 0; b < 4; b++ {
+			if v&(1<<uint(b)) == 0 {
+				continue
+			}
+			msg := fmt.Sprintf("Датчик %d: %s", i+1, enbmsTempBitText[b].text)
+			if enbmsTempBitText[b].prot {
+				protections = append(protections, msg)
+			} else {
+				alarms = append(alarms, msg)
+			}
 		}
 	}
-	// Одиночные warn (биты 96..99): env, power, chargecurrent, customer.
 	single := map[int]string{
 		96: "Температура среды: предупреждение",
 		97: "Силовая часть: предупреждение",
@@ -136,25 +196,27 @@ func decodeEnBms26Alarms(sn bms26Snapshot) []string {
 	}
 	for bit := 96; bit <= 99; bit++ {
 		if alarmBit(a, bit) {
-			out = append(out, single[bit])
+			alarms = append(alarms, single[bit])
 		}
 	}
-	// Ext_Bit Byte0..5 → группы 0..5; берём только Warn/Protect (как parseEnBmsState).
 	for by := 0; by < 6; by++ {
 		grp, ok := enbmsExtGroups[by]
 		if !ok {
 			continue
 		}
 		for _, eb := range grp.bits {
-			if eb.typ != "Warn" && eb.typ != "Protect" {
+			if !alarmBit(a, 100+by*8+eb.bit) {
 				continue
 			}
-			if alarmBit(a, 100+by*8+eb.bit) {
-				out = append(out, eb.name)
+			switch eb.typ {
+			case "Warn":
+				alarms = append(alarms, eb.name)
+			case "Protect":
+				protections = append(protections, eb.name)
 			}
 		}
 	}
-	return out
+	return alarms, protections
 }
 
 // bms26CellMasks возвращает по-ячеечные маски тревог (бит i = ячейка i+1):

@@ -27,11 +27,15 @@ func TestEnbmsPackAlarmRoundtrip(t *testing.T) {
 	for _, s := range sn.Alarms {
 		got[s] = true
 	}
+	gp := map[string]bool{}
+	for _, s := range sn.Protections {
+		gp[s] = true
+	}
 	if !got["Ячейка 1: высокое напряжение (предупреждение)"] {
 		t.Fatalf("нет тревоги ячейки: %v", sn.Alarms)
 	}
-	if !got["Датчик 1: защита от перегрева"] {
-		t.Fatalf("нет тревоги датчика: %v", sn.Alarms)
+	if !gp["Датчик 1: защита от перегрева"] {
+		t.Fatalf("нет защиты датчика: %v", sn.Protections)
 	}
 	if !got["Ячейка: превышение напряжения"] {
 		t.Fatalf("нет Ext_Bit тревоги: %v", sn.Alarms)

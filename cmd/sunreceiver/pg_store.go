@@ -101,6 +101,12 @@ CREATE INDEX IF NOT EXISTS averages_ts_ip_idx ON sunreceiver.averages (ts, ip);
 	if err := ensureMeterTariffSchema(s); err != nil {
 		return fmt.Errorf("pg meter tariff schema: %w", err)
 	}
+	if err := ensureDds238Schema(s); err != nil {
+		return err
+	}
+	if err := ensureMapSchema(s); err != nil {
+		return err
+	}
 	// Обособленные таблицы счётчика DTS017M (5-мин средние + посуточные тарифы).
 	if err := ensureDts017AveragesSchema(s); err != nil {
 		return fmt.Errorf("pg dts017m averages schema: %w", err)
@@ -321,6 +327,12 @@ ORDER BY ts ASC`
 		if err := rows.Scan(&ip, &name, &ts, &deviceSN, &vals); err != nil {
 			return nil, fmt.Errorf("pg scan: %w", err)
 		}
+		if ip == meterDeviceKey {
+			continue // старые строки DDS238 в averages — игнорируем (см. dds238_averages)
+		}
+		if ip == mapDevKey {
+			continue // старые строки МАП в averages — игнорируем (см. map_averages)
+		}
 		var vc valuesContract
 		if len(vals) > 0 {
 			if err := json.Unmarshal(vals, &vc); err != nil {
@@ -337,6 +349,16 @@ ORDER BY ts ASC`
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("pg rows: %w", err)
+	}
+	// DDS238 хранится обособленно (dds238_averages) — подмешиваем его точки при
+	// запросе «все устройства» (ips пуст), чтобы дашборд/реставрация видели снимок.
+	if len(ips) == 0 {
+		if ds, derr := s.Dds238Averages(start, end); derr == nil {
+			snaps = append(snaps, ds...)
+		}
+		if ms, merr := s.MapAverages(start, end); merr == nil {
+			snaps = append(snaps, ms...)
+		}
 	}
 	return snaps, nil
 }
@@ -576,7 +598,7 @@ ORDER BY ts ASC`, start.UTC(), end.UTC())
 func (s *pgStore) DailyTariffsRange(start, end time.Time) ([]meterDayStat, error) {
 	rows, err := s.pool.Query(s.ctx, `
 SELECT day, import_day, import_night, export_day, export_night
-FROM sunreceiver.daily_tariffs
+FROM sunreceiver.dds238_daily_tariffs
 WHERE finalized IS NOT NULL
   AND import_day IS NOT NULL AND import_night IS NOT NULL
   AND export_day IS NOT NULL AND export_night IS NOT NULL
@@ -627,7 +649,7 @@ func (s *pgStore) MeterBoundaryValues(day time.Time) (*meterBoundaryRow, error) 
 	err := s.pool.QueryRow(s.ctx, `
 SELECT import_0000, import_0700, import_2300, import_next,
        export_0000, export_0700, export_2300, export_next
-FROM sunreceiver.daily_tariffs
+FROM sunreceiver.dds238_daily_tariffs
 WHERE day = $1`, day).Scan(
 		&row.Import0000, &row.Import0700, &row.Import2300, &row.ImportNext,
 		&row.Export0000, &row.Export0700, &row.Export2300, &row.ExportNext)

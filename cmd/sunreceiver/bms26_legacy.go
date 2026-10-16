@@ -344,7 +344,7 @@ func finalizeBms26(sn *bms26Snapshot) {
 	if len(sn.AlarmBytes) == 0 {
 		return
 	}
-	sn.Alarms = decodeBms26Alarms(*sn)
+	sn.Alarms, sn.Protections = decodeBms26Alarms(*sn)
 	sn.CellWarnMask, sn.CellProtMask = bms26CellMasks(*sn)
 	sn.TempWarnMask, sn.TempProtMask = bms26TempMasks(*sn)
 }

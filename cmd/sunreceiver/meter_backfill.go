@@ -123,7 +123,7 @@ func (s *pgStore) meterBoundaryCaptured(b time.Time) bool {
 	day := time.Date(y, mo, d, 0, 0, 0, 0, loc)
 	var v *float64
 	err := s.pool.QueryRow(s.ctx,
-		`SELECT "`+col+`" FROM sunreceiver.daily_tariffs WHERE day=$1`, day).Scan(&v)
+		`SELECT "`+col+`" FROM sunreceiver.dds238_daily_tariffs WHERE day=$1`, day).Scan(&v)
 	if err != nil || v == nil {
 		return false
 	}
@@ -133,7 +133,7 @@ func (s *pgStore) meterBoundaryCaptured(b time.Time) bool {
 		prevDay := day.AddDate(0, 0, -1)
 		var next *float64
 		err := s.pool.QueryRow(s.ctx,
-			`SELECT "import_next" FROM sunreceiver.daily_tariffs WHERE day=$1`, prevDay).Scan(&next)
+			`SELECT "import_next" FROM sunreceiver.dds238_daily_tariffs WHERE day=$1`, prevDay).Scan(&next)
 		return err == nil && next != nil
 	}
 	return true

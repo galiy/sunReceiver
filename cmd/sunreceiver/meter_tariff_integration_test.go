@@ -44,7 +44,7 @@ func TestMeterTariffPGIntegration(t *testing.T) {
 			time.Date(2026, 9, 1, 0, 0, 0, 0, loc),
 			time.Date(2026, 9, 2, 0, 0, 0, 0, loc),
 		} {
-			pgc.pool.Exec(ctx, `DELETE FROM sunreceiver.daily_tariffs WHERE day = $1`, d)
+			pgc.pool.Exec(ctx, `DELETE FROM sunreceiver.dds238_daily_tariffs WHERE day = $1`, d)
 		}
 	}
 	clean()
@@ -63,7 +63,7 @@ func TestMeterTariffPGIntegration(t *testing.T) {
 	var finalized *time.Time
 	if err := pgc.pool.QueryRow(ctx, `
 SELECT import_day, import_night, export_day, export_night, finalized
-FROM sunreceiver.daily_tariffs WHERE day = $1`, day).Scan(&impDay, &impNight, &expDay, &expNight, &finalized); err != nil {
+FROM sunreceiver.dds238_daily_tariffs WHERE day = $1`, day).Scan(&impDay, &impNight, &expDay, &expNight, &finalized); err != nil {
 		t.Fatalf("select: %v", err)
 	}
 	if finalized == nil {
@@ -105,7 +105,7 @@ func TestMeterTariffBoundaryZeroAtomic(t *testing.T) {
 	}
 	clean := func() {
 		for _, d := range days {
-			pgc.pool.Exec(ctx, `DELETE FROM sunreceiver.daily_tariffs WHERE day = $1`, d)
+			pgc.pool.Exec(ctx, `DELETE FROM sunreceiver.dds238_daily_tariffs WHERE day = $1`, d)
 		}
 	}
 	clean()
@@ -118,11 +118,11 @@ func TestMeterTariffBoundaryZeroAtomic(t *testing.T) {
 	}
 	// Обе колонки записаны: import_0000[D] и import_next[D−1].
 	var imp0000, importNext *float64
-	if err := pgc.pool.QueryRow(ctx, `SELECT "import_0000" FROM sunreceiver.daily_tariffs WHERE day=$1`,
+	if err := pgc.pool.QueryRow(ctx, `SELECT "import_0000" FROM sunreceiver.dds238_daily_tariffs WHERE day=$1`,
 		time.Date(2026, 9, 2, 0, 0, 0, 0, loc)).Scan(&imp0000); err != nil || imp0000 == nil || *imp0000 != 500 {
 		t.Fatalf("import_0000[D] = %v (err %v), want 500", imp0000, err)
 	}
-	if err := pgc.pool.QueryRow(ctx, `SELECT "import_next" FROM sunreceiver.daily_tariffs WHERE day=$1`,
+	if err := pgc.pool.QueryRow(ctx, `SELECT "import_next" FROM sunreceiver.dds238_daily_tariffs WHERE day=$1`,
 		time.Date(2026, 9, 1, 0, 0, 0, 0, loc)).Scan(&importNext); err != nil || importNext == nil || *importNext != 500 {
 		t.Fatalf("import_next[D-1] = %v (err %v), want 500", importNext, err)
 	}
@@ -135,7 +135,7 @@ func TestMeterTariffBoundaryZeroAtomic(t *testing.T) {
 	if err := pgc.StoreMeterBoundary(b, 500.0, 50.0); err != nil {
 		t.Fatalf("StoreMeterBoundary идемпотентный повтор: %v", err)
 	}
-	if err := pgc.pool.QueryRow(ctx, `SELECT "import_0000" FROM sunreceiver.daily_tariffs WHERE day=$1`,
+	if err := pgc.pool.QueryRow(ctx, `SELECT "import_0000" FROM sunreceiver.dds238_daily_tariffs WHERE day=$1`,
 		time.Date(2026, 9, 2, 0, 0, 0, 0, loc)).Scan(&imp0000); err != nil || *imp0000 != 500 {
 		t.Fatalf("import_0000 после идемпотентного повтора = %v, want 500 (значения не изменились)", imp0000)
 	}
@@ -144,7 +144,7 @@ func TestMeterTariffBoundaryZeroAtomic(t *testing.T) {
 	if err := pgc.StoreMeterBoundary(b, 999.0, 99.0); err != nil {
 		t.Fatalf("StoreMeterBoundary повтор (override): %v", err)
 	}
-	if err := pgc.pool.QueryRow(ctx, `SELECT "import_0000" FROM sunreceiver.daily_tariffs WHERE day=$1`,
+	if err := pgc.pool.QueryRow(ctx, `SELECT "import_0000" FROM sunreceiver.dds238_daily_tariffs WHERE day=$1`,
 		time.Date(2026, 9, 2, 0, 0, 0, 0, loc)).Scan(&imp0000); err != nil || *imp0000 != 999 {
 		t.Fatalf("import_0000 после override = %v, want 999 (do update)", imp0000)
 	}
@@ -152,7 +152,7 @@ func TestMeterTariffBoundaryZeroAtomic(t *testing.T) {
 	// Самовосстановление: имитируем частичную запись (только import_0000[D],
 	// import_next[D−1] пропущен — транзиентный сбой PG в старом неатомарном коде).
 	// meterBoundaryCaptured для часа 0 должен вернуть false → добор повторит запись.
-	pgc.pool.Exec(ctx, `UPDATE sunreceiver.daily_tariffs SET "import_next"=NULL WHERE day=$1`,
+	pgc.pool.Exec(ctx, `UPDATE sunreceiver.dds238_daily_tariffs SET "import_next"=NULL WHERE day=$1`,
 		time.Date(2026, 9, 1, 0, 0, 0, 0, loc))
 	if pgc.meterBoundaryCaptured(b) {
 		t.Fatal("meterBoundaryCaptured(00:00)=true при частичной записи, want false (импорт_next[D-1] NULL)")

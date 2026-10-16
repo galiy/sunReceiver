@@ -192,8 +192,13 @@ func runMeterPoll(store *redisStore, pg *pgStore, cfg *meterConfig, ctx context.
 				Timestamp: now.Format(time.RFC3339),
 				Values:    vals,
 			}
-			if err := store.SaveSnapshot(snap, now); err != nil {
-				log.Printf("redis meter save %s: %v", cfg.IP, err)
+			// DDS238 хранится обособленно (sunreceiver:dds238:current/:series) —
+			// общие sunreceiver:current/:series для счётчика не используются.
+			if err := store.SaveDds238Current(snap); err != nil {
+				log.Printf("redis dds238 current %s: %v", cfg.IP, err)
+			}
+			if err := store.SaveDds238Series(snap, now); err != nil {
+				log.Printf("redis dds238 series %s: %v", cfg.IP, err)
 			}
 			if capture != nil {
 				capture.capture(readings, now)

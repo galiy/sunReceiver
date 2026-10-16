@@ -1984,6 +1984,12 @@ func saveWindowSnapshot(store *redisStore, pg *pgStore, t invTarget, res DeviceR
 		Kind:       invKindName(t.Kind),
 		Values:     res.Values,
 	}
+	if snap.IP == mapDevKey {
+		if err := store.saveMapSnapshot(snap, ts); err != nil {
+			log.Printf("redis save map: %v", err)
+		}
+		return
+	}
 	if err := store.SaveSnapshotMAP(snap, ts); err != nil {
 		log.Printf("redis save %s: %v", devKey(t), err)
 	}
@@ -2313,18 +2319,8 @@ func main() {
 		log.Printf("pg: отключено (флаг -pg пустой); работаем только через Redis")
 	}
 
-	// Однократная миграция идентификатора счётчика на единый ключ (dds238):
-	// переписывает current/временной ряд Redis и строки PG averages. Выполняется
-	// СИНХРОННО до запуска пулеров и runAccumulator — иначе backfill агрегации успел
-	// бы обработать ряд под старыми IP-ключами.
-	migrateMeterDeviceKey(store, pg, time.Now())
-	// Однократный перенос ключей КЭС старым форматом "<host>#mppt-<uid>" → "mppt-<serial>"
-	// (current/ряд Redis + строки PG averages). До пулеров/аккумулятора.
-	migrateMPPTDeviceKeys(store, pg, time.Now())
 	// Кэш serial BMS26 (BASE→serial, EnBMS) — для «костыля» старых пулеров.
 	loadBms26SerialCache(store)
-	// Однократный перенос истории DTS017M на стабильный ключ (идемпотентно).
-	migrateDts017AverageKey(pg, dts017Cfg)
 
 	// Фоновые процессы: усреднение данных за 5 минут в PG и очистка старых
 	// данных Redis (старше 2 календарных суток).
@@ -2908,6 +2904,25 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, re
 			// ts.Format("2006-01")). Живая запись пишет по локальной зоне, а тут ts
 			// из RFC3339 обычно в UTC — приводим к time.Local для того же месяца-ключа.
 			ts = ts.In(time.Local)
+			if snap.IP == meterDeviceKey {
+				// DDS238 восстанавливаем в обособленные ключи.
+				if serr := store.SaveDds238Series(snap, ts); serr != nil {
+					log.Printf("pg restore: dds238 save: %v", serr)
+					continue
+				}
+				_ = store.SaveDds238Current(snap)
+				restored++
+				continue
+			}
+			if snap.IP == mapDevKey {
+				// МАП восстанавливаем в обособленные ключи.
+				if serr := store.saveMapSnapshot(snap, ts); serr != nil {
+					log.Printf("pg restore: map save: %v", serr)
+					continue
+				}
+				restored++
+				continue
+			}
 			if serr := store.SaveSnapshot(snap, ts); serr != nil {
 				log.Printf("pg restore: save %s: %v", snap.IP, serr)
 				continue
