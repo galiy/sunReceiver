@@ -58,11 +58,12 @@ func TestMPPTStableKeyEmptyUID(t *testing.T) {
 	if k := devKey(t0); k != "mppt-1097" {
 		t.Fatalf("devKey = %q, want mppt-1097", k)
 	}
-	// Слот, для которого UID ни разу не встречался — фолбэк на индексный ключ.
+	// Слот, для которого UID ни разу не встречался — фолбэк на индексный ключ,
+	// 1-based (совпадает с именем "MPPT-<slot+1>" и kesKeyByName).
 	if uid := s.resolveUID(2, ""); uid != "" {
 		t.Fatalf("resolveUID(2, \"\") = %q, want \"\"", uid)
 	}
-	if k := devKey(invTarget{IP: "10.0.0.1", Kind: kindMPPT, Slot: 2, UID: ""}); k != "mppt-2" {
-		t.Fatalf("devKey без UID = %q, want mppt-2", k)
+	if k := devKey(invTarget{IP: "10.0.0.1", Kind: kindMPPT, Slot: 2, UID: ""}); k != "mppt-3" {
+		t.Fatalf("devKey без UID = %q, want mppt-3", k)
 	}
 }

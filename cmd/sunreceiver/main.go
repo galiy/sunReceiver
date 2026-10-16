@@ -661,7 +661,9 @@ func devKey(t invTarget) string {
 		if t.UID != "" {
 			return fmt.Sprintf("mppt-%s", t.UID)
 		}
-		return fmt.Sprintf("mppt-%d", t.Slot)
+		// Без UID — по слоту (1-based), чтобы совпадать с отображаемым именем
+		// "MPPT-<slot+1>" и kesKeyByName (иначе ключ расходится на единицу).
+		return fmt.Sprintf("mppt-%d", t.Slot+1)
 	}
 	if t.Kind == kindMAP {
 		return mapDevKey
