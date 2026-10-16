@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strconv"
 	"sync"
 	"time"
 
@@ -40,6 +39,12 @@ type redisStore struct {
 	// МАП нестабильно отдаёт блоки. Запись каждого показания не подавляется.
 	mapMu  sync.Mutex
 	mapWin map[string]mapWinMember
+
+	// tsMu/tsCreated/tsFailUntil — кэш уже созданных серий RedisTimeSeries
+	// (key -> подпись меток) и негативный бэкофф при сбое TS.CREATE. См. rts_store.go.
+	tsMu        sync.Mutex
+	tsCreated   map[string]string
+	tsFailUntil map[string]time.Time
 }
 
 type mapWinMember struct {
@@ -218,53 +223,26 @@ func (s *redisStore) scanPrefixKeys(prefix string) ([]string, error) {
 // сегмента временного ряда (т.е. in-memory данные потеряны и нужна реставрация
 // из persistent-хранилища PostgreSQL).
 func (s *redisStore) IsEmpty() (bool, error) {
-	// Обособленные данные инверторов по марке (current/ряд) — основной признак.
-	for _, b := range []invBrand{deyeBrand, sofarBrand} {
-		if n, err := s.rdb.HLen(s.ctx, b.curKey).Result(); err != nil {
+	// Достаточно любого current-HASH модуля (последнее состояние) — уже «не пусто».
+	for _, key := range []string{
+		deyeBrand.curKey, sofarBrand.curKey,
+		redisDds238CurrentKey, redisMapCurrentKey, redisKesCurrentKey,
+		redisBms26CurrentKey, redisDts017CurrentKey, redisCE308CurrentKey,
+	} {
+		n, err := s.rdb.HLen(s.ctx, key).Result()
+		if err != nil {
 			return false, err
-		} else if n > 0 {
+		}
+		if n > 0 {
 			return false, nil
 		}
-		if ks, err := s.scanPrefixKeys(b.seriesPfx + "*"); err != nil {
-			return false, err
-		} else if len(ks) > 0 {
-			return false, nil
-		}
 	}
-	// Обособленные данные DDS238 (current/ряд) тоже означают «не пусто».
-	if n, err := s.rdb.HLen(s.ctx, redisDds238CurrentKey).Result(); err != nil {
+	// Либо есть хоть одна серия RedisTimeSeries.
+	keys, err := s.scanPrefixKeys(tsSeriesPrefix + "*")
+	if err != nil {
 		return false, err
-	} else if n > 0 {
-		return false, nil
 	}
-	if ks, err := s.scanPrefixKeys(redisDds238SeriesPrefix + "*"); err != nil {
-		return false, err
-	} else if len(ks) > 0 {
-		return false, nil
-	}
-	// Обособленные данные МАП (current/ряд).
-	if n, err := s.rdb.HLen(s.ctx, redisMapCurrentKey).Result(); err != nil {
-		return false, err
-	} else if n > 0 {
-		return false, nil
-	}
-	if ks, err := s.scanPrefixKeys(redisMapSeriesPrefix + "*"); err != nil {
-		return false, err
-	} else if len(ks) > 0 {
-		return false, nil
-	}
-	// Обособленные данные КЭС (current/ряд).
-	if n, err := s.rdb.HLen(s.ctx, redisKesCurrentKey).Result(); err != nil {
-		return false, err
-	} else if n > 0 {
-		return false, nil
-	}
-	if ks, err := s.scanPrefixKeys(redisKesSeriesPrefix + "*"); err != nil {
-		return false, err
-	} else if len(ks) > 0 {
-		return false, nil
-	}
-	return true, nil
+	return len(keys) == 0, nil
 }
 
 // recentCutoff возвращает момент начала вторых из последних двух календарных
@@ -300,79 +278,10 @@ func seriesReadCutoff(start, now time.Time) time.Time {
 // 2 календарных суток (recentCutoff). Пустые сегменты удаляются целиком. Текущие
 // HASH (current-ключи модулей) не трогаются — последнее состояние хранится всегда.
 // Вызывается фоновым процессом (см. runRedisCleanup).
-func (s *redisStore) PurgeOld(now time.Time) {
-	cutoff := recentCutoff(now)
-	// Ряды сетевых инверторов по марке (обособленные).
-	var keys []string
-	for _, b := range []invBrand{deyeBrand, sofarBrand} {
-		ik, err := s.scanPrefixKeys(b.seriesPfx + "*")
-		if err != nil {
-			log.Printf("redis cleanup %s keys: %v", b.name, err)
-			continue
-		}
-		keys = append(keys, ik...)
-	}
-	// Ряд BMS (bms26) чистится тем же окном.
-	bmsKeys, err := s.scanPrefixKeys(redisBms26SeriesPrefix + "*")
-	if err != nil {
-		log.Printf("redis cleanup bms26 keys: %v", err)
-	} else {
-		keys = append(keys, bmsKeys...)
-	}
-	// Ряд DDS238 (обособленный) — то же окно удержания.
-	ddsKeys, err := s.scanPrefixKeys(redisDds238SeriesPrefix + "*")
-	if err != nil {
-		log.Printf("redis cleanup dds238 keys: %v", err)
-	} else {
-		keys = append(keys, ddsKeys...)
-	}
-	// Ряд МАП (обособленный) — то же окно удержания.
-	mapKeys, err := s.scanPrefixKeys(redisMapSeriesPrefix + "*")
-	if err != nil {
-		log.Printf("redis cleanup map keys: %v", err)
-	} else {
-		keys = append(keys, mapKeys...)
-	}
-	// Ряд КЭС (обособленный).
-	kesKeys, err := s.scanPrefixKeys(redisKesSeriesPrefix + "*")
-	if err != nil {
-		log.Printf("redis cleanup kes keys: %v", err)
-	} else {
-		keys = append(keys, kesKeys...)
-	}
-	// Ряд мгновенных значений CE308 (окно удержания — те же 2 календарных суток).
-	ce308Keys, err := s.scanPrefixKeys(redisCE308SeriesPrefix + "*")
-	if err != nil {
-		log.Printf("redis cleanup ce308 keys: %v", err)
-	} else {
-		keys = append(keys, ce308Keys...)
-	}
-	// Обособленный ряд счётчика DTS017M (окно 2 календарных суток).
-	dts017Keys, err := s.scanPrefixKeys(redisDts017SeriesPrefix + "*")
-	if err != nil {
-		log.Printf("redis cleanup dts017m keys: %v", err)
-	} else {
-		keys = append(keys, dts017Keys...)
-	}
-	// Операцию выполняем так, чтобы «строго старше cutoff», т.е. ZRemRangeByScore
-	// убирает [ -inf ; cutoff-1 ], поэтому ровно cutoff остаётся в ряде.
-	remBelow := strconv.FormatInt(cutoff.Unix()-1, 10)
-	for _, key := range keys {
-		if err := s.rdb.ZRemRangeByScore(s.ctx, key, "-inf", remBelow).Err(); err != nil {
-			log.Printf("redis cleanup %s: %v", key, err)
-			continue
-		}
-		n, err := s.rdb.ZCard(s.ctx, key).Result()
-		if err != nil {
-			continue
-		}
-		if n == 0 {
-			if err := s.rdb.Del(s.ctx, key).Err(); err != nil {
-				log.Printf("redis cleanup del %s: %v", key, err)
-			}
-		}
-	}
-}
+// PurgeOld — no-op: ротацию временных рядов выполняет сам RedisTimeSeries
+// (RETENTION 2 суток на серию). Оставлен для совместимости фонового цикла
+// (runRedisCleanup) до удаления старых ZSET-рядов (этап 9 плана).
+func (s *redisStore) PurgeOld(now time.Time) {}
 
 // CurrentOne возвращает один последний снимок по ЛОГИЧЕСКОМУ ключу обособленного
 // устройства: meterDeviceKey → Dds238Current, mapDevKey → MapCurrent,

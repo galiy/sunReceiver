@@ -77,7 +77,7 @@ legacy-файл `dds238.json` НЕ используется; если разде
 (`meterDeviceKey`), не зависящий от IP/транспорта:
 
 - поле HASH `sunreceiver:dds238:current` (текущий снимок);
-- identity снимков обособленного ряда Redis `sunreceiver:dds238:series:*`
+- identity снимков обособленного ряда Redis `RedisTimeSeries `sunreceiver:ts:dds238:*``
   (дедупликация, добор тарифных границ);
 - таблица PG `sunreceiver.dds238_averages_r` (5-минутные агрегаты; ключ — `name`, `ip` нет);
 - чтение текущего снимка потребителями (уведомления, лампы-индикаторы) через

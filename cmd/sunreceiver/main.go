@@ -2816,7 +2816,7 @@ func redisBMSDataPresent(store *redisStore) (bool, error) {
 	if n > 0 {
 		return true, nil
 	}
-	keys, err := store.scanPrefixKeys(redisBms26SeriesPrefix + "*")
+	keys, err := store.scanPrefixKeys(tsSeriesPrefix + "bms26" + ":*")
 	if err != nil {
 		return false, err
 	}
@@ -2835,7 +2835,7 @@ func redisDts017DataPresent(store *redisStore) (bool, error) {
 	if n > 0 {
 		return true, nil
 	}
-	keys, err := store.scanPrefixKeys(redisDts017SeriesPrefix + "*")
+	keys, err := store.scanPrefixKeys(tsSeriesPrefix + "dts017m" + ":*")
 	if err != nil {
 		return false, err
 	}
@@ -2853,7 +2853,7 @@ func redisCE308DataPresent(store *redisStore) (bool, error) {
 	if n > 0 {
 		return true, nil
 	}
-	keys, err := store.scanPrefixKeys(redisCE308SeriesPrefix + "*")
+	keys, err := store.scanPrefixKeys(tsSeriesPrefix + "ce308" + ":*")
 	if err != nil {
 		return false, err
 	}

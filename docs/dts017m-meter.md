@@ -74,7 +74,7 @@
 DTS017M → (Modbus RTU через прозрачный шлюз)
    → dts017 poller (poll_interval)
        → Redis  HASH sunreceiver:dts017m:current            (последний снимок)
-                ZSET sunreceiver:dts017m:series:<YYYY-MM>  (каждое показание, окно 2 суток)
+                ZSET RedisTimeSeries `sunreceiver:ts:dts017m:*`  (каждое показание, окно 2 суток)
        → (границы 00:00/07:00/23:00) захват Import/Export
                 → PG sunreceiver.dts017m_daily_tariffs
    → dts017 accumulator (5 мин) → PG sunreceiver.dts017m_averages_r
@@ -153,7 +153,7 @@ CE308 (эталон знака: «+» = потребление) и DTS017M — �
 ### Redis (обособленные ключи)
 
 - `sunreceiver:dts017m:current` — HASH, поле `dts017m`, значение — JSON снимка;
-- `sunreceiver:dts017m:series:<YYYY-MM>` — ZSET (score = Unix-сек., member = JSON
+- `RedisTimeSeries `sunreceiver:ts:dts017m:*`` — ZSET (score = Unix-сек., member = JSON
   снимка), пишется каждое показание; окно удержания — 2 календарных суток
   (`PurgeOld`).
 

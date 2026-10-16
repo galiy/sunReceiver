@@ -103,7 +103,7 @@ legacy-файлом `dds238.json`; `protocol` — `"tcp"` (Modbus TCP, по ум
 "poll_interval"}` (**`disabled` — ОБЯЗАТЕЛЬНОЕ**: `true` — опрос выключен; `protocol` —
 `"rtu"` (по умолчанию, прозрачный шлюз) или `"tcp"`; `port` умолч. 502, `unit` умолч. 1,
 `poll_interval` умолч. 1 с). Хранилище **обособлено**: собственные ключи/ряд Redis
-(`sunreceiver:dts017m:current`, `sunreceiver:dts017m:series:*`) и таблицы PG
+(`sunreceiver:dts017m:current`, RedisTimeSeries-серии `sunreceiver:ts:dts017m:*`) и таблицы PG
 (`dts017m_averages_r`, `dts017m_daily_tariffs`), отдельный аккумулятор; общие
 ключи/таблицы DDS238 не используются. Описан в
 [`docs/dts017m-meter.md`](docs/dts017m-meter.md). Счётчик Энергомера **CE308** (опрос по BLE) — раздел
@@ -172,7 +172,7 @@ inverter 10, map 1, meter 1, ce308 5, antbms 1. Период EnBMS задаёт�
 
 Данные текут: **устройство → poller → Redis (сразу) → аккумулятор → PG (5-мин
 усреднённые точки) → дашборд (чтение)**. Опрос — независимые горутины. Дашборд только
-читает `current`/`series` (Redis) и `averages` (PG).
+читает `current` (Redis HASH) / `series` (RedisTimeSeries, ключи `sunreceiver:ts:*`) и `averages` (PG).
 
 - **`internal/solarman/`** — клиент Solarman V5. Полное описание —
   [`docs/modules/solarman-client.md`](docs/modules/solarman-client.md).
@@ -230,7 +230,7 @@ inverter 10, map 1, meter 1, ce308 5, antbms 1. Период EnBMS задаёт�
   опрос через HTTP-API «Малина26» (`/api/bms/devices` + `/api/bms/raw`), бинарный
   контракт 107 Б — копия пакета `internal/bmscontract` (оригинал —
   `github.com/galiy/malina-26/daemons/lib/bmscontract`). Redis current `sunreceiver:bms26:current`
-  + ряд `sunreceiver:bms26:series:*`; PG `bms26_averages_r` (5-мин средние). Полное
+  + серии RedisTimeSeries `sunreceiver:ts:bms26:*`; PG `bms26_averages_r` (5-мин средние). Полное
   описание — [`docs/modules/bms26.md`](docs/modules/bms26.md).
 - **ANT BMS** — `bms_poller.go`, `bms_accumulator.go`, `daemons/bmslistener/`. Полное описание —
   [`docs/antbms.md`](docs/antbms.md). Демон bmslistener (установка на ПАК «Малина») —

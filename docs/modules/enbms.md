@@ -214,7 +214,7 @@ ANT-пулер, и пулер malina26 пишут в **единый ряд bms26
 `bms26_legacy.go`):
 
 - Redis `sunreceiver:bms26:current` (HASH, поле = serial) — текущий снимок;
-- Redis `sunreceiver:bms26:series:<YYYY-MM>` (ZSET) — **каждое снятое показание**
+- Redis `RedisTimeSeries `sunreceiver:ts:bms26:*`` (ZSET) — **каждое снятое показание**
   (score = секунда; окно 2 суток, чистка PurgeOld);
 - PostgreSQL `sunreceiver.bms26_averages_r` (партиционированная колоночная, ключ
   `name`=serial) + дети `_cells/_temps/_alarm` — вся история с гранулярностью

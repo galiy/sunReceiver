@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -57,25 +56,8 @@ func (s *redisStore) SaveDds238Current(snap deviceSnapshot) error {
 // SaveDds238Series кладёт мгновенную точку в месячный ZSET ряда DDS238
 // (дедуп по score).
 func (s *redisStore) SaveDds238Series(snap deviceSnapshot, ts time.Time) error {
-	snap.IP = "" // ip не персистим
-	b, err := json.Marshal(snap)
-	if err != nil {
-		return fmt.Errorf("marshal dds238 series: %w", err)
-	}
-	key := dds238SeriesKey(ts)
 	pipe := s.rdb.TxPipeline()
-	// Убираем прежнюю точку на этой секунде (та же секунда — перезапись).
-	if old, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{
-		Min: strconv.FormatInt(ts.Unix(), 10), Max: strconv.FormatInt(ts.Unix(), 10)}).Result(); err == nil {
-		for _, m := range old {
-			var q deviceSnapshot
-			if json.Unmarshal([]byte(m), &q) == nil && q.IP == snap.IP {
-				pipe.ZRem(s.ctx, key, m)
-			}
-		}
-	}
-	pipe.ZAdd(s.ctx, key, redis.Z{Score: float64(ts.Unix()), Member: string(b)})
-	pipe.Expire(s.ctx, key, 40*24*time.Hour)
+	s.tsAddValueContract(pipe, "dds238", meterDeviceKey, snap.Name, "", snap.DeviceSN, ts, snap.Values)
 	if _, err := pipe.Exec(s.ctx); err != nil {
 		return fmt.Errorf("save dds238 series: %w", err)
 	}
@@ -105,29 +87,13 @@ func (s *redisStore) QueryDds238Series(start, end time.Time) ([]deviceSnapshot, 
 	if start.After(end) {
 		return nil, errors.New("dds238 series: start after end")
 	}
-	min := strconv.FormatInt(start.Unix(), 10)
-	max := strconv.FormatInt(end.Unix(), 10)
-	var all []deviceSnapshot
-	var queryErr error
-	eachMonth(start, end, func(y int, m time.Month) bool {
-		key := dds238SeriesKey(time.Date(y, m, 1, 0, 0, 0, 0, time.Local))
-		vals, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: min, Max: max}).Result()
-		if err != nil {
-			queryErr = err
-			return false
-		}
-		for _, v := range vals {
-			var snap deviceSnapshot
-			if json.Unmarshal([]byte(v), &snap) != nil {
-				continue
-			}
-			snap.IP = meterDeviceKey
-			all = append(all, snap)
-		}
-		return true
-	})
-	if queryErr != nil {
-		return nil, queryErr
+	series, err := s.tsMRange(start, end, "kind=dds238")
+	if err != nil {
+		return nil, err
 	}
-	return all, nil
+	out := tsGroupSnapshots(series)
+	for i := range out {
+		out[i].IP = meterDeviceKey
+	}
+	return out, nil
 }

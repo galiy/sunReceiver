@@ -19,7 +19,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -64,34 +63,11 @@ func (s *redisStore) SaveCE308Current(snap ce308Snapshot) error {
 // Перед записью удаляет предыдущую версию того же устройства на том же score,
 // чтобы в ZSET не было дублей в один момент времени (аналог SaveSnapshot).
 func (s *redisStore) SaveCE308History(snap ce308Snapshot, ts time.Time) error {
-	b, err := json.Marshal(snap)
-	if err != nil {
-		return fmt.Errorf("marshal ce308 history %s: %w", snap.Name, err)
-	}
-	key := ce308SeriesKey(ts)
-	score := strconv.FormatInt(ts.Unix(), 10)
-	old, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: score, Max: score}).Result()
-	if err != nil {
-		return fmt.Errorf("ce308 history dedup %s: %w", snap.Name, err)
-	}
-	var stale []any
-	for _, m := range old {
-		var q ce308Snapshot
-		if json.Unmarshal([]byte(m), &q) != nil {
-			continue
-		}
-		if q.Name == snap.Name {
-			stale = append(stale, m)
-		}
-	}
 	pipe := s.rdb.TxPipeline()
-	if len(stale) > 0 {
-		pipe.ZRem(s.ctx, key, stale...)
+	for tag, v := range snap.Values {
+		s.tsAdd(pipe, "ce308", snap.Name, snap.Name, "", "", tag, ts, v)
 	}
-	pipe.ZAdd(s.ctx, key, redis.Z{Score: float64(ts.Unix()), Member: string(b)})
-	pipe.Expire(s.ctx, key, 40*24*time.Hour)
-	_, err = pipe.Exec(s.ctx)
-	if err != nil {
+	if _, err := pipe.Exec(s.ctx); err != nil {
 		return fmt.Errorf("save ce308 history %s: %w", snap.Name, err)
 	}
 	return nil
@@ -145,21 +121,14 @@ func (s *redisStore) QueryCE308Series(start, end time.Time) ([]ce308Snapshot, er
 	if start.After(end) {
 		return nil, fmt.Errorf("ce308 series: start after end")
 	}
-	startScore := strconv.FormatInt(start.Unix(), 10)
-	endScore := strconv.FormatInt(end.Unix(), 10)
-	var out []ce308Snapshot
-	for key := ce308SeriesKey(start); !keyAfter(key, end); key = nextCe308SeriesKey(key) {
-		vals, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: startScore, Max: endScore}).Result()
-		if err != nil {
-			return nil, fmt.Errorf("ce308 series %s: %w", key, err)
-		}
-		for _, m := range vals {
-			var snap ce308Snapshot
-			if err := json.Unmarshal([]byte(m), &snap); err != nil {
-				continue
-			}
-			out = append(out, snap)
-		}
+	series, err := s.tsMRange(start, end, "kind=ce308")
+	if err != nil {
+		return nil, err
+	}
+	snaps := tsGroupSnapshots(series)
+	out := make([]ce308Snapshot, 0, len(snaps))
+	for _, sn := range snaps {
+		out = append(out, ce308Snapshot{Name: sn.Name, Timestamp: sn.Timestamp, Values: vcToFloatMap(sn.Values)})
 	}
 	return out, nil
 }

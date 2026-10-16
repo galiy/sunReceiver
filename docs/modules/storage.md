@@ -32,37 +32,31 @@
 Ключи (сетевые инверторы **обособлены по марке**; ключ устройства — **серийный
 номер инвертора** `inverter_sn`, IP — информационное поле «откуда получено»):
 
-- **`sunreceiver:deye:current`** / **`sunreceiver:sofar:current`** — HASH текущих
-  (последних) значений: поле = серийник инвертора, значение = JSON `deviceSnapshot`.
-  `HGETALL` отдаёт состояние всех инверторов марки — читает дашборд. Чистке не подлежит.
-- **`sunreceiver:deye:series:<YYYY-MM>`** / **`sunreceiver:sofar:series:<YYYY-MM>`** —
-  временной ряд марки, месячный сегмент = ZSET: score = Unix (сек.),
-  member = JSON `deviceSnapshot`. TTL на сегмент ~40 дней (предохранитель; основную
-  очистку делает `PurgeOld`).
-- Общие **`sunreceiver:current`** / **`sunreceiver:series:*`** **выведены из
-  эксплуатации** (все классы устройств обособлены). Старые данные перенесены
-  скриптами `scripts/migrate_inv_split.py` + `backfill_inv_ip.py` (плюс
-  `scripts/cleanup_common_shared.py`, `scripts/fix_rudiment_sn.py`), общие ключи удалены.
+- **`sunreceiver:<kind>:current`** (HASH: `deye|sofar|dds238|map|kes|bms26|dts017m|ce308`)
+  — последнее состояние: поле = логический ключ устройства, значение = JSON снимка.
+  Читает дашборд (`/api/current`, `/api/animation`). Не чистится.
+- **Временные ряды — RedisTimeSeries** (модуль присутствует в Redis 8): серия на пару
+  **(устройство, тег)** — ключ `sunreceiver:ts:<kind>:<device>:<tag>`, метки
+  `LABELS {kind, device, tag, name, ip, device_sn}`, `RETENTION 172800000` (2 суток). Выборка —
+  `TS.MRANGE/TS.RANGE` с `FILTER` (устройство и/или теги; кросс-устройственные сводные —
+  `FILTER kind=... tag=...`). Гранулярность — сырьевая. Детали/план — см. ниже и
+  `docs/research/redis-storage-optimization.md`.
+- Общие **`sunreceiver:current`** / **`sunreceiver:series:*`** (старые ZSET) **выведены
+  из эксплуатации**; ZSET-ряды `*:series:*` удаляются на этапе 9 плана RT.
 
-Сохранение снимка одним циклом: `HSet(<марка>:current, serial, snap)` +
-`ZAdd(<марка>:series, epoch, snap)` (PIPELINE/TxPipeline). `SaveSnapshot` пишет
-**каждое** снятое показание (дедуп только в пределах одной секунды на устройство) и
-диспетчерит марку по `deviceSnapshot.Kind` (`deye`/`sofar`).
+Сохранение снимка: `HSet(<kind>:current, key, snap)` + `TS.ADD` по каждому тегу
+(pipeline, `ON_DUPLICATE LAST`); `SaveSnapshot` диспетчерит марку по `deviceSnapshot.Kind`.
+Ротацию выполняет `RETENTION` RT (`PurgeOld` — no-op).
 
 `recentCutoff(now)` — момент начала вторых из последних двух календарных суток
-(00:00 вчера в локальной зоне). Используется и очисткой Redis, и дашбордом для
-выбора источника. Стык PG/Redis во всех series-API — общий helper
-`seamWindows` (`dashboard.go`): PG `[start, cutoff−1 с]`, Redis `[cutoff, end]`
-(без дубля точки на cutoff и без разрыва).
+(00:00 вчера). Используется дашбордом для выбора источника. Стык PG/Redis во всех
+series-API — общий helper `seamWindows` (`dashboard.go`): PG `[start, cutoff−1 с]`,
+RT `[cutoff, end]` (без дубля точки на cutoff и без разрыва).
 
 **Восстановление при пустом Redis**: `restoreRedisFromPG` при старте восстанавливает
-ряды НЕЗАВИСИМО друг от друга: инверторы по марке (`pg.invAverages` deye/sofar за окно
-2 календарных суток), МАП/счётчик/КЭС и прочие обособленные (`averagesAll`),
-BMS26, DTS017M, CE308 — каждый в свой ряд `sunreceiver:*:series:<YYYY-MM>`. Сбой
-одного запроса не прерывает остальные. Если хотя бы один ряд восстановить не удалось
-(или пришёл сигнал остановки), ставится маркер `sunreceiver:restore:incomplete`, и
-реставрация повторяется при следующем старте даже при непустом Redis; маркер снимается
-после полностью успешной реставрации.
+ряды (инверторы по марке, МАП/счётчик/КЭС/DTS017M/CE308/BMS26) через те же `Save*`
+(теперь пишут в RT-серии). Сбой одного запроса не прерывает остальные; при неполной
+реставрации ставится маркер `sunreceiver:restore:incomplete` и повтор при следующем старте.
 **Нюанс**: штатный Redis-ряд BMS — сырые показания (`samples=1`), а восстановленный
 из PG участок представлен 5-минутными средними (`samples>1`) — до первых новых
 опросов ряд смешанный (маркер — поле `samples`).
@@ -95,10 +89,10 @@ BMS26, DTS017M, CE308 — каждый в свой ряд `sunreceiver:*:series:
 - Тарифы счётчика: `DailyTariffsRange`, `StoreMeterBoundary` — см.
   [dds238-meter.md](../dds238-meter.md).
 - Счётчик DTS017M: **обособленные** ключи/ряд Redis (`sunreceiver:dts017m:current`,
-  `sunreceiver:dts017m:series:*`) и таблицы PG (`dts017m_averages_r`,
+  `RedisTimeSeries `sunreceiver:ts:dts017m:*``) и таблицы PG (`dts017m_averages_r`,
   `dts017m_daily_tariffs`) — [dts017m-meter.md](../dts017m-meter.md).
 - Счётчик DDS238: **обособленные** ключи/ряд Redis
-  (`sunreceiver:dds238:current`, `sunreceiver:dds238:series:*`) и таблицы PG
+  (`sunreceiver:dds238:current`, `RedisTimeSeries `sunreceiver:ts:dds238:*``) и таблицы PG
   (`dds238_averages_r`, `dds238_daily_tariffs`); логический ключ — `dds238`
   (`meterDeviceKey`). Перенос старого ключа — разовыми скриптами; в бинарнике нет.
 
@@ -120,7 +114,7 @@ BMS26, DTS017M, CE308 — каждый в свой ряд `sunreceiver:*:series:
 ## BMS/CE308: отдельные аккумуляторы и таблицы
 
 - **BMS (ANT + EnBMS + malina26)** — единое хранилище bms26: текущее в
-  `sunreceiver:bms26:current`, КАЖДОЕ показание в ряд `sunreceiver:bms26:series:<YYYY-MM>`,
+  `sunreceiver:bms26:current`, КАЖДОЕ показание в ряд `RedisTimeSeries `sunreceiver:ts:bms26:*``,
   5-минутные средние в PG `sunreceiver.bms26_averages_r` (name = serial). Пулер
   malina26 пишет напрямую; старые пулеры ANT (`bms_poller.go`) и EnBMS
   (`enBms_poller.go`) кормят те же ряды через шимы (`bms26_legacy.go`,

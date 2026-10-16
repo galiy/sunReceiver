@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -105,9 +104,8 @@ func snapKey(sn deviceSnapshot) string {
 	return sn.IP
 }
 
-// saveInvSnapshot пишет снимок инвертора в обособленные ключи марки одной
-// транзакцией (current HASH + месячный ZSET), зеркально прочим модулям: хранится
-// КАЖДОЕ показание, точка того же устройства на той же секунде перезаписывается.
+// saveInvSnapshot пишет снимок инвертора: current HASH (последнее состояние) +
+// точки в RedisTimeSeries (по тегам, серия на (марка,серийник,тег)).
 func (s *redisStore) saveInvSnapshot(b invBrand, snap deviceSnapshot, ts time.Time) error {
 	key := snap.InverterSN
 	if key == "" {
@@ -117,29 +115,9 @@ func (s *redisStore) saveInvSnapshot(b invBrand, snap deviceSnapshot, ts time.Ti
 	if err != nil {
 		return fmt.Errorf("marshal inv %s %s: %w", b.name, key, err)
 	}
-	zkey := b.seriesKey(ts)
-	score := strconv.FormatInt(ts.Unix(), 10)
-	old, err := s.rdb.ZRangeByScore(s.ctx, zkey, &redis.ZRangeBy{Min: score, Max: score}).Result()
-	if err != nil {
-		return fmt.Errorf("inv %s dedup %s: %w", b.name, zkey, err)
-	}
-	var stale []any
-	for _, m := range old {
-		var q deviceSnapshot
-		if json.Unmarshal([]byte(m), &q) != nil {
-			continue
-		}
-		if q.InverterSN == key {
-			stale = append(stale, m)
-		}
-	}
 	pipe := s.rdb.TxPipeline()
 	pipe.HSet(s.ctx, b.curKey, key, raw)
-	if len(stale) > 0 {
-		pipe.ZRem(s.ctx, zkey, stale...)
-	}
-	pipe.ZAdd(s.ctx, zkey, redis.Z{Score: float64(ts.Unix()), Member: string(raw)})
-	pipe.Expire(s.ctx, zkey, 40*24*time.Hour)
+	s.tsAddValueContract(pipe, b.name, key, snap.Name, snap.IP, snap.DeviceSN, ts, snap.Values)
 	if _, err := pipe.Exec(s.ctx); err != nil {
 		return fmt.Errorf("save inv %s %s: %w", b.name, key, err)
 	}
@@ -191,30 +169,11 @@ func (s *redisStore) queryInvSeries(b invBrand, start, end time.Time) ([]deviceS
 	if start.After(end) {
 		return nil, errors.New("inv series: start after end")
 	}
-	min := strconv.FormatInt(start.Unix(), 10)
-	max := strconv.FormatInt(end.Unix(), 10)
-	var all []deviceSnapshot
-	var queryErr error
-	eachMonth(start, end, func(y int, m time.Month) bool {
-		key := b.seriesKey(time.Date(y, m, 1, 0, 0, 0, 0, time.Local))
-		vals, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: min, Max: max}).Result()
-		if err != nil {
-			queryErr = err
-			return false
-		}
-		for _, v := range vals {
-			var snap deviceSnapshot
-			if json.Unmarshal([]byte(v), &snap) != nil {
-				continue
-			}
-			all = append(all, snap)
-		}
-		return true
-	})
-	if queryErr != nil {
-		return nil, queryErr
+	series, err := s.tsMRange(start, end, "kind="+b.name)
+	if err != nil {
+		return nil, err
 	}
-	return all, nil
+	return tsGroupSnapshots(series), nil
 }
 
 // (Схема таблиц 5-минутных средних инверторов — партиционированные колоночные

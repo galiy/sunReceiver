@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -56,33 +55,10 @@ func (s *redisStore) SaveDts017Current(snap dts017Snapshot) error {
 // SaveDts017Series кладёт мгновенную точку в месячный ZSET ряда DTS017M
 // (score = секунда снятия; дедупликация по (устройство, score)).
 func (s *redisStore) SaveDts017Series(snap dts017Snapshot, ts time.Time) error {
-	b, err := json.Marshal(snap)
-	if err != nil {
-		return fmt.Errorf("marshal dts017 series %s: %w", snap.Name, err)
-	}
-	key := dts017SeriesKey(ts)
-	score := strconv.FormatInt(ts.Unix(), 10)
-	old, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: score, Max: score}).Result()
-	if err != nil {
-		return fmt.Errorf("dts017 series dedup %s: %w", key, err)
-	}
-	var stale []any
-	for _, m := range old {
-		var q dts017Snapshot
-		if json.Unmarshal([]byte(m), &q) != nil {
-			continue
-		}
-		if q.Name == snap.Name {
-			stale = append(stale, m)
-		}
-	}
 	pipe := s.rdb.TxPipeline()
-	if len(stale) > 0 {
-		pipe.ZRem(s.ctx, key, stale...)
+	for tag, v := range snap.Values {
+		s.tsAdd(pipe, "dts017m", snap.Name, snap.Name, "", "", tag, ts, v)
 	}
-	pipe.ZAdd(s.ctx, key, redis.Z{Score: float64(ts.Unix()), Member: string(b)})
-	// Держим историю не меньше месяца; эффективное окно задаёт PurgeOld (2 суток).
-	pipe.Expire(s.ctx, key, 40*24*time.Hour)
 	if _, err := pipe.Exec(s.ctx); err != nil {
 		return fmt.Errorf("save dts017 series %s: %w", snap.Name, err)
 	}
@@ -111,28 +87,14 @@ func (s *redisStore) QueryDts017Series(start, end time.Time) ([]dts017Snapshot, 
 	if start.After(end) {
 		return nil, errors.New("dts017 series: start after end")
 	}
-	min := strconv.FormatInt(start.Unix(), 10)
-	max := strconv.FormatInt(end.Unix(), 10)
-	var all []dts017Snapshot
-	var queryErr error
-	eachMonth(start, end, func(y int, m time.Month) bool {
-		key := dts017SeriesKey(time.Date(y, m, 1, 0, 0, 0, 0, time.Local))
-		vals, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: min, Max: max}).Result()
-		if err != nil {
-			queryErr = err
-			return false
-		}
-		for _, v := range vals {
-			var snap dts017Snapshot
-			if json.Unmarshal([]byte(v), &snap) != nil {
-				continue
-			}
-			all = append(all, snap)
-		}
-		return true
-	})
-	if queryErr != nil {
-		return nil, queryErr
+	series, err := s.tsMRange(start, end, "kind=dts017m")
+	if err != nil {
+		return nil, err
 	}
-	return all, nil
+	snaps := tsGroupSnapshots(series)
+	out := make([]dts017Snapshot, 0, len(snaps))
+	for _, sn := range snaps {
+		out = append(out, dts017Snapshot{Name: sn.Name, Timestamp: sn.Timestamp, Values: vcToFloatMap(sn.Values)})
+	}
+	return out, nil
 }

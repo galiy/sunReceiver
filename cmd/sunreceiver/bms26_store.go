@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -58,32 +59,24 @@ func (s *redisStore) SaveBms26Current(cur map[string]string) error {
 
 // SaveBms26Series кладёт мгновенную точку в месячный ZSET (dedup по (serial, score)).
 func (s *redisStore) SaveBms26Series(sn bms26Snapshot, ts time.Time) error {
-	b, err := json.Marshal(sn)
-	if err != nil {
-		return fmt.Errorf("marshal bms26 series %s: %w", sn.Serial, err)
+	if sn.Serial == "" {
+		return nil
 	}
-	key := bms26SeriesKey(ts)
-	score := strconv.FormatInt(ts.Unix(), 10)
-	old, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: score, Max: score}).Result()
-	if err != nil {
-		return fmt.Errorf("bms26 series dedup %s: %w", key, err)
-	}
-	var stale []any
-	for _, m := range old {
-		var q bms26Snapshot
-		if json.Unmarshal([]byte(m), &q) != nil {
-			continue
-		}
-		if q.Serial == sn.Serial {
-			stale = append(stale, m)
-		}
+	name := sn.DeviceName
+	if name == "" {
+		name = sn.Serial
 	}
 	pipe := s.rdb.TxPipeline()
-	if len(stale) > 0 {
-		pipe.ZRem(s.ctx, key, stale...)
+	s.tsAddValueContract(pipe, "bms26", sn.Serial, name, "", "", ts, bms26ScalarVC(sn))
+	for i, v := range sn.CellsV {
+		s.tsAdd(pipe, "bms26", sn.Serial, name, "", "", fmt.Sprintf("cell_%d", i+1), ts, v)
 	}
-	pipe.ZAdd(s.ctx, key, redis.Z{Score: float64(ts.Unix()), Member: string(b)})
-	pipe.Expire(s.ctx, key, 40*24*time.Hour)
+	for i, v := range sn.TemperaturesC {
+		s.tsAdd(pipe, "bms26", sn.Serial, name, "", "", fmt.Sprintf("temp_%d", i+1), ts, v)
+	}
+	for i, v := range sn.AlarmBytes {
+		s.tsAdd(pipe, "bms26", sn.Serial, name, "", "", fmt.Sprintf("alarm_%d", i+1), ts, float64(v))
+	}
 	if _, err := pipe.Exec(s.ctx); err != nil {
 		return fmt.Errorf("save bms26 series %s: %w", sn.Serial, err)
 	}
@@ -431,28 +424,134 @@ func (s *redisStore) QueryBms26Series(serial string, start, end time.Time) ([]bm
 	if start.After(end) {
 		return nil, errors.New("start after end")
 	}
-	min := strconv.FormatInt(start.Unix(), 10)
-	max := strconv.FormatInt(end.Unix(), 10)
-	var all []bms26Snapshot
-	var queryErr error
-	eachMonth(start, end, func(y int, m time.Month) bool {
-		key := bms26SeriesKey(time.Date(y, m, 1, 0, 0, 0, 0, time.Local))
-		vals, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: min, Max: max}).Result()
-		if err != nil {
-			queryErr = err
-			return false
-		}
-		for _, v := range vals {
-			var sn bms26Snapshot
-			if json.Unmarshal([]byte(v), &sn) != nil || sn.Serial != serial {
-				continue
-			}
-			all = append(all, sn)
-		}
-		return true
-	})
-	if queryErr != nil {
-		return nil, queryErr
+	series, err := s.tsMRange(start, end, "kind=bms26", "device="+serial)
+	if err != nil {
+		return nil, err
 	}
-	return all, nil
+	return assembleBms26Series(series), nil
+}
+
+// assembleBms26Series собирает bms26Snapshot из per-tag серий BMS (скаляры +
+// cell_i/temp_i/alarm_i) по (serial, ts).
+func assembleBms26Series(series []tsSeries) []bms26Snapshot {
+	type dk struct {
+		serial string
+		ts     int64
+	}
+	byKey := map[dk]*bms26Snapshot{}
+	for _, ser := range series {
+		serial := ser.Labels["device"]
+		name := ser.Labels["name"]
+		tag := ser.Labels["tag"]
+		for _, p := range ser.Points {
+			k := dk{serial, p.TS}
+			sn := byKey[k]
+			if sn == nil {
+				sn = &bms26Snapshot{Serial: serial, DeviceName: name, Timestamp: time.UnixMilli(p.TS).Format(time.RFC3339)}
+				byKey[k] = sn
+			}
+			assignBms26Tag(sn, tag, p.V)
+		}
+	}
+	out := make([]bms26Snapshot, 0, len(byKey))
+	for _, sn := range byKey {
+		out = append(out, *sn)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Timestamp < out[j].Timestamp })
+	return out
+}
+
+// assignBms26Tag кладёт значение тега в поле снимка BMS (скаляры) либо в массив
+// (cell_/temp_/alarm_ по индексу 1-based).
+func assignBms26Tag(sn *bms26Snapshot, tag string, v float64) {
+	if i, ok := tagIndex(tag, "cell_"); ok {
+		sn.CellsV = setIdx(sn.CellsV, i, v)
+		return
+	}
+	if i, ok := tagIndex(tag, "temp_"); ok {
+		sn.TemperaturesC = setIdx(sn.TemperaturesC, i, v)
+		return
+	}
+	if i, ok := tagIndex(tag, "alarm_"); ok {
+		sn.AlarmBytes = setIdxInt(sn.AlarmBytes, i, int(v))
+		return
+	}
+	switch tag {
+	case "soc":
+		sn.Soc = v
+	case "soh":
+		sn.Soh = v
+	case "mode":
+		sn.Mode = int(v)
+	case "flags":
+		sn.Flags = int(v)
+	case "cycles":
+		sn.Cycles = int(v)
+	case "power_w":
+		sn.PowerW = v
+	case "rated_ah":
+		sn.RatedAh = v
+	case "current_a":
+		sn.CurrentA = v
+	case "avg_cell_v":
+		sn.AvgCellV = v
+	case "cell_count":
+		sn.CellCount = int(v)
+	case "max_cell_v":
+		sn.MaxCellV = v
+	case "min_cell_v":
+		sn.MinCellV = v
+	case "temp_count":
+		sn.TempCount = int(v)
+	case "capacity_ah":
+		sn.CapacityAh = v
+	case "balance_mask":
+		sn.BalanceMask = uint32(v)
+	case "cell_warn_mask":
+		sn.CellWarnMask = uint32(v)
+	case "cell_prot_mask":
+		sn.CellProtMask = uint32(v)
+	case "temp_warn_mask":
+		sn.TempWarnMask = uint32(v)
+	case "temp_prot_mask":
+		sn.TempProtMask = uint32(v)
+	case "max_cell_idx":
+		sn.MaxCellIdx = int(v)
+	case "min_cell_idx":
+		sn.MinCellIdx = int(v)
+	case "remaining_ah":
+		sn.RemainingAh = v
+	case "port_voltage_v":
+		sn.PortV = v
+	case "total_voltage_v":
+		sn.TotalV = v
+	}
+}
+
+// tagIndex — индекс (0-based) для тега вида "<prefix><n>" (n 1-based).
+func tagIndex(tag, prefix string) (int, bool) {
+	if !strings.HasPrefix(tag, prefix) {
+		return 0, false
+	}
+	n, err := strconv.Atoi(tag[len(prefix):])
+	if err != nil || n < 1 {
+		return 0, false
+	}
+	return n - 1, true
+}
+
+func setIdx(a []float64, i int, v float64) []float64 {
+	for len(a) <= i {
+		a = append(a, 0)
+	}
+	a[i] = v
+	return a
+}
+
+func setIdxInt(a []int, i, v int) []int {
+	for len(a) <= i {
+		a = append(a, 0)
+	}
+	a[i] = v
+	return a
 }

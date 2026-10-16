@@ -20,11 +20,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
-
-	"github.com/redis/go-redis/v9"
 )
 
 // Ключи Redis модуля КЭС (MPPT-контроллеры). Обособлены от инверторов/МАП/DDS238:
@@ -52,30 +49,9 @@ func (s *redisStore) saveKesSnapshot(snap deviceSnapshot, ts time.Time) error {
 	if err != nil {
 		return fmt.Errorf("marshal kes snapshot: %w", err)
 	}
-	zkey := kesSeriesKey(ts)
-	score := strconv.FormatInt(ts.Unix(), 10)
-	old, err := s.rdb.ZRangeByScore(s.ctx, zkey, &redis.ZRangeBy{Min: score, Max: score}).Result()
-	if err != nil {
-		return fmt.Errorf("kes dedup %s: %w", zkey, err)
-	}
-	var stale []any
-	for _, m := range old {
-		var q deviceSnapshot
-		if json.Unmarshal([]byte(m), &q) != nil {
-			continue
-		}
-		// member без ip: сравниваем по name (уникально для КЭС).
-		if q.Name == snap.Name {
-			stale = append(stale, m)
-		}
-	}
 	pipe := s.rdb.TxPipeline()
 	pipe.HSet(s.ctx, redisKesCurrentKey, key, b)
-	if len(stale) > 0 {
-		pipe.ZRem(s.ctx, zkey, stale...)
-	}
-	pipe.ZAdd(s.ctx, zkey, redis.Z{Score: float64(ts.Unix()), Member: string(b)})
-	pipe.Expire(s.ctx, zkey, 40*24*time.Hour)
+	s.tsAddValueContract(pipe, "kes", key, snap.Name, "", snap.DeviceSN, ts, snap.Values)
 	if _, err := pipe.Exec(s.ctx); err != nil {
 		return fmt.Errorf("save kes %s: %w", key, err)
 	}
@@ -105,31 +81,15 @@ func (s *redisStore) QueryKesSeries(start, end time.Time) ([]deviceSnapshot, err
 	if start.After(end) {
 		return nil, errors.New("kes series: start after end")
 	}
-	min := strconv.FormatInt(start.Unix(), 10)
-	max := strconv.FormatInt(end.Unix(), 10)
-	var all []deviceSnapshot
-	var queryErr error
-	eachMonth(start, end, func(y int, m time.Month) bool {
-		key := kesSeriesKey(time.Date(y, m, 1, 0, 0, 0, 0, time.Local))
-		vals, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: min, Max: max}).Result()
-		if err != nil {
-			queryErr = err
-			return false
-		}
-		for _, v := range vals {
-			var snap deviceSnapshot
-			if json.Unmarshal([]byte(v), &snap) != nil {
-				continue
-			}
-			snap.IP = kesKeyBySnap(snap)
-			all = append(all, snap)
-		}
-		return true
-	})
-	if queryErr != nil {
-		return nil, queryErr
+	series, err := s.tsMRange(start, end, "kind=kes")
+	if err != nil {
+		return nil, err
 	}
-	return all, nil
+	out := tsGroupSnapshots(series)
+	for i := range out {
+		out[i].IP = kesKeyByName(out[i].Name)
+	}
+	return out, nil
 }
 
 // kesKeyBySnap — ключ КЭС (вида `mppt-<serial>`) по снимку: по отображаемому

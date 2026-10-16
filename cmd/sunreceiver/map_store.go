@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -59,31 +58,11 @@ func (s *redisStore) saveMapSnapshot(snap deviceSnapshot, ts time.Time) error {
 	if err != nil {
 		return fmt.Errorf("marshal map snapshot: %w", err)
 	}
-	key := mapSeriesKey(ts)
-	score := strconv.FormatInt(ts.Unix(), 10)
-	old, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: score, Max: score}).Result()
-	if err != nil {
-		return fmt.Errorf("map dedup %s: %w", key, err)
-	}
-	var stale []any
-	for _, m := range old {
-		var q deviceSnapshot
-		if json.Unmarshal([]byte(m), &q) != nil {
-			continue
-		}
-		if q.IP == snap.IP {
-			stale = append(stale, m)
-		}
-	}
 	pipe := s.rdb.TxPipeline()
 	pipe.HSet(s.ctx, redisMapCurrentKey, mapDevKey, b)
-	if len(stale) > 0 {
-		pipe.ZRem(s.ctx, key, stale...)
-	}
-	pipe.ZAdd(s.ctx, key, redis.Z{Score: float64(ts.Unix()), Member: string(b)})
-	pipe.Expire(s.ctx, key, 40*24*time.Hour)
+	s.tsAddValueContract(pipe, "map", mapDevKey, snap.Name, "", snap.DeviceSN, ts, snap.Values)
 	if _, err := pipe.Exec(s.ctx); err != nil {
-		return fmt.Errorf("save map %s: %w", snap.IP, err)
+		return fmt.Errorf("save map: %w", err)
 	}
 	s.mapMu.Lock()
 	if s.mapWin == nil {
@@ -117,29 +96,13 @@ func (s *redisStore) QueryMapSeries(start, end time.Time) ([]deviceSnapshot, err
 	if start.After(end) {
 		return nil, errors.New("map series: start after end")
 	}
-	min := strconv.FormatInt(start.Unix(), 10)
-	max := strconv.FormatInt(end.Unix(), 10)
-	var all []deviceSnapshot
-	var queryErr error
-	eachMonth(start, end, func(y int, m time.Month) bool {
-		key := mapSeriesKey(time.Date(y, m, 1, 0, 0, 0, 0, time.Local))
-		vals, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: min, Max: max}).Result()
-		if err != nil {
-			queryErr = err
-			return false
-		}
-		for _, v := range vals {
-			var snap deviceSnapshot
-			if json.Unmarshal([]byte(v), &snap) != nil {
-				continue
-			}
-			snap.IP = mapDevKey
-			all = append(all, snap)
-		}
-		return true
-	})
-	if queryErr != nil {
-		return nil, queryErr
+	series, err := s.tsMRange(start, end, "kind=map")
+	if err != nil {
+		return nil, err
 	}
-	return all, nil
+	out := tsGroupSnapshots(series)
+	for i := range out {
+		out[i].IP = mapDevKey
+	}
+	return out, nil
 }

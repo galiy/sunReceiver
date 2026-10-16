@@ -18,7 +18,6 @@ package main
 
 import (
 	"context"
-	"strconv"
 	"testing"
 	"time"
 
@@ -137,14 +136,13 @@ func TestSaveMapSnapshotMerge(t *testing.T) {
 	if err := s.saveMapSnapshot(sp2, t2); err != nil {
 		t.Fatalf("saveMapSnapshot #2: %v", err)
 	}
-	key := mapSeriesKey(t1)
+	// Точки читаем из RedisTimeSeries по тегу battery_voltage.
 	countAt := func(ts time.Time) int {
-		members, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{
-			Min: strconv.FormatInt(ts.Unix(), 10), Max: strconv.FormatInt(ts.Unix(), 10)}).Result()
+		pts, err := s.tsRange(tsKey("map", mapDevKey, "battery_voltage"), ts, ts)
 		if err != nil {
-			t.Fatalf("ZRangeByScore: %v", err)
+			t.Fatalf("tsRange: %v", err)
 		}
-		return len(members)
+		return len(pts)
 	}
 	// Каждое показание сохранено отдельно (не схлопнуто в окно).
 	if n := countAt(t1); n != 1 {
@@ -199,15 +197,6 @@ func TestRedisStoreSnapshotDedup(t *testing.T) {
 		}
 	}
 
-	key := deyeBrand.seriesKey(ts)
-	score := strconv.FormatInt(ts.Unix(), 10)
-	members, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: score, Max: score}).Result()
-	if err != nil {
-		t.Fatalf("ZRangeByScore: %v", err)
-	}
-	if len(members) != 2 {
-		t.Fatalf("members со score секунды=%d, want 2 (A заменён на 1, B без изменений): %v", len(members), members)
-	}
 	got, err := s.queryInvSeries(deyeBrand, ts, ts)
 	if err != nil {
 		t.Fatalf("queryInvSeries: %v", err)

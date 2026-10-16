@@ -190,21 +190,24 @@ graph LR
     B3["bms26:<serial>:temp_1 ... temp_6"]
     B4["bms26:<serial>:alarm_1 ... alarm_19"]
   end
-  L["LABELS: kind, device, tag, unit"] --- TS
+  L["LABELS: kind, device, tag, name, ip, device_sn"] --- TS
 ```
 
 - Ключ: `sunreceiver:ts:<kind>:<device>:<tag>`; `<device>` — логический ключ
   (серийник для инверторов/BMS, имя для map/dds238/kes/dts), небезопасные символы
   (пробелы и т.п.) заменяются на `_`.
 - `LABELS`: `kind` (`deye|sofar|dds238|map|kes|dts017m|bms26|ce308`), `device`
-  (исходный логический ключ), `tag` (имя тега), `unit`.
-- `RETENTION 172800000` (2 суток), `DUPLICATE_POLICY LAST` (повтор ts — перезапись).
+  (исходный логический ключ), `tag` (имя тега), `name` (отображаемое имя),
+  `ip`/`device_sn` (информационные; пустые метки не добавляются).
+- `RETENTION 172800000` (2 суток) и `DUPLICATE_POLICY LAST` — задаются в `TS.CREATE`;
+`TS.ADD` лишь кладёт точку (`ON_DUPLICATE LAST`).
 - Массивы: BMS `cells_v` -> `cell_1..N`, `temperatures_c` -> `temp_1..N`,
   `alarm_bytes` -> `alarm_1..19` (по индексу). CE308 в режиме
   `final_readings_only` в RT не пишется (только `ce308-energy:current`).
 
 ### 8.2 Запись
-На каждый снимок — набор `TS.ADD` (пайплайном) с `RETENTION`.
+На каждый снимок — набор `TS.ADD` (пайплайном). `RETENTION`/`DUPLICATE_POLICY`
+задаются при `TS.CREATE` (не в `TS.ADD`).
 Серия с метками создаётся один раз (`TS.CREATE key RETENTION 172800000 LABELS ...`),
 далее только `TS.ADD`. Созданные серии кэшируются в памяти процесса.
 
@@ -214,7 +217,7 @@ sequenceDiagram
   participant R as redisStore(TS)
   P->>R: SaveSnapshot(device, tags)
   R->>R: ensure series (TS.CREATE ... LABELS) [once/cache]
-  R->>Redis: pipeline TS.ADD key ts_ms val RETENTION 172800000 DUPLICATE_POLICY LAST
+  R->>Redis: pipeline TS.ADD key ts_ms val (ON_DUPLICATE LAST; retention задан в TS.CREATE)
 ```
 
 `*:current` (HASH) — без изменений (последнее состояние для `/api/current|animation`).
