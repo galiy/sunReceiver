@@ -363,6 +363,8 @@ ORDER BY ts ASC`
 	return snaps, nil
 }
 
+/* УСТАРЕЛО: старый путь записи в PG sunreceiver.bms_averages — оставлено для справки,
+   больше не вызывается (BMS пишет в bms26_averages через insertBms26AveragedExec).
 // InsertBMSAveraged сохраняет одну усреднённую за 5 минут точку BMS
 // (ts — начало промежутка). Идемпотентна по (name, ts).
 //
@@ -399,7 +401,10 @@ ON CONFLICT (name, ts) DO UPDATE SET values = EXCLUDED.values
 	}
 	return nil
 }
+*/
 
+/* УСТАРЕЛО: старый путь записи в PG sunreceiver.enbms_averages — оставлено для справки,
+   больше не вызывается (BMS пишет в bms26_averages через insertBms26AveragedExec).
 // InsertEnBmsAveraged сохраняет одну усреднённую за 5 минут точку BMS EnBMS
 // (ts — начало промежутка). Sample-count guard — как у InsertBMSAveraged: более
 // полная запись (больше samples) не перетирается частичной.
@@ -426,6 +431,7 @@ ON CONFLICT (name, ts) DO UPDATE SET values = EXCLUDED.values
 	}
 	return nil
 }
+*/
 
 // DeviceErrorRow — одна запись истории ошибок устройства.
 type DeviceErrorRow struct {

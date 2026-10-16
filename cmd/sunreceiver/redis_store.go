@@ -294,6 +294,31 @@ func (s *redisStore) PruneMPPT(active map[string]struct{}) {
 // транзакцией: пишет все активные (поле = ключ bmsKey, значение = JSON bmsDevice)
 // и удаляет те, которых нет в active (устройство исчезло из коллекции —
 // адаптер отключился/замолчал, bmslistener уже забыл его).
+// SetBMS — БЫЛО (старый код, оставлен для справки; писал в sunreceiver:bms):
+//
+//	func (s *redisStore) SetBMS(active map[string]string) error {
+//		cur, err := s.rdb.HGetAll(s.ctx, redisBMSKey).Result()
+//		if err != nil {
+//			return fmt.Errorf("bms HGETALL: %w", err)
+//		}
+//		var stale []string
+//		for k := range cur {
+//			if _, ok := active[k]; !ok {
+//				stale = append(stale, k)
+//			}
+//		}
+//		pipe := s.rdb.TxPipeline()
+//		for k, v := range active {
+//			pipe.HSet(s.ctx, redisBMSKey, k, v)
+//		}
+//		if len(stale) > 0 {
+//			pipe.HDel(s.ctx, redisBMSKey, stale...)
+//		}
+//		if _, err := pipe.Exec(s.ctx); err != nil {
+//			return fmt.Errorf("bms set: %w", err)
+//		}
+//		return nil
+//	}
 func (s *redisStore) SetBMS(active map[string]string) error {
 	// КОСТЫЛЬ: старый ANT-пулер пишет не в sunreceiver:bms, а в ряды bms26
 	// (sunreceiver:bms26:current) с новым serial (ANT — по ёмкости). См. bms26_legacy.go.
@@ -353,6 +378,41 @@ func (s *redisStore) BMSOne(name string) (string, error) {
 // одинаковым score — две точки в один и тот же момент времени на графике
 // («ступенька»). Поэтому перед записью удаляются старые версии того же
 // устройства на этом score: остаётся ровно одна точка на (устройство, секунда).
+// SaveBMSSeries — БЫЛО (старый код, оставлен для справки; писал в sunreceiver:bms:series):
+//
+//	func (s *redisStore) SaveBMSSeries(p bmsSeriesPoint, ts time.Time) error {
+//		b, err := json.Marshal(p)
+//		if err != nil {
+//			return fmt.Errorf("marshal bms series %s: %w", p.Name, err)
+//		}
+//		key := bmsSeriesKey(ts)
+//		score := strconv.FormatInt(ts.Unix(), 10)
+//		old, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: score, Max: score}).Result()
+//		if err != nil {
+//			return fmt.Errorf("bms series dedup %s: %w", key, err)
+//		}
+//		var stale []any
+//		for _, m := range old {
+//			var q bmsSeriesPoint
+//			if json.Unmarshal([]byte(m), &q) != nil {
+//				continue
+//			}
+//			if q.Name == p.Name {
+//				stale = append(stale, m)
+//			}
+//		}
+//		pipe := s.rdb.TxPipeline()
+//		if len(stale) > 0 {
+//			pipe.ZRem(s.ctx, key, stale...)
+//		}
+//		pipe.ZAdd(s.ctx, key, redis.Z{Score: float64(ts.Unix()), Member: string(b)})
+//		pipe.Expire(s.ctx, key, 40*24*time.Hour)
+//		_, err = pipe.Exec(s.ctx)
+//		if err != nil {
+//			return fmt.Errorf("save bms series %s: %w", p.Name, err)
+//		}
+//		return nil
+//	}
 func (s *redisStore) SaveBMSSeries(p bmsSeriesPoint, ts time.Time) error {
 	// КОСТЫЛЬ: старый ANT-пулер пишет точки в ряд bms26 (по новому serial).
 	sn, ok := antAveragedToBms26(p.Name, p.bmsAveraged, p.Ts)

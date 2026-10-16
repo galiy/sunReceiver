@@ -202,7 +202,7 @@ func (s *bmsApiClient) fetch(ctx context.Context) (*bmsCollection, error) {
 func runBmsPoll(store *redisStore, pg *pgStore, ctx context.Context) {
 	ticker := time.NewTicker(bmsPollInterval)
 	defer ticker.Stop()
-	acc := newBmsAccumulator()
+	acc := newBms26Accumulator()
 	lastAlarms := map[string]map[string]bool{} // device key -> активные алармы (для истории)
 	log.Printf("bms avg: накопление 5-минутных усреднённых точек (в памяти процесса; PG %v)", pg != nil)
 	for {
@@ -213,7 +213,12 @@ func runBmsPoll(store *redisStore, pg *pgStore, ctx context.Context) {
 				now := time.Now()
 				for i := range col.Devices {
 					d := col.Devices[i]
-					acc.add(d, now)
+					// КОСТЫЛЬ: кормим ОБЩИЙ bms26-аккумулятор (PG bms26_averages).
+					if cap, ok := antCapFromName(d.DeviceName); ok {
+						if serial := legacyAntSerial(cap); serial != "" {
+							acc.add(antDeviceToBms26(d, serial), now)
+						}
+					}
 					saveBMSReading(store, d, now)
 					// История ошибок: пишем только появление нового аларма.
 					if pg != nil {
@@ -239,7 +244,7 @@ func runBmsPoll(store *redisStore, pg *pgStore, ctx context.Context) {
 					}
 				}
 			}
-			saveBMSClosedBuckets(pg, acc.closed(time.Now()))
+			saveBms26ClosedBuckets(pg, acc.closed(time.Now()))
 		case <-ctx.Done():
 			// Неполный 5-минутный промежуток в PG не пишем (там только полные
 			// бакеты); в Redis он не нужен — каждое показание уже записано живым
@@ -292,10 +297,19 @@ var bmsEmptyTolerance = 3
 // временный сбой shm) не должна стирать весь дашборд батарей.
 var bmsEmptyStreak int
 
+/* УСТАРЕЛО: старый путь записи 5-мин средних BMS — оставлено для справки, не вызывается
+   (runBmsPoll кормит общий bms26Accumulator и пишет через saveBms26ClosedBuckets).
 // saveBMSClosedBuckets пишет готовые 5-минутные усреднённые точки BMS в PG
 // (sunreceiver.bms_averages, вечно) — гранулярность PG = 1 запись / 5 минут.
 // В Redis-ряд 5-минутные средние НЕ пишутся: там лежат сырые показания, которые
 // пулер пишет сам (saveBMSReading).
+// saveBMSClosedBuckets — БЫЛО (старый код, оставлен для справки; писал в PG sunreceiver.bms_averages):
+//	... внутри retryPg/withTx:
+//		for _, r := range pgRows {
+//			if err := insertBMSAveragedExec(q, pg.ctx, r.name, r.start, r.avg); err != nil {
+//				return err
+//			}
+//		}
 func saveBMSClosedBuckets(pg *pgStore, pts []bmsAvgPoint) {
 	if pg == nil {
 		return
@@ -335,6 +349,7 @@ func saveBMSClosedBuckets(pg *pgStore, pts []bmsAvgPoint) {
 		log.Printf("bms avg pg: %v", err)
 	}
 }
+*/
 
 // recomputeMinMaxCells пересчитывает индексы и напряжения max/min ячеек из
 // фактического массива ячеек (cells_v), а не из меток, заявленных BMS в кадре

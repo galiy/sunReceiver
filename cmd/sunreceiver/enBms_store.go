@@ -45,6 +45,15 @@ func enbmsSeriesKey(ts time.Time) string {
 }
 
 // SaveEnBmsCurrent пишет текущий снимок EnBMS в HASH (поле = MAC).
+// SaveEnBmsCurrent — БЫЛО (старый код, оставлен для справки; писал в sunreceiver:enbms:current):
+//
+//	func (s *redisStore) SaveEnBmsCurrent(snap enbmsSnapshot) error {
+//		b, err := json.Marshal(snap)
+//		if err != nil {
+//			return fmt.Errorf("marshal enbms current %s: %w", snap.MAC, err)
+//		}
+//		return s.rdb.HSet(s.ctx, redisEnBmsCurrentKey, snap.MAC, b).Err()
+//	}
 func (s *redisStore) SaveEnBmsCurrent(snap enbmsSnapshot) error {
 	// КОСТЫЛЬ: старый EnBMS-пулер пишет в ряды bms26 (единый EnBMS-serial).
 	serial := legacyEnbmsSerial()
@@ -60,6 +69,40 @@ func (s *redisStore) SaveEnBmsCurrent(snap enbmsSnapshot) error {
 
 // SaveEnBmsSeries кладёт МГНОВЕННУЮ (сырую) точку в месячный ZSET ряда EnBMS
 // (score = секунда снятия; дедупликация по (имя, score) — как SaveBMSSeries).
+// SaveEnBmsSeries — БЫЛО (старый код, оставлен для справки; писал в sunreceiver:enbms:series):
+//
+//	func (s *redisStore) SaveEnBmsSeries(p enbmsSeriesPoint, ts time.Time) error {
+//		b, err := json.Marshal(p)
+//		if err != nil {
+//			return fmt.Errorf("marshal enbms series %s: %w", p.Name, err)
+//		}
+//		key := enbmsSeriesKey(ts)
+//		score := strconv.FormatInt(ts.Unix(), 10)
+//		old, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: score, Max: score}).Result()
+//		if err != nil {
+//			return fmt.Errorf("enbms series dedup %s: %w", key, err)
+//		}
+//		var stale []any
+//		for _, m := range old {
+//			var q enbmsSeriesPoint
+//			if json.Unmarshal([]byte(m), &q) != nil {
+//				continue
+//			}
+//			if q.Name == p.Name {
+//				stale = append(stale, m)
+//			}
+//		}
+//		pipe := s.rdb.TxPipeline()
+//		if len(stale) > 0 {
+//			pipe.ZRem(s.ctx, key, stale...)
+//		}
+//		pipe.ZAdd(s.ctx, key, redis.Z{Score: float64(ts.Unix()), Member: string(b)})
+//		pipe.Expire(s.ctx, key, 40*24*time.Hour)
+//		if _, err := pipe.Exec(s.ctx); err != nil {
+//			return fmt.Errorf("save enbms series %s: %w", p.Name, err)
+//		}
+//		return nil
+//	}
 func (s *redisStore) SaveEnBmsSeries(p enbmsSeriesPoint, ts time.Time) error {
 	// КОСТЫЛЬ: старый EnBMS-пулер пишет точки в ряд bms26 (единый EnBMS-serial).
 	sn, ok := enbmsAveragedToBms26(p.enbmsAveraged, p.Ts)
@@ -137,9 +180,18 @@ func (s *redisStore) QueryEnBmsSeries(mac string, start, end time.Time) ([]enbms
 	return all, nil
 }
 
+/* УСТАРЕЛО: старый путь записи 5-мин средних EnBMS — оставлено для справки, не вызывается
+   (EnBMS-пулер кормит общий bms26Accumulator и пишет через saveBms26ClosedBuckets).
 // saveEnBmsClosedBuckets пишет готовые 5-минутные усреднённые точки EnBMS в PG
 // (sunreceiver.enbms_averages) — гранулярность PG = 1 запись / 5 минут. В
 // Redis-ряд 5-минутные средние НЕ пишутся: там сырые показания (saveEnBmsReading).
+// saveEnBmsClosedBuckets — БЫЛО (старый код, оставлен для справки; писал в PG sunreceiver.enbms_averages):
+//	... внутри retryPg/withTx:
+//		for _, r := range pgRows {
+//			if err := insertEnBmsAveragedExec(q, pg.ctx, r.name, r.start, r.avg); err != nil {
+//				return err
+//			}
+//		}
 func saveEnBmsClosedBuckets(pg *pgStore, pts []enbmsAvgPoint) {
 	if pg == nil {
 		return
@@ -176,3 +228,5 @@ func saveEnBmsClosedBuckets(pg *pgStore, pts []enbmsAvgPoint) {
 		logEnBms("avg pg: %v", err)
 	}
 }
+
+*/

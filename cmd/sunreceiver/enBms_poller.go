@@ -155,7 +155,7 @@ func runEnBmsPoll(store *redisStore, pg *pgStore, cfg *enBmsConfig, ctx context.
 // interval. Свой in-memory аккумулятор 5-минутных средних для PG (аккумулятор не
 // потокобезопасен, поэтому у каждой группы он свой).
 func runEnBmsGroup(store *redisStore, pg *pgStore, method enBmsMethod, devs []*enbmsPollerDev, interval time.Duration, ctx context.Context) {
-	acc := newEnBmsAccumulator()
+	acc := newBms26Accumulator()
 	logEnBms("метод=%s период=%s устройств=%d — опрос запущен (avg: PG %v)",
 		method, interval, len(devs), pg != nil)
 
@@ -175,7 +175,7 @@ func runEnBmsGroup(store *redisStore, pg *pgStore, method enBmsMethod, devs []*e
 			}
 			pollEnBmsDevice(pg, store, acc, d, ctx)
 		}
-		saveEnBmsClosedBuckets(pg, acc.closed(time.Now()))
+		saveBms26ClosedBuckets(pg, acc.closed(time.Now()))
 		if ctx.Err() != nil {
 			shutdown()
 			return
@@ -192,7 +192,7 @@ func runEnBmsGroup(store *redisStore, pg *pgStore, method enBmsMethod, devs []*e
 // pollEnBmsDevice выполняет один опрос одного устройства: при необходимости
 // подключается (неблокирующе, по nextRetry), читает Battery с ретраями таймаута,
 // сохраняет снимок и кормит аккумулятор.
-func pollEnBmsDevice(pg *pgStore, store *redisStore, acc *enbmsAccumulator, d *enbmsPollerDev, ctx context.Context) {
+func pollEnBmsDevice(pg *pgStore, store *redisStore, acc *bms26Accumulator, d *enbmsPollerDev, ctx context.Context) {
 	if d.conn == nil {
 		if time.Now().Before(d.nextRetry) {
 			return
@@ -333,7 +333,10 @@ func pollEnBmsDevice(pg *pgStore, store *redisStore, acc *enbmsAccumulator, d *e
 		logEnBms("redis current %s: %v", d.cfg.Key, err)
 	}
 	saveEnBmsReading(store, snap, now)
-	acc.add(snap, now)
+	// КОСТЫЛЬ: кормим ОБЩИЙ bms26-аккумулятор (PG bms26_averages).
+	if serial := legacyEnbmsSerial(); serial != "" {
+		acc.add(enbmsSnapshotToBms26(snap, serial), now)
+	}
 	// История ошибок: появление новых алармов. Пока enbmsAlarmHistory=false —
 	// раскладка Ext_Bit не откалибрована (ложные срабатывания на здоровом кадре).
 	if pg != nil && enbmsAlarmHistory {
