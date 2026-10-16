@@ -237,13 +237,11 @@ func recentCutoff(t time.Time) time.Time {
 	return startOfToday.AddDate(0, 0, -1)
 }
 
-// seriesRawWindow — сколько «свежего» времени отдаём из Redis СЫРЫМИ (1 с), а всё
-// более старое в окне запроса — из PG (5-мин средние). Ряды лежат общими месячными
-// ZSET (сотни тысяч членов на все устройства), поэтому чтение широкого окна из Redis
-// — это полный скан с JSON-разбором каждого члена (десятки секунд). Ограничиваем
-// Redis-хвост небольшим окном: детализация 1 с нужна только для «зума», для обзорных
-// графиков достаточно 5-мин средних из PG.
-const seriesRawWindow = 1 * time.Hour
+// seriesRawWindow — сколько «свежего» времени отдаём из Redis СЫРЫМИ, а всё более
+// старое в окне запроса — из PG (5-мин средние). Ряды теперь RedisTimeSeries
+// (серии device×tag, сжатие, RETENTION 2 суток), чтение окна дешевле, поэтому
+// Redis-хвост = 48 ч (по retention RT); старше — из PG.
+const seriesRawWindow = 48 * time.Hour
 
 // seriesReadCutoff — граница Redis/PG для чтения ряда по запросу [start, now]:
 // Redis покрывает только последние seriesRawWindow, остальное — PG.
