@@ -60,13 +60,19 @@ func newBms26Source(httpSrc *malina26Source) *bms26Source {
 	return &bms26Source{http: httpSrc, pollInterval: time.Second}
 }
 
-// bms26Device — запись списка /api/bms/devices.
+// bms26Device — запись списка /api/bms/devices (первоисточник —
+// cleaning.malina/web/internal/web/bmsapi.go).
 type bms26Device struct {
-	ID      int    `json:"id"`
-	Gen     uint64 `json:"gen"`
-	Serial  string `json:"serial"`
-	Base    string `json:"base"`
-	BmsType string `json:"bms_type"`
+	Type         string `json:"type"`
+	ID           int    `json:"id"`
+	Gen          uint64 `json:"gen"`
+	Serial       string `json:"serial"`
+	Base         string `json:"base"`
+	BmsType      string `json:"bms_type"`
+	BmsTypeLabel string `json:"bms_type_label"`
+	Source       string `json:"source"`
+	Framing      int    `json:"framing"`
+	LastSeen     int64  `json:"last_seen"`
 }
 
 // bms26Snapshot — текущий снимок одной BMS (JSON в Redis current и PG values).
