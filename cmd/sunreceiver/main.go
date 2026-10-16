@@ -2058,6 +2058,11 @@ func pollAndSaveMap(ctx context.Context, store *redisStore, pg *pgStore, now tim
 			log.Printf("kes malina26: %v", err)
 		} else {
 			for _, k := range readings {
+				// Отвергаем контроллеры без серийника (UID) — иначе ключ/имя пустые.
+				if k.UID == "" {
+					log.Printf("kes malina26: контроллер без serial (slot %d) — пропуск", k.Slot)
+					continue
+				}
 				name := "MPPT-" + k.UID
 				t := invTarget{IP: malina26.host, Name: name, Kind: kindMPPT, Slot: k.Slot, UID: k.UID, Order: mpptOrderBase + k.Slot}
 				activeMPPT[devKey(t)] = struct{}{}
