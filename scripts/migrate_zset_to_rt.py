@@ -14,7 +14,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CFG = os.path.join(HERE, "..", "sunReceiver.json")
 
 TS_PREFIX = "sunreceiver:ts:"
-RETENTION_MS = 172800000
+RETENTION_MS = 5184000000
 CHUNK = 4000
 
 # module -> ключ устройства (device) и отображаемое имя/ip/device_sn

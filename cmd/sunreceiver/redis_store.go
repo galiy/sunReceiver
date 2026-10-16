@@ -238,14 +238,22 @@ func recentCutoff(t time.Time) time.Time {
 }
 
 // seriesRawWindow — сколько «свежего» времени отдаём из Redis СЫРЫМИ, а всё более
-// старое в окне запроса — из PG (5-мин средние). Ряды теперь RedisTimeSeries
-// (серии device×tag, сжатие, RETENTION 2 суток), чтение окна дешевле, поэтому
-// Redis-хвост = 48 ч (по retention RT); старше — из PG.
+// старое в окне запроса — из PG (5-мин средние). Ряды — RedisTimeSeries
+// (серии device×tag, сжатие, RETENTION 60 суток).
 const seriesRawWindow = 48 * time.Hour
 
-// seriesReadCutoff — граница Redis/PG для чтения ряда по запросу [start, now]:
-// Redis покрывает только последние seriesRawWindow, остальное — PG.
+// graphPgOnlyWindow — порог окна графика: если запрошено БОЛЬШЕ 2 суток, сырьё из
+// RedisTimeSeries не читаем вовсе — график строится только по PG (*_averages_r,
+// 5-мин). Меньшие окна — свежий хвост из RT, старше — PG.
+const graphPgOnlyWindow = 48 * time.Hour
+
+// seriesReadCutoff — граница Redis/PG для чтения ряда по запросу [start, now].
+// Если окно больше graphPgOnlyWindow (2 суток) — PG-only (cutoff=now, Redis не
+// читается); иначе Redis покрывает последние seriesRawWindow, остальное — PG.
 func seriesReadCutoff(start, now time.Time) time.Time {
+	if now.Sub(start) > graphPgOnlyWindow {
+		return now // Redis-часть пустая (end не позже cutoff)
+	}
 	c := now.Add(-seriesRawWindow)
 	if c.Before(start) {
 		c = start

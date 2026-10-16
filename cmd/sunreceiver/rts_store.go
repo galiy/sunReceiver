@@ -36,7 +36,7 @@ import (
 // кросс-устройственные сводные). См. docs/research/redis-storage-optimization.md.
 const (
 	tsSeriesPrefix = "sunreceiver:ts:"
-	tsRetentionMs  = 172800000 // 2 суток
+	tsRetentionMs  = 5184000000 // 60 суток (2 месяца) — глубина сырья в RedisTimeSeries
 )
 
 // tsPoint — точка серии: ts (Unix ms) и значение.
