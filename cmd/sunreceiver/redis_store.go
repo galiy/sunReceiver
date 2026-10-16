@@ -48,7 +48,7 @@ type redisStore struct {
 }
 
 type mapWinMember struct {
-	member string // JSON-снапшот (member ZSET) — источник mergeMAPSnap
+	member string // JSON-снапшот последнего снимка МАП — источник mergeMAPSnap
 }
 
 // openRedis создаёт клиент Redis. Retry-логику оставляем библиотеке go-redis.
@@ -179,24 +179,6 @@ func (s *redisStore) SetBMS(active map[string]string) error {
 
 // eachMonth вызывает fn для каждого календарного месяца в диапазоне [start, end]
 // (включительно), начиная с месяца start. fn возвращает false — прервать обход.
-func eachMonth(start, end time.Time, fn func(y int, m time.Month) bool) {
-	y, m := start.Year(), start.Month()
-	for {
-		t := time.Date(y, m, 1, 0, 0, 0, 0, time.Local)
-		if t.After(end) {
-			break
-		}
-		if !fn(y, m) {
-			break
-		}
-		if m == 12 {
-			y++
-			m = 1
-		} else {
-			m++
-		}
-	}
-}
 
 // scanPrefixKeys возвращает все ключи с данным префиксом через SCAN — не
 // блокирует Redis в отличие от KEYS.

@@ -25,17 +25,12 @@ import (
 )
 
 // Ключи Redis модуля КЭС (MPPT-контроллеры). Обособлены от инверторов/МАП/DDS238:
-// собственные current-HASH и месячный ряд. Ключ устройства — devKey (`mppt-<serial>`).
+// собственные current-HASH и ряд RedisTimeSeries. Ключ устройства — devKey (`mppt-<serial>`).
 // Читаются отдельными методами (KesCurrent/QueryKesSeries/KesAverages); в общие
 // читалки (снят) НЕ подмешиваются.
 const (
-	redisKesCurrentKey   = "sunreceiver:kes:current"
-	redisKesSeriesPrefix = "sunreceiver:kes:series:"
+	redisKesCurrentKey = "sunreceiver:kes:current"
 )
-
-func kesSeriesKey(ts time.Time) string {
-	return redisKesSeriesPrefix + ts.Format("2006-01")
-}
 
 // isKesKey — ключ устройства КЭС (`mppt-<serial>`); отделяет их от инверторов/МАП.
 func isKesKey(ip string) bool { return strings.HasPrefix(ip, "mppt-") }

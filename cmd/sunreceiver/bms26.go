@@ -209,7 +209,7 @@ func (s *bms26Source) fetchBmsRaw(ctx context.Context, id int, gen uint64) ([]by
 
 // runBms26Poll — отдельный цикл опроса BMS (malina26). Пишет текущий снимок в Redis
 // (HASH sunreceiver:bms26:current, поле = serial), каждое снятое показание — в
-// месячный ряд (sunreceiver:bms26:series:<YYYY-MM>), а 5-минутные средние — в PG
+// ряд RedisTimeSeries (sunreceiver:ts:bms26:*), а 5-минутные средние — в PG
 // (sunreceiver.bms26_averages_r, аккумулятор в памяти процесса).
 func runBms26Poll(store *redisStore, pg *pgStore, ctx context.Context) {
 	acc := newBms26Accumulator()

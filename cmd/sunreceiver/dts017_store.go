@@ -26,22 +26,15 @@ import (
 )
 
 // Ключи Redis модуля DTS017M. Полностью обособлены от инверторов/МАП/DDS238:
-// счётчик имеет собственные current-HASH и месячный ряд. Общие
+// счётчик имеет собственные current-HASH и ряд RedisTimeSeries. Общие
 // sunreceiver:current / sunreceiver:series:* НЕ используются.
 const (
 	// redisDts017CurrentKey — HASH текущего снимка DTS017M: поле = ключ устройства
 	// (dts017DeviceKey), значение = JSON dts017Snapshot. Перезаписывается опросом.
 	redisDts017CurrentKey = "sunreceiver:dts017m:current"
-	// redisDts017SeriesPrefix — месячный ряд мгновенных показаний DTS017M:
-	// ключи sunreceiver:dts017m:series:<YYYY-MM>, ZSET (score = Unix-секунды,
+	// ключи sunreceiver:ts:dts017m:* (серии RedisTimeSeries; score = Unix-секунды,
 	// member = JSON dts017Snapshot). Окно удержания — 2 календарных суток (PurgeOld).
-	redisDts017SeriesPrefix = "sunreceiver:dts017m:series:"
 )
-
-// dts017SeriesKey возвращает ключ месячного сегмента ряда DTS017M для ts.
-func dts017SeriesKey(ts time.Time) string {
-	return redisDts017SeriesPrefix + ts.Format("2006-01")
-}
 
 // SaveDts017Current пишет текущий снимок DTS017M в собственный HASH current.
 func (s *redisStore) SaveDts017Current(snap dts017Snapshot) error {
@@ -52,7 +45,7 @@ func (s *redisStore) SaveDts017Current(snap dts017Snapshot) error {
 	return s.rdb.HSet(s.ctx, redisDts017CurrentKey, dts017DeviceKey, b).Err()
 }
 
-// SaveDts017Series кладёт мгновенную точку в месячный ZSET ряда DTS017M
+// SaveDts017Series кладёт мгновенную точку в ряд RedisTimeSeries ряда DTS017M
 // (score = секунда снятия; дедупликация по (устройство, score)).
 func (s *redisStore) SaveDts017Series(snap dts017Snapshot, ts time.Time) error {
 	pipe := s.rdb.TxPipeline()
@@ -82,7 +75,7 @@ func (s *redisStore) Dts017Current() (*dts017Snapshot, error) {
 }
 
 // QueryDts017Series возвращает мгновенные снимки DTS017M за период [start, end]
-// включительно по месячным сегментам собственного ряда.
+// включительно по сериям RedisTimeSeries собственного ряда.
 func (s *redisStore) QueryDts017Series(start, end time.Time) ([]dts017Snapshot, error) {
 	if start.After(end) {
 		return nil, errors.New("dts017 series: start after end")

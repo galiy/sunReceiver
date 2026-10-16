@@ -26,23 +26,17 @@ import (
 )
 
 // Ключи Redis модуля МАП (kindMAP). Обособлены от инверторов/MPPT/DDS238:
-// собственные current-HASH и месячный ряд. Общие sunreceiver:current / :series:*
+// собственные current-HASH и ряд RedisTimeSeries. Общие sunreceiver:current / :series:*
 // для МАП больше не используются. Читаются отдельными методами
 // (MapCurrent/QueryMapSeries/MapAverages); в общие читалки
 // (снят) НЕ подмешиваются.
 const (
 	// redisMapCurrentKey — HASH текущего снимка МАП: поле = mapDevKey.
 	redisMapCurrentKey = "sunreceiver:map:current"
-	// redisMapSeriesPrefix — месячный ряд мгновенных показаний МАП.
-	redisMapSeriesPrefix = "sunreceiver:map:series:"
 )
 
-func mapSeriesKey(ts time.Time) string {
-	return redisMapSeriesPrefix + ts.Format("2006-01")
-}
-
 // saveMapSnapshot пишет снимок МАП (с merge окон батареи/сети) в обособленные
-// ключи: current-HASH + месячный ряд.
+// ключи: current-HASH + ряд RedisTimeSeries.
 func (s *redisStore) saveMapSnapshot(snap deviceSnapshot, ts time.Time) error {
 	// merge окон заряда/разряда (mergeMAPSnap).
 	prevMember := ""

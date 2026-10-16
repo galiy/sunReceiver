@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -50,10 +49,6 @@ const (
 	defaultMeterPowerTag   = "meter_active_power"
 	defaultMeterVoltageTag = "meter_voltage"
 	defaultMapGridTag      = "grid_voltage"
-
-	// redisRelayKey — HASH текущего (желаемого) состояния ламп: поле = имя лампы,
-	// значение = "on"/"off"/"blink". Пишется при каждом изменении и при старте.
-	redisRelayKey = "sunreceiver:relay"
 )
 
 // lampState — состояние лампы (канала реле).
@@ -269,7 +264,6 @@ func newRelayController(c *relaySection, store *redisStore) *relayController {
 		lastSent: time.Time{},
 		clock:    time.Now,
 	}
-	rc.persist()
 	return rc
 }
 
@@ -345,9 +339,6 @@ func (c *relayController) applyLamp(slot int, st lampState) error {
 	// повторы (мигание, keepalive) не пишем.
 	log.Printf("relay: лампа %q → %s (было %s)", name, st.String(), prev.String())
 
-	c.mu.Lock()
-	c.persistLocked()
-	c.mu.Unlock()
 	return nil
 }
 
@@ -515,31 +506,6 @@ func (c *relayController) drop() {
 	if c.conn != nil {
 		_ = c.conn.Close()
 		c.conn = nil
-	}
-}
-
-// persist записывает желаемое состояние ламп в Redis (HASH sunreceiver:relay).
-func (c *relayController) persist() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.persistLocked()
-}
-
-func (c *relayController) persistLocked() {
-	if c.store == nil || c.store.rdb == nil || c.store.ctx == nil {
-		return
-	}
-	snap := make([]relayLampStatus, len(c.cfg.Lamps))
-	for i, lamp := range c.cfg.Lamps {
-		snap[i] = relayLampStatus{Name: lamp.Name, Relay: lamp.Relay, State: c.desired[i]}
-	}
-	b, err := json.Marshal(snap)
-	if err != nil {
-		log.Printf("relay: marshal snapshot: %v", err)
-		return
-	}
-	if err := c.store.rdb.Set(c.store.ctx, redisRelayKey, b, 0).Err(); err != nil {
-		log.Printf("relay: redis set %s: %v", redisRelayKey, err)
 	}
 }
 

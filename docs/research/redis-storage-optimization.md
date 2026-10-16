@@ -156,12 +156,12 @@ graph TD
 
 ## 7. Принятые решения (покомпонентно; разработка — по отмашке)
 
-- **`sunreceiver:ce308:energy`** → **переименовать** в
-  **`sunreceiver:ce308-energy:current`** (единый стиль `*:current`). Ключ нужен:
+- **`sunreceiver:ce308:energy`** → **переименован** в
+  **`sunreceiver:ce308-energy:current`** (выполнено; значение перенесено). Ключ нужен:
   планировщик снимков CE308 (`ce308EnergyDelay`) и панель `GET/POST /api/ce308/energy`.
   В разработке: сменить константу `redisCE308EnergyKey` (`ce308_store.go`) +
   миграцию значения (перенести один снимок old→new).
-- **`sunreceiver:relay`** → **удалить**. Ключ write-only (пишется `relayController.persist`),
+- **`sunreceiver:relay`** → **удалён** (выполнено). Ключ был write-only (пишется `relayController.persist`),
   никем не читается; `/api/relay` отдаёт состояние из памяти (`controller.Snapshot`).
   В разработке: удалить константу `redisRelayKey`, `persistLocked`/`persist` и вызовы;
   из доков (`docs/relay_sr-201(2light).md`) убрать упоминание ключа.

@@ -36,14 +36,8 @@ const (
 	// redisBms26CurrentKey — HASH текущего снимка BMS: поле = serial,
 	// значение = JSON bms26Snapshot.
 	redisBms26CurrentKey = "sunreceiver:bms26:current"
-	// redisBms26SeriesPrefix — месячный ряд МГНОВЕННЫХ точек:
-	// sunreceiver:bms26:series:<YYYY-MM>, ZSET (score = Unix-сек, member = JSON).
-	redisBms26SeriesPrefix = "sunreceiver:bms26:series:"
+	// sunreceiver:ts:bms26:* (серии RedisTimeSeries).
 )
-
-func bms26SeriesKey(ts time.Time) string {
-	return redisBms26SeriesPrefix + ts.Format("2006-01")
-}
 
 // SaveBms26Current записывает текущие снимки BMS в HASH (поле = serial).
 func (s *redisStore) SaveBms26Current(cur map[string]string) error {
@@ -57,7 +51,7 @@ func (s *redisStore) SaveBms26Current(cur map[string]string) error {
 	return s.rdb.HSet(s.ctx, redisBms26CurrentKey, vals...).Err()
 }
 
-// SaveBms26Series кладёт мгновенную точку в месячный ZSET (dedup по (serial, score)).
+// SaveBms26Series кладёт мгновенную точку в ряд RedisTimeSeries (dedup по (serial, score)).
 func (s *redisStore) SaveBms26Series(sn bms26Snapshot, ts time.Time) error {
 	if sn.Serial == "" {
 		return nil
@@ -419,7 +413,7 @@ func (s *redisStore) Bms26One(serial string) (*bms26Snapshot, error) {
 }
 
 // QueryBms26Series возвращает сырые точки одной BMS malina26 (по serial) за
-// период [start, end] из месячных ZSET-рядов, по возрастанию времени.
+// период [start, end] из RT-серий, по возрастанию времени.
 func (s *redisStore) QueryBms26Series(serial string, start, end time.Time) ([]bms26Snapshot, error) {
 	if start.After(end) {
 		return nil, errors.New("start after end")

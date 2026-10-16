@@ -2865,13 +2865,13 @@ func redisCE308DataPresent(store *redisStore) (bool, error) {
 // календарных суток), иначе фоновая очистка сразу удалит восстановленное.
 // Запускается в фоне при пустом Redis. Восстанавливаются ОБА ряда:
 //   - снимки инверторов (invAverages) и обособленных (averagesAll) — SaveSnapshot в месячный
-//     ZSET ряда;
+//     RT-ряда;
 //   - точки BMS (pg.Bms26AveragesAll) — SaveBms26Series в ряд
-//     sunreceiver:bms26:series:<YYYY-MM>;
+//     sunreceiver:ts:bms26:*;
 //   - точки DTS017M (pg.Dts017AveragesAll) — SaveDts017Series/SaveDts017Current в
-//     обособленный ряд sunreceiver:dts017m:series:<YYYY-MM>;
+//     обособленный ряд sunreceiver:ts:dts017m:*;
 //   - точки CE308 (pg.CE308AveragesAll) — SaveCE308History/SaveCE308Current в
-//     обособленный ряд sunreceiver:ce308:series:<YYYY-MM>.
+//     обособленный ряд sunreceiver:ts:ce308:*.
 //
 // Восстановление каждого ряда независимо: сбой одного запроса не прерывает
 // остальные. Возвращает complete=false, если хотя бы один ряд восстановить не
@@ -2919,7 +2919,7 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, re
 			if perr != nil {
 				continue
 			}
-			// Ключ месячного сегмента ряда строится по ts (<prefix><YYYY-MM>).
+			// Ключ серии RT ряда строится по ts (<prefix><YYYY-MM>).
 			// Живая запись пишет по локальной зоне, а тут ts из RFC3339 обычно в UTC
 			// — приводим к time.Local для того же месяца-ключа.
 			ts = ts.In(time.Local)
@@ -2963,7 +2963,7 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, re
 	}
 
 	// Ряд BMS (единый тип ANT+EnBMS) — из pg.bms26_averages_r (5-мин средние) в
-	// sunreceiver:bms26:series:<YYYY-MM> (то же окно удержания).
+	// sunreceiver:ts:bms26:* (то же окно удержания).
 	bmsPts, err := pg.Bms26AveragesAll(start, end)
 	if err != nil {
 		log.Printf("pg restore: bms26 query: %v", err)
@@ -2992,7 +2992,7 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, re
 	}
 
 	// Ряд DTS017M — из pg.dts017m_averages_r (5-мин средние) в
-	// sunreceiver:dts017m:series:<YYYY-MM> (то же окно удержания); current —
+	// sunreceiver:ts:dts017m:* (то же окно удержания); current —
 	// последняя восстановленная точка.
 	dtsPts, err := pg.Dts017AveragesAll(start, end)
 	if err != nil {
@@ -3032,7 +3032,7 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, re
 	}
 
 	// Ряд CE308 — из pg.ce308_averages_r (5-мин средние) в
-	// sunreceiver:ce308:series:<YYYY-MM> (то же окно удержания); current —
+	// sunreceiver:ts:ce308:* (то же окно удержания); current —
 	// последняя восстановленная точка. В режиме final_readings_only телеметрия
 	// CE308 не пишется/не отдаётся — реставрация ряда не выполняется (это не сбой).
 	if !restoreCE308Series {

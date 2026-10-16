@@ -32,20 +32,13 @@ const (
 	// redisCE308CurrentKey — HASH текущего снимка CE308: поле = имя устройства,
 	// значение = JSON deviceSnapshot. Перезаписывается после каждого успешного опроса.
 	redisCE308CurrentKey = "sunreceiver:ce308:current"
-	// redisCE308SeriesPrefix — временной ряд мгновенных значений CE308.
-	// Ключи вида sunreceiver:ce308:series:<YYYY-MM>, каждый — ZSET: score = Unix
+	// Ключи вида sunreceiver:ts:ce308:* (серии RedisTimeSeries).
 	// (сек.), member = JSON deviceSnapshot. Пишется после каждого успешного опроса
 	// (~1 точка за 2 с); усреднение до 1 записи за 5 мин — в PG (ce308_accumulator).
-	redisCE308SeriesPrefix = "sunreceiver:ce308:series:"
 	// redisCE308EnergyKey — разовый снимок накопленной электроэнергии CE308
 	// (JSON ce308EnergySnapshot). Один ключ, история по энергии не ведётся.
-	redisCE308EnergyKey = "sunreceiver:ce308:energy"
+	redisCE308EnergyKey = "sunreceiver:ce308-energy:current"
 )
-
-// ce308SeriesKey возвращает ключ месячного сегмента ряда CE308 для ts.
-func ce308SeriesKey(ts time.Time) string {
-	return redisCE308SeriesPrefix + ts.Format("2006-01")
-}
 
 // SaveCE308Current пишет ТОЛЬКО текущее значение CE308 (HASH current[имя]),
 // перезаписывая предыдущий снимок. Используется программным способом в каждом
@@ -61,7 +54,7 @@ func (s *redisStore) SaveCE308Current(snap ce308Snapshot) error {
 
 // SaveCE308History кладёт точку во временной ряд CE308 (score = Unix-секунды).
 // Перед записью удаляет предыдущую версию того же устройства на том же score,
-// чтобы в ZSET не было дублей в один момент времени (аналог SaveSnapshot).
+// чтобы не было дублей в один момент времени.
 func (s *redisStore) SaveCE308History(snap ce308Snapshot, ts time.Time) error {
 	pipe := s.rdb.TxPipeline()
 	for tag, v := range snap.Values {
@@ -116,7 +109,7 @@ func (s *redisStore) CE308Energy() (*ce308EnergySnapshot, error) {
 }
 
 // QueryCE308Series возвращает мгновенные снимки CE308 за период [start, end]
-// включительно из временного ряда (по месячным сегментам, объединяя по времени).
+// включительно из временного ряда (по сериям RedisTimeSeries, объединяя по времени).
 func (s *redisStore) QueryCE308Series(start, end time.Time) ([]ce308Snapshot, error) {
 	if start.After(end) {
 		return nil, fmt.Errorf("ce308 series: start after end")
@@ -134,28 +127,5 @@ func (s *redisStore) QueryCE308Series(start, end time.Time) ([]ce308Snapshot, er
 }
 
 // keyAfter — true, если ключ месяца key строго позже time end (для выхода из цикла).
-func keyAfter(key string, end time.Time) bool {
-	var y, m int
-	_, err := fmt.Sscanf(key[ce308KeyPrefixLen:], "%04d-%02d", &y, &m)
-	if err != nil {
-		return true
-	}
-	return (y > end.Year()) || (y == end.Year() && m > int(end.Month()))
-}
 
-// nextCe308SeriesKey возвращает ключ следующего месяца после key.
 // Формат ключа: sunreceiver:ce308:series:YYYY-MM.
-func nextCe308SeriesKey(key string) string {
-	s := key[ce308KeyPrefixLen:]
-	var y, m int
-	_, _ = fmt.Sscanf(s, "%04d-%02d", &y, &m)
-	m++
-	if m > 12 {
-		m = 1
-		y++
-	}
-	return redisCE308SeriesPrefix + fmt.Sprintf("%04d-%02d", y, m)
-}
-
-// ce308KeyPrefixLen — длина префикса месячного ключа (по YYYY-MM).
-const ce308KeyPrefixLen = len(redisCE308SeriesPrefix)

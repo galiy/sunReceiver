@@ -26,7 +26,7 @@ import (
 )
 
 // Ключи Redis модуля DDS238 (электросчётчик). Обособлены от инверторов/МАП/DTS017M:
-// у счётчика собственные current-HASH и месячный ряд. Общие
+// у счётчика собственные current-HASH и ряд RedisTimeSeries. Общие
 // sunreceiver:current / sunreceiver:series:* БОЛЬШЕ не используются для DDS238.
 // Читаются отдельными методами (Dds238Current/QueryDds238Series/Dds238Averages);
 // в общие читалки (снят) НЕ подмешиваются.
@@ -34,14 +34,8 @@ const (
 	// redisDds238CurrentKey — HASH текущего снимка DDS238: поле = meterDeviceKey,
 	// значение = JSON deviceSnapshot.
 	redisDds238CurrentKey = "sunreceiver:dds238:current"
-	// redisDds238SeriesPrefix — месячный ряд мгновенных показаний DDS238:
-	// sunreceiver:dds238:series:<YYYY-MM>, ZSET (score = Unix-сек, member = JSON).
-	redisDds238SeriesPrefix = "sunreceiver:dds238:series:"
+	// sunreceiver:ts:dds238:* (серии RedisTimeSeries).
 )
-
-func dds238SeriesKey(ts time.Time) string {
-	return redisDds238SeriesPrefix + ts.Format("2006-01")
-}
 
 // SaveDds238Current пишет текущий снимок DDS238 в собственный HASH current.
 func (s *redisStore) SaveDds238Current(snap deviceSnapshot) error {
@@ -53,7 +47,7 @@ func (s *redisStore) SaveDds238Current(snap deviceSnapshot) error {
 	return s.rdb.HSet(s.ctx, redisDds238CurrentKey, meterDeviceKey, b).Err()
 }
 
-// SaveDds238Series кладёт мгновенную точку в месячный ZSET ряда DDS238
+// SaveDds238Series кладёт мгновенную точку в ряд RedisTimeSeries ряда DDS238
 // (дедуп по score).
 func (s *redisStore) SaveDds238Series(snap deviceSnapshot, ts time.Time) error {
 	pipe := s.rdb.TxPipeline()
@@ -82,7 +76,7 @@ func (s *redisStore) Dds238Current() (*deviceSnapshot, error) {
 }
 
 // QueryDds238Series возвращает мгновенные снимки DDS238 за [start, end] по
-// месячным сегментам собственного ряда.
+// сериям RedisTimeSeries собственного ряда.
 func (s *redisStore) QueryDds238Series(start, end time.Time) ([]deviceSnapshot, error) {
 	if start.After(end) {
 		return nil, errors.New("dds238 series: start after end")

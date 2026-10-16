@@ -40,7 +40,7 @@ func pollDts017(ctx context.Context, c *meterClient) (map[string]float64, dts017
 }
 
 // runDts017Poll — цикл опроса счётчика DTS017M с периодом cfg.PollInterval:
-//   - пишет снимок в СОБСТВЕННЫЕ ключи Redis (current + месячный ряд, каждое
+//   - пишет снимок в СОБСТВЕННЫЕ ключи Redis (current + ряд RedisTimeSeries, каждое
 //     показание), окно удержания 2 календарных суток;
 //   - на границах тарифных зон (00:00, 07:00, 23:00) захватывает Import/Export
 //     для посуточной статистики в собственной таблице PG (dts017_tariff.go).

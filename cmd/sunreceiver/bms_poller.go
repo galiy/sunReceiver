@@ -192,7 +192,7 @@ func (s *bmsApiClient) fetch(ctx context.Context) (*bmsCollection, error) {
 // ПАК «Малина»; данные — C-демон bmslistener, shm 2018).
 //
 //   - актуальное состояние пишется в Redis-ключ (HASH bms26:current);
-//   - КАЖДОЕ снятое показание пишется в Redis-ряд (месячный ZSET
+//   - КАЖДОЕ снятое показание пишется в Redis-ряд (ряд RedisTimeSeries
 //     bms26:series, окно 2 календарных суток; см. saveBMSReading);
 //   - параллельно 1-секундные снимки накапливаются в памяти (bmsAccumulator) в
 //     5-минутные усреднённые точки и пишутся в PostgreSQL

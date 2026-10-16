@@ -56,20 +56,19 @@ func normalizeInverterSN(kind, sn string) string {
 //
 // КЛЮЧ УСТРОЙСТВА — серийный номер инвертора (deviceSnapshot.InverterSN), а не IP:
 // IP остаётся в снимке как информационное поле («откуда получено»). Поле HASH,
-// идентичность точки в ZSET и PK строки PG — серийник.
+// идентичность точки в RedisTimeSeries и PK строки PG — серийник.
 //
 // Общие ключи sunreceiver:current / :series:* и PG averages выведены из
 // эксплуатации (см. BACKLOG): сюда переехали инверторы, всё остальное давно
 // обособлено (DDS238/МАП/КЭС/DTS017M/CE308/BMS).
 type invBrand struct {
-	name      string // "deye"/"sofar"
-	curKey    string // HASH текущих снимков марки (поле = серийник)
-	seriesPfx string // префикс месячного ряда ZSET
+	name   string // "deye"/"sofar"
+	curKey string // HASH текущих снимков марки (поле = серийник)
 }
 
 var (
-	deyeBrand  = invBrand{"deye", "sunreceiver:deye:current", "sunreceiver:deye:series:"}
-	sofarBrand = invBrand{"sofar", "sunreceiver:sofar:current", "sunreceiver:sofar:series:"}
+	deyeBrand  = invBrand{"deye", "sunreceiver:deye:current"}
+	sofarBrand = invBrand{"sofar", "sunreceiver:sofar:current"}
 )
 
 // invBrandByKind возвращает марку хранилища по deviceSnapshot.Kind ("deye"/"sofar")
@@ -82,10 +81,6 @@ func invBrandByKind(kind string) *invBrand {
 		return &sofarBrand
 	}
 	return nil
-}
-
-func (b invBrand) seriesKey(ts time.Time) string {
-	return b.seriesPfx + ts.Format("2006-01")
 }
 
 // spec — колоночная партиционированная таблица марки (deye/sofar).
@@ -164,7 +159,7 @@ func (s *redisStore) invSnapshotByIP(b invBrand, ip string) (deviceSnapshot, err
 }
 
 // queryInvSeries возвращает мгновенные снимки инверторов марки за [start, end] по
-// месячным сегментам собственного ряда.
+// сериям RedisTimeSeries собственного ряда.
 func (s *redisStore) queryInvSeries(b invBrand, start, end time.Time) ([]deviceSnapshot, error) {
 	if start.After(end) {
 		return nil, errors.New("inv series: start after end")

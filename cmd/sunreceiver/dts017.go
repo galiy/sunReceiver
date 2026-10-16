@@ -121,7 +121,7 @@ var dts017CumulativeTags = map[string]bool{
 }
 
 // dts017Snapshot — снимок счётчика DTS017M для собственных ключей Redis
-// (HASH current и месячный ряд). Values — плоская map тегов, сериализуется как есть.
+// (HASH current и ряд RT). Values — плоская map тегов, сериализуется как есть.
 type dts017Snapshot struct {
 	Name      string             `json:"name"`
 	Timestamp string             `json:"timestamp"`

@@ -18,7 +18,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"testing"
 	"time"
@@ -28,23 +27,14 @@ import (
 
 const meterTestIP = "192.168.0.254"
 
-// meterSeededPoint — тестовая точка ряда: член ZSET + ключ месячного сегмента,
-// в который она попала (для точной очистки; точка может лечь в сегмент другого
-// месяца, чем ближайшая к ней граница).
-type meterSeededPoint struct {
-	key    string
-	member []byte
-}
-
 // seedMeterSeries кладёт в Redis обособленный временной ряд счётчика DDS238
 // снимки в заданных точках и возвращает точные (ключ-сегмент, член) для
 // последующей очистки.
 func seedMeterSeries(t *testing.T, store *redisStore, cfg *meterConfig, pts []struct {
 	ts  time.Time
 	imp float64
-}) []meterSeededPoint {
+}) []struct{ key string } {
 	t.Helper()
-	var members []meterSeededPoint
 	for _, p := range pts {
 		snap := deviceSnapshot{
 			Name: cfg.Name, Timestamp: p.ts.Format(time.RFC3339), Values: valuesContract{
@@ -54,18 +44,15 @@ func seedMeterSeries(t *testing.T, store *redisStore, cfg *meterConfig, pts []st
 		if err := store.SaveDds238Series(snap, p.ts); err != nil {
 			t.Fatalf("seed %v: %v", p.ts, err)
 		}
-		stored := snap
-		stored.IP = "" // SaveDds238Series персистит без ip
-		mem, _ := json.Marshal(stored)
-		members = append(members, meterSeededPoint{key: dds238SeriesKey(p.ts), member: mem})
 	}
-	return members
+	return nil
 }
 
-// cleanMeterSeeded удаляет тестовые точки ряда DDS238 и текущий снимок.
-func cleanMeterSeeded(rdb *redis.Client, ctx context.Context, members []meterSeededPoint) {
-	for _, m := range members {
-		rdb.ZRem(ctx, m.key, m.member)
+// cleanMeterSeeded удаляет тестовые RT-серии DDS238 и текущий снимок.
+func cleanMeterSeeded(rdb *redis.Client, ctx context.Context, _ []struct{ key string }) {
+	keys, _ := rdb.Keys(ctx, tsSeriesPrefix+"dds238:*").Result()
+	if len(keys) > 0 {
+		rdb.Del(ctx, keys...)
 	}
 	rdb.HDel(ctx, redisDds238CurrentKey, meterDeviceKey)
 }
