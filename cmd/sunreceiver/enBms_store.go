@@ -46,46 +46,27 @@ func enbmsSeriesKey(ts time.Time) string {
 
 // SaveEnBmsCurrent пишет текущий снимок EnBMS в HASH (поле = MAC).
 func (s *redisStore) SaveEnBmsCurrent(snap enbmsSnapshot) error {
-	b, err := json.Marshal(snap)
-	if err != nil {
-		return fmt.Errorf("marshal enbms current %s: %w", snap.MAC, err)
+	// КОСТЫЛЬ: старый EnBMS-пулер пишет в ряды bms26 (единый EnBMS-serial).
+	serial := legacyEnbmsSerial()
+	if serial == "" {
+		return nil
 	}
-	return s.rdb.HSet(s.ctx, redisEnBmsCurrentKey, snap.MAC, b).Err()
+	b, err := json.Marshal(enbmsSnapshotToBms26(snap, serial))
+	if err != nil {
+		return fmt.Errorf("marshal enbms→bms26 %s: %w", snap.MAC, err)
+	}
+	return s.SaveBms26Current(map[string]string{serial: string(b)})
 }
 
 // SaveEnBmsSeries кладёт МГНОВЕННУЮ (сырую) точку в месячный ZSET ряда EnBMS
 // (score = секунда снятия; дедупликация по (имя, score) — как SaveBMSSeries).
 func (s *redisStore) SaveEnBmsSeries(p enbmsSeriesPoint, ts time.Time) error {
-	b, err := json.Marshal(p)
-	if err != nil {
-		return fmt.Errorf("marshal enbms series %s: %w", p.Name, err)
+	// КОСТЫЛЬ: старый EnBMS-пулер пишет точки в ряд bms26 (единый EnBMS-serial).
+	sn, ok := enbmsAveragedToBms26(p.enbmsAveraged, p.Ts)
+	if !ok {
+		return nil
 	}
-	key := enbmsSeriesKey(ts)
-	score := strconv.FormatInt(ts.Unix(), 10)
-	old, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: score, Max: score}).Result()
-	if err != nil {
-		return fmt.Errorf("enbms series dedup %s: %w", key, err)
-	}
-	var stale []any
-	for _, m := range old {
-		var q enbmsSeriesPoint
-		if json.Unmarshal([]byte(m), &q) != nil {
-			continue
-		}
-		if q.Name == p.Name {
-			stale = append(stale, m)
-		}
-	}
-	pipe := s.rdb.TxPipeline()
-	if len(stale) > 0 {
-		pipe.ZRem(s.ctx, key, stale...)
-	}
-	pipe.ZAdd(s.ctx, key, redis.Z{Score: float64(ts.Unix()), Member: string(b)})
-	pipe.Expire(s.ctx, key, 40*24*time.Hour)
-	if _, err := pipe.Exec(s.ctx); err != nil {
-		return fmt.Errorf("save enbms series %s: %w", p.Name, err)
-	}
-	return nil
+	return s.SaveBms26Series(sn, ts)
 }
 
 // EnBmsCurrent возвращает текущие снимки EnBMS из HASH (поле = MAC).
@@ -181,7 +162,11 @@ func saveEnBmsClosedBuckets(pg *pgStore, pts []enbmsAvgPoint) {
 	if err := retryPg(func() error {
 		return pg.withTx(func(q pgExecer) error {
 			for _, r := range pgRows {
-				if err := insertEnBmsAveragedExec(q, pg.ctx, r.name, r.start, r.avg); err != nil {
+				sn, ok := enbmsAveragedToBms26(r.avg, r.start.Format(time.RFC3339))
+				if !ok {
+					continue
+				}
+				if err := insertBms26AveragedExec(q, pg.ctx, sn.Serial, r.start, sn); err != nil {
 					return err
 				}
 			}

@@ -220,8 +220,10 @@ func pollEnBmsDevice(pg *pgStore, store *redisStore, acc *enbmsAccumulator, d *e
 			}
 			if pg != nil && !d.commErr {
 				d.commErr = true
-				if e := pg.InsertDeviceError(d.cfg.Key, "enbms", "comm", err.Error(), time.Now()); e != nil {
-					logEnBms("error pg %s: %v", d.cfg.Key, e)
+				if serial := legacyEnbmsSerial(); serial != "" {
+					if e := pg.InsertDeviceError(serial, "bms", "comm", err.Error(), time.Now()); e != nil {
+						logEnBms("error pg %s: %v", serial, e)
+					}
 				}
 			}
 			// RS485: фиксированная пауза 15 с (попытка ограничена 5 с диалом);
@@ -340,8 +342,10 @@ func pollEnBmsDevice(pg *pgStore, store *redisStore, acc *enbmsAccumulator, d *e
 		}
 		for a := range cur {
 			if d.lastAlarms == nil || !d.lastAlarms[a] {
-				if e := pg.InsertDeviceError(d.cfg.Key, "enbms", a, a, now); e != nil {
-					logEnBms("error pg %s: %v", d.cfg.Key, e)
+				if serial := legacyEnbmsSerial(); serial != "" {
+					if e := pg.InsertDeviceError(serial, "bms", a, a, now); e != nil {
+						logEnBms("error pg %s: %v", serial, e)
+					}
 				}
 			}
 		}

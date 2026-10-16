@@ -218,6 +218,11 @@ func runBmsPoll(store *redisStore, pg *pgStore, ctx context.Context) {
 					// История ошибок: пишем только появление нового аларма.
 					if pg != nil {
 						key := bmsKey(d)
+						if cap, ok := antCapFromName(d.DeviceName); ok {
+							if serial := legacyAntSerial(cap); serial != "" {
+								key = serial
+							}
+						}
 						cur := map[string]bool{}
 						for _, a := range d.Alarms {
 							cur[a] = true
@@ -225,7 +230,7 @@ func runBmsPoll(store *redisStore, pg *pgStore, ctx context.Context) {
 						prev := lastAlarms[key]
 						for a := range cur {
 							if prev == nil || !prev[a] {
-								if err := pg.InsertDeviceError(key, "antbms", a, a, now); err != nil {
+								if err := pg.InsertDeviceError(key, "bms", a, a, now); err != nil {
 									log.Printf("bms error pg %s: %v", key, err)
 								}
 							}
@@ -316,7 +321,11 @@ func saveBMSClosedBuckets(pg *pgStore, pts []bmsAvgPoint) {
 	if err := retryPg(func() error {
 		return pg.withTx(func(q pgExecer) error {
 			for _, r := range pgRows {
-				if err := insertBMSAveragedExec(q, pg.ctx, r.name, r.start, r.avg); err != nil {
+				sn, ok := antAveragedToBms26(r.name, r.avg, r.start.Format(time.RFC3339))
+				if !ok {
+					continue
+				}
+				if err := insertBms26AveragedExec(q, pg.ctx, sn.Serial, r.start, sn); err != nil {
 					return err
 				}
 			}

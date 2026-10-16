@@ -303,6 +303,7 @@ func pollBms26Once(ctx context.Context) []bms26Snapshot {
 		sn.Alarms = decodeBms26Alarms(sn)
 		sn.CellWarnMask, sn.CellProtMask = bms26CellMasks(sn)
 		sn.TempWarnMask, sn.TempProtMask = bms26TempMasks(sn)
+		cacheBms26Snapshot(sn) // костыль: кэш serial для старых пулеров
 		out = append(out, sn)
 	}
 	return out
