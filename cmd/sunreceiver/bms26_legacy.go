@@ -128,16 +128,18 @@ func antDeviceToBms26(d bmsDevice, serial string) bms26Snapshot {
 	if d.Balancer != 0 {
 		flags |= 4
 	}
-	return bms26Snapshot{
+	sn := bms26Snapshot{
 		Serial: serial, Base: d.DeviceName, BmsType: "AntBMS-DSP", DeviceName: serial,
 		Timestamp: time.Now().Format(time.RFC3339),
 		CellCount: d.CellCount, CellsV: d.CellsV, TemperaturesC: d.TemperaturesC,
 		CurrentA: d.CurrentA, PowerW: d.PowerW, Soc: float64(d.Soc), Soh: d.Soh,
 		CapacityAh: d.CapacityAh, RemainingAh: d.RemainingAh, Cycles: d.Cycles,
 		Flags: flags, BalanceMask: d.BalanceMask, Mode: legacyModeFromCurrent(d.CurrentA),
-		MaxCellV: d.MaxCellV, MinCellV: d.MinCellV, AvgCellV: d.AvgCellV,
-		Alarms: d.Alarms,
+		AlarmBytes: antAlarmBytesFromCodes(d.ChargeMos, d.DischargeMos, d.Balancer),
+		MaxCellV:   d.MaxCellV, MinCellV: d.MinCellV, AvgCellV: d.AvgCellV,
 	}
+	finalizeBms26(&sn)
+	return sn
 }
 
 // enbmsSnapshotToBms26 — старый EnBMS-снимок → bms26Snapshot с новым serial.
@@ -150,8 +152,15 @@ func enbmsSnapshotToBms26(s enbmsSnapshot, serial string) bms26Snapshot {
 		TotalV: s.TotalVoltageV, PortV: s.PortVoltageV, Cycles: s.Cycles,
 		BalanceMask: enbmsBalanceMask(s.BalanceCells), Mode: legacyModeFromText(s.Mode),
 		MaxCellV: s.MaxCellV, MinCellV: s.MinCellV, AvgCellV: s.AvgCellV,
-		Alarms: s.Alarms,
 	}
+	// Двоичный alarm: прямая копия (собрана EnBMS-парсером из сырых нибблов);
+	// если её нет (BLE-путь), fallback — восстановление из строк.
+	if len(s.AlarmBytes) > 0 {
+		sn.AlarmBytes = s.AlarmBytes
+	} else {
+		sn.AlarmBytes = enbmsAlarmBytesFromStrings(s.Alarms, s.CellCount, len(s.TemperaturesC))
+	}
+	finalizeBms26(&sn)
 	return sn
 }
 
@@ -175,13 +184,16 @@ func antAveragedToBms26(name string, a bmsAveraged, ts string) (bms26Snapshot, b
 	if a.Balancer != 0 {
 		flags |= 4
 	}
-	return bms26Snapshot{
+	sn := bms26Snapshot{
 		Serial: serial, BmsType: "AntBMS-DSP", DeviceName: serial, Timestamp: ts,
 		CellCount: a.CellCount, CellsV: a.CellsV, TemperaturesC: a.Temperatures,
 		CurrentA: a.CurrentA, PowerW: a.PowerW, Soc: a.Soc,
 		CapacityAh: a.CapacityAh, RemainingAh: a.RemainingAh, Flags: flags,
-		MaxCellV: a.MaxCellV, MinCellV: a.MinCellV, AvgCellV: a.AvgCellV,
-	}, true
+		AlarmBytes: antAlarmBytesFromCodes(a.ChargeMos, a.DischargeMos, a.Balancer),
+		MaxCellV:   a.MaxCellV, MinCellV: a.MinCellV, AvgCellV: a.AvgCellV,
+	}
+	finalizeBms26(&sn)
+	return sn, true
 }
 
 // enbmsAveragedToBms26 — 5-мин среднее EnBMS → bms26Snapshot (MAC → единственный serial).
@@ -224,3 +236,135 @@ func itoa(n int) string {
 }
 
 var _ = log.Printf
+
+// ---- Сборка двоичного alarm (19 Б) из старых данных (по упаковке bms-reader) ----
+
+// setLegacyAlarmBit — a[bit/8] |= 1<<(bit%8) (как setAlarmBit в bms-reader).
+func setLegacyAlarmBit(a []int, bit int) {
+	if bit < 0 || bit/8 >= len(a) {
+		return
+	}
+	a[bit/8] |= 1 << uint(bit%8)
+}
+
+// setLegacyAlarmNibble — упаковка 4-битного кода начиная с бита base (setAlarmCode).
+func setLegacyAlarmNibble(a []int, base, code int) {
+	for b := 0; b < 4; b++ {
+		if code&(1<<uint(b)) != 0 {
+			setLegacyAlarmBit(a, base+b)
+		}
+	}
+}
+
+// antAlarmBytesFromCodes — alarm_bytes ANT: биты 0..3/4..7/8..11 (коды MOS).
+// system log (12..27) в старом снимке отсутствует → 0.
+func antAlarmBytesFromCodes(charge, disch, bal int) []int {
+	a := make([]int, 19)
+	setLegacyAlarmNibble(a, 0, charge)
+	setLegacyAlarmNibble(a, 4, disch)
+	setLegacyAlarmNibble(a, 8, bal)
+	return a
+}
+
+// enbmsAlarmBytesFromStrings — реконструкция alarm_bytes EnBMS из строк тревог
+// (обратный маппинг к enbmsCellStateBits/enbmsTempStateBits/enbmsExtGroups, те же
+// таблицы, что и парсер). Точны для строк RS485-пути (TeleState 0x44).
+func enbmsAlarmBytesFromStrings(alarms []string, cellCount, tempCount int) []int {
+	a := make([]int, 19)
+	cellBit := map[string]int{
+		"высокое напряжение (предупреждение)": 0,
+		"защита от перенапряжения":            1,
+		"низкое напряжение (предупреждение)":  2,
+		"защита от пониженного напряжения":    3,
+	}
+	tempBit := map[string]int{
+		"перегрев (предупреждение)":       0,
+		"защита от перегрева":             1,
+		"переохлаждение (предупреждение)": 2,
+		"защита от переохлаждения":        3,
+	}
+	single := map[string]int{
+		"Температура среды: предупреждение":     96,
+		"Силовая часть: предупреждение":         97,
+		"Ток заряда: предупреждение":            98,
+		"Пользовательский вход: предупреждение": 99,
+	}
+	// Ext_Bit: имя → глобальный бит (100 + by*8 + bit), только Warn/Protect.
+	extBit := map[string]int{}
+	for by := 0; by < 6; by++ {
+		grp, ok := enbmsExtGroups[by]
+		if !ok {
+			continue
+		}
+		for _, eb := range grp.bits {
+			if eb.typ == "Warn" || eb.typ == "Protect" {
+				extBit[eb.name] = 100 + by*8 + eb.bit
+			}
+		}
+	}
+	var idx int
+	var phrase string
+	parseIdx := func(s, prefix string) bool {
+		// "Ячейка 12: фраза"
+		if len(s) <= len(prefix) || s[:len(prefix)] != prefix {
+			return false
+		}
+		rest := s[len(prefix):]
+		colon := -1
+		for i := 0; i < len(rest); i++ {
+			if rest[i] == ':' {
+				colon = i
+				break
+			}
+		}
+		if colon < 0 {
+			return false
+		}
+		n := 0
+		for i := 0; i < colon; i++ {
+			if rest[i] < '0' || rest[i] > '9' {
+				return false
+			}
+			n = n*10 + int(rest[i]-'0')
+		}
+		idx = n
+		phrase = rest[colon+1:]
+		if len(phrase) > 0 && phrase[0] == ' ' {
+			phrase = phrase[1:]
+		}
+		return true
+	}
+	for _, s := range alarms {
+		if b, ok := single[s]; ok {
+			setLegacyAlarmBit(a, b)
+			continue
+		}
+		if b, ok := extBit[s]; ok {
+			setLegacyAlarmBit(a, b)
+			continue
+		}
+		if parseIdx(s, "Ячейка") && idx >= 1 && idx <= cellCount {
+			if b, ok := cellBit[phrase]; ok {
+				setLegacyAlarmNibble(a, (idx-1)*4, 1<<uint(b))
+			}
+			continue
+		}
+		if parseIdx(s, "Датчик") && idx >= 1 && idx <= tempCount {
+			if b, ok := tempBit[phrase]; ok {
+				setLegacyAlarmNibble(a, 64+(idx-1)*4, 1<<uint(b))
+			}
+			continue
+		}
+	}
+	return a
+}
+
+// finalizeBms26 заполняет производные (alarms+маски) из alarm_bytes/типа.
+func finalizeBms26(sn *bms26Snapshot) {
+	if len(sn.AlarmBytes) == 0 {
+		return
+	}
+	sn.Alarms = decodeBms26Alarms(*sn)
+	sn.CellWarnMask, sn.CellProtMask = bms26CellMasks(*sn)
+	sn.TempWarnMask, sn.TempProtMask = bms26TempMasks(*sn)
+}

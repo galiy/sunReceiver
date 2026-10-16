@@ -544,6 +544,7 @@ type enbmsSnapshot struct {
 	Keys          []string  `json:"keys,omitempty"`          // включённые ключи (TeleState 0x44, Ext_Bit)
 	Balance       []string  `json:"balance,omitempty"`       // балансируемые ячейки (TeleState 0x44, Ext_Bit)
 	BalanceCells  []int     `json:"balance_cells,omitempty"` // номера балансируемых ячеек (1-based)
+	AlarmBytes    []int     `json:"alarm_bytes,omitempty"`   // двоичный alarm (19 Б) — для переноса в bms26
 }
 
 // enbmsSnapshotFromParsed строит снимок из декодированного Battery: мощности
@@ -905,6 +906,7 @@ type enbmsState struct {
 	Balance      []string
 	BalanceCells []int // номера балансируемых ячеек (1-based) — для маски/подсветки
 	Mode         string
+	AlarmBytes   []int // двоичный alarm (19 Б, упаковка как bms-reader applyEn44)
 }
 
 // parseEnBmsState декодирует INFO блока TeleState (CID2 0x44, 49 байт). Раскладка
@@ -987,7 +989,41 @@ func parseEnBmsState(p []byte) (enbmsState, error) {
 			}
 		}
 	}
+	// Двоичный alarm (19 Б): та же упаковка, что в bms-reader (applyEn44/setAlarmBit):
+	// ячейки i*4+b (0..63), датчики 64+i*4+b (64..95), Ext_Bit Byte0..5 → 100+by*8+bit.
+	st.AlarmBytes = enbmsPackAlarm(cellFlags, tempFlags, ext)
 	return st, nil
+}
+
+// enbmsPackAlarm упаковывает сырые cellFlags/tempFlags/ext в 19-байтный alarm
+// (копия раскладки bms-reader enbms.go applyEn44/setAlarmBit).
+func enbmsPackAlarm(cellFlags, tempFlags, ext []byte) []int {
+	a := make([]int, 19)
+	for i := 0; i < len(cellFlags) && i < 16; i++ {
+		for b := 0; b < 4; b++ {
+			if cellFlags[i]&(1<<uint(b)) != 0 {
+				setLegacyAlarmBit(a, i*4+b)
+			}
+		}
+	}
+	for i := 0; i < len(tempFlags) && i < 8; i++ {
+		for b := 0; b < 4; b++ {
+			if tempFlags[i]&(1<<uint(b)) != 0 {
+				setLegacyAlarmBit(a, 64+i*4+b)
+			}
+		}
+	}
+	for by := 0; by < 6 && by < len(ext); by++ {
+		for bit := 0; bit < 8; bit++ {
+			if by == 5 && bit > 6 {
+				continue
+			}
+			if ext[by]&(1<<uint(bit)) != 0 {
+				setLegacyAlarmBit(a, 100+by*8+bit)
+			}
+		}
+	}
+	return a
 }
 
 // Грубые границы валидности показаний EnBMS: отбрасываем очевидный мусор

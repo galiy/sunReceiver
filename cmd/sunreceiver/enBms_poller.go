@@ -323,6 +323,7 @@ func pollEnBmsDevice(pg *pgStore, store *redisStore, acc *enbmsAccumulator, d *e
 			snap.Keys = st.Keys
 			snap.Balance = st.Balance
 			snap.BalanceCells = st.BalanceCells
+			snap.AlarmBytes = st.AlarmBytes
 		}
 	}
 	// Текущее состояние — в HASH (перезапись); каждое снятое показание — в
