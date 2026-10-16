@@ -239,16 +239,13 @@ func (s *redisStore) PruneLegacyMPPT() {
 // переставали считаться «актуальными» на дашборде, но их история во временном ряду
 // сохранялась.
 func (s *redisStore) PruneMPPT(active map[string]struct{}) {
-	m, err := s.rdb.HGetAll(s.ctx, redisCurrentKey).Result()
+	m, err := s.rdb.HGetAll(s.ctx, redisKesCurrentKey).Result()
 	if err != nil {
 		log.Printf("redis prune mppt HGETALL: %v", err)
 		return
 	}
 	var keys []string
 	for ip := range m {
-		if !strings.HasPrefix(ip, "mppt-") {
-			continue
-		}
 		if _, ok := active[ip]; ok {
 			continue
 		}
@@ -257,7 +254,7 @@ func (s *redisStore) PruneMPPT(active map[string]struct{}) {
 	if len(keys) == 0 {
 		return
 	}
-	if err := s.rdb.HDel(s.ctx, redisCurrentKey, keys...).Err(); err != nil {
+	if err := s.rdb.HDel(s.ctx, redisKesCurrentKey, keys...).Err(); err != nil {
 		log.Printf("redis prune mppt del %v: %v", keys, err)
 	}
 	// Чистим в памяти mapWin по удалённым MPPT-ключам (иначе карта растёт при
@@ -390,6 +387,17 @@ func (s *redisStore) IsEmpty() (bool, error) {
 	} else if len(ks) > 0 {
 		return false, nil
 	}
+	// Обособленные данные КЭС (current/ряд).
+	if n, err := s.rdb.HLen(s.ctx, redisKesCurrentKey).Result(); err != nil {
+		return false, err
+	} else if n > 0 {
+		return false, nil
+	}
+	if ks, err := s.scanPrefixKeys(redisKesSeriesPrefix + "*"); err != nil {
+		return false, err
+	} else if len(ks) > 0 {
+		return false, nil
+	}
 	return true, nil
 }
 
@@ -456,6 +464,13 @@ func (s *redisStore) PurgeOld(now time.Time) {
 	} else {
 		keys = append(keys, mapKeys...)
 	}
+	// Ряд КЭС (обособленный).
+	kesKeys, err := s.scanPrefixKeys(redisKesSeriesPrefix + "*")
+	if err != nil {
+		log.Printf("redis cleanup kes keys: %v", err)
+	} else {
+		keys = append(keys, kesKeys...)
+	}
 	// Ряд мгновенных значений CE308 (окно удержания — те же 2 календарных суток).
 	ce308Keys, err := s.scanPrefixKeys(redisCE308SeriesPrefix + "*")
 	if err != nil {
@@ -509,6 +524,9 @@ func (s *redisStore) Current() ([]deviceSnapshot, error) {
 		if snap.IP == mapDevKey {
 			continue // старое поле МАП в общем current — игнорируем (см. map:current)
 		}
+		if isKesKey(snap.IP) {
+			continue // старые поля КЭС в общем current — игнорируем (см. kes:current)
+		}
 		snaps = append(snaps, snap)
 	}
 	// DDS238 хранится обособленно — подмешиваем его снимок прозрачно.
@@ -518,6 +536,10 @@ func (s *redisStore) Current() ([]deviceSnapshot, error) {
 	// МАП хранится обособленно — подмешиваем прозрачно.
 	if m, merr := s.MapCurrent(); merr == nil && m != nil {
 		snaps = append(snaps, *m)
+	}
+	// КЭС хранятся обособленно — подмешиваем прозрачно.
+	if ks, kerr := s.KesCurrent(); kerr == nil {
+		snaps = append(snaps, ks...)
 	}
 	// Сортируем по логическому имени — стабильный порядок карточек.
 	for i := 1; i < len(snaps); i++ {
@@ -573,6 +595,9 @@ func (s *redisStore) QuerySeries(start, end time.Time) ([]deviceSnapshot, error)
 			if snap.IP == mapDevKey {
 				continue // старые точки МАП в общем ряду — игнорируем (см. map:series)
 			}
+			if isKesKey(snap.IP) {
+				continue // старые точки КЭС в общем ряду — игнорируем (см. kes:series)
+			}
 			all = append(all, snap)
 		}
 		return true
@@ -587,6 +612,10 @@ func (s *redisStore) QuerySeries(start, end time.Time) ([]deviceSnapshot, error)
 	// МАП хранится обособленным рядом — подмешиваем прозрачно.
 	if m, merr := s.QueryMapSeries(start, end); merr == nil {
 		all = append(all, m...)
+	}
+	// КЭС хранятся обособленным рядом — подмешиваем прозрачно.
+	if ks, kerr := s.QueryKesSeries(start, end); kerr == nil {
+		all = append(all, ks...)
 	}
 	return all, nil
 }

@@ -242,7 +242,6 @@ func valuesCE308(r ce308Reads) map[string]float64 {
 // сериализации остаются только общие теги.
 type ce308Snapshot struct {
 	Name      string             `json:"name"`
-	IP        string             `json:"ip"`
 	Timestamp string             `json:"timestamp"`
 	Values    map[string]float64 `json:"values"`
 }

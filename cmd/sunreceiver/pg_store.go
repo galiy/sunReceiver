@@ -107,6 +107,9 @@ CREATE INDEX IF NOT EXISTS averages_ts_ip_idx ON sunreceiver.averages (ts, ip);
 	if err := ensureMapSchema(s); err != nil {
 		return err
 	}
+	if err := ensureKesSchema(s); err != nil {
+		return err
+	}
 	// Обособленные таблицы счётчика DTS017M (5-мин средние + посуточные тарифы).
 	if err := ensureDts017AveragesSchema(s); err != nil {
 		return fmt.Errorf("pg dts017m averages schema: %w", err)
@@ -333,6 +336,9 @@ ORDER BY ts ASC`
 		if ip == mapDevKey {
 			continue // старые строки МАП в averages — игнорируем (см. map_averages)
 		}
+		if isKesKey(ip) {
+			continue // старые строки КЭС в averages — игнорируем (см. kes_averages)
+		}
 		var vc valuesContract
 		if len(vals) > 0 {
 			if err := json.Unmarshal(vals, &vc); err != nil {
@@ -358,6 +364,9 @@ ORDER BY ts ASC`
 		}
 		if ms, merr := s.MapAverages(start, end); merr == nil {
 			snaps = append(snaps, ms...)
+		}
+		if ks, kerr := s.KesAverages(start, end); kerr == nil {
+			snaps = append(snaps, ks...)
 		}
 	}
 	return snaps, nil

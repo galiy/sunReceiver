@@ -46,6 +46,7 @@ func dds238SeriesKey(ts time.Time) string {
 
 // SaveDds238Current пишет текущий снимок DDS238 в собственный HASH current.
 func (s *redisStore) SaveDds238Current(snap deviceSnapshot) error {
+	snap.IP = "" // ip не персистим (обособленное устройство; ключ — name/meterDeviceKey)
 	b, err := json.Marshal(snap)
 	if err != nil {
 		return fmt.Errorf("marshal dds238 current: %w", err)
@@ -56,6 +57,7 @@ func (s *redisStore) SaveDds238Current(snap deviceSnapshot) error {
 // SaveDds238Series кладёт мгновенную точку в месячный ZSET ряда DDS238
 // (дедуп по score).
 func (s *redisStore) SaveDds238Series(snap deviceSnapshot, ts time.Time) error {
+	snap.IP = "" // ip не персистим
 	b, err := json.Marshal(snap)
 	if err != nil {
 		return fmt.Errorf("marshal dds238 series: %w", err)
@@ -93,6 +95,7 @@ func (s *redisStore) Dds238Current() (*deviceSnapshot, error) {
 	if err := json.Unmarshal(b, &snap); err != nil {
 		return nil, err
 	}
+	snap.IP = meterDeviceKey
 	return &snap, nil
 }
 
@@ -118,9 +121,7 @@ func (s *redisStore) QueryDds238Series(start, end time.Time) ([]deviceSnapshot, 
 			if json.Unmarshal([]byte(v), &snap) != nil {
 				continue
 			}
-			if snap.IP != meterDeviceKey {
-				continue
-			}
+			snap.IP = meterDeviceKey
 			all = append(all, snap)
 		}
 		return true

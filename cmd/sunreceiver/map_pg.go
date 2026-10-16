@@ -29,12 +29,11 @@ import (
 func ensureMapSchema(s *pgStore) error {
 	if _, err := s.pool.Exec(s.ctx, `
 CREATE TABLE IF NOT EXISTS sunreceiver.map_averages (
-	ip        text        NOT NULL,
 	name      text        NOT NULL,
 	ts        timestamptz NOT NULL,
 	device_sn text        NOT NULL DEFAULT '',
 	values    jsonb       NOT NULL DEFAULT '{}'::jsonb,
-	PRIMARY KEY (ip, ts)
+	PRIMARY KEY (name, ts)
 );
 CREATE INDEX IF NOT EXISTS map_averages_ts_idx ON sunreceiver.map_averages (ts);`); err != nil {
 		return fmt.Errorf("pg map_averages schema: %w", err)
@@ -43,18 +42,18 @@ CREATE INDEX IF NOT EXISTS map_averages_ts_idx ON sunreceiver.map_averages (ts);
 }
 
 // insertMapAveragedExec пишет одну 5-минутную усреднённую точку МАП.
-func insertMapAveragedExec(q pgExecer, ctx context.Context, ip, name string, ts time.Time, deviceSN string, vc valuesContract) error {
+func insertMapAveragedExec(q pgExecer, ctx context.Context, name string, ts time.Time, deviceSN string, vc valuesContract) error {
 	vals, err := json.Marshal(vc)
 	if err != nil {
 		return fmt.Errorf("pg marshal map avg: %w", err)
 	}
 	_, err = q.Exec(ctx, `
-INSERT INTO sunreceiver.map_averages (ip, name, ts, device_sn, values)
-VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT (ip, ts) DO UPDATE SET name = EXCLUDED.name, device_sn = EXCLUDED.device_sn, values = EXCLUDED.values`,
-		ip, name, ts.UTC(), deviceSN, vals)
+INSERT INTO sunreceiver.map_averages (name, ts, device_sn, values)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (name, ts) DO UPDATE SET device_sn = EXCLUDED.device_sn, values = EXCLUDED.values`,
+		name, ts.UTC(), deviceSN, vals)
 	if err != nil {
-		return fmt.Errorf("pg insert map avg %s: %w", ip, err)
+		return fmt.Errorf("pg insert map avg %s: %w", name, err)
 	}
 	return nil
 }
@@ -62,7 +61,7 @@ ON CONFLICT (ip, ts) DO UPDATE SET name = EXCLUDED.name, device_sn = EXCLUDED.de
 // MapAverages возвращает 5-минутные усреднённые точки МАП за [start, end].
 func (s *pgStore) MapAverages(start, end time.Time) ([]deviceSnapshot, error) {
 	rows, err := s.pool.Query(s.ctx, `
-SELECT ip, name, ts, device_sn, values
+SELECT name, ts, device_sn, values
 FROM sunreceiver.map_averages
 WHERE ts >= $1 AND ts <= $2
 ORDER BY ts ASC`, start.UTC(), end.UTC())
@@ -72,10 +71,10 @@ ORDER BY ts ASC`, start.UTC(), end.UTC())
 	defer rows.Close()
 	out := []deviceSnapshot{}
 	for rows.Next() {
-		var ip, name, deviceSN string
+		var name, deviceSN string
 		var ts time.Time
 		var vals json.RawMessage
-		if err := rows.Scan(&ip, &name, &ts, &deviceSN, &vals); err != nil {
+		if err := rows.Scan(&name, &ts, &deviceSN, &vals); err != nil {
 			return nil, fmt.Errorf("pg scan map avg: %w", err)
 		}
 		var vc valuesContract
@@ -85,7 +84,7 @@ ORDER BY ts ASC`, start.UTC(), end.UTC())
 			}
 		}
 		out = append(out, deviceSnapshot{
-			Name: name, IP: ip, DeviceSN: deviceSN,
+			Name: name, IP: mapDevKey, DeviceSN: deviceSN,
 			Timestamp: ts.Format(time.RFC3339), Values: vc,
 		})
 	}

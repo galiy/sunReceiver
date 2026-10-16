@@ -52,6 +52,7 @@ func (s *redisStore) saveMapSnapshot(snap deviceSnapshot, ts time.Time) error {
 	}
 	s.mapMu.Unlock()
 	snap = mergeMAPSnap(snap, prevMember)
+	snap.IP = "" // ip не персистим (обособленное устройство; ключ — name/mapDevKey)
 
 	b, err := json.Marshal(snap)
 	if err != nil {
@@ -105,6 +106,7 @@ func (s *redisStore) MapCurrent() (*deviceSnapshot, error) {
 	if err := json.Unmarshal(b, &snap); err != nil {
 		return nil, err
 	}
+	snap.IP = mapDevKey
 	return &snap, nil
 }
 
@@ -130,9 +132,7 @@ func (s *redisStore) QueryMapSeries(start, end time.Time) ([]deviceSnapshot, err
 			if json.Unmarshal([]byte(v), &snap) != nil {
 				continue
 			}
-			if snap.IP != mapDevKey {
-				continue
-			}
+			snap.IP = mapDevKey
 			all = append(all, snap)
 		}
 		return true

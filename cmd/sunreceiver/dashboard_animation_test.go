@@ -141,7 +141,7 @@ func TestBuildAnimationGarageMeter(t *testing.T) {
 	}
 	// Свежий снимок CE308 (резервный источник): потребление из сети 120 Вт.
 	ce308 := map[string]ce308Snapshot{
-		"CE308": {Name: "CE308", IP: "10.0.0.20", Timestamp: now.Format(time.RFC3339),
+		"CE308": {Name: "CE308", Timestamp: now.Format(time.RFC3339),
 			Values: map[string]float64{ce308ActiveP: 120}},
 	}
 	// Без DTS017M используется резерв CE308.
@@ -173,7 +173,7 @@ func TestBuildAnimationGarageMeter(t *testing.T) {
 	staleDts := &dts017Snapshot{Name: "DTS017M", Timestamp: now.Add(-time.Hour).Format(time.RFC3339),
 		Values: map[string]float64{dts017ActivePower: 999}}
 	staleCE := map[string]ce308Snapshot{
-		"CE308": {Name: "CE308", IP: "10.0.0.20", Timestamp: now.Add(-time.Hour).Format(time.RFC3339),
+		"CE308": {Name: "CE308", Timestamp: now.Add(-time.Hour).Format(time.RFC3339),
 			Values: map[string]float64{ce308ActiveP: 120}},
 	}
 	res3 := buildAnimationResponse(devices, staleDts, staleCE, nil, now)

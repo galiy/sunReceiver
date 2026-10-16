@@ -915,7 +915,7 @@ type DeviceResult struct {
 // временной ряд series). JSON-представление — контракт для дашборда и PG.
 type deviceSnapshot struct {
 	Name       string `json:"name"`
-	IP         string `json:"ip"`
+	IP         string `json:"ip,omitempty"`
 	Timestamp  string `json:"timestamp"`
 	DeviceSN   string `json:"device_sn,omitempty"`
 	InverterSN string `json:"inverter_sn,omitempty"`
@@ -1990,6 +1990,12 @@ func saveWindowSnapshot(store *redisStore, pg *pgStore, t invTarget, res DeviceR
 		}
 		return
 	}
+	if isKesKey(snap.IP) {
+		if err := store.saveKesSnapshot(snap, ts); err != nil {
+			log.Printf("redis save kes %s: %v", snap.IP, err)
+		}
+		return
+	}
 	if err := store.SaveSnapshotMAP(snap, ts); err != nil {
 		log.Printf("redis save %s: %v", devKey(t), err)
 	}
@@ -2918,6 +2924,15 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, re
 				// МАП восстанавливаем в обособленные ключи.
 				if serr := store.saveMapSnapshot(snap, ts); serr != nil {
 					log.Printf("pg restore: map save: %v", serr)
+					continue
+				}
+				restored++
+				continue
+			}
+			if isKesKey(snap.IP) {
+				// КЭС восстанавливаем в обособленные ключи.
+				if serr := store.saveKesSnapshot(snap, ts); serr != nil {
+					log.Printf("pg restore: kes save: %v", serr)
 					continue
 				}
 				restored++

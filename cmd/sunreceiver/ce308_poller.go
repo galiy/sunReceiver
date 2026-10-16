@@ -354,7 +354,6 @@ func ce308PollOnce(store *redisStore, cfg *ce308Config, m *ce308Meter) error {
 	}
 	snap := ce308Snapshot{
 		Name:      cfg.Name,
-		IP:        cfg.MAC,
 		Timestamp: ce308Timestamp(now),
 		Values:    valuesCE308(reads),
 	}

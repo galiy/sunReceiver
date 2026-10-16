@@ -185,13 +185,19 @@ func insertAverageBucket(pg *pgStore, start time.Time, snaps []deviceSnapshot) {
 		return pg.withTx(func(q pgExecer) error {
 			for _, r := range rows {
 				if r.ip == meterDeviceKey {
-					if err := insertDds238AveragedExec(q, pg.ctx, r.ip, r.name, start, r.deviceSN, r.vc); err != nil {
+					if err := insertDds238AveragedExec(q, pg.ctx, r.name, start, r.deviceSN, r.vc); err != nil {
 						return err
 					}
 					continue
 				}
 				if r.ip == mapDevKey {
-					if err := insertMapAveragedExec(q, pg.ctx, r.ip, r.name, start, r.deviceSN, r.vc); err != nil {
+					if err := insertMapAveragedExec(q, pg.ctx, r.name, start, r.deviceSN, r.vc); err != nil {
+						return err
+					}
+					continue
+				}
+				if isKesKey(r.ip) {
+					if err := insertKesAveragedExec(q, pg.ctx, r.name, start, r.deviceSN, r.vc); err != nil {
 						return err
 					}
 					continue
