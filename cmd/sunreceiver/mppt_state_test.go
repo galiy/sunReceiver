@@ -43,27 +43,13 @@ func TestMPPTEmptyTolerance(t *testing.T) {
 	}
 }
 
-func TestMPPTStableKeyEmptyUID(t *testing.T) {
-	s := newMPPTPollState()
-	// Первый опрос: слот 0 отдаёт UID — запоминаем и используем его как ключ.
-	if uid := s.resolveUID(0, "1097"); uid != "1097" {
-		t.Fatalf("resolveUID(0, \"1097\") = %q, want 1097", uid)
-	}
-	// Последующий опрос: ответ пришёл без UID — ключ должен остаться стабильным
-	// (по последнему известному UID слота), а не «дрейфовать» по индексу.
-	if uid := s.resolveUID(0, ""); uid != "1097" {
-		t.Fatalf("resolveUID(0, \"\") = %q, want 1097 (стабильный ключ)", uid)
-	}
-	t0 := invTarget{IP: "10.0.0.1", Kind: kindMPPT, Slot: 0, UID: s.resolveUID(0, "")}
-	if k := devKey(t0); k != "mppt-1097" {
+func TestMPPTKeyByUIDOnly(t *testing.T) {
+	// Ключ MPPT — только по серийнику (UID).
+	if k := devKey(invTarget{IP: "10.0.0.1", Kind: kindMPPT, Slot: 0, UID: "1097"}); k != "mppt-1097" {
 		t.Fatalf("devKey = %q, want mppt-1097", k)
 	}
-	// Слот, для которого UID ни разу не встречался — фолбэк на индексный ключ,
-	// 1-based (совпадает с именем "MPPT-<slot+1>" и kesKeyByName).
-	if uid := s.resolveUID(2, ""); uid != "" {
-		t.Fatalf("resolveUID(2, \"\") = %q, want \"\"", uid)
-	}
-	if k := devKey(invTarget{IP: "10.0.0.1", Kind: kindMPPT, Slot: 2, UID: ""}); k != "mppt-3" {
-		t.Fatalf("devKey без UID = %q, want mppt-3", k)
+	// Пустой UID — пустой ключ (пулер такие контроллеры пропускает).
+	if k := devKey(invTarget{IP: "10.0.0.1", Kind: kindMPPT, Slot: 2, UID: ""}); k != "" {
+		t.Fatalf("devKey без UID = %q, want \"\"", k)
 	}
 }

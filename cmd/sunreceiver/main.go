@@ -601,33 +601,15 @@ func defaultPGDSN(db *dbConfig) string {
 }
 
 // mpptPollState — межцикловое состояние пулера MPPT-контроллеров через веб-API
-// ПАК «Малина» (сохраняется между вызовами pollAndSaveMap, которые идут раз в
-// секунду из runMapPoll; доступ к нему только из одной горутины). Защищает от двух
-// краевых эффектов ответов read_json.php?device=mppt:
-//   - счётчик подряд идущих ПУСТЫХ (len(arr)==0) успешных ответов: до порога
-//     mpptEmptyTolerance не вызываем PruneMPPT, чтобы одиночная пустота не снесла
-//     все MPPT-ключи из current (аналог BMS-гварда);
-//   - маппинг слот→UID: если в текущем ответе UID контроллера пуст, используем
-//     последний известный UID этого слота — ключ devKey (и имя) не «дрейфует»
-//     между опросами из-за пустого UID (сам UID — стабильный серийник контроллера).
+// ПАК «Малина» (сохраняется между вызовами pollAndSaveMap; доступ из одной
+// горутины). Счётчик подряд идущих ПУСТЫХ успешных ответов: до порога
+// mpptEmptyTolerance не вызываем PruneMPPT, чтобы одиночная пустота не снесла
+// все MPPT-ключи из current.
 type mpptPollState struct {
-	slots map[int]string // слот → последний известный UID контроллера (стабильный ключ)
-	empty int            // подряд идущих пустых успешных ответов MPPT API
+	empty int // подряд идущих пустых успешных ответов MPPT API
 }
 
-func newMPPTPollState() *mpptPollState {
-	return &mpptPollState{slots: map[int]string{}}
-}
-
-// resolveUID возвращает UID для слота: переданный (если непустой) — запоминает его;
-// иначе — последний известный для слота (стабильный ключ при пустом UID), либо "".
-func (s *mpptPollState) resolveUID(slot int, uid string) string {
-	if uid != "" {
-		s.slots[slot] = uid
-		return uid
-	}
-	return s.slots[slot]
-}
+func newMPPTPollState() *mpptPollState { return &mpptPollState{} }
 
 // shouldPrune решает, вызывать ли PruneMPPT в текущем цикле. При пустом ответе
 // (empty=true) инкрементит счётчик и разрешает прунинг только после порога
@@ -658,12 +640,12 @@ const mapDevKey = "map"
 // PruneMPPT ищет ключи по strings.HasPrefix(ip, "mppt-")).
 func devKey(t invTarget) string {
 	if t.Kind == kindMPPT {
-		if t.UID != "" {
-			return fmt.Sprintf("mppt-%s", t.UID)
+		// Ключ MPPT — только по серийнику (UID). Без UID устройства нет (пулер
+		// такие пропускает); пустая строка заставит вызывающих не сохранять.
+		if t.UID == "" {
+			return ""
 		}
-		// Без UID — по слоту (1-based), чтобы совпадать с отображаемым именем
-		// "MPPT-<slot+1>" и kesKeyByName (иначе ключ расходится на единицу).
-		return fmt.Sprintf("mppt-%d", t.Slot+1)
+		return fmt.Sprintf("mppt-%s", t.UID)
 	}
 	if t.Kind == kindMAP {
 		return mapDevKey
@@ -2048,17 +2030,14 @@ func pollAndSaveMap(ctx context.Context, store *redisStore, pg *pgStore, now tim
 		} else {
 			for slot := range arr {
 				slot := slot
-				// UID — стабильный серийник контроллера; при пустом в ответе берём
-				// последний известный для слота, чтобы ключ не «дрейфовал».
-				uid := state.resolveUID(slot, arr[slot].UID)
-				name := fmt.Sprintf("MPPT-%d", slot+1)
-				if uid != "" {
-					name = "MPPT-" + uid
-				} else {
-					// UID неизвестен и ни разу не встречался для слота — ключ по
-					// индексу (деградация: отвал нижнего слота может склеить ряды).
-					log.Printf("%s: mppt api: слот %d без UID — ключ по индексу", mppt.Host, slot)
+				// Ключ/имя MPPT — по стабильному серийнику (UID). Пустой UID
+				// (нет данных) — контроллер пропускаем (без индекса-фолбэка).
+				uid := arr[slot].UID
+				if uid == "" {
+					log.Printf("%s: mppt api: слот %d без UID — пропуск", mppt.Host, slot)
+					continue
 				}
+				name := "MPPT-" + uid
 				t := invTarget{IP: mppt.Host, Name: name, Kind: kindMPPT, Slot: slot, UID: uid, Order: mpptOrderBase + slot}
 				activeMPPT[devKey(t)] = struct{}{}
 				wg.Add(1)
