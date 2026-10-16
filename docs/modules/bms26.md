@@ -71,8 +71,10 @@ HTTP-клиент и токен (см. [`map-mppt.md`](map-mppt.md)). Пулер
   `bms26Snapshot`;
 - **Redis series**: месячный ZSET `sunreceiver:bms26:series:<YYYY-MM>` (score = Unix-сек,
   member = JSON снимка; каждое снятое показание);
-- **PG**: таблица `sunreceiver.bms26_averages (name text, ts timestamptz, values jsonb,
-  PK(name,ts))` — 5-минутные средние (аккумулятор в памяти процесса, `bms26_store.go`).
+- **PG**: партиционированная колоночная `sunreceiver.bms26_averages_r`
+  (`name`, `ts`, метаданные, скаляры-колонки) + дочерние `bms26_averages_r_cells`
+  /`_temps`/`_alarm`(`name`, `ts`, `idx`, `v`) — массивы контракта по idx;
+  5-минутные средние (`bms26_store.go`, `bms26_avg_r.go`).
 
 Агрегация в 5-минутном баке (спека `bms-reader.md` §1): `flags`/`balance_mask`/`alarm` —
 побитовое ИЛИ; `cells_*`/`temps_*`/`current`/`power`/`soc`/`soh`/`remaining`/`total`/
@@ -108,8 +110,8 @@ HTTP-клиент и токен (см. [`map-mppt.md`](map-mppt.md)). Пулер
      (`высокое напряжение…`, `защита от…`, одиночные warn, Ext_Bit), и подписи групп.
 3. **Миграция истории** (сделано ранее): разовыми Python-скриптами перенесены ряды
    из
-   `sunreceiver:bms:series:*`/`enbms:series:*` и PG `bms_averages`/`enbms_averages` в
-   `sunreceiver:bms26:*`/`bms26_averages` (JSON приводится к форме `bms26Snapshot`;
+   `sunreceiver:bms:series:*`/`enbms:series:*` и PG `bms_averages_r`/`enbms_averages_r` в
+   `sunreceiver:bms26:*`/`bms26_averages_r` (JSON приводится к форме `bms26Snapshot`;
    дедуп). Связка id: ANT — по ёмкости (`AntBms <cap> A/h` → `AntBMS-DSP-<cap>-NNNNN`),
    EnBMS — единственный MAC → единственный EnBMS-serial. Также перенесена **история
    ошибок** `device_errors`: `kind='antbms'`/`'enbms'` → `kind='bms'`, `device` → serial.

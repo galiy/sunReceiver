@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -92,6 +93,9 @@ func (s *redisStore) SaveBms26Series(sn bms26Snapshot, ts time.Time) error {
 // bms26Accumulator — накопитель 5-минутных усреднённых точек BMS в памяти.
 type bms26Accumulator struct {
 	buckets map[string]*bms26Bucket
+	// pending — финализированные бакеты, закрытые при смене 5-мин окна в add()
+	// (граница прошла между тиками без вызова closed()) — забираются closed().
+	pending []bms26Snapshot
 }
 
 type bms26Bucket struct {
@@ -99,9 +103,11 @@ type bms26Bucket struct {
 	n     int
 	// последние значения метаданных/полей-«last»
 	meta bms26Snapshot
-	// суммы для avg
+	// суммы и счётчики для avg (per-index — для cells/temps)
 	sumCells []float64
+	cntCells []int
 	sumTemps []float64
+	cntTemps []int
 	sumCur   float64
 	sumPower float64
 	sumSoc   float64
@@ -110,9 +116,13 @@ type bms26Bucket struct {
 	sumTotal float64
 	sumPort  float64
 	// OR-поля
-	flags   int
-	balMask uint32
-	alrm    [19]int
+	flags    int
+	balMask  uint32
+	cellWarn uint32
+	cellProt uint32
+	tempWarn uint32
+	tempProt uint32
+	alrm     [19]int
 }
 
 func newBms26Accumulator() *bms26Accumulator {
@@ -130,6 +140,11 @@ func (a *bms26Accumulator) add(sn bms26Snapshot, now time.Time) {
 	st := bms26BucketStart(now)
 	bk := a.buckets[sn.Serial]
 	if bk == nil || !bk.start.Equal(st) {
+		// Смена 5-мин окна: финализируем предыдущий бакет в pending (не теряем),
+		// даже если closed() в этом тике ещё не вызывался.
+		if bk != nil {
+			a.pending = append(a.pending, bk.finalize())
+		}
 		bk = &bms26Bucket{start: st}
 		a.buckets[sn.Serial] = bk
 	}
@@ -137,17 +152,19 @@ func (a *bms26Accumulator) add(sn bms26Snapshot, now time.Time) {
 	bk.meta = sn // метаданные/«last» поля — из последнего снимка
 	for i, v := range sn.CellsV {
 		if i >= len(bk.sumCells) {
-			bk.sumCells = append(bk.sumCells, v)
-		} else {
-			bk.sumCells[i] += v
+			bk.sumCells = append(bk.sumCells, 0)
+			bk.cntCells = append(bk.cntCells, 0)
 		}
+		bk.sumCells[i] += v
+		bk.cntCells[i]++
 	}
 	for i, v := range sn.TemperaturesC {
 		if i >= len(bk.sumTemps) {
-			bk.sumTemps = append(bk.sumTemps, v)
-		} else {
-			bk.sumTemps[i] += v
+			bk.sumTemps = append(bk.sumTemps, 0)
+			bk.cntTemps = append(bk.cntTemps, 0)
 		}
+		bk.sumTemps[i] += v
+		bk.cntTemps[i]++
 	}
 	bk.sumCur += sn.CurrentA
 	bk.sumPower += sn.PowerW
@@ -158,14 +175,20 @@ func (a *bms26Accumulator) add(sn bms26Snapshot, now time.Time) {
 	bk.sumPort += sn.PortV
 	bk.flags |= sn.Flags
 	bk.balMask |= sn.BalanceMask
+	bk.cellWarn |= sn.CellWarnMask
+	bk.cellProt |= sn.CellProtMask
+	bk.tempWarn |= sn.TempWarnMask
+	bk.tempProt |= sn.TempProtMask
 	for i := 0; i < 19 && i < len(sn.AlarmBytes); i++ {
 		bk.alrm[i] |= sn.AlarmBytes[i]
 	}
 }
 
 // closed возвращает готовые (закрытые) бакеты и удаляет их из накопителя.
+// Включает pending (закрытые при смене окна в add()) и бакеты старше текущего окна.
 func (a *bms26Accumulator) closed(now time.Time) []bms26Snapshot {
-	var out []bms26Snapshot
+	out := a.pending
+	a.pending = nil
 	cur := bms26BucketStart(now)
 	for k, bk := range a.buckets {
 		if !bk.start.Before(cur) {
@@ -183,20 +206,30 @@ func (bk *bms26Bucket) finalize() bms26Snapshot {
 	s.Timestamp = bk.start.Format(time.RFC3339)
 	s.Flags = bk.flags
 	s.BalanceMask = bk.balMask
+	s.CellWarnMask = bk.cellWarn
+	s.CellProtMask = bk.cellProt
+	s.TempWarnMask = bk.tempWarn
+	s.TempProtMask = bk.tempProt
 	s.AlarmBytes = make([]int, 19)
 	for i := 0; i < 19; i++ {
 		s.AlarmBytes[i] = bk.alrm[i]
 	}
+	// cells/temps — среднее ПО ИНДЕКСУ (per-index счётчик), устойчиво к смене длины
+	// массивов внутри окна.
 	if len(bk.sumCells) > 0 {
 		s.CellsV = make([]float64, len(bk.sumCells))
 		for i := range bk.sumCells {
-			s.CellsV[i] = bk.sumCells[i] / n
+			if bk.cntCells[i] > 0 {
+				s.CellsV[i] = bk.sumCells[i] / float64(bk.cntCells[i])
+			}
 		}
 	}
 	if len(bk.sumTemps) > 0 {
 		s.TemperaturesC = make([]float64, len(bk.sumTemps))
 		for i := range bk.sumTemps {
-			s.TemperaturesC[i] = bk.sumTemps[i] / n
+			if bk.cntTemps[i] > 0 {
+				s.TemperaturesC[i] = bk.sumTemps[i] / float64(bk.cntTemps[i])
+			}
 		}
 	}
 	s.CurrentA = bk.sumCur / n
@@ -210,7 +243,7 @@ func (bk *bms26Bucket) finalize() bms26Snapshot {
 }
 
 // saveBms26ClosedBuckets пишет готовые 5-минутные точки в PG
-// (sunreceiver.bms26_averages). В Redis-ряд 5-минутные средние не пишутся.
+// (sunreceiver.bms26_averages_r). В Redis-ряд 5-минутные средние не пишутся.
 func saveBms26ClosedBuckets(pg *pgStore, pts []bms26Snapshot) {
 	if pg == nil || len(pts) == 0 {
 		return
@@ -220,7 +253,10 @@ func saveBms26ClosedBuckets(pg *pgStore, pts []bms26Snapshot) {
 			for _, sn := range pts {
 				ts, err := time.Parse(time.RFC3339, sn.Timestamp)
 				if err != nil {
-					ts = time.Now()
+					// Битый timestamp бакета: не подменяем на now() (уедет по времени),
+					// а пропускаем точку с логом.
+					log.Printf("bms26 avg: битый ts %q (serial=%s) — точка пропущена", sn.Timestamp, sn.Serial)
+					continue
 				}
 				if err := insertBms26AveragedExec(q, pg.ctx, sn.Serial, ts, sn); err != nil {
 					return err
@@ -233,18 +269,126 @@ func saveBms26ClosedBuckets(pg *pgStore, pts []bms26Snapshot) {
 	}
 }
 
+// insertBms26AveragedExec раскладывает усреднённый бакет BMS в партиционированную
+// колоночную таблицу bms26_averages_r (скаляры/метаданные — колонки) и в дочерние
+// таблицы bms26_averages_r_cells/_temps/_alarm (массивы контракта по idx).
 func insertBms26AveragedExec(q pgExecer, ctx context.Context, name string, ts time.Time, sn bms26Snapshot) error {
-	vals, err := json.Marshal(sn)
-	if err != nil {
-		return fmt.Errorf("pg marshal bms26 avg %s: %w", name, err)
+	sp := avgSpecByTable(bms26AvgTable)
+	vc := valuesContract{
+		"soc": sn.Soc, "soh": sn.Soh, "mode": float64(sn.Mode), "flags": float64(sn.Flags),
+		"cycles": float64(sn.Cycles), "power_w": sn.PowerW, "rated_ah": sn.RatedAh,
+		"current_a": sn.CurrentA, "avg_cell_v": sn.AvgCellV, "cell_count": float64(sn.CellCount),
+		"max_cell_v": sn.MaxCellV, "min_cell_v": sn.MinCellV, "temp_count": float64(sn.TempCount),
+		"capacity_ah": sn.CapacityAh, "balance_mask": float64(sn.BalanceMask),
+		"cell_warn_mask": float64(sn.CellWarnMask), "cell_prot_mask": float64(sn.CellProtMask),
+		"temp_warn_mask": float64(sn.TempWarnMask), "temp_prot_mask": float64(sn.TempProtMask),
+		"max_cell_idx": float64(sn.MaxCellIdx), "min_cell_idx": float64(sn.MinCellIdx),
+		"remaining_ah": sn.RemainingAh, "port_voltage_v": sn.PortV, "total_voltage_v": sn.TotalV,
 	}
-	_, err = q.Exec(ctx, `
-INSERT INTO sunreceiver.bms26_averages (name, ts, values)
-VALUES ($1, $2, $3)
-ON CONFLICT (name, ts) DO UPDATE SET values = EXCLUDED.values`,
-		name, ts.UTC(), vals)
-	if err != nil {
-		return fmt.Errorf("pg insert bms26 avg %s: %w", name, err)
+	meta := map[string]string{"base": sn.Base, "serial": sn.Serial, "bms_type": sn.BmsType, "device_name": sn.DeviceName}
+	if err := insertAvgRow(q, ctx, sp, name, ts, meta, vc); err != nil {
+		return err
+	}
+	if err := insertBms26Child(q, ctx, sp.table+"_cells", name, ts, floatVals(sn.CellsV)); err != nil {
+		return err
+	}
+	if err := insertBms26Child(q, ctx, sp.table+"_temps", name, ts, floatVals(sn.TemperaturesC)); err != nil {
+		return err
+	}
+	return insertBms26Child(q, ctx, sp.table+"_alarm", name, ts, intVals(sn.AlarmBytes))
+}
+
+// insertBms26Child пишет элементы массива (по idx) в дочернюю таблицу *_r_<suffix>
+// одним многострочным INSERT (вместо поштучных Exec на элемент).
+func insertBms26Child(q pgExecer, ctx context.Context, table, name string, ts time.Time, vals []any) error {
+	if len(vals) == 0 {
+		return nil
+	}
+	var sb strings.Builder
+	args := make([]any, 0, len(vals)*4)
+	fmt.Fprintf(&sb, "INSERT INTO %s (name, ts, idx, v) VALUES ", table)
+	for i, v := range vals {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		n := len(args)
+		fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d)", n+1, n+2, n+3, n+4)
+		args = append(args, name, ts.UTC(), i, v)
+	}
+	sb.WriteString(" ON CONFLICT (name, ts, idx) DO UPDATE SET v = EXCLUDED.v")
+	if _, err := q.Exec(ctx, sb.String(), args...); err != nil {
+		return fmt.Errorf("pg insert %s %s: %w", table, name, err)
+	}
+	return nil
+}
+
+func floatVals(xs []float64) []any {
+	out := make([]any, len(xs))
+	for i, v := range xs {
+		out[i] = v
+	}
+	return out
+}
+
+func intVals(xs []int) []any {
+	out := make([]any, len(xs))
+	for i, v := range xs {
+		out[i] = v
+	}
+	return out
+}
+
+// bms26ScalarVC/bms26Meta — раскладка снимка BMS по колонкам (общие для записи и
+// миграции), порядок согласован с avgSpecs для bms26.
+func bms26ScalarVC(sn bms26Snapshot) valuesContract {
+	return valuesContract{
+		"soc": sn.Soc, "soh": sn.Soh, "mode": float64(sn.Mode), "flags": float64(sn.Flags),
+		"cycles": float64(sn.Cycles), "power_w": sn.PowerW, "rated_ah": sn.RatedAh,
+		"current_a": sn.CurrentA, "avg_cell_v": sn.AvgCellV, "cell_count": float64(sn.CellCount),
+		"max_cell_v": sn.MaxCellV, "min_cell_v": sn.MinCellV, "temp_count": float64(sn.TempCount),
+		"capacity_ah": sn.CapacityAh, "balance_mask": float64(sn.BalanceMask),
+		"cell_warn_mask": float64(sn.CellWarnMask), "cell_prot_mask": float64(sn.CellProtMask),
+		"temp_warn_mask": float64(sn.TempWarnMask), "temp_prot_mask": float64(sn.TempProtMask),
+		"max_cell_idx": float64(sn.MaxCellIdx), "min_cell_idx": float64(sn.MinCellIdx),
+		"remaining_ah": sn.RemainingAh, "port_voltage_v": sn.PortV, "total_voltage_v": sn.TotalV,
+	}
+}
+
+// insertBms26AveragedExecNoClobber — как insertBms26AveragedExec, но ON CONFLICT
+// DO NOTHING (для миграции истории: не затирает новые точки).
+func insertBms26AveragedExecNoClobber(q pgExecer, ctx context.Context, name string, ts time.Time, sn bms26Snapshot) error {
+	sp := avgSpecByTable(bms26AvgTable)
+	meta := map[string]string{"base": sn.Base, "serial": sn.Serial, "bms_type": sn.BmsType, "device_name": sn.DeviceName}
+	if err := insertAvgRowNoClobber(q, ctx, sp, name, ts, meta, bms26ScalarVC(sn)); err != nil {
+		return err
+	}
+	if err := insertBms26ChildNoClobber(q, ctx, sp.table+"_cells", name, ts, floatVals(sn.CellsV)); err != nil {
+		return err
+	}
+	if err := insertBms26ChildNoClobber(q, ctx, sp.table+"_temps", name, ts, floatVals(sn.TemperaturesC)); err != nil {
+		return err
+	}
+	return insertBms26ChildNoClobber(q, ctx, sp.table+"_alarm", name, ts, intVals(sn.AlarmBytes))
+}
+
+func insertBms26ChildNoClobber(q pgExecer, ctx context.Context, table, name string, ts time.Time, vals []any) error {
+	if len(vals) == 0 {
+		return nil
+	}
+	var sb strings.Builder
+	args := make([]any, 0, len(vals)*4)
+	fmt.Fprintf(&sb, "INSERT INTO %s (name, ts, idx, v) VALUES ", table)
+	for i, v := range vals {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		n := len(args)
+		fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d)", n+1, n+2, n+3, n+4)
+		args = append(args, name, ts.UTC(), i, v)
+	}
+	sb.WriteString(" ON CONFLICT (name, ts, idx) DO NOTHING")
+	if _, err := q.Exec(ctx, sb.String(), args...); err != nil {
+		return fmt.Errorf("pg insert %s %s: %w", table, name, err)
 	}
 	return nil
 }

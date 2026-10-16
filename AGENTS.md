@@ -81,7 +81,7 @@ PostgreSQL. Включает веб-дашборд текущих парамет
   **копия** пакета `internal/bmscontract` (оригинал —
   `github.com/galiy/malina-26/daemons/lib/bmscontract`; см.
   [`docs/modules/bms26.md`](docs/modules/bms26.md)); хранение — Redis
-  `sunreceiver:bms26:*` + PG `bms26_averages`. Старые разделы **`antBms`**
+  `sunreceiver:bms26:*` + PG `bms26_averages_r`. Старые разделы **`antBms`**
   `{"url", "disabled"}` (**`disabled` — ОБЯЗАТЕЛЬНОЕ**: `false` — ANT BMS
   опрашивается, `true` — опрос отключён; `url` — **полный** адрес `read_bms.php` ПАК
   «Малина», при необходимости с Basic-auth прямо в URL:
@@ -95,7 +95,7 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 `{"name", "ip", "port", "unit", "protocol", "first_reg", "register_count"}` (имеет приоритет над
 legacy-файлом `dds238.json`; `protocol` — `"tcp"` (Modbus TCP, по умолчанию) или `"rtu"`
 (Modbus RTU поверх TCP через прозрачный шлюз)). Идентификатор счётчика во всех
-хранилищах — единый стабильный ключ **`dds238`** (Redis `sunreceiver:dds238:current`/ряд, PG `sunreceiver.dds238_averages`),
+хранилищах — единый стабильный ключ **`dds238`** (Redis `sunreceiver:dds238:current`/ряд, PG `sunreceiver.dds238_averages_r`),
 не зависящий от `ip`; смена адреса/транспорта не распадается на разные устройства.
 Счётчик **DTS017M** (трёхфазный, Modbus RTU через
 прозрачный шлюз; историю счётчика **не читаем** — посуточные тарифы считаются сами) —
@@ -104,7 +104,7 @@ legacy-файлом `dds238.json`; `protocol` — `"tcp"` (Modbus TCP, по ум
 `"rtu"` (по умолчанию, прозрачный шлюз) или `"tcp"`; `port` умолч. 502, `unit` умолч. 1,
 `poll_interval` умолч. 1 с). Хранилище **обособлено**: собственные ключи/ряд Redis
 (`sunreceiver:dts017m:current`, `sunreceiver:dts017m:series:*`) и таблицы PG
-(`dts017m_averages`, `dts017m_daily_tariffs`), отдельный аккумулятор; общие
+(`dts017m_averages_r`, `dts017m_daily_tariffs`), отдельный аккумулятор; общие
 ключи/таблицы DDS238 не используются. Описан в
 [`docs/dts017m-meter.md`](docs/dts017m-meter.md). Счётчик Энергомера **CE308** (опрос по BLE) — раздел
 **`ce308`** `{"disabled", "final_readings_only", "name", "mac", "pin"}`
@@ -196,7 +196,7 @@ inverter 10, map 1, meter 1, ce308 5, antbms 1. Период EnBMS задаёт�
 - **Счётчик DTS017M** — `dts017_*.go`: `dts017.go` (регистры/декодер/теги),
   `dts017_client`-транспорт — переиспользуемый `meter_client.go` (fn `0x04`),
   `dts017_poller.go`, `dts017_store.go` (обособленные ключи/ряд Redis),
-  `dts017_accumulator.go` (5-мин средние в `dts017m_averages`), `dts017_tariff.go`
+  `dts017_accumulator.go` (5-мин средние в `dts017m_averages_r`), `dts017_tariff.go`
   (посуточные тарифы в `dts017m_daily_tariffs`), `dts017_backfill.go`,
   `dts017_time.go` (раз в 30 мин сверка часов счётчика с локальным временем; при
   расхождении > 2 с — коррекция записью fn `0x10` в `0x0210`; стартовая проверка на
@@ -230,7 +230,7 @@ inverter 10, map 1, meter 1, ce308 5, antbms 1. Период EnBMS задаёт�
   опрос через HTTP-API «Малина26» (`/api/bms/devices` + `/api/bms/raw`), бинарный
   контракт 107 Б — копия пакета `internal/bmscontract` (оригинал —
   `github.com/galiy/malina-26/daemons/lib/bmscontract`). Redis current `sunreceiver:bms26:current`
-  + ряд `sunreceiver:bms26:series:*`; PG `bms26_averages` (5-мин средние). Полное
+  + ряд `sunreceiver:bms26:series:*`; PG `bms26_averages_r` (5-мин средние). Полное
   описание — [`docs/modules/bms26.md`](docs/modules/bms26.md).
 - **ANT BMS** — `bms_poller.go`, `bms_accumulator.go`, `daemons/bmslistener/`. Полное описание —
   [`docs/antbms.md`](docs/antbms.md). Демон bmslistener (установка на ПАК «Малина») —

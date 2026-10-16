@@ -660,7 +660,7 @@ func (h *dashboardHandler) apiBMSSeries(w http.ResponseWriter, r *http.Request, 
 	}
 	cutoff := seriesReadCutoff(from, now)
 	// Единый тип BMS: имя в URL — serial. Старая часть периода — из
-	// pg.bms26_averages, рецентная — из Redis-ряда bms26.
+	// pg.bms26_averages_r, рецентная — из Redis-ряда bms26.
 	var pts []bms26Snapshot
 	pgStart, pgEnd, pgOK, rStart, rEnd, rOK := seamWindows(from, to, cutoff)
 	if h.pg != nil && pgOK {

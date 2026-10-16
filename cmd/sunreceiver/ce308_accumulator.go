@@ -26,7 +26,7 @@ import (
 // Особенность обработки истории CE308: мгновенные значения пишутся в Redis при
 // каждом опросе (~1 точка за 2 с), а в PostgreSQL усредняются до дискретности
 // 1 запись за 5 минут (единая гранулярность PG для всех рядов). Для CE308 —
-// отдельная таблица PG (sunreceiver.ce308_averages); шаг совпадает с avgStep.
+// отдельная таблица PG (sunreceiver.ce308_averages_r); шаг совпадает с avgStep.
 
 // ce308AvgStep — дискретность усреднения истории CE308 в PostgreSQL: 5 минут.
 const ce308AvgStep = avgStep
@@ -114,7 +114,7 @@ func backfillCe308(store *redisStore, pg *pgStore, name string) {
 // runCe308Accumulator — фоновый процесс усреднения истории CE308 в PostgreSQL.
 // По завершении каждого 5-минутного промежутка (не сразу, а спустя
 // ce308AvgDelay) читает снимки промежутка из Redis-ряда и пишет одну усреднённую
-// точку в sunreceiver.ce308_averages (ts = начало промежутка).
+// точку в sunreceiver.ce308_averages_r (ts = начало промежутка).
 func runCe308Accumulator(store *redisStore, pg *pgStore, name string, ctx context.Context) {
 	if pg == nil {
 		return

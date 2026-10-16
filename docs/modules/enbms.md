@@ -216,11 +216,12 @@ ANT-пулер, и пулер malina26 пишут в **единый ряд bms26
 - Redis `sunreceiver:bms26:current` (HASH, поле = serial) — текущий снимок;
 - Redis `sunreceiver:bms26:series:<YYYY-MM>` (ZSET) — **каждое снятое показание**
   (score = секунда; окно 2 суток, чистка PurgeOld);
-- PostgreSQL `sunreceiver.bms26_averages` (`name`=serial, `ts`, `values` jsonb) —
-  вся история с гранулярностью **1 запись / 5 минут**.
+- PostgreSQL `sunreceiver.bms26_averages_r` (партиционированная колоночная, ключ
+  `name`=serial) + дети `_cells/_temps/_alarm` — вся история с гранулярностью
+  **1 запись / 5 минут**.
 
 Подробнее — [bms26.md](bms26.md). Старые ключи `sunreceiver:enbms:*`/PG
-`enbms_averages` выведены и удалены.
+`enbms_averages_r` выведены и удалены.
 
 Мгновенные поля (ток/мощность/SOC/ёмкости/напряжения ячеек/температуры)
 усредняются за 5 минут; дискретные (число ячеек, циклы) берутся по последнему

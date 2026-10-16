@@ -17,7 +17,7 @@
   от 00:00 вчерашнего дня (`recentCutoff(now)`). Старые точки удаляет фоновый
   процесс `runRedisCleanup` → `redisStore.PurgeOld`. HASH `current` не трогается.
 - **PostgreSQL хранит всю историю** усреднёнными 5-минутными точками
-  (`*_averages` — марочные deye/sofar и обособленные `dds238_averages`/`map_averages`/`kes_averages`/`dts017m_averages`/`ce308_averages`/`bms26_averages`); старше двух суток — только здесь
+  (`*_averages` — марочные deye/sofar и обособленные `dds238_averages_r`/`map_averages_r`/`kes_averages_r`/`dts017m_averages_r`/`ce308_averages_r`/`bms26_averages_r`); старше двух суток — только здесь
   и никогда не удаляются.
 
 ## Redis (`redis_store.go`)
@@ -72,28 +72,35 @@ BMS26, DTS017M, CE308 — каждый в свой ряд `sunreceiver:*:series:
 до ~86 400 точек/сутки на устройство (JSON с массивами ячеек). При росте памяти
 следить за `INFO memory`/размером ключей `sunreceiver:*series*`.
 
-## PostgreSQL (`pg_store.go`)
+## PostgreSQL (`pg_store.go`, `avg_r.go`)
 
-- Таблицы **`sunreceiver.deye_averages(serial, ip, name, ts, device_sn, values jsonb)`**
-  и **`sunreceiver.sofar_averages(...)`**, PK `(serial, ts)`, индекс по `ts`. Ключ —
-  серийник инвертора; `ip` — информационная колонка (для привязки размещения).
-  Общая `sunreceiver.averages` **выведена из эксплуатации и удалена**.
-- `insertInvAveragedExec(...)` — одна усреднённая точка марки (ts = начало
-  5-минутного промежутка), идемпотентна по `(serial, ts)`.
-- `invAverages(brand, start, end)` — чтение усреднённых точек марки за период (для
-  дашборда и реставрации Redis).
-- `ensureInvAveragesSchema` — создание марочных таблиц инверторов.
+Все 5-минутные средние хранятся в **партиционированных колоночных** таблицах
+`<orig>_averages_r` (суффикс `R`): `PARTITION BY RANGE (ts)` помесячно, `PK (ключ, ts)`,
+значения — типизированные колонки `double precision` (вместо `values jsonb`),
+информационные метаданные — `text`. **FOREIGN KEY нет — только индексы**;
+согласованность связанной группы строк (BMS) — общей транзакцией. Детали и порядок
+миграции — [`../averages-partitioned-plan.md`](../averages-partitioned-plan.md).
+
+- Инверторы: **`deye_averages_r`/`sofar_averages_r`** (`serial`, `ts`, `name`,
+  `device_sn`, `ip`, 17 метрик), ключ — серийник. `insertAveraged`-ы и читатели — в
+  `avg_r.go` (`insertAvgRow`/`selectAvgRows`).
+- DDS238/МАП/КЭС/CE308/DTS017M/BMS26: свои `*_averages_r` (`avgSpecs`), BMS —
+  parent + дети `bms26_averages_r_cells/_temps/_alarm(name, ts, idx, v)`.
+- **Старые jsonb-таблицы** (`deye_averages_r`, `sofar_averages_r`, `dds238_averages_r`,
+  `map_averages_r`, `kes_averages_r`, `ce308_averages_r`, `dts017m_averages_r`,
+  `bms26_averages_r`) — **история до этапа миграции**; в коде не создаются/не пишутся,
+  удаляются на этапе 6.
+- Партиции: функция `sunreceiver.ensure_month_partition`, горизонт −1…+2 месяца
+  создаётся при старте и каждые 12 ч (`runAvgPartitionMaintenance`).
 - Тарифы счётчика: `DailyTariffsRange`, `StoreMeterBoundary` — см.
   [dds238-meter.md](../dds238-meter.md).
 - Счётчик DTS017M: **обособленные** ключи/ряд Redis (`sunreceiver:dts017m:current`,
-  `sunreceiver:dts017m:series:*`) и таблицы PG (`dts017m_averages`,
-  `dts017m_daily_tariffs`), отдельный аккумулятор; общие ключи/таблицы DDS238 не
-  используются — [dts017m-meter.md](../dts017m-meter.md).
+  `sunreceiver:dts017m:series:*`) и таблицы PG (`dts017m_averages_r`,
+  `dts017m_daily_tariffs`) — [dts017m-meter.md](../dts017m-meter.md).
 - Счётчик DDS238: **обособленные** ключи/ряд Redis
   (`sunreceiver:dds238:current`, `sunreceiver:dds238:series:*`) и таблицы PG
-  (`dds238_averages`, `dds238_daily_tariffs`); логический ключ — `dds238`
-  (`meterDeviceKey`), общая `averages` не используется. Перенос старого ключа —
-  разовыми скриптами `scripts/migrate_dds238*.py`; в бинарнике миграций нет.
+  (`dds238_averages_r`, `dds238_daily_tariffs`); логический ключ — `dds238`
+  (`meterDeviceKey`). Перенос старого ключа — разовыми скриптами; в бинарнике нет.
 
 ## Фоновые процессы (`accumulator.go`)
 
@@ -114,13 +121,13 @@ BMS26, DTS017M, CE308 — каждый в свой ряд `sunreceiver:*:series:
 
 - **BMS (ANT + EnBMS + malina26)** — единое хранилище bms26: текущее в
   `sunreceiver:bms26:current`, КАЖДОЕ показание в ряд `sunreceiver:bms26:series:<YYYY-MM>`,
-  5-минутные средние в PG `sunreceiver.bms26_averages` (name = serial). Пулер
+  5-минутные средние в PG `sunreceiver.bms26_averages_r` (name = serial). Пулер
   malina26 пишет напрямую; старые пулеры ANT (`bms_poller.go`) и EnBMS
   (`enBms_poller.go`) кормят те же ряды через шимы (`bms26_legacy.go`,
   `enBms_store.go`). Подробнее — [bms26.md](bms26.md), [enbms.md](enbms.md),
   [../antbms.md](../antbms.md).
 - **CE308** (`ce308_accumulator.go`): сырой ряд Redis (~2 с), PG
-  `sunreceiver.ce308_averages` — усреднение **5 минут** (тот же `avgStep`), см.
+  `sunreceiver.ce308_averages_r` — усреднение **5 минут** (тот же `avgStep`), см.
   [ce308.md](ce308.md).
 
 Повторная запись того же (устройство, промежуток) в PG **заменяется**
@@ -132,7 +139,7 @@ BMS26, DTS017M, CE308 — каждый в свой ряд `sunreceiver:*:series:
 - [Дашборд](dashboard.md) — читатель марочных `deye/sofar:current`/`:series` +
   `invAverages` (обособленные — своими читалками).
 - [dds238-meter.md](../dds238-meter.md) — `dds238_daily_tariffs`.
-- [../antbms.md](../antbms.md) — ключи `sunreceiver:bms26:*`, `bms26_averages`.
+- [../antbms.md](../antbms.md) — ключи `sunreceiver:bms26:*`, `bms26_averages_r`.
 ## История ошибок устройств (`device_errors`)
 
 Таблица `sunreceiver.device_errors(device, kind, code, msg, ts)` — история

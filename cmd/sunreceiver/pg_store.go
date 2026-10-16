@@ -18,7 +18,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -89,53 +88,12 @@ func (s *pgStore) ensureSchema() error {
 	if err := ensureMeterTariffSchema(s); err != nil {
 		return fmt.Errorf("pg meter tariff schema: %w", err)
 	}
-	if err := ensureDds238Schema(s); err != nil {
-		return err
-	}
-	if err := ensureMapSchema(s); err != nil {
-		return err
-	}
-	if err := ensureKesSchema(s); err != nil {
-		return err
-	}
-	// Обособленные таблицы сетевых инверторов по марке (deye/sofar), ключ — серийник.
-	if err := ensureInvAveragesSchema(s); err != nil {
-		return err
-	}
-	// Обособленные таблицы счётчика DTS017M (5-мин средние + посуточные тарифы).
-	if err := ensureDts017AveragesSchema(s); err != nil {
-		return fmt.Errorf("pg dts017m averages schema: %w", err)
+	// Партиционированные колоночные таблицы 5-минутных средних (все устройства).
+	if err := s.ensureAvgSchema(); err != nil {
+		return fmt.Errorf("pg averages_r schema: %w", err)
 	}
 	if err := ensureDts017TariffSchema(s); err != nil {
 		return fmt.Errorf("pg dts017m tariff schema: %w", err)
-	}
-	// (Таблицы bms_averages/enbms_averages удалены — BMS хранится в bms26_averages.)
-	// Таблица 5-минутных усреднённых точек счётчика Энергомера CE308.
-	// PK (name, ts) — эффективная выборка «CE308 за диапазон времени» (узкий
-	// индексный range-scan по первичному ключу); опциональный индекс по ts для
-	// выборок по времени без фильтра по устройству.
-	if _, err := s.pool.Exec(s.ctx, `
-CREATE TABLE IF NOT EXISTS sunreceiver.ce308_averages (
-	name   text        NOT NULL,
-	ts     timestamptz NOT NULL,
-	values jsonb       NOT NULL DEFAULT '{}'::jsonb,
-	PRIMARY KEY (name, ts)
-);
-CREATE INDEX IF NOT EXISTS ce308_averages_ts_idx ON sunreceiver.ce308_averages (ts);`); err != nil {
-		return fmt.Errorf("pg ce308_averages schema: %w", err)
-	}
-	// (Таблица enbms_averages удалена — BMS EnBMS хранится в bms26_averages.)
-	// Таблица 5-минутных усреднённых точек BMS через malina26 (единый тип BMS:
-	// ANT + EnBMS). PK (name, ts); name = serial BMS.
-	if _, err := s.pool.Exec(s.ctx, `
-CREATE TABLE IF NOT EXISTS sunreceiver.bms26_averages (
-	name   text        NOT NULL,
-	ts     timestamptz NOT NULL,
-	values jsonb       NOT NULL DEFAULT '{}'::jsonb,
-	PRIMARY KEY (name, ts)
-);
-CREATE INDEX IF NOT EXISTS bms26_averages_ts_idx ON sunreceiver.bms26_averages (ts);`); err != nil {
-		return fmt.Errorf("pg bms26_averages schema: %w", err)
 	}
 	// История ошибок ВСЕХ устройств (инверторы/МАП/счётчик/CE308/BMS): запись —
 	// только при ПОЯВЛЕНИИ ошибки (переход «не было → есть»), без дублей.
@@ -150,6 +108,11 @@ CREATE TABLE IF NOT EXISTS sunreceiver.device_errors (
 );
 CREATE INDEX IF NOT EXISTS device_errors_ts_idx ON sunreceiver.device_errors (ts);`); err != nil {
 		return fmt.Errorf("pg device_errors schema: %w", err)
+	}
+	// Горизонт помесячных партиций *_r (текущий + следующий месяц); далее
+	// поддерживается фоновым процессом (runAvgPartitionMaintenance).
+	if err := s.ensureAvgPartitions(); err != nil {
+		return fmt.Errorf("pg averages_r partitions: %w", err)
 	}
 	return nil
 }
@@ -207,20 +170,11 @@ func (s *pgStore) withTx(fn func(q pgExecer) error) error {
 // (ts — начало промежутка). Идемпотентна по (name, ts), повторная запись
 // ОБНОВЛЯЕТ строку (last-write-wins), как в InsertAveraged.
 func (s *pgStore) InsertCe308Average(name string, ts time.Time, vc map[string]float64) error {
-	vals, err := json.Marshal(vc)
-	if err != nil {
-		return fmt.Errorf("pg marshal ce308 values %s: %w", name, err)
+	cv := make(valuesContract, len(vc))
+	for k, v := range vc {
+		cv[k] = v
 	}
-	_, err = s.pool.Exec(s.ctx, `
-INSERT INTO sunreceiver.ce308_averages (name, ts, values)
-VALUES ($1, $2, $3)
-ON CONFLICT (name, ts) DO UPDATE
-  SET values = EXCLUDED.values`,
-		name, ts.UTC(), vals)
-	if err != nil {
-		return fmt.Errorf("pg insert ce308 avg %s: %w", name, err)
-	}
-	return nil
+	return insertAvgRow(s.pool, s.ctx, avgSpecByTable("sunreceiver.ce308_averages_r"), name, ts, nil, cv)
 }
 
 // ce308PGPoint — усреднённая точка CE308 из PostgreSQL (ts — начало 5-мин
@@ -235,29 +189,16 @@ type ce308PGPoint struct {
 // [start, end] включительно. PK (name, ts) даёт эффективный range-scan
 // «устройство за период времени».
 func (s *pgStore) QueryCE308Averages(name string, start, end time.Time) ([]ce308PGPoint, error) {
-	rows, err := s.pool.Query(s.ctx, `
-SELECT ts, values FROM sunreceiver.ce308_averages
-WHERE name = $1 AND ts BETWEEN $2 AND $3
-ORDER BY ts`,
-		name, start.UTC(), end.UTC())
+	snaps, err := s.selectAvgRows(avgSpecByTable("sunreceiver.ce308_averages_r"), name, start, end)
 	if err != nil {
-		return nil, fmt.Errorf("pg query ce308 %s: %w", name, err)
+		return nil, err
 	}
-	defer rows.Close()
-	var out []ce308PGPoint
-	for rows.Next() {
-		var ts time.Time
-		var raw []byte
-		if err := rows.Scan(&ts, &raw); err != nil {
-			return nil, err
-		}
-		var vc map[string]float64
-		if err := json.Unmarshal(raw, &vc); err != nil {
-			return nil, err
-		}
-		out = append(out, ce308PGPoint{Name: name, TS: ts, Values: vc})
+	out := make([]ce308PGPoint, 0, len(snaps))
+	for _, sn := range snaps {
+		ts, _ := time.Parse(time.RFC3339, sn.Timestamp)
+		out = append(out, ce308PGPoint{Name: name, TS: ts, Values: vcToFloatMap(sn.Values)})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // averagesAll возвращает 5-минутные точки за [start, end] по ВСЕМ устройствам:
@@ -377,105 +318,23 @@ func (s *pgStore) DeviceErrorsCount(from, to time.Time, kind, device string) (in
 // Bms26Averages возвращает 5-минутные усреднённые точки одной BMS (name = serial)
 // за период [start, end] включительно, по возрастанию ts.
 func (s *pgStore) Bms26Averages(name string, start, end time.Time) ([]bms26Snapshot, error) {
-	rows, err := s.pool.Query(s.ctx, `
-SELECT ts, values
-FROM sunreceiver.bms26_averages
-WHERE name = $1 AND ts >= $2 AND ts <= $3
-ORDER BY ts ASC`, name, start.UTC(), end.UTC())
-	if err != nil {
-		return nil, fmt.Errorf("pg query bms26 averages: %w", err)
-	}
-	defer rows.Close()
-
-	out := []bms26Snapshot{}
-	for rows.Next() {
-		var ts time.Time
-		var vals json.RawMessage
-		if err := rows.Scan(&ts, &vals); err != nil {
-			return nil, fmt.Errorf("pg scan bms26 avg: %w", err)
-		}
-		var sn bms26Snapshot
-		if len(vals) > 0 {
-			if err := json.Unmarshal(vals, &sn); err != nil {
-				continue
-			}
-		}
-		sn.Serial = name
-		sn.Timestamp = ts.Format(time.RFC3339)
-		out = append(out, sn)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("pg rows bms26 avg: %w", err)
-	}
-	return out, nil
+	return s.selectBms26Range(name, start, end)
 }
 
 // Bms26AveragesAll возвращает 5-минутные усреднённые точки BMS ВСЕХ устройств
 // (malina26) за период [start, end] — для восстановления Redis-ряда.
 func (s *pgStore) Bms26AveragesAll(start, end time.Time) ([]bms26Snapshot, error) {
-	rows, err := s.pool.Query(s.ctx, `
-SELECT name, ts, values
-FROM sunreceiver.bms26_averages
-WHERE ts >= $1 AND ts <= $2
-ORDER BY ts ASC`, start.UTC(), end.UTC())
-	if err != nil {
-		return nil, fmt.Errorf("pg query bms26 averages all: %w", err)
-	}
-	defer rows.Close()
-
-	out := []bms26Snapshot{}
-	for rows.Next() {
-		var name string
-		var ts time.Time
-		var vals json.RawMessage
-		if err := rows.Scan(&name, &ts, &vals); err != nil {
-			return nil, fmt.Errorf("pg scan bms26 avg all: %w", err)
-		}
-		var sn bms26Snapshot
-		if len(vals) > 0 {
-			if err := json.Unmarshal(vals, &sn); err != nil {
-				continue
-			}
-		}
-		sn.Serial = name
-		sn.Timestamp = ts.Format(time.RFC3339)
-		out = append(out, sn)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("pg rows bms26 avg all: %w", err)
-	}
-	return out, nil
+	return s.selectBms26Range("", start, end)
 }
 
 func (s *pgStore) CE308AveragesAll(start, end time.Time) ([]ce308Snapshot, error) {
-	rows, err := s.pool.Query(s.ctx, `
-SELECT name, ts, values
-FROM sunreceiver.ce308_averages
-WHERE ts >= $1 AND ts <= $2
-ORDER BY ts ASC`, start.UTC(), end.UTC())
+	snaps, err := s.selectAvgRows(avgSpecByTable("sunreceiver.ce308_averages_r"), "", start, end)
 	if err != nil {
-		return nil, fmt.Errorf("pg query ce308 averages all: %w", err)
+		return nil, err
 	}
-	defer rows.Close()
-
-	out := []ce308Snapshot{}
-	for rows.Next() {
-		var name string
-		var ts time.Time
-		var vals json.RawMessage
-		if err := rows.Scan(&name, &ts, &vals); err != nil {
-			return nil, fmt.Errorf("pg scan ce308 avg all: %w", err)
-		}
-		snap := ce308Snapshot{Name: name, Timestamp: ts.Format(time.RFC3339)}
-		if len(vals) > 0 {
-			if err := json.Unmarshal(vals, &snap.Values); err != nil {
-				continue
-			}
-		}
-		out = append(out, snap)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("pg ce308 averages all rows: %w", err)
+	out := make([]ce308Snapshot, 0, len(snaps))
+	for _, sn := range snaps {
+		out = append(out, ce308Snapshot{Name: sn.Name, Timestamp: sn.Timestamp, Values: vcToFloatMap(sn.Values)})
 	}
 	return out, nil
 }
@@ -485,34 +344,13 @@ ORDER BY ts ASC`, start.UTC(), end.UTC())
 // Redis-ряда sunreceiver:dts017m:series из PG при пустом Redis
 // (см. restoreRedisFromPG).
 func (s *pgStore) Dts017AveragesAll(start, end time.Time) ([]dts017Snapshot, error) {
-	rows, err := s.pool.Query(s.ctx, `
-SELECT name, ts, values
-FROM sunreceiver.dts017m_averages
-WHERE ts >= $1 AND ts <= $2
-ORDER BY ts ASC`, start.UTC(), end.UTC())
+	snaps, err := s.selectAvgRows(avgSpecByTable("sunreceiver.dts017m_averages_r"), "", start, end)
 	if err != nil {
-		return nil, fmt.Errorf("pg query dts017m averages all: %w", err)
+		return nil, err
 	}
-	defer rows.Close()
-
-	out := []dts017Snapshot{}
-	for rows.Next() {
-		var name string
-		var ts time.Time
-		var vals json.RawMessage
-		if err := rows.Scan(&name, &ts, &vals); err != nil {
-			return nil, fmt.Errorf("pg scan dts017m avg all: %w", err)
-		}
-		snap := dts017Snapshot{Name: name, Timestamp: ts.Format(time.RFC3339)}
-		if len(vals) > 0 {
-			if err := json.Unmarshal(vals, &snap.Values); err != nil {
-				continue
-			}
-		}
-		out = append(out, snap)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("pg dts017m averages all rows: %w", err)
+	out := make([]dts017Snapshot, 0, len(snaps))
+	for _, sn := range snaps {
+		out = append(out, dts017Snapshot{Name: sn.Name, Timestamp: sn.Timestamp, Values: vcToFloatMap(sn.Values)})
 	}
 	return out, nil
 }

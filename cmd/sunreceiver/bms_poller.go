@@ -196,7 +196,7 @@ func (s *bmsApiClient) fetch(ctx context.Context) (*bmsCollection, error) {
 //     bms26:series, окно 2 календарных суток; см. saveBMSReading);
 //   - параллельно 1-секундные снимки накапливаются в памяти (bmsAccumulator) в
 //     5-минутные усреднённые точки и пишутся в PostgreSQL
-//     (sunreceiver.bms_averages) — гранулярность PG = 1 запись / 5 минут.
+//     (sunreceiver.bms_averages_r) — гранулярность PG = 1 запись / 5 минут.
 //
 // В общем снимке sunreceiver:current BMS не участвует (нет универсального
 // контракта values).
@@ -214,7 +214,7 @@ func runBmsPoll(store *redisStore, pg *pgStore, ctx context.Context) {
 				now := time.Now()
 				for i := range col.Devices {
 					d := col.Devices[i]
-					// КОСТЫЛЬ: кормим ОБЩИЙ bms26-аккумулятор (PG bms26_averages).
+					// КОСТЫЛЬ: кормим ОБЩИЙ bms26-аккумулятор (PG bms26_averages_r).
 					if cap, ok := antCapFromName(d.DeviceName); ok {
 						if serial := legacyAntSerial(cap); serial != "" {
 							acc.add(antDeviceToBms26(d, serial), now)

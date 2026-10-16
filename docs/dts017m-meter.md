@@ -77,7 +77,7 @@ DTS017M → (Modbus RTU через прозрачный шлюз)
                 ZSET sunreceiver:dts017m:series:<YYYY-MM>  (каждое показание, окно 2 суток)
        → (границы 00:00/07:00/23:00) захват Import/Export
                 → PG sunreceiver.dts017m_daily_tariffs
-   → dts017 accumulator (5 мин) → PG sunreceiver.dts017m_averages
+   → dts017 accumulator (5 мин) → PG sunreceiver.dts017m_averages_r
 ```
 
 ## Регистры (чтение функцией 03/04)
@@ -159,7 +159,7 @@ CE308 (эталон знака: «+» = потребление) и DTS017M — �
 
 ### PostgreSQL (обособленные таблицы)
 
-- `sunreceiver.dts017m_averages` (PK `(name, ts)`) — 5-минутные средние. Накопительные
+- `sunreceiver.dts017m_averages_r` (PK `(name, ts)`) — 5-минутные средние. Накопительные
   энергии берутся **последним значением окна** (`dts017CumulativeTags`), остальные теги
   усредняются.
 - `sunreceiver.dts017m_daily_tariffs` — посуточные тарифы (структура как у
@@ -196,7 +196,7 @@ export_night = (Export(07:00) − Export(00:00)) + (Export(00:00 след.дня
 - `dts017_store.go` — обособленные ключи/ряд Redis.
 - `dts017_poller.go` — цикл опроса + запись в Redis + захват границ.
 - `dts017_tariff.go` — захват границ, финализация дня, схема/методы PG (`dts017m_daily_tariffs`).
-- `dts017_accumulator.go` — 5-минутные средние в `dts017m_averages`.
+- `dts017_accumulator.go` — 5-минутные средние в `dts017m_averages_r`.
 - `dts017_backfill.go` — добор пропущенных границ.
 - `dts017_time.go` — проверка/коррекция часов счётчика (BCD `0x0210`, раз в 30 мин).
 - `meter_client.go` — переиспользуемый Modbus RTU/TCP-клиент (поле `Func` — код
@@ -207,7 +207,7 @@ export_night = (Export(07:00) − Export(00:00)) + (Export(00:00 след.дня
 ## Восстановление Redis из PG
 
 При полностью пустом Redis (и отсутствии в нём данных BMS/DTS017M) ряд и current
-DTS017M восстанавливаются из `sunreceiver.dts017m_averages` за окно
+DTS017M восстанавливаются из `sunreceiver.dts017m_averages_r` за окно
 `db.pg_restore_window` (по умолчанию 30 суток, не старше окна удержания Redis 2
 суток) — в `restoreRedisFromPG`, как для общего ряда/BMS/EnBMS. Наличие данных
 DTS017M в Redis проверяется отдельно (`redisDts017DataPresent`), чтобы не перетереть

@@ -230,7 +230,7 @@ func insertAverageBucket(pg *pgStore, start time.Time, snaps []deviceSnapshot) {
 // окно (инверторы + обособленные DDS238/МАП/КЭС) и группирует снимки по
 // (accBucketKeyOf, 5-минутный промежуток) в памяти, вместо того чтобы ходить в
 // Redis по каждому 5-минутному бакету (~576 раз за 2 суток).
-func backfillAccumulator(store *redisStore, pg *pgStore, now time.Time) {
+func backfillAccumulator(store *redisStore, pg *pgStore, now time.Time, ctx context.Context) {
 	if pg == nil {
 		return
 	}
@@ -247,6 +247,13 @@ func backfillAccumulator(store *redisStore, pg *pgStore, now time.Time) {
 	groups := groupForBackfill(snaps, start, end)
 	var n int
 	for k, bucketSnaps := range groups {
+		// Прерываемся по остановке сервиса между бакетами: backfill (~576 бакетов
+		// за 2 суток) не должен затягивать graceful shutdown (иначе systemd убивает
+		// процесс по TimeoutStopSec).
+		if ctx.Err() != nil {
+			log.Printf("acc backfill: прервано по остановке (обработано %d)", n)
+			return
+		}
 		insertAverageBucket(pg, k.bts, bucketSnaps)
 		n++
 	}
@@ -318,7 +325,7 @@ func runAccumulator(store *redisStore, pg *pgStore, ctx context.Context) {
 		return
 	}
 	log.Printf("avg: старт; период=%s, отсрочка усреднения=%s, 12 промежутков в час", avgStep, avgDelay)
-	backfillAccumulator(store, pg, time.Now())
+	backfillAccumulator(store, pg, time.Now(), ctx)
 
 	// bucketWg — запущенные, но ещё не завершённые averageBucket: при stop
 	// ждём их завершения, чтобы main закрыл пул PG только после последней записи.

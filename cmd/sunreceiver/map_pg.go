@@ -18,78 +18,28 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"time"
 )
 
-// Схема PG модуля МАП: обособленная таблица map_averages (5-мин средние).
+// Схема PG модуля МАП: обособленная таблица map_averages_r (5-мин средние).
 // Пишется/читается только для МАП; общая averages для МАП больше не используется
 // (старые строки удаляются миграцией).
-func ensureMapSchema(s *pgStore) error {
-	if _, err := s.pool.Exec(s.ctx, `
-CREATE TABLE IF NOT EXISTS sunreceiver.map_averages (
-	name      text        NOT NULL,
-	ts        timestamptz NOT NULL,
-	device_sn text        NOT NULL DEFAULT '',
-	values    jsonb       NOT NULL DEFAULT '{}'::jsonb,
-	PRIMARY KEY (name, ts)
-);
-CREATE INDEX IF NOT EXISTS map_averages_ts_idx ON sunreceiver.map_averages (ts);`); err != nil {
-		return fmt.Errorf("pg map_averages schema: %w", err)
-	}
-	return nil
-}
+// (Схема МАП — партиционированная map_averages_r, см. avg_r.go.)
 
-// insertMapAveragedExec пишет одну 5-минутную усреднённую точку МАП.
+// insertMapAveragedExec пишет одну 5-минутную усреднённую точку МАП в map_averages_r.
 func insertMapAveragedExec(q pgExecer, ctx context.Context, name string, ts time.Time, deviceSN string, vc valuesContract) error {
-	vals, err := json.Marshal(vc)
-	if err != nil {
-		return fmt.Errorf("pg marshal map avg: %w", err)
-	}
-	_, err = q.Exec(ctx, `
-INSERT INTO sunreceiver.map_averages (name, ts, device_sn, values)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (name, ts) DO UPDATE SET device_sn = EXCLUDED.device_sn, values = EXCLUDED.values`,
-		name, ts.UTC(), deviceSN, vals)
-	if err != nil {
-		return fmt.Errorf("pg insert map avg %s: %w", name, err)
-	}
-	return nil
+	return insertAvgRow(q, ctx, avgSpecByTable("sunreceiver.map_averages_r"), name, ts,
+		map[string]string{"device_sn": deviceSN}, vc)
 }
 
 // MapAverages возвращает 5-минутные усреднённые точки МАП за [start, end].
 func (s *pgStore) MapAverages(start, end time.Time) ([]deviceSnapshot, error) {
-	rows, err := s.pool.Query(s.ctx, `
-SELECT name, ts, device_sn, values
-FROM sunreceiver.map_averages
-WHERE ts >= $1 AND ts <= $2
-ORDER BY ts ASC`, start.UTC(), end.UTC())
+	out, err := s.selectAvgRows(avgSpecByTable("sunreceiver.map_averages_r"), "", start, end)
 	if err != nil {
-		return nil, fmt.Errorf("pg query map averages: %w", err)
+		return nil, err
 	}
-	defer rows.Close()
-	out := []deviceSnapshot{}
-	for rows.Next() {
-		var name, deviceSN string
-		var ts time.Time
-		var vals json.RawMessage
-		if err := rows.Scan(&name, &ts, &deviceSN, &vals); err != nil {
-			return nil, fmt.Errorf("pg scan map avg: %w", err)
-		}
-		var vc valuesContract
-		if len(vals) > 0 {
-			if err := json.Unmarshal(vals, &vc); err != nil {
-				continue
-			}
-		}
-		out = append(out, deviceSnapshot{
-			Name: name, IP: mapDevKey, DeviceSN: deviceSN,
-			Timestamp: ts.Format(time.RFC3339), Values: vc,
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("pg rows map avg: %w", err)
+	for i := range out {
+		out[i].IP = mapDevKey
 	}
 	return out, nil
 }

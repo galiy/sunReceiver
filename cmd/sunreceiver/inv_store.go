@@ -66,12 +66,11 @@ type invBrand struct {
 	name      string // "deye"/"sofar"
 	curKey    string // HASH текущих снимков марки (поле = серийник)
 	seriesPfx string // префикс месячного ряда ZSET
-	table     string // таблица PG 5-мин средних
 }
 
 var (
-	deyeBrand  = invBrand{"deye", "sunreceiver:deye:current", "sunreceiver:deye:series:", "deye_averages"}
-	sofarBrand = invBrand{"sofar", "sunreceiver:sofar:current", "sunreceiver:sofar:series:", "sofar_averages"}
+	deyeBrand  = invBrand{"deye", "sunreceiver:deye:current", "sunreceiver:deye:series:"}
+	sofarBrand = invBrand{"sofar", "sunreceiver:sofar:current", "sunreceiver:sofar:series:"}
 )
 
 // invBrandByKind возвращает марку хранилища по deviceSnapshot.Kind ("deye"/"sofar")
@@ -88,6 +87,11 @@ func invBrandByKind(kind string) *invBrand {
 
 func (b invBrand) seriesKey(ts time.Time) string {
 	return b.seriesPfx + ts.Format("2006-01")
+}
+
+// spec — колоночная партиционированная таблица марки (deye/sofar).
+func (b invBrand) spec() *avgSpec {
+	return avgSpecByTable("sunreceiver." + b.name + "_averages_r")
 }
 
 // snapKey — ключ устройства в обособленном хранилище. Для сетевых инверторов это
@@ -213,84 +217,18 @@ func (s *redisStore) queryInvSeries(b invBrand, start, end time.Time) ([]deviceS
 	return all, nil
 }
 
-// ensureInvAveragesSchema создаёт таблицы 5-минутных средних инверторов по марке.
-// PK (serial, ts): ключ — серийник инвертора. Колонка ip — информационная («откуда
-// получено»; нужна дашборду для привязки размещения placeByIP, как было в общей
-// таблице), ключом не является.
-func ensureInvAveragesSchema(s *pgStore) error {
-	for _, b := range []invBrand{deyeBrand, sofarBrand} {
-		if _, err := s.pool.Exec(s.ctx, fmt.Sprintf(`
-CREATE TABLE IF NOT EXISTS sunreceiver.%s (
-	serial    text        NOT NULL,
-	ip        text        NOT NULL DEFAULT '',
-	name      text        NOT NULL,
-	ts        timestamptz NOT NULL,
-	device_sn text        NOT NULL DEFAULT '',
-	values    jsonb       NOT NULL DEFAULT '{}'::jsonb,
-	PRIMARY KEY (serial, ts)
-);
-CREATE INDEX IF NOT EXISTS %s_ts_idx ON sunreceiver.%s (ts);`, b.table, b.table, b.table)); err != nil {
-			return fmt.Errorf("pg %s schema: %w", b.table, err)
-		}
-	}
-	return nil
-}
+// (Схема таблиц 5-минутных средних инверторов — партиционированные колоночные
+// `<марка>_averages_r`, см. avg_r.go/ensureAvgSchema. Старые jsonb-таблицы
+// deye_averages_r/sofar_averages_r — история до этапа миграции, в коде не создаются.)
 
-// insertInvAveragedExec пишет одну 5-минутную точку инвертора марки (в таблицу b.table).
-// Идемпотентна по (serial, ts); поздняя запись переопределяет раннюю.
+// insertInvAveragedExec пишет одну 5-минутную точку инвертора марки в
+// партиционированную колоночную таблицу <марка>_averages_r. Идемпотентно по (serial, ts).
 func insertInvAveragedExec(q pgExecer, ctx context.Context, b invBrand, serial, ip, name string, ts time.Time, deviceSN string, vc valuesContract) error {
-	vals, err := json.Marshal(vc)
-	if err != nil {
-		return fmt.Errorf("pg marshal %s %s: %w", b.table, serial, err)
-	}
-	_, err = q.Exec(ctx, fmt.Sprintf(`
-INSERT INTO sunreceiver.%s (serial, ip, name, ts, device_sn, values)
-VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (serial, ts) DO UPDATE
-  SET ip = EXCLUDED.ip,
-      name = EXCLUDED.name,
-      device_sn = EXCLUDED.device_sn,
-      values = EXCLUDED.values`, b.table),
-		serial, ip, name, ts.UTC(), deviceSN, vals)
-	if err != nil {
-		return fmt.Errorf("pg insert %s %s: %w", b.table, serial, err)
-	}
-	return nil
+	return insertAvgRow(q, ctx, b.spec(), serial, ts,
+		map[string]string{"name": name, "device_sn": deviceSN, "ip": ip}, vc)
 }
 
 // invAverages возвращает 5-минутные точки инверторов марки за [start, end].
 func (s *pgStore) invAverages(b invBrand, start, end time.Time) ([]deviceSnapshot, error) {
-	rows, err := s.pool.Query(s.ctx, fmt.Sprintf(`
-SELECT serial, ip, name, ts, device_sn, values
-FROM sunreceiver.%s
-WHERE ts >= $1 AND ts <= $2
-ORDER BY ts ASC`, b.table), start.UTC(), end.UTC())
-	if err != nil {
-		return nil, fmt.Errorf("pg query %s: %w", b.table, err)
-	}
-	defer rows.Close()
-	var out []deviceSnapshot
-	for rows.Next() {
-		var serial, ip, name, deviceSN string
-		var ts time.Time
-		var vals json.RawMessage
-		if err := rows.Scan(&serial, &ip, &name, &ts, &deviceSN, &vals); err != nil {
-			return nil, fmt.Errorf("pg scan %s: %w", b.table, err)
-		}
-		var vc valuesContract
-		if len(vals) > 0 {
-			if err := json.Unmarshal(vals, &vc); err != nil {
-				continue
-			}
-		}
-		out = append(out, deviceSnapshot{
-			Name:       name,
-			IP:         ip,
-			InverterSN: serial,
-			Timestamp:  ts.Format(time.RFC3339),
-			DeviceSN:   deviceSN,
-			Values:     vc,
-		})
-	}
-	return out, rows.Err()
+	return s.selectAvgRows(b.spec(), "", start, end)
 }

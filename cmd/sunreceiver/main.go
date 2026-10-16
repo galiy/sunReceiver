@@ -643,7 +643,7 @@ func (s *mpptPollState) shouldPrune(empty bool) bool {
 }
 
 // mapDevKey — постоянный ключ устройства МАП в хранилище (логический ключ
-// обособленных ключей sunreceiver:map:current/:series:*; поле в PG map_averages —
+// обособленных ключей sunreceiver:map:current/:series:*; поле в PG map_averages_r —
 // name). Не зависит от адреса МАП (Modbus TCP/RS485 или веб-API) и его IP: МАП
 // всегда одна колонка/ряд с ключом "map".
 const mapDevKey = "map"
@@ -1881,7 +1881,7 @@ func pollMPPTFromArr(t invTarget, arr []mpptRaw) DeviceResult {
 
 // runMapPoll — отдельный 1-секундный цикл опроса быстрых целей — МАП (kindMAP,
 // Modbus TCP) и MPPT-контроллеров (веб-API ПАК «Малина») — и записи в Redis
-// каждого снятого показания (Score = секунда снятия; см. SaveSnapshotMAP).
+// каждого снятого показания (Score = секунда снятия; см. saveMapSnapshot).
 // МАП-цели исключены из 10-сек циклов инверторов (см. runInverterPoll); MPPT не
 // регистрируются в конфиге вовсе (см. pollAndSaveMap).
 func runMapPoll(store *redisStore, pg *pgStore, stop context.Context) {
@@ -1931,7 +1931,7 @@ func (e *mapErrState) clear(key string) {
 
 // pollAndSaveMap опрашивает быстрые источники параллельно и пишет в Redis
 // КАЖДОЕ снятое показание (Score = секунда снятия; + актуальное current) через
-// SaveSnapshotMAP:
+// saveMapSnapshot:
 //   - МАП (kindMAP, Modbus TCP) — цели из targets;
 //   - MPPT-контроллеры — ДИНАМИЧЕСКИ: состав определяется фактически подключёнными
 //     к ПАК «Малина» контроллерами из ответа read_json.php?device=mppt, а не из
@@ -1940,7 +1940,7 @@ func (e *mapErrState) clear(key string) {
 //     «актуальной».
 //
 // saveWindowSnapshot складывает результат опроса в deviceSnapshot (ts = res.Time
-// при наличии, иначе now) и пишет в Redis через SaveSnapshotMAP. Общий для
+// при наличии, иначе now) и пишет в Redis через saveMapSnapshot. Общий для
 // МАП- и MPPT-веток pollAndSaveMap.
 func saveWindowSnapshot(store *redisStore, pg *pgStore, t invTarget, res DeviceResult, now time.Time, errState *mapErrState) {
 	key := devKey(t)
@@ -2252,6 +2252,15 @@ func main() {
 		} else {
 			defer pg.Close()
 			log.Printf("pg: persistent-хранилище подключено (5-минутные усреднённые точки)")
+			// Режим миграции средних (этап 5) — запускается с dev-ПК, выходит без
+			// старта пулеров: `--migrate-avg`.
+			if argPresent("--migrate-avg") {
+				if merr := runMigrateAvg(pg); merr != nil {
+					log.Fatalf("migrate-avg: %v", merr)
+				}
+				log.Printf("migrate-avg: завершено")
+				return
+			}
 			// Если Redis пуст — восстановить в нём данные из PG. Реставрация
 			// выполняется СИНХРОННО, ДО запуска runAccumulator ниже: иначе
 			// backfillAccumulator мог бы прочитать наполовину восстановленный
@@ -2329,9 +2338,14 @@ func main() {
 		defer bgWg.Done()
 		runRedisCleanup(store, stopCtx)
 	}()
+	bgWg.Add(1)
+	go func() {
+		defer bgWg.Done()
+		runAvgPartitionMaintenance(pg, stopCtx)
+	}()
 	// МАП («КЭС», Modbus TCP) и MPPT-контроллеры (веб-API ПАК «Малина»)
 	// опрашиваются отдельно, 1 раз в секунду, и пишутся в Redis каждым снятым
-	// показанием (см. SaveSnapshotMAP). Быстрый 1-сек цикл
+	// показанием (см. saveMapSnapshot). Быстрый 1-сек цикл
 	// запускается только если есть хоть один источник МАП/MPPT: при map.disabled=true
 	// (или отсутствии источников) горутина не стартует вовсе.
 	hasMapSource := mapAPI != nil || mppt != nil || malina26 != nil
@@ -2384,7 +2398,7 @@ func main() {
 	}
 	// ANT BMS (read_bms.php) — 1 раз в секунду: актуальное состояние в отдельном
 	// Redis-ключе (HASH bms26) + накопление 5-минутных усреднённых
-	// точек в Redis (ряд, окно 2 суток) и PG (bms_averages), см. bms_poller.go
+	// точек в Redis (ряд, окно 2 суток) и PG (bms26_averages_r), см. bms_poller.go
 	// и bms_accumulator.go.
 	if bmsSite != nil {
 		bgWg.Add(1)
@@ -2394,7 +2408,7 @@ func main() {
 		}()
 	}
 	// BMS через malina26 (единый тип ANT+EnBMS): отдельный цикл, Redis
-	// sunreceiver:bms26:* + PG bms26_averages, см. bms26.go.
+	// sunreceiver:bms26:* + PG bms26_averages_r, см. bms26.go.
 	if bms26 != nil {
 		bgWg.Add(1)
 		go func() {
@@ -2421,7 +2435,7 @@ func main() {
 
 	// Счётчик DTS017M — отдельный цикл опроса (Modbus RTU через прозрачный шлюз)
 	// с периодом dts017m.poll_interval. Данные — ТОЛЬКО в собственные ключи/ряд
-	// Redis и собственные таблицы PG (dts017m_averages, dts017m_daily_tariffs);
+	// Redis и собственные таблицы PG (dts017m_averages_r, dts017m_daily_tariffs);
 	// история счётчика не читается, посуточные тарифы считаются сами (см.
 	// dts017_poller.go, dts017_accumulator.go, dts017_tariff.go, dts017_backfill.go).
 	if dts017Cfg != nil {
@@ -2476,7 +2490,7 @@ func main() {
 	// BMS EnBMS — отдельный цикл опроса выбранным методом (BLE или RS485; см.
 	// enBms.method). Устройства опрашиваются последовательно с периодом метода;
 	// соединения не рвутся между опросами. Данные — Redis current/series + PG
-	// enbms_averages, см. enBms_poller.go/enBms_accumulator.go. Для BLE перед
+	// bms26_averages_r, см. enBms_poller.go/enBms_store.go. Для BLE перед
 	// запуском проверяем суммарное число BLE-устройств (enBms + CE308): реальный
 	// BLE-контроллер держит ограниченное число одновременных соединений; при
 	// превышении опрос EnBMS не запускается вовсе. Для RS485 этого лимита нет.
@@ -2948,7 +2962,7 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, re
 		log.Printf("pg restore: завершено, восстановлено точек: %d", restored)
 	}
 
-	// Ряд BMS (единый тип ANT+EnBMS) — из pg.bms26_averages (5-мин средние) в
+	// Ряд BMS (единый тип ANT+EnBMS) — из pg.bms26_averages_r (5-мин средние) в
 	// sunreceiver:bms26:series:<YYYY-MM> (то же окно удержания).
 	bmsPts, err := pg.Bms26AveragesAll(start, end)
 	if err != nil {
@@ -2977,7 +2991,7 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, re
 		log.Printf("pg restore: BMS восстановлено точек: %d", bmsRestored)
 	}
 
-	// Ряд DTS017M — из pg.dts017m_averages (5-мин средние) в
+	// Ряд DTS017M — из pg.dts017m_averages_r (5-мин средние) в
 	// sunreceiver:dts017m:series:<YYYY-MM> (то же окно удержания); current —
 	// последняя восстановленная точка.
 	dtsPts, err := pg.Dts017AveragesAll(start, end)
@@ -3017,7 +3031,7 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, re
 		log.Printf("pg restore: DTS017M восстановлено точек: %d", dtsRestored)
 	}
 
-	// Ряд CE308 — из pg.ce308_averages (5-мин средние) в
+	// Ряд CE308 — из pg.ce308_averages_r (5-мин средние) в
 	// sunreceiver:ce308:series:<YYYY-MM> (то же окно удержания); current —
 	// последняя восстановленная точка. В режиме final_readings_only телеметрия
 	// CE308 не пишется/не отдаётся — реставрация ряда не выполняется (это не сбой).

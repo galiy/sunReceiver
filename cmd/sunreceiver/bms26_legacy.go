@@ -42,7 +42,7 @@ func capFromRe(re *regexp.Regexp, s string) (int, bool) {
 
 // КОСТЫЛЬ: если временно включаются СТАРЫЕ пулеры BMS (ANT read_bms.php / EnBMS
 // BLE/RS485 напрямую), они пишут не в старые ключи, а в НОВЫЕ ряды bms26
-// (sunreceiver:bms26:current / :series / PG bms26_averages), чтобы данные легли в
+// (sunreceiver:bms26:current / :series / PG bms26_averages_r), чтобы данные легли в
 // те же ряды, что и у пулера malina26.
 //
 // Соответствие «старое устройство → новый serial» — по документированному правилу

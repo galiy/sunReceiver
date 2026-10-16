@@ -49,7 +49,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 | **BMS EnBMS** (`enBms_*.go`) | Опрос BMS Enjie (EMU110x) по BLE (Battery, CID2 `0x61`) или RS485 (TeleMeter, CID2 `0x42`, ASCII PACE через TCP-шлюз/COM); метод и период — в конфиге; устройства последовательно, постоянные соединения; в Redis — каждое показание, в PG — 5-мин средние | [modules/enbms.md](modules/enbms.md) |
 | **Проброс Bluetooth (usbip)** (вне кода, ОТКЛЮЧЕНО 2026-09-24) | Историческая схема: проброс BLE-контроллера MediaTek с `.9` на `.253` через usbip; на `.253` теперь физический USB-адаптер | [ce308-bluetooth/README.md](ce308-bluetooth/README.md) |
 | **ANT BMS** (`bms_poller.go`, `daemons/bmslistener/`) | Опрос батарей через `read_bms.php` → shm bmslistener; в Redis — каждое показание, в PG — 5-мин средние | [antbms.md](antbms.md), [modules/bms-listener.md](modules/bms-listener.md) |
-| **BMS malina26** (`bms26*.go`) | Единый пулер BMS (ANT+EnBMS) через HTTP-API «Малина26»: `/api/bms/devices` + `/api/bms/raw` (бинарный контракт 107 Б, копия `internal/bmscontract`); Redis `sunreceiver:bms26:*` + PG `bms26_averages` | [modules/bms26.md](modules/bms26.md) |
+| **BMS malina26** (`bms26*.go`) | Единый пулер BMS (ANT+EnBMS) через HTTP-API «Малина26»: `/api/bms/devices` + `/api/bms/raw` (бинарный контракт 107 Б, копия `internal/bmscontract`); Redis `sunreceiver:bms26:*` + PG `bms26_averages_r` | [modules/bms26.md](modules/bms26.md) |
 | **Шлюз Modbus TCP↔RTU** (`daemons/mapgateway/`, C) | Публикует последовательный порт МАП как Modbus TCP (:502) для пулера; systemd на ПАК «Малина» | [daemons/mapgateway/README.md](../daemons/mapgateway/README.md) |
 | **Уведомления в MAX** (`notify.go`) | Отправка событий мониторинга МАП (недоступен / нет напряжения сети) в мессенджер MAX через Bot API, с гистерезисом и дедупликацией | [modules/notify.md](modules/notify.md) |
 | **Сетевое реле SR-201** (`relay_control.go`) | Управление двойным реле по UDP (белая/красная лампы): поддержка состояния (вкл/выкл/мигание 2 Гц) + автоиндикаторы (отдача в сеть, наличие напряжения сети) | [relay_sr-201(2light).md](relay_sr-201(2light).md) |
@@ -82,11 +82,11 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
   Поле `meter.protocol` задаёт транспорт: `"tcp"` (Modbus TCP, по умолчанию) или
   `"rtu"` (Modbus RTU поверх TCP — прозрачный шлюз, напр. USR-DR164; MBAP нет,
   кадр `unit+PDU+CRC16`). Идентификатор счётчика — единый стабильный ключ **`dds238`**
-  во всех хранилищах (Redis current/ряд, PG `dds238_averages`), не зависящий от `ip`.
+  во всех хранилищах (Redis current/ряд, PG `dds238_averages_r`), не зависящий от `ip`.
 - **Счётчик DTS017M** — раздел `dts017m`; `disabled` обязателен. `protocol` — `"rtu"`
   (по умолчанию, прозрачный шлюз) или `"tcp"`; `poll_interval` (сек, по умолчанию 1).
   **Обособленное хранилище**: собственные ключи/ряд Redis (`sunreceiver:dts017m:*`),
-  собственные таблицы PG (`dts017m_averages`, `dts017m_daily_tariffs`) и отдельный
+  собственные таблицы PG (`dts017m_averages_r`, `dts017m_daily_tariffs`) и отдельный
   аккумулятор; общие ключи/таблицы DDS238 не используются. Историю счётчика не читаем —
   посуточные тарифы считаем сами. См. [`dts017m-meter.md`](dts017m-meter.md).
 - **BMS** — раздел `antBms` (поле `url` — полный адрес `read_bms.php`, в т.ч. с
@@ -107,9 +107,9 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
   с persistence (RDB+AOF). При полностью пустом Redis данные восстанавливаются из
   PostgreSQL. (Подробнее — [modules/storage.md](modules/storage.md).)
 - **PostgreSQL** — вся история, **единая гранулярность 1 запись / 5 минут** по марке
-  (`sunreceiver.deye_averages`/`sofar_averages`, а также `ce308_averages`,
-  `bms26_averages`, `dts017m_averages`, `dds238_averages`, `map_averages`,
-  `kes_averages`), плюс таблицы тарифов (`sunreceiver.dds238_daily_tariffs` и
+  (`sunreceiver.deye_averages_r`/`sofar_averages_r`, а также `ce308_averages_r`,
+  `bms26_averages_r`, `dts017m_averages_r`, `dds238_averages_r`, `map_averages_r`,
+  `kes_averages_r`), плюс таблицы тарифов (`sunreceiver.dds238_daily_tariffs` и
   обособленная `sunreceiver.dts017m_daily_tariffs`). Фоновые аккумуляторы усредняют
   накопленные в Redis снимки.
 - **Тарифы счётчика** — `sunreceiver.dds238_daily_tariffs` (посуточно, «День/Ночь» ×
@@ -212,6 +212,7 @@ arm-linux-musleabihf -static` (статичный elf32 ARM), поэтому н�
 - [`modules/solarman-client.md`](modules/solarman-client.md) — клиент Solarman V5.
 - [`modules/inverter-poller.md`](modules/inverter-poller.md) — poller инверторов.
 - [`modules/storage.md`](modules/storage.md) — Redis + PG + аккумулятор.
+- [`averages-partitioned-plan.md`](averages-partitioned-plan.md) — перенос 5-мин средних в партиционированные колоночные `*_averages_r` (этапы 1–6, выполнено).
 - [`modules/dashboard.md`](modules/dashboard.md) — веб-дашборд.
 - [`modules/map-mppt.md`](modules/map-mppt.md) — МАП + MPPT.
 - [`modules/ce308.md`](modules/ce308.md) — счётчик Энергомера CE308 (BLE).

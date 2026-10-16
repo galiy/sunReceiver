@@ -18,8 +18,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log"
 	"math"
 	"sync"
@@ -27,41 +25,21 @@ import (
 )
 
 // Аккумулятор DTS017M: усредняет мгновенные снимки собственного ряда Redis до
-// 1 записи за 5 минут в СОБСТВЕННУЮ таблицу sunreceiver.dts017m_averages. Общий
+// 1 записи за 5 минут в СОБСТВЕННУЮ таблицу sunreceiver.dts017m_averages_r. Общий
 // accumulator.go (и таблица averages) не задействован. Накопительные величины
 // (энергии, dts017CumulativeTags) берутся последним значением окна, остальные —
 // средним.
 
-// ensureDts017AveragesSchema создаёт таблицу 5-минутных средних DTS017M.
-func ensureDts017AveragesSchema(s *pgStore) error {
-	_, err := s.pool.Exec(s.ctx, `
-CREATE TABLE IF NOT EXISTS sunreceiver.dts017m_averages (
-	name   text        NOT NULL,
-	ts     timestamptz NOT NULL,
-	values jsonb       NOT NULL DEFAULT '{}'::jsonb,
-	PRIMARY KEY (name, ts)
-);
-CREATE INDEX IF NOT EXISTS dts017m_averages_ts_idx ON sunreceiver.dts017m_averages (ts);`)
-	return err
-}
+// (Схема DTS017M — партиционированная dts017m_averages_r, см. avg_r.go.)
 
-// InsertDts017Average сохраняет одну 5-минутную точку DTS017M (ts — начало
-// промежутка). Идемпотентна по (name, ts), повторная запись обновляет строку.
+// InsertDts017Average сохраняет одну 5-минутную точку DTS017M в
+// партиционированную колоночную таблицу dts017m_averages_r. Идемпотентна по (name, ts).
 func (s *pgStore) InsertDts017Average(name string, ts time.Time, vc map[string]float64) error {
-	vals, err := json.Marshal(vc)
-	if err != nil {
-		return fmt.Errorf("pg marshal dts017m values %s: %w", name, err)
+	cv := make(valuesContract, len(vc))
+	for k, v := range vc {
+		cv[k] = v
 	}
-	_, err = s.pool.Exec(s.ctx, `
-INSERT INTO sunreceiver.dts017m_averages (name, ts, values)
-VALUES ($1, $2, $3)
-ON CONFLICT (name, ts) DO UPDATE
-  SET values = EXCLUDED.values`,
-		name, ts.UTC(), vals)
-	if err != nil {
-		return fmt.Errorf("pg insert dts017m avg %s: %w", name, err)
-	}
-	return nil
+	return insertAvgRow(s.pool, s.ctx, avgSpecByTable("sunreceiver.dts017m_averages_r"), name, ts, nil, cv)
 }
 
 // averageDts017 усредняет снимки одного 5-минутного окна: обычные теги — среднее
@@ -103,7 +81,7 @@ func averageDts017(snaps []dts017Snapshot) map[string]float64 {
 
 // runDts017Accumulator — фоновый цикл усреднения истории DTS017M в PG. По
 // завершении каждого 5-минутного промежутка (спустя avgDelay) пишет одну точку в
-// sunreceiver.dts017m_averages. При старте — catch-up по окну Redis.
+// sunreceiver.dts017m_averages_r. При старте — catch-up по окну Redis.
 func runDts017Accumulator(store *redisStore, pg *pgStore, name string, ctx context.Context) {
 	if pg == nil {
 		return

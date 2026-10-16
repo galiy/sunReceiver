@@ -28,6 +28,7 @@ sunReceiver.json
 # бинарники сборки (якорь на корень репозитория: иначе правило совпадает с
 # каталогом cmd/sunreceiver при core.ignorecase=true и глушит новые файлы)
 /sunReceiver
+cmd/sunreceiver/sunreceiver
 /sunReceiver-linux
 /solarman-probe
 *.log

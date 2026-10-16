@@ -333,7 +333,7 @@ func pollEnBmsDevice(pg *pgStore, store *redisStore, acc *bms26Accumulator, d *e
 		logEnBms("redis current %s: %v", d.cfg.Key, err)
 	}
 	saveEnBmsReading(store, snap, now)
-	// КОСТЫЛЬ: кормим ОБЩИЙ bms26-аккумулятор (PG bms26_averages).
+	// КОСТЫЛЬ: кормим ОБЩИЙ bms26-аккумулятор (PG bms26_averages_r).
 	if serial := legacyEnbmsSerial(); serial != "" {
 		acc.add(enbmsSnapshotToBms26(snap, serial), now)
 	}

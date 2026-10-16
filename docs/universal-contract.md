@@ -40,7 +40,7 @@
 > `data/…`, а в Redis (обособленные по марке HASH+ZSET:
 > `sunreceiver:deye:current`/`deye:series:*`, `sunreceiver:sofar:*`, последние
 > 2 суток; ключ инвертора — серийник `inverter_sn`) и PostgreSQL (5-минутные
-> усреднённые точки `sunreceiver.deye_averages`/`sofar_averages`). Конфиг — единый
+> усреднённые точки `sunreceiver.deye_averages_r`/`sofar_averages_r`). Конфиг — единый
 > `sunReceiver.json` (не `config.json`). Описанная ниже структура объекта снимка
 > (поля `name`/`ip`/`timestamp`/`device_sn`/`values`) сохранена и в Redis/PG
 > (`ip` — информационное поле).

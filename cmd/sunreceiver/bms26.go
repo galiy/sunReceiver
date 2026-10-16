@@ -38,7 +38,7 @@ import (
 //     несовпадение id+gen или пустой слот → 404.
 //
 // Хранение обособлено: Redis current/series (sunreceiver:bms26:*) и PG
-// sunreceiver.bms26_averages.
+// sunreceiver.bms26_averages_r.
 
 // bms26Source — источник BMS: HTTP-клиент «Малина26» (token/Bearer/401). Клиент
 // переиспользует тот же источник, что и method=malina26 раздела map (общий
@@ -210,7 +210,7 @@ func (s *bms26Source) fetchBmsRaw(ctx context.Context, id int, gen uint64) ([]by
 // runBms26Poll — отдельный цикл опроса BMS (malina26). Пишет текущий снимок в Redis
 // (HASH sunreceiver:bms26:current, поле = serial), каждое снятое показание — в
 // месячный ряд (sunreceiver:bms26:series:<YYYY-MM>), а 5-минутные средние — в PG
-// (sunreceiver.bms26_averages, аккумулятор в памяти процесса).
+// (sunreceiver.bms26_averages_r, аккумулятор в памяти процесса).
 func runBms26Poll(store *redisStore, pg *pgStore, ctx context.Context) {
 	acc := newBms26Accumulator()
 	lastAlarms := map[string]map[string]bool{} // serial -> активные тревоги (для истории)
@@ -221,6 +221,10 @@ func runBms26Poll(store *redisStore, pg *pgStore, ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
+			// Сначала сбрасываем ЗАКРЫТЫЕ бакеты (start < текущего 5-мин бакета), и
+			// только потом принимаем новые: иначе acc.add() на границе бакета
+			// заменяет предыдущий бакет новым до его финализации, и точка теряется.
+			saveBms26ClosedBuckets(pg, acc.closed(time.Now()))
 			snaps := pollBms26Once(ctx)
 			if len(snaps) > 0 {
 				cur := make(map[string]string, len(snaps))
@@ -259,7 +263,6 @@ func runBms26Poll(store *redisStore, pg *pgStore, ctx context.Context) {
 					log.Printf("bms26 redis current: %v", err)
 				}
 			}
-			saveBms26ClosedBuckets(pg, acc.closed(time.Now()))
 		case <-ctx.Done():
 			return
 		}
