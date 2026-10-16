@@ -19,31 +19,18 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"strconv"
-	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
-// Ключи Redis.
-const (
-	// redisCurrentKey — HASH текущих (последних) значений: поле=ip инвертора,
-	// значение=JSON deviceSnapshot. Один HGETALL отдаёт состояние всех инверторов.
-	redisCurrentKey = "sunreceiver:current"
-	// redisSeriesPrefix — временной ряд. Ключи вида sunreceiver:series:<YYYY-MM>,
-	// каждый — ZSET: score=Unix (сек.), member=JSON deviceSnapshot.
-	// Месячная сегментация: чтение произвольного периода — это несколько ZRANGEBYSCORE
-	// по затронутым месяцам, отсортированных по времени.
-	redisSeriesPrefix = "sunreceiver:series:"
-)
-
-// redisStore — тонкая обёртка над клиентом Redis для текущих значений и временного ряда.
+// redisStore — тонкая обёртка над клиентом Redis для текущих значений и временного
+// ряда. Общие ключи sunreceiver:current / :series:* выведены из эксплуатации —
+// инверторы обособлены по марке (см. inv_store.go), прочее — по модулям.
 type redisStore struct {
 	rdb *redis.Client
 	ctx context.Context
@@ -53,11 +40,6 @@ type redisStore struct {
 	// МАП нестабильно отдаёт блоки. Запись каждого показания не подавляется.
 	mapMu  sync.Mutex
 	mapWin map[string]mapWinMember
-
-	// legacyMPPTCleaned — одноразовая зачистка устаревших MPPT-ключей старого
-	// формата; выполняется при первом вызове PruneLegacyMPPT (после реставрации
-	// Redis из PG), далее — no-op.
-	legacyMPPTCleaned atomic.Bool
 }
 
 type mapWinMember struct {
@@ -92,86 +74,15 @@ func (s *redisStore) SetCtx(ctx context.Context) {
 	s.ctx = ctx
 }
 
-// redisSeriesKey возвращает ключ месячного сегмента временного ряда для ts.
-func redisSeriesKey(ts time.Time) string {
-	return redisSeriesPrefix + ts.Format("2006-01")
-}
-
-// SaveSnapshot пишет снимок в Redis одной транзакцией:
-//   - обновляет текущее значение (HASH current[ip]);
-//   - кладёт точку в месячный ZSET временного ряда (score = Unix-секунды).
-//
-// Хранится КАЖДОЕ снятое показание (окно удержания — 2 календарных суток).
-// Тот же (устройство, секунда) может записываться дважды (повторный опрос в
-// пределах секунды): голый ZADD оставил бы два member с одинаковым score,
-// поэтому перед записью удаляются старые версии того же устройства на этом
-// score — остаётся ровно одна точка на (устройство, секунда).
+// SaveSnapshot пишет снимок сетевого инвертора в обособленные ключи его марки
+// (deye/sofar) — по серийному номеру инвертора (InverterSN) как ключу. Общие
+// sunreceiver:current / sunreceiver:series:* выведены из эксплуатации.
 func (s *redisStore) SaveSnapshot(snap deviceSnapshot, ts time.Time) error {
-	return s.saveSnapshot(snap, ts, false)
-}
-
-// SaveSnapshotMAP — как SaveSnapshot, но для целей МАП/MPPT: недостающие МАП-теги
-// (grid_voltage/grid_power/battery_voltage/battery_power) дополняются из
-// предыдущего снимка того же устройства (гейт МАП нестабильно отдаёт блоки).
-// Пишется каждое снятое показание (без 10-секундного окна).
-func (s *redisStore) SaveSnapshotMAP(snap deviceSnapshot, ts time.Time) error {
-	return s.saveSnapshot(snap, ts, true)
-}
-
-// saveSnapshot — общая реализация записи. mergeMAP=true — дополнить МАП-теги из
-// предыдущего снимка и запомнить member как источник для следующего merge.
-func (s *redisStore) saveSnapshot(snap deviceSnapshot, ts time.Time, mergeMAP bool) error {
-	if mergeMAP && isMAPDevice(snap.Values) {
-		prevMember := ""
-		s.mapMu.Lock()
-		if p, had := s.mapWin[snap.IP]; had {
-			prevMember = p.member
-		}
-		s.mapMu.Unlock()
-		snap = mergeMAPSnap(snap, prevMember)
+	b := invBrandByKind(snap.Kind)
+	if b == nil {
+		return fmt.Errorf("save snapshot: неизвестная марка инвертора %q (ip=%s)", snap.Kind, snap.IP)
 	}
-	b, err := json.Marshal(snap)
-	if err != nil {
-		return fmt.Errorf("marshal snapshot %s: %w", snap.IP, err)
-	}
-	key := redisSeriesKey(ts)
-	// Старые версии этого же устройства на том же моменте (score): ищем среди
-	// member'ов с точным score, разбираем и собираем для удаления.
-	score := strconv.FormatInt(ts.Unix(), 10)
-	old, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: score, Max: score}).Result()
-	if err != nil {
-		return fmt.Errorf("dedup %s: %w", snap.IP, err)
-	}
-	var stale []any
-	for _, m := range old {
-		var q deviceSnapshot
-		if json.Unmarshal([]byte(m), &q) != nil {
-			continue
-		}
-		if q.IP == snap.IP {
-			stale = append(stale, m)
-		}
-	}
-	pipe := s.rdb.TxPipeline()
-	pipe.HSet(s.ctx, redisCurrentKey, snap.IP, b)
-	if len(stale) > 0 {
-		pipe.ZRem(s.ctx, key, stale...)
-	}
-	pipe.ZAdd(s.ctx, key, redis.Z{Score: float64(ts.Unix()), Member: string(b)})
-	// Держим хоть один месяц истории; при смене месяца эта строка оставит ключ живым.
-	pipe.Expire(s.ctx, key, 40*24*time.Hour)
-	if _, err := pipe.Exec(s.ctx); err != nil {
-		return fmt.Errorf("save %s: %w", snap.IP, err)
-	}
-	if mergeMAP {
-		s.mapMu.Lock()
-		if s.mapWin == nil {
-			s.mapWin = map[string]mapWinMember{}
-		}
-		s.mapWin[snap.IP] = mapWinMember{member: string(b)}
-		s.mapMu.Unlock()
-	}
-	return nil
+	return s.saveInvSnapshot(*b, snap, ts)
 }
 
 // mergeMAPSnap дополняет снимок устройства МАП недостающими МАП-тегами
@@ -202,37 +113,6 @@ func mergeMAPSnap(snap deviceSnapshot, prevMember string) deviceSnapshot {
 	return snap
 }
 
-// PruneLegacyMPPT удаляет из HASH current устаревшие MPPT-ключи старого формата
-// (содержащие "#mppt", вид "<host>#mppt-<uid>"). Новый формат ключа — "mppt-<serial>"
-// (без host), такие ключи в active-множестве PruneMPPT и здесь не трогаются.
-// Выполняется ОДИН РАЗ за жизнь процесса (при первом вызове, после реставрации
-// Redis из PG) — вызывается из горячего секундного цикла, поэтому повторные
-// HGetAll-вычитки исключены флагом.
-func (s *redisStore) PruneLegacyMPPT() {
-	if !s.legacyMPPTCleaned.CompareAndSwap(false, true) {
-		return
-	}
-	m, err := s.rdb.HGetAll(s.ctx, redisCurrentKey).Result()
-	if err != nil {
-		log.Printf("redis prune legacy mppt HGETALL: %v", err)
-		return
-	}
-	var keys []string
-	for ip := range m {
-		if strings.Contains(ip, "#mppt") {
-			keys = append(keys, ip)
-		}
-	}
-	if len(keys) == 0 {
-		return
-	}
-	if err := s.rdb.HDel(s.ctx, redisCurrentKey, keys...).Err(); err != nil {
-		log.Printf("redis prune legacy mppt HDEL: %v", err)
-		return
-	}
-	log.Printf("redis: удалены устаревшие MPPT-ключи (%d)", len(keys))
-}
-
 // PruneMPPT удаляет из HASH current все MPPT-ключи (начинающиеся с "mppt-"),
 // которых нет в active (множество актуальных devKey каждого MPPT, присутствующем в
 // ответе ПАК «Малина»/«Малина26»). Нужно, чтобы исчезнувшие с МАП контроллеры
@@ -257,13 +137,6 @@ func (s *redisStore) PruneMPPT(active map[string]struct{}) {
 	if err := s.rdb.HDel(s.ctx, redisKesCurrentKey, keys...).Err(); err != nil {
 		log.Printf("redis prune mppt del %v: %v", keys, err)
 	}
-	// Чистим в памяти mapWin по удалённым MPPT-ключам (иначе карта растёт при
-	// ротации контроллеров).
-	s.mapMu.Lock()
-	for _, k := range keys {
-		delete(s.mapWin, k)
-	}
-	s.mapMu.Unlock()
 }
 
 // SetBMS обновляет коллекцию BMS-устройств в HASH sunreceiver:bms одной
@@ -299,8 +172,8 @@ func (s *redisStore) SetBMS(active map[string]string) error {
 	return s.SaveBms26Current(cur)
 }
 
-// BMSCurrent возвращает текущее состояние всех BMS-устройств (поле = ключ
-// bmsKey, значение = JSON bmsDevice).
+// eachMonth вызывает fn для каждого календарного месяца в диапазоне [start, end]
+// (включительно), начиная с месяца start. fn возвращает false — прервать обход.
 func eachMonth(start, end time.Time, fn func(y int, m time.Month) bool) {
 	y, m := start.Year(), start.Month()
 	for {
@@ -341,29 +214,22 @@ func (s *redisStore) scanPrefixKeys(prefix string) ([]string, error) {
 	return keys, nil
 }
 
-// scanSeriesKeys возвращает все месячные ключи временного ряда инверторов
-// (prefix*) — для проверки пустоты (IsEmpty).
-func (s *redisStore) scanSeriesKeys() ([]string, error) {
-	return s.scanPrefixKeys(redisSeriesPrefix + "*")
-}
-
 // IsEmpty возвращает true, если в Redis нет ни текущего состояния, ни одного
 // сегмента временного ряда (т.е. in-memory данные потеряны и нужна реставрация
 // из persistent-хранилища PostgreSQL).
 func (s *redisStore) IsEmpty() (bool, error) {
-	n, err := s.rdb.HLen(s.ctx, redisCurrentKey).Result()
-	if err != nil {
-		return false, err
-	}
-	if n > 0 {
-		return false, nil
-	}
-	keys, err := s.scanSeriesKeys()
-	if err != nil {
-		return false, err
-	}
-	if len(keys) > 0 {
-		return false, nil
+	// Обособленные данные инверторов по марке (current/ряд) — основной признак.
+	for _, b := range []invBrand{deyeBrand, sofarBrand} {
+		if n, err := s.rdb.HLen(s.ctx, b.curKey).Result(); err != nil {
+			return false, err
+		} else if n > 0 {
+			return false, nil
+		}
+		if ks, err := s.scanPrefixKeys(b.seriesPfx + "*"); err != nil {
+			return false, err
+		} else if len(ks) > 0 {
+			return false, nil
+		}
 	}
 	// Обособленные данные DDS238 (current/ряд) тоже означают «не пусто».
 	if n, err := s.rdb.HLen(s.ctx, redisDds238CurrentKey).Result(); err != nil {
@@ -429,19 +295,22 @@ func seriesReadCutoff(start, now time.Time) time.Time {
 	return c
 }
 
-// PurgeOld удаляет из временных рядов Redis (месячные сегменты инверторов и
-// сырых показаний ANT BMS/EnBMS, мгновенных значений CE308) все точки, timestamp
-// которых строго старше окна последних 2 календарных суток (recentCutoff).
-// Пустые сегменты удаляются целиком. Текущие HASH (current, sunreceiver:bms,
-// sunreceiver:enbms:current) не трогаются — последнее состояние устройств
-// хранится всегда.
+// PurgeOld удаляет из временных рядов Redis (месячные сегменты: инверторы deye/sofar,
+// МАП, DDS238, КЭС, DTS017M, BMS26, мгновенные CE308) точки старше окна последних
+// 2 календарных суток (recentCutoff). Пустые сегменты удаляются целиком. Текущие
+// HASH (current-ключи модулей) не трогаются — последнее состояние хранится всегда.
 // Вызывается фоновым процессом (см. runRedisCleanup).
 func (s *redisStore) PurgeOld(now time.Time) {
 	cutoff := recentCutoff(now)
-	keys, err := s.scanSeriesKeys()
-	if err != nil {
-		log.Printf("redis cleanup keys: %v", err)
-		return
+	// Ряды сетевых инверторов по марке (обособленные).
+	var keys []string
+	for _, b := range []invBrand{deyeBrand, sofarBrand} {
+		ik, err := s.scanPrefixKeys(b.seriesPfx + "*")
+		if err != nil {
+			log.Printf("redis cleanup %s keys: %v", b.name, err)
+			continue
+		}
+		keys = append(keys, ik...)
 	}
 	// Ряд BMS (bms26) чистится тем же окном.
 	bmsKeys, err := s.scanPrefixKeys(redisBms26SeriesPrefix + "*")
@@ -505,116 +374,73 @@ func (s *redisStore) PurgeOld(now time.Time) {
 	}
 }
 
-// Current возвращает текущие снимки всех инверторов (поля HASH current) из Redis,
-// отсортированные по имени для стабильного порядка на дашборде.
-func (s *redisStore) Current() ([]deviceSnapshot, error) {
-	m, err := s.rdb.HGetAll(s.ctx, redisCurrentKey).Result()
-	if err != nil {
-		return nil, fmt.Errorf("HGETALL %s: %w", redisCurrentKey, err)
-	}
-	snaps := make([]deviceSnapshot, 0, len(m))
-	for _, v := range m {
-		var snap deviceSnapshot
-		if e := json.Unmarshal([]byte(v), &snap); e != nil {
-			continue
-		}
-		if snap.IP == meterDeviceKey {
-			continue // старое поле DDS238 в общем current — игнорируем (см. dds238:current)
-		}
-		if snap.IP == mapDevKey {
-			continue // старое поле МАП в общем current — игнорируем (см. map:current)
-		}
-		if isKesKey(snap.IP) {
-			continue // старые поля КЭС в общем current — игнорируем (см. kes:current)
-		}
-		snaps = append(snaps, snap)
-	}
-	// DDS238 хранится обособленно — подмешиваем его снимок прозрачно.
-	if d, derr := s.Dds238Current(); derr == nil && d != nil {
-		snaps = append(snaps, *d)
-	}
-	// МАП хранится обособленно — подмешиваем прозрачно.
-	if m, merr := s.MapCurrent(); merr == nil && m != nil {
-		snaps = append(snaps, *m)
-	}
-	// КЭС хранятся обособленно — подмешиваем прозрачно.
-	if ks, kerr := s.KesCurrent(); kerr == nil {
-		snaps = append(snaps, ks...)
-	}
-	// Сортируем по логическому имени — стабильный порядок карточек.
-	for i := 1; i < len(snaps); i++ {
-		for j := i; j > 0 && snaps[j].Name < snaps[j-1].Name; j-- {
-			snaps[j], snaps[j-1] = snaps[j-1], snaps[j]
-		}
-	}
-	return snaps, nil
-}
-
-// CurrentOne возвращает один последний снимок из current-HASH по IP
-// (для донаса аппаратных серийных номеров в runInverterPoll).
+// CurrentOne возвращает один последний снимок по ЛОГИЧЕСКОМУ ключу обособленного
+// устройства: meterDeviceKey → Dds238Current, mapDevKey → MapCurrent,
+// `mppt-<serial>` → соответствующий КЭС из KesCurrent. Инверторы читаются
+// марочными читалками (invCurrent); общий HASH current выведен из эксплуатации.
+// Используется точечными потребителями (AGM-плашки, лампы-индикаторы,
+// уведомления). Если снимка нет — redis.Nil.
 func (s *redisStore) CurrentOne(ip string) (deviceSnapshot, error) {
-	v, err := s.rdb.HGet(s.ctx, redisCurrentKey, ip).Result()
-	if err != nil {
-		return deviceSnapshot{}, err
+	switch {
+	case ip == meterDeviceKey:
+		d, err := s.Dds238Current()
+		if err != nil {
+			return deviceSnapshot{}, err
+		}
+		if d == nil {
+			return deviceSnapshot{}, redis.Nil
+		}
+		return *d, nil
+	case ip == mapDevKey:
+		m, err := s.MapCurrent()
+		if err != nil {
+			return deviceSnapshot{}, err
+		}
+		if m == nil {
+			return deviceSnapshot{}, redis.Nil
+		}
+		return *m, nil
+	case isKesKey(ip):
+		ks, err := s.KesCurrent()
+		if err != nil {
+			return deviceSnapshot{}, err
+		}
+		for _, k := range ks {
+			if k.IP == ip {
+				return k, nil
+			}
+		}
+		return deviceSnapshot{}, redis.Nil
 	}
-	var snap deviceSnapshot
-	if e := json.Unmarshal([]byte(v), &snap); e != nil {
-		return deviceSnapshot{}, e
-	}
-	return snap, nil
+	return deviceSnapshot{}, fmt.Errorf("current %q: неизвестный ключ устройства", ip)
 }
 
-// QuerySeries возвращает все снимки за период [start, end] включительно из временного ряда.
-// Читает по одному месячному сегменту ZRANGEBYSCORE, объединяя в порядке времени.
-func (s *redisStore) QuerySeries(start, end time.Time) ([]deviceSnapshot, error) {
-	if start.After(end) {
-		return nil, errors.New("start after end")
-	}
-	min := strconv.FormatInt(start.Unix(), 10)
-	max := strconv.FormatInt(end.Unix(), 10)
+// queryAllSeries возвращает объединённый мгновенный ряд за [start, end]:
+// сетевые инверторы (deye + sofar) + обособленные DDS238/МАП/КЭС (их собственные
+// ряды). Для накопителя/восстановления, которым нужен полный набор устройств:
+// общий ряд sunreceiver:series:* выведен из эксплуатации.
+func (s *redisStore) queryAllSeries(start, end time.Time) ([]deviceSnapshot, error) {
 	var all []deviceSnapshot
-	var queryErr error
-	eachMonth(start, end, func(y int, m time.Month) bool {
-		key := redisSeriesKey(time.Date(y, m, 1, 0, 0, 0, 0, time.Local))
-		vals, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{
-			Min: min,
-			Max: max,
-		}).Result()
+	for _, b := range []invBrand{deyeBrand, sofarBrand} {
+		pts, err := s.queryInvSeries(b, start, end)
 		if err != nil {
-			queryErr = err
-			return false
+			return nil, err
 		}
-		for _, v := range vals {
-			var snap deviceSnapshot
-			if e := json.Unmarshal([]byte(v), &snap); e != nil {
-				continue
-			}
-			if snap.IP == meterDeviceKey {
-				continue // старые точки DDS238 в общем ряду — игнорируем (см. dds238:series)
-			}
-			if snap.IP == mapDevKey {
-				continue // старые точки МАП в общем ряду — игнорируем (см. map:series)
-			}
-			if isKesKey(snap.IP) {
-				continue // старые точки КЭС в общем ряду — игнорируем (см. kes:series)
-			}
-			all = append(all, snap)
-		}
-		return true
-	})
-	if queryErr != nil {
-		return nil, queryErr
+		all = append(all, pts...)
 	}
-	// DDS238 хранится обособленным рядом — подмешиваем прозрачно.
-	if d, derr := s.QueryDds238Series(start, end); derr == nil {
+	if d, derr := s.QueryDds238Series(start, end); derr != nil {
+		log.Printf("queryAllSeries dds238: %v", derr)
+	} else {
 		all = append(all, d...)
 	}
-	// МАП хранится обособленным рядом — подмешиваем прозрачно.
-	if m, merr := s.QueryMapSeries(start, end); merr == nil {
+	if m, merr := s.QueryMapSeries(start, end); merr != nil {
+		log.Printf("queryAllSeries map: %v", merr)
+	} else {
 		all = append(all, m...)
 	}
-	// КЭС хранятся обособленным рядом — подмешиваем прозрачно.
-	if ks, kerr := s.QueryKesSeries(start, end); kerr == nil {
+	if ks, kerr := s.QueryKesSeries(start, end); kerr != nil {
+		log.Printf("queryAllSeries kes: %v", kerr)
+	} else {
 		all = append(all, ks...)
 	}
 	return all, nil

@@ -36,8 +36,9 @@ type meterSeededPoint struct {
 	member []byte
 }
 
-// seedMeterSeries кладёт в Redis временной ряд счётчика testIP снимки в заданных
-// точках и возвращает точные (ключ-сегмент, член) для последующей очистки.
+// seedMeterSeries кладёт в Redis обособленный временной ряд счётчика DDS238
+// снимки в заданных точках и возвращает точные (ключ-сегмент, член) для
+// последующей очистки.
 func seedMeterSeries(t *testing.T, store *redisStore, cfg *meterConfig, pts []struct {
 	ts  time.Time
 	imp float64
@@ -46,25 +47,27 @@ func seedMeterSeries(t *testing.T, store *redisStore, cfg *meterConfig, pts []st
 	var members []meterSeededPoint
 	for _, p := range pts {
 		snap := deviceSnapshot{
-			Name: cfg.Name, IP: cfg.IP, Timestamp: p.ts.Format(time.RFC3339), Values: valuesContract{
+			Name: cfg.Name, Timestamp: p.ts.Format(time.RFC3339), Values: valuesContract{
 				"meter_import": p.imp, "meter_export": p.imp / 10,
 			},
 		}
-		if err := store.SaveSnapshot(snap, p.ts); err != nil {
+		if err := store.SaveDds238Series(snap, p.ts); err != nil {
 			t.Fatalf("seed %v: %v", p.ts, err)
 		}
-		mem, _ := json.Marshal(snap)
-		members = append(members, meterSeededPoint{key: redisSeriesKey(p.ts), member: mem})
+		stored := snap
+		stored.IP = "" // SaveDds238Series персистит без ip
+		mem, _ := json.Marshal(stored)
+		members = append(members, meterSeededPoint{key: dds238SeriesKey(p.ts), member: mem})
 	}
 	return members
 }
 
-// cleanMeterSeeded удаляет тестовые точки ряда и текущий снимок testIP.
+// cleanMeterSeeded удаляет тестовые точки ряда DDS238 и текущий снимок.
 func cleanMeterSeeded(rdb *redis.Client, ctx context.Context, members []meterSeededPoint) {
 	for _, m := range members {
 		rdb.ZRem(ctx, m.key, m.member)
 	}
-	rdb.HDel(ctx, redisCurrentKey, meterTestIP)
+	rdb.HDel(ctx, redisDds238CurrentKey, meterDeviceKey)
 }
 
 // TestMeterBackfillNearest — интеграционный тест добора пропущенной границы:
@@ -94,7 +97,7 @@ func TestMeterBackfillNearest(t *testing.T) {
 	day := time.Date(2026, 9, 8, 0, 0, 0, 0, loc)
 
 	pgc.pool.Exec(ctx, `DELETE FROM sunreceiver.dds238_daily_tariffs WHERE day = $1`, day)
-	rdb.HDel(ctx, redisCurrentKey, meterTestIP)
+	rdb.HDel(ctx, redisDds238CurrentKey, meterDeviceKey)
 	members := seedMeterSeries(t, store, cfg, []struct {
 		ts  time.Time
 		imp float64
@@ -166,7 +169,7 @@ func TestMeterBackfillEndToEnd(t *testing.T) {
 	day := time.Date(by, bmo, bd, 0, 0, 0, 0, loc)
 
 	pgc.pool.Exec(ctx, `DELETE FROM sunreceiver.dds238_daily_tariffs WHERE day = $1`, day)
-	rdb.HDel(ctx, redisCurrentKey, meterTestIP)
+	rdb.HDel(ctx, redisDds238CurrentKey, meterDeviceKey)
 	members := seedMeterSeries(t, store, cfg, []struct {
 		ts  time.Time
 		imp float64

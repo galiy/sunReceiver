@@ -90,7 +90,7 @@ function pathWithRounds(pts, r){
 // спрайта 150px: доля 0.71.
 // Масштаб схемы: 1 см ≈ 16px в viewBox.
 var CM=16;
-var METER={bodyXFrac:0.80, dispXFrac:0.582};
+var METER={dispXFrac:0.582};
 function spriteNode(svg, key, cx, cy, label, raise){
   raise=raise||0;
   // Узел-«сеть» (Сеть дома / Сеть гаража): кружок с той же толщиной контура,
@@ -107,7 +107,7 @@ function spriteNode(svg, key, cx, cy, label, raise){
   }
   var g=document.createElementNS(NS,'g');
   var spec=SPR[sprKey(key)]||SPR.grid;
-  var wScale=spec.wScale||1, effW=spec.w*wScale; // эффективная ширина (растяжение в ширину)
+  var effW=spec.w; // эффективная ширина спрайта
   var img=document.createElementNS(NS,'image');
   img.setAttribute('href','/static/img/animation/'+spec.file+'.png?v='+CACHE_BUST);
   img.setAttribute('width',effW);
@@ -692,7 +692,7 @@ function renderNodeTemps(svg, n){
   var upds=[];
   var key=n.key, cx=n.cx, cy=n.cy, raise=n.raise||0;
   var spec=SPR[sprKey(key)]||SPR.grid;
-  var effW=spec.w*(spec.wScale||1);
+  var effW=spec.w;
   var g=document.createElementNS(NS,'g');
   if(n.tempPos==='above'){
     // Ширина панели — под самую длинную надпись + место под значение:

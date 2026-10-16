@@ -28,8 +28,9 @@ import (
 
 // Ключи Redis модуля МАП (kindMAP). Обособлены от инверторов/MPPT/DDS238:
 // собственные current-HASH и месячный ряд. Общие sunreceiver:current / :series:*
-// для МАП больше не используются; чтение (Current/QuerySeries) собирает МАП из
-// этих ключей прозрачно, поэтому дашборд/анимация видят снимок как раньше.
+// для МАП больше не используются. Читаются отдельными методами
+// (MapCurrent/QueryMapSeries/MapAverages); в общие читалки
+// (снят) НЕ подмешиваются.
 const (
 	// redisMapCurrentKey — HASH текущего снимка МАП: поле = mapDevKey.
 	redisMapCurrentKey = "sunreceiver:map:current"
@@ -44,10 +45,10 @@ func mapSeriesKey(ts time.Time) string {
 // saveMapSnapshot пишет снимок МАП (с merge окон батареи/сети) в обособленные
 // ключи: current-HASH + месячный ряд.
 func (s *redisStore) saveMapSnapshot(snap deviceSnapshot, ts time.Time) error {
-	// merge как в saveSnapshot для МАП (окна заряда/разряда).
+	// merge окон заряда/разряда (mergeMAPSnap).
 	prevMember := ""
 	s.mapMu.Lock()
-	if p, had := s.mapWin[snap.IP]; had {
+	if p, had := s.mapWin[mapDevKey]; had {
 		prevMember = p.member
 	}
 	s.mapMu.Unlock()
@@ -75,7 +76,7 @@ func (s *redisStore) saveMapSnapshot(snap deviceSnapshot, ts time.Time) error {
 		}
 	}
 	pipe := s.rdb.TxPipeline()
-	pipe.HSet(s.ctx, redisMapCurrentKey, snap.IP, b)
+	pipe.HSet(s.ctx, redisMapCurrentKey, mapDevKey, b)
 	if len(stale) > 0 {
 		pipe.ZRem(s.ctx, key, stale...)
 	}
@@ -88,7 +89,7 @@ func (s *redisStore) saveMapSnapshot(snap deviceSnapshot, ts time.Time) error {
 	if s.mapWin == nil {
 		s.mapWin = map[string]mapWinMember{}
 	}
-	s.mapWin[snap.IP] = mapWinMember{member: string(b)}
+	s.mapWin[mapDevKey] = mapWinMember{member: string(b)}
 	s.mapMu.Unlock()
 	return nil
 }

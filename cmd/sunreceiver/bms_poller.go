@@ -78,7 +78,7 @@ type bmsDevice struct {
 	Balance      []string `json:"balance,omitempty"`        // балансируемые ячейки (EnBMS, TeleState 0x44)
 }
 
-// bmsKey — ключ BMS-устройства для HASH sunreceiver:bms, Redis-ряда, PG (name)
+// bmsKey — ключ BMS-устройства для HASH bms26, Redis-ряда, PG (name)
 // и дашборда (/api/bms/<name>). Приоритет — уже вычисленный d.Key (если задан
 // при резолве коллекции); иначе — deviceName, либо "deviceName@Port" при
 // непустом Port (фолбэк для одиночных вызовов, где контекст коллизий неизвестен).
@@ -191,9 +191,9 @@ func (s *bmsApiClient) fetch(ctx context.Context) (*bmsCollection, error) {
 // runBmsPoll — отдельный 1-секундный цикл опроса ANT BMS (read_bms.php на
 // ПАК «Малина»; данные — C-демон bmslistener, shm 2018).
 //
-//   - актуальное состояние пишется в Redis-ключ (HASH sunreceiver:bms);
+//   - актуальное состояние пишется в Redis-ключ (HASH bms26:current);
 //   - КАЖДОЕ снятое показание пишется в Redis-ряд (месячный ZSET
-//     sunreceiver:bms:series, окно 2 календарных суток; см. saveBMSReading);
+//     bms26:series, окно 2 календарных суток; см. saveBMSReading);
 //   - параллельно 1-секундные снимки накапливаются в памяти (bmsAccumulator) в
 //     5-минутные усреднённые точки и пишутся в PostgreSQL
 //     (sunreceiver.bms_averages) — гранулярность PG = 1 запись / 5 минут.

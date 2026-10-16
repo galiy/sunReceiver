@@ -33,8 +33,7 @@ import (
 // а тип BMS (`bms_type` из списка) нужен только для раскладки тревог/ошибок.
 //
 // Ручки (см. cleaning.malina docs/bms-reader.md, docs/bms-reader-arch.md §12):
-//   - GET /api/bms/devices → [{type:"bms", id, gen, serial, base, bms_type,
-//     source, framing, last_seen}];
+//   - GET /api/bms/devices → [{id, gen, serial, base, bms_type}];
 //   - GET /api/bms/raw?id=&gen= → бинарный контракт 107 Б (per slot);
 //     несовпадение id+gen или пустой слот → 404.
 //
@@ -63,15 +62,11 @@ func newBms26Source(httpSrc *malina26Source) *bms26Source {
 
 // bms26Device — запись списка /api/bms/devices.
 type bms26Device struct {
-	Type     string `json:"type"`
-	ID       int    `json:"id"`
-	Gen      uint64 `json:"gen"`
-	Serial   string `json:"serial"`
-	Base     string `json:"base"`
-	BmsType  string `json:"bms_type"`
-	Source   string `json:"source"`
-	Framing  int    `json:"framing"`
-	LastSeen int64  `json:"last_seen"`
+	ID      int    `json:"id"`
+	Gen     uint64 `json:"gen"`
+	Serial  string `json:"serial"`
+	Base    string `json:"base"`
+	BmsType string `json:"bms_type"`
 }
 
 // bms26Snapshot — текущий снимок одной BMS (JSON в Redis current и PG values).
@@ -81,8 +76,6 @@ type bms26Snapshot struct {
 	Serial        string    `json:"serial"`
 	Base          string    `json:"base"`
 	BmsType       string    `json:"bms_type"`
-	Source        string    `json:"source"`
-	Framing       int       `json:"framing"`
 	Timestamp     string    `json:"timestamp"`
 	DeviceName    string    `json:"deviceName"`
 	CellCount     int       `json:"cell_count"`
@@ -300,8 +293,6 @@ func pollBms26Once(ctx context.Context) []bms26Snapshot {
 		sn.Serial = d.Serial
 		sn.Base = d.Base
 		sn.BmsType = d.BmsType
-		sn.Source = d.Source
-		sn.Framing = d.Framing
 		sn.DeviceName = d.Serial
 		sn.Timestamp = now.Format(time.RFC3339)
 		finalizeBms26(&sn)

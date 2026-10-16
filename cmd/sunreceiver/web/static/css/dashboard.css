@@ -29,7 +29,6 @@ h1 { font-size:22px; margin:0 0 4px; }
 .pivot-table tr.p-power td.p-val { color:#37b24d; }
 .pivot-table td.stale-time { color:#f03e3e; }
 .pivot-table td.stale-keep { color:#8a94a0; }
-.pivot-table td.p-unit { color:#6b7785; font-weight:400; }
 .pivot-table td.p-empty { color:#a9b1bb; }
 .pivot-table tr:nth-child(even) td { background:#f4f7fa; }
 /* Группы верхних плашек: общая рамка с заголовком и рядом плашек одинакового размера */
@@ -53,7 +52,7 @@ h1 { font-size:22px; margin:0 0 4px; }
 .plate .lbl, .meter-stat .lbl { font-size:11px; color:#6b7785; text-transform:uppercase; letter-spacing:.05em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .plate .val, .meter-stat .val { font-size:26px; font-weight:700; line-height:1.1; font-variant-numeric:tabular-nums; }
 .plate .unit, .meter-stat .unit { font-size:14px; color:#6b7785; font-weight:400; margin-left:5px; }
-.plate .sub, .meter-stat .sub, .kpi-sub { font-size:11px; color:#6b7785; }
+.plate .sub, .meter-stat .sub { font-size:11px; color:#6b7785; }
 .meter-stat .pos { color:#37b24d; } /* положительная величина / потребление */
 .meter-stat .neg { color:#C8385A; } /* отрицательная величина / отдача в сеть */
 /* Плашки МАП: знак мощности/тока — «+» красный, «−» зелёный. */
@@ -122,5 +121,3 @@ h1 { font-size:22px; margin:0 0 4px; }
 .spoiler-body { display:none; padding:0 16px 16px; }
 .spoiler.open > .spoiler-body { display:block; }
 .spoiler-body .anim-scheme { margin-bottom:0; }
-/* Мобильная версия: панель периодов на главной — безделка (графиков на главной нет). */
-@media (max-width: 900px) { #mainPeriod { display:none; } }

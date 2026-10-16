@@ -18,7 +18,7 @@ function renderAgmKPIs(d){
   h+='<div class="kpi"><div class="lbl">Заряд (SOC)</div><div class="val socval">'
     +'<span class="mini-batt"><span class="mini-batt-fill" style="width:'+soc+'%;background:'+agmSocColor(soc)+';display:block"></span></span>'
     +'<span>'+soc+'<span class="unit">%</span></span></div>'
-    +'<div class="sub">остаток '+fmtNum(d.remaining_ah,1)+' А·ч из '+fmtNum(d.capacity_ah,0)+' А·ч</div></div>';
+    +'<div class="sub">остаток '+fmtNum(d.remaining_ah,1)+' А·ч / '+fmtNum(d.capacity_ah,0)+' А·ч</div></div>';
   h+='<div class="kpi"><div class="lbl">Напряжение батареи</div><div class="val">'+fmtNum(d.voltage,2)+'<span class="unit">V</span></div>'
     +'<div class="sub">с шины МАП</div></div>';
   h+='<div class="kpi"><div class="lbl">Ток</div><div class="val '+iCls+'">'+fmtNum(d.current_a,1)+'<span class="unit">A</span></div></div>';

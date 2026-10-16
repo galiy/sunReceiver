@@ -59,6 +59,12 @@ const tariffCacheTTL = 60 * time.Second
 // на графике не «пилил» между счётчиком и МАП.
 const meterGridMaxAge = 20 * time.Second
 
+// inverterStaleWindow — окно актуальности снимка инвертора для carry-forward сумм
+// («Мощность дома», суммарная активная мощность): устройство, не присылавшее
+// снимков дольше этого окна, перестаёт учитываться. В синхроне с фронтом
+// (web/static/js/dashboard.js STALE_MS).
+const inverterStaleWindow = 20 * time.Minute
+
 // ce308EnergyMinInterval — минимальный период между ручными снимками энергии CE308:
 // кнопка «Обновить» на дашборде не чаще раза в 5 минут. Защита от частых нажатий:
 // чтение END01..END04 занимает ~1.5-2 мин и на это время блокирует опрос мгновенных
@@ -564,7 +570,7 @@ func (h *dashboardHandler) apiBMS(w http.ResponseWriter, r *http.Request) {
 	})
 	// Плитка AGM (свинцово-кислотный АКБ) — всегда последней, после всех BMS.
 	// SOC считается по фиксированной таблице AGM от напряжения батареи МАП
-	// (текущее значение из HASH sunreceiver:current, ip="map").
+	// (текущее значение из обособленного ключа sunreceiver:map:current).
 	agmSOCVal := 0
 	if snap, serr := h.store.CurrentOne("map"); serr == nil {
 		if v, ok := snapFloat(snap.Values, "battery_voltage"); ok {
@@ -1050,8 +1056,39 @@ func (h *dashboardHandler) loadDts017TariffData(now time.Time) (*meterBoundaryRo
 	return h.dtsTariffB, h.dtsTariffM, h.dtsTariffY
 }
 
+// allCurrent собирает текущие снимки ВСЕХ устройств для дашборда/анимации:
+// сетевые инверторы (обособленные ключи по марке deye/sofar) + обособленные
+// DDS238 (счётчик), МАП (батарея/сеть) и КЭС (MPPT-контроллеры). Общие ключи
+// sunreceiver:current выведены из эксплуатации.
+func (h *dashboardHandler) allCurrent() ([]deviceSnapshot, error) {
+	var devices []deviceSnapshot
+	for _, b := range []invBrand{deyeBrand, sofarBrand} {
+		inv, err := h.store.invCurrent(b)
+		if err != nil {
+			return nil, err
+		}
+		devices = append(devices, inv...)
+	}
+	if d, derr := h.store.Dds238Current(); derr != nil {
+		log.Printf("dashboard: dds238 current: %v", derr)
+	} else if d != nil {
+		devices = append(devices, *d)
+	}
+	if m, merr := h.store.MapCurrent(); merr != nil {
+		log.Printf("dashboard: map current: %v", merr)
+	} else if m != nil {
+		devices = append(devices, *m)
+	}
+	if ks, kerr := h.store.KesCurrent(); kerr != nil {
+		log.Printf("dashboard: kes current: %v", kerr)
+	} else {
+		devices = append(devices, ks...)
+	}
+	return devices, nil
+}
+
 func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
-	devices, err := h.store.Current()
+	devices, err := h.allCurrent()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1080,7 +1117,7 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	// STALE_MS, что на дашборде): инвертор, выключенный ночью, в текущую сумму
 	// не входит, а его устаревшее значение (напр. 9 Вт заката) не выставляется
 	// как текущая мощность.
-	staleCutoff := time.Now().Add(-20 * time.Minute)
+	staleCutoff := time.Now().Add(-inverterStaleWindow)
 	// Суммарные показатели по размещениям инверторов (группа «Мощности инверторов»):
 	// одна пара плашек «активная + PV» на каждое размещение, имя/порядок — из
 	// placementOrder (sunReceiver.json). MPPT-контроллеры (КЭС), счётчик и МАП в
@@ -1311,7 +1348,7 @@ func animPV(v valuesContract) float64 {
 // устройства со снимком старше STALE (20 мин) помечаются Stale — клиент рисует
 // их мощность нулём и приглушает спрайт (ночью инверторы/КЭС не отдают данные).
 func (h *dashboardHandler) apiAnimation(w http.ResponseWriter, r *http.Request) {
-	devices, err := h.store.Current()
+	devices, err := h.allCurrent()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1360,7 +1397,7 @@ func buildAnimationResponse(devices []deviceSnapshot, dts017 *dts017Snapshot, ce
 		}
 		return devices[i].Name < devices[j].Name
 	})
-	staleCutoff := now.Add(-20 * time.Minute)
+	staleCutoff := now.Add(-inverterStaleWindow)
 	stale := func(d deviceSnapshot) bool {
 		ts, err := time.Parse(time.RFC3339, d.Timestamp)
 		return err != nil || !ts.After(staleCutoff)
@@ -1547,7 +1584,7 @@ func freshGarageMeterPower(dts017 *dts017Snapshot, ce308 map[string]ce308Snapsho
 // устарел — тогда мощность гаража на схеме не считаем. Резервный источник для
 // гаража (основной — DTS017M, см. freshGarageMeterPower).
 func freshCE308Power(ce308 map[string]ce308Snapshot, now time.Time) (float64, bool) {
-	staleCutoff := now.Add(-20 * time.Minute)
+	staleCutoff := now.Add(-inverterStaleWindow)
 	for _, sn := range ce308 {
 		ts, err := time.Parse(time.RFC3339, sn.Timestamp)
 		if err != nil || !ts.After(staleCutoff) {
@@ -1674,18 +1711,19 @@ func temperatureSeries(snaps []deviceSnapshot) []deviceSeries {
 		if !ok || x <= -100 {
 			return
 		}
-		k := tempKey{sn.IP, label}
+		k := tempKey{snapKey(sn), label}
 		ds, ok := byKey[k]
 		if !ok {
 			ds = &deviceSeries{IP: sn.IP}
 			byKey[k] = ds
 		}
 		ds.Points = append(ds.Points, seriesPoint{T: sn.Timestamp, V: x})
-		if !seenDev[sn.IP] {
-			seenDev[sn.IP] = true
-			devOrder = append(devOrder, sn.IP)
-			devIsMap[sn.IP] = isMAPDevice(sn.Values)
-			devName[sn.IP] = sn.Name
+		dev := snapKey(sn)
+		if !seenDev[dev] {
+			seenDev[dev] = true
+			devOrder = append(devOrder, dev)
+			devIsMap[dev] = isMAPDevice(sn.Values)
+			devName[dev] = sn.Name
 		}
 	}
 	for _, sn := range snaps {
@@ -1783,6 +1821,59 @@ func seamWindows(start, end, cutoff time.Time) (pgStart, pgEnd time.Time, pgOK b
 	return
 }
 
+// groupInverterSeries группирует снимки инверторов в ряды по ключу устройства
+// (snapKey). Снимки МАП и КЭС исключаются (их мощность — на своих графиках);
+// ряд остаётся только если есть ac_active_power. Сортировка — по ключу (НЕ по
+// имени!): устройства с одинаковым именем дают разные ряды и не схлопываются.
+// Цвета — по индексу в отсортированном списке.
+func groupInverterSeries(snaps []deviceSnapshot) []deviceSeries {
+	byKey := map[string]*deviceSeries{}
+	for _, sn := range snaps {
+		if isMAPDevice(sn.Values) || isMPPTKey(sn.IP) {
+			continue
+		}
+		v, hasPower := snapFloat(sn.Values, "ac_active_power")
+		if !hasPower {
+			continue
+		}
+		key := snapKey(sn)
+		ds, ok := byKey[key]
+		if !ok {
+			ds = &deviceSeries{IP: sn.IP, Name: sn.Name}
+			byKey[key] = ds
+		}
+		if ds.Name == "" {
+			ds.Name = sn.Name
+		}
+		if ds.IP == "" {
+			ds.IP = sn.IP // ip — информационное (для истории PG может прийти из любой точки)
+		}
+		ds.Points = append(ds.Points, seriesPoint{T: sn.Timestamp, V: v})
+	}
+	keys := make([]string, 0, len(byKey))
+	for k := range byKey {
+		keys = append(keys, k)
+	}
+	sort.SliceStable(keys, func(i, j int) bool {
+		mi, mj := isMPPTKey(keys[i]), isMPPTKey(keys[j])
+		if mi != mj {
+			return !mi
+		}
+		ni, nj := byKey[keys[i]].Name, byKey[keys[j]].Name
+		if ni != nj {
+			return ni < nj
+		}
+		return keys[i] < keys[j]
+	})
+	out := make([]deviceSeries, 0, len(keys))
+	for i, k := range keys {
+		ds := byKey[k]
+		ds.Color = seriesPalette[i%len(seriesPalette)]
+		out = append(out, *ds)
+	}
+	return out
+}
+
 func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	loc := time.Local
@@ -1819,58 +1910,11 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Группируем по имени инвертора, цвет — по индексу в отсортированном списке.
-	// Снимки устройства МАП (батарея/сеть) исключаем — их мощность отображается
-	// только на своих графиках МАП, а не на графике активной мощности инверторов.
-	byIP := map[string]*deviceSeries{}
-	nameToIP := map[string]string{}
-	for _, sn := range snaps {
-		// Снимки устройства МАП (батарея/сеть), MPPT-контроллеров КЭС (их
-		// ac_active_power — это DC-мощность заряда, а не AC-выход) и счётчика DDS238
-		// исключаем — их мощность отображается на своих графиках/плашках, а не на
-		// графике активной мощности инверторов. Смотрим дальше: устройство попадает
-		// в ряд только если хоть в одном снимке есть ac_active_power (у счётчика его нет).
-		if isMAPDevice(sn.Values) || isMPPTKey(sn.IP) {
-			continue
-		}
-		v, hasPower := snapFloat(sn.Values, "ac_active_power")
-		if !hasPower {
-			continue
-		}
-		if _, ok := byIP[sn.IP]; !ok {
-			byIP[sn.IP] = &deviceSeries{IP: sn.IP, Name: sn.Name}
-			nameToIP[sn.Name] = sn.IP
-		}
-		byIP[sn.IP].Points = append(byIP[sn.IP].Points, seriesPoint{T: sn.Timestamp, V: v})
-	}
-
-	names := make([]string, 0, len(byIP))
-	for _, ds := range byIP {
-		names = append(names, string(ds.Name))
-	}
-	sort.SliceStable(names, func(i, j int) bool {
-		mi, mj := isMPPTKey(nameToIP[names[i]]), isMPPTKey(nameToIP[names[j]])
-		if mi != mj {
-			return !mi
-		}
-		return names[i] < names[j]
-	})
-
 	res := seriesResponse{
 		GeneratedAt: now.Format(time.RFC3339),
 		From:        from.Format(time.RFC3339),
 		To:          to.Format(time.RFC3339),
-		Series:      make([]deviceSeries, 0, len(names)),
-	}
-	// name → *deviceSeries, O(1) на имя вместо O(N) вложенного обхода.
-	nameToSeries := make(map[string]*deviceSeries, len(byIP))
-	for _, ds := range byIP {
-		nameToSeries[ds.Name] = ds
-	}
-	for i, n := range names {
-		ds := nameToSeries[n]
-		ds.Color = seriesPalette[i%len(seriesPalette)]
-		res.Series = append(res.Series, *ds)
+		Series:      groupInverterSeries(snaps),
 	}
 
 	// Суммарный ряд: складываем ac_active_power всех инверторов по минутным бакетам.
@@ -1989,11 +2033,11 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 // продолжает работать. Окно много больше асинхронного джиттера опроса (~8 с), поэтому
 // глубокие провалы из-за фазовых сдвигов не возвращаются.
 func sumActive(snaps []deviceSnapshot) []seriesPoint {
-	const staleWindow = 20 * time.Minute
+	const staleWindow = inverterStaleWindow
 	type rec struct {
-		ts time.Time
-		v  float64
-		ip string
+		ts  time.Time
+		v   float64
+		key string
 	}
 	var recs []rec
 	for _, sn := range snaps {
@@ -2010,22 +2054,22 @@ func sumActive(snaps []deviceSnapshot) []seriesPoint {
 		if err != nil {
 			continue
 		}
-		recs = append(recs, rec{ts: ts, v: v, ip: sn.IP})
+		recs = append(recs, rec{ts: ts, v: v, key: snapKey(sn)})
 	}
 	sort.Slice(recs, func(i, j int) bool { return recs[i].ts.Before(recs[j].ts) })
 	current := map[string]float64{}
 	lastSeen := map[string]time.Time{}
 	out := make([]seriesPoint, 0, len(recs))
 	for _, r := range recs {
-		current[r.ip] = r.v
-		lastSeen[r.ip] = r.ts
+		current[r.key] = r.v
+		lastSeen[r.key] = r.ts
 		// Исключаем устройства, замолчавшие дольше окна актуальности: их устаревшая
 		// мощность больше не суммируется, пока не появится новый реальный снимок.
 		var total float64
-		for ip, v := range current {
-			if r.ts.Sub(lastSeen[ip]) > staleWindow {
-				delete(current, ip)
-				delete(lastSeen, ip)
+		for key, v := range current {
+			if r.ts.Sub(lastSeen[key]) > staleWindow {
+				delete(current, key)
+				delete(lastSeen, key)
 				continue
 			}
 			total += v
@@ -2083,11 +2127,11 @@ func sumSeries(a, b []seriesPoint) []seriesPoint {
 // (суммарная активная мощность инверторов Дома — отдельная линия на графике
 // «Мощности», чтобы был виден вклад Дома в формулу).
 func housePowerSeries(snaps []deviceSnapshot, placeByIP map[string]string) (house, ac []seriesPoint) {
-	const staleWindow = 20 * time.Minute
+	const staleWindow = inverterStaleWindow
 	type invRec struct {
-		ts time.Time
-		v  float64
-		ip string
+		ts  time.Time
+		v   float64
+		key string
 	}
 	// Инверторы Дома: отбираем по размещению, исключая МАП/счётчик/КЭС (КЭС — это
 	// MPPT-контроллеры, их мощность уходит к батарее, а не в формулу Дома).
@@ -2114,7 +2158,7 @@ func housePowerSeries(snaps []deviceSnapshot, placeByIP map[string]string) (hous
 		if err != nil {
 			continue
 		}
-		invRecs = append(invRecs, invRec{ts: ts, v: v, ip: sn.IP})
+		invRecs = append(invRecs, invRec{ts: ts, v: v, key: snapKey(sn)})
 	}
 	sort.Slice(invRecs, func(i, j int) bool { return invRecs[i].ts.Before(invRecs[j].ts) })
 
@@ -2194,15 +2238,15 @@ func housePowerSeries(snaps []deviceSnapshot, placeByIP map[string]string) (hous
 	ii := 0
 	for _, mr := range mapRecs {
 		for ii < len(invRecs) && !invRecs[ii].ts.After(mr.ts) {
-			current[invRecs[ii].ip] = invRecs[ii].v
-			lastSeen[invRecs[ii].ip] = invRecs[ii].ts
+			current[invRecs[ii].key] = invRecs[ii].v
+			lastSeen[invRecs[ii].key] = invRecs[ii].ts
 			ii++
 		}
 		var ac float64
-		for ip, v := range current {
-			if mr.ts.Sub(lastSeen[ip]) > staleWindow {
-				delete(current, ip)
-				delete(lastSeen, ip)
+		for key, v := range current {
+			if mr.ts.Sub(lastSeen[key]) > staleWindow {
+				delete(current, key)
+				delete(lastSeen, key)
 				continue
 			}
 			ac += v
@@ -2659,6 +2703,38 @@ func (h *dashboardHandler) apiAGMSeries(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// mapSeriesRange возвращает мгновенные снимки МАП за [from, to]: рецентная
+// часть — из обособленного ряда Redis (QueryMapSeries), старая (старше cutoff) —
+// 5-минутные средние из PG (MapAverages). Используется AGM-рядом (agmSeries);
+// порядок и сшивка окон — как в loadRangeUncached.
+func (h *dashboardHandler) mapSeriesRange(from, to, now time.Time) []deviceSnapshot {
+	cutoff := seriesReadCutoff(from, now)
+	pgStart, pgEnd, pgOK, rStart, rEnd, rOK := seamWindows(from, to, cutoff)
+	var out []deviceSnapshot
+	if h.pg != nil && pgOK {
+		if ms, err := h.pg.MapAverages(pgStart, pgEnd); err != nil {
+			log.Printf("dashboard: mapSeriesRange pg: %v", err)
+		} else {
+			out = append(out, ms...)
+		}
+	}
+	if rOK {
+		if rs, err := h.store.QueryMapSeries(rStart, rEnd); err != nil {
+			log.Printf("dashboard: mapSeriesRange redis: %v", err)
+		} else if len(rs) == 0 && h.pg != nil {
+			// Redis пуст (сбой/долгий простой) — дополняем из PG, как loadRange.
+			if ms, err := h.pg.MapAverages(rStart, rEnd); err != nil {
+				log.Printf("dashboard: mapSeriesRange fallback: %v", err)
+			} else {
+				out = append(out, ms...)
+			}
+		} else {
+			out = append(out, rs...)
+		}
+	}
+	return out
+}
+
 // agmSeries вычисляет ряд AGM за [from, to] с учётом СВЕЖЕСТИ источников:
 //   - точка считается только если у КАЖДОГО источника (МАП + все BMS) есть
 //     значение в пределах ±agmFreshWindow (±2 с) — иначе точка пропускается;
@@ -2672,17 +2748,9 @@ func (h *dashboardHandler) apiAGMSeries(w http.ResponseWriter, r *http.Request) 
 // МАП − Σ BMS; МАП=0 трактуется как реальное значение (не гард).
 func (h *dashboardHandler) agmSeries(from, to, now time.Time) ([]agmSeriesPoint, []agmSeriesPoint) {
 	cutoff := seriesReadCutoff(from, now)
-	snaps, err := h.loadRange(from, to, now)
-	if err != nil {
-		log.Printf("dashboard: agm loadRange: %v", err)
-		return nil, nil
-	}
-	// Источник 0 — МАП (нужен также для напряжения).
+	// Источник 0 — МАП (нужен также для напряжения): читаем его обособленный ряд.
 	var mapDev agmDevValues
-	for _, s := range snaps {
-		if s.IP != "map" {
-			continue
-		}
+	for _, s := range h.mapSeriesRange(from, to, now) {
 		u, okU := snapFloat(s.Values, "battery_voltage")
 		pw, okP := snapFloat(s.Values, "battery_power")
 		if !okU || !okP || !(u > 0) {
@@ -3115,37 +3183,83 @@ func (h *dashboardHandler) loadRange(start, end time.Time, now time.Time) ([]dev
 	return c.snaps, c.err
 }
 
-// loadRangeUncached — реальное чтение из PG (старая часть) и Redis (рецентная часть).
+// loadRangeUncached — реальное чтение ряда устройств для /api/series из PG
+// (старая часть) и Redis (рецентная часть). Читаются обособленные ряды сетевых
+// инверторов (deye/sofar) И обособленные МАП и DDS238 — они нужны этому эндпоинту
+// для рядов сети/батареи (МАП), счётчика (DDS238) и «Мощности дома».
+// Общий sunreceiver:series:* / averages выведены из эксплуатации.
 func (h *dashboardHandler) loadRangeUncached(start, end time.Time, now time.Time) ([]deviceSnapshot, error) {
-	// Redis-часть — только последние seriesRawWindow (иначе полный скан месячных
-	// общих ZSET = десятки секунд); остальное окно — из PG (5-мин средние).
+	// Redis-часть — только последние seriesRawWindow; остальное окно — из PG
+	// (5-мин средние).
 	cutoff := seriesReadCutoff(start, now)
 	pgStart, pgEnd, pgOK, rStart, rEnd, rOK := seamWindows(start, end, cutoff)
 	var all []deviceSnapshot
 	// Старая часть периода (старше cutoff) — из PostgreSQL (5-мин средние).
 	if h.pg != nil && pgOK {
-		pgSnaps, err := h.pg.Averages(pgStart, pgEnd)
-		if err != nil {
-			return nil, err
+		for _, b := range []invBrand{deyeBrand, sofarBrand} {
+			pts, err := h.pg.invAverages(b, pgStart, pgEnd)
+			if err != nil {
+				return nil, err
+			}
+			for i := range pts {
+				pts[i].Kind = b.name
+			}
+			all = append(all, pts...)
 		}
-		all = append(all, pgSnaps...)
+		if ms, err := h.pg.MapAverages(pgStart, pgEnd); err != nil {
+			log.Printf("dashboard: loadRange map averages: %v", err)
+		} else {
+			all = append(all, ms...)
+		}
+		if ds, err := h.pg.Dds238Averages(pgStart, pgEnd); err != nil {
+			log.Printf("dashboard: loadRange dds238 averages: %v", err)
+		} else {
+			all = append(all, ds...)
+		}
 	}
 	// Рецентная часть периода (от cutoff) — из Redis (каждое показание).
-	// Если в Redis снимков нет (их потеряли, например при сбое Redis или пока был
-	// выключен пулер, а реставрация из PG срабатывает только при полностью пустом
-	// Redis) — дополняем окно 5-минутными средними из PG, чтобы график не остался
-	// пустым, а показал хотя бы усреднённую историю за период.
+	// Если в Redis снимков нет (сбой/долгий простой, а реставрация из PG срабатывает
+	// только при полностью пустом Redis) — дополняем 5-мин средними из PG.
 	if rOK {
-		redisSnaps, err := h.store.QuerySeries(rStart, rEnd)
-		if err != nil {
-			return nil, err
+		var redisSnaps []deviceSnapshot
+		for _, b := range []invBrand{deyeBrand, sofarBrand} {
+			pts, err := h.store.queryInvSeries(b, rStart, rEnd)
+			if err != nil {
+				return nil, err
+			}
+			redisSnaps = append(redisSnaps, pts...)
+		}
+		if ms, err := h.store.QueryMapSeries(rStart, rEnd); err != nil {
+			log.Printf("dashboard: loadRange map series: %v", err)
+		} else {
+			redisSnaps = append(redisSnaps, ms...)
+		}
+		if ds, err := h.store.QueryDds238Series(rStart, rEnd); err != nil {
+			log.Printf("dashboard: loadRange dds238 series: %v", err)
+		} else {
+			redisSnaps = append(redisSnaps, ds...)
 		}
 		if len(redisSnaps) == 0 && h.pg != nil {
-			pgSnaps, perr := h.pg.Averages(rStart, rEnd)
-			if perr != nil {
-				return nil, perr
+			for _, b := range []invBrand{deyeBrand, sofarBrand} {
+				pts, perr := h.pg.invAverages(b, rStart, rEnd)
+				if perr != nil {
+					return nil, perr
+				}
+				for i := range pts {
+					pts[i].Kind = b.name
+				}
+				all = append(all, pts...)
 			}
-			all = append(all, pgSnaps...)
+			if ms, err := h.pg.MapAverages(rStart, rEnd); err != nil {
+				log.Printf("dashboard: loadRange map fallback: %v", err)
+			} else {
+				all = append(all, ms...)
+			}
+			if ds, err := h.pg.Dds238Averages(rStart, rEnd); err != nil {
+				log.Printf("dashboard: loadRange dds238 fallback: %v", err)
+			} else {
+				all = append(all, ds...)
+			}
 		} else {
 			all = append(all, redisSnaps...)
 		}

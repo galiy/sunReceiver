@@ -272,7 +272,12 @@ func pollMAPMalina26(ctx context.Context) DeviceResult {
 	}
 	res.HasData = true
 	res.Values = vals
-	res.DeviceSN = mapDevKey
+	// device_sn МАП — его реальный серийник (число строкой), а не логический ключ:
+	// так история и живой снимок несут один идентификатор устройства.
+	res.DeviceSN = malina26.serial
+	if res.DeviceSN == "" {
+		res.DeviceSN = mapDevKey
+	}
 	mapTracker.trackAPITS(lastSeen, now)
 	hasGrid := false
 	grid := 0.0

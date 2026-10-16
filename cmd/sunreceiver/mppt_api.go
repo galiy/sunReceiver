@@ -110,12 +110,7 @@ type mpptRaw struct {
 	V_Bat     string // Напряжение АКБ, В (0x2E5)
 	P_PV      string // Мощность солнечных панелей, Вт (0x2EB)
 	P_Out     string // Мощность на выходе контроллера, Вт (0x2ED)
-	P_Load    string // Мощность нагрузки, Вт (0x2F5)
-	P_curr    string // Мощность заряда, Вт (0x2F9)
 	I_Ch      string // Ток заряда АКБ, А (0x2FB)
-	I_Out     string // Ток на выходе контроллера, А (0x2FF)
-	Temp_Int  string // Внутренняя температура, °C (0x31D)
-	Temp_Bat  string // Температура АКБ, °C (0x31E)
 	Pwr_kW    string // Энергия за сутки, кВт·ч (0x3A1)
 	Pwr_W     string // Энергия за сутки, Вт (0x39F)
 }
@@ -141,12 +136,7 @@ func (r *mpptRaw) UnmarshalJSON(data []byte) error {
 	str("V_Bat", &r.V_Bat)
 	str("P_PV", &r.P_PV)
 	str("P_Out", &r.P_Out)
-	str("P_Load", &r.P_Load)
-	str("P_curr", &r.P_curr)
 	str("I_Ch", &r.I_Ch)
-	str("I_Out", &r.I_Out)
-	str("Temp_Int", &r.Temp_Int)
-	str("Temp_Bat", &r.Temp_Bat)
 	str("Pwr_kW", &r.Pwr_kW)
 	str("Pwr_W", &r.Pwr_W)
 	if v, ok := raw["timestamp"]; ok {
@@ -310,7 +300,6 @@ type mapRaw struct {
 	Iacc      string // Ток АКБ, А (знак «+» = разряд, «−» = заряд — как battery_power) (_Iacc, 0x432/0x433)
 	UNet      string // Напряжение сети, В (0 = нет сети) (_UNET, 0x422)
 	PNetCalc  string // Расчётная мощность сети, Вт (_PNET_calc = _UNET × _INET) — ДОСТОВЕРНАЯ
-	PLoad     string // Мощность нагрузки по АКБ, Вт (_PLoad) — НЕ батарейная (нагрузка потребителя)
 	PLoadCalc string // Расчётная мощность батареи, Вт (_PLoad_calc = _Uacc × _IAcc_med_A_u16) — ДОСТОВЕРНАЯ
 	TFNet     string // Частота сети, Гц (_TFNET)
 	// InetFlag — флаг ПО Малины (_Inet_flag): управляет ТОЛЬКО знаком, в котором
@@ -350,7 +339,6 @@ func (r *mapRaw) UnmarshalJSON(data []byte) error {
 	str("_Iacc", &r.Iacc)
 	str("_UNET", &r.UNet)
 	str("_PNET_calc", &r.PNetCalc)
-	str("_PLoad", &r.PLoad)
 	str("_PLoad_calc", &r.PLoadCalc)
 	str("_TFNET", &r.TFNet)
 	str("_Inet_flag", &r.InetFlag)

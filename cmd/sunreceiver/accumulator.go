@@ -144,39 +144,43 @@ func averageBucket(store *redisStore, pg *pgStore, start, end time.Time) {
 }
 
 // readBucketWindow читает из Redis снимки за промежуток [start, end). Правый
-// конец исключительный (QuerySeries(start, end−1с)): точка ровно на границе end
+// конец исключительный (queryAllSeries(start, end−1с)): точка ровно на границе end
 // принадлежит СЛЕДУЮЩЕМУ бакету (floorToStep(end) == end) — согласовано с
-// группировкой backfillAccumulator и без двойного счёта (QuerySeries сам
-// включителен с обоих концов).
+// группировкой backfillAccumulator и без двойного счёта (queryAllSeries сам
+// включителен с обоих концов). Читается объединённый ряд (инверторы + обособленные
+// DDS238/МАП/КЭС): общий ряд снят — см. queryAllSeries.
 func readBucketWindow(store *redisStore, start, end time.Time) ([]deviceSnapshot, error) {
-	return store.QuerySeries(start, end.Add(-time.Second))
+	return store.queryAllSeries(start, end.Add(-time.Second))
 }
 
-// insertAverageBucket группирует снимки по инвертору (по IP) и для каждого
-// записывает одну усреднённую точку в PG (ts = start). Общий для накопителя
-// (averageBucket) и бэкенд-долива (backfillAccumulator). Весь набор точек одного
-// бакета пишется ОДНОЙ транзакцией с ограниченным retry (см. retryPg): либо все
-// точки инверторов промежутка, либо ни одной — кратковременный сбой PG не
-// оставляет частично записанный бакет («дыру»).
+// insertAverageBucket группирует снимки по устройству (accBucketKeyOf: марка
+// инвертора + snapKey) и для каждого записывает одну усреднённую точку в PG
+// (ts = start). Общий для накопителя (averageBucket) и бэкенд-долива
+// (backfillAccumulator). Весь набор точек одного бакета пишется ОДНОЙ транзакцией
+// с ограниченным retry (см. retryPg): либо все точки промежутка, либо ни одной —
+// кратковременный сбой PG не оставляет частично записанный бакет («дыру»).
 func insertAverageBucket(pg *pgStore, start time.Time, snaps []deviceSnapshot) {
 	if len(snaps) == 0 {
 		return
 	}
-	byIP := map[string][]deviceSnapshot{}
+	byKey := map[string][]deviceSnapshot{}
 	for _, sn := range snaps {
-		byIP[sn.IP] = append(byIP[sn.IP], sn)
+		k := accBucketKeyOf(sn)
+		byKey[k] = append(byKey[k], sn)
 	}
 	type row struct {
-		ip, name, deviceSN string
-		vc                 valuesContract
+		key, kind, ip, name, deviceSN string
+		vc                            valuesContract
 	}
-	rows := make([]row, 0, len(byIP))
-	for ip, group := range byIP {
+	rows := make([]row, 0, len(byKey))
+	for _, group := range byKey {
 		vc := averageValues(group)
 		if len(vc) == 0 {
 			continue
 		}
-		rows = append(rows, row{ip: ip, name: group[0].Name, deviceSN: group[0].DeviceSN, vc: vc})
+		// В маршрутизацию/запись идёт ГОЛЫЙ ключ устройства (snapKey), а составной
+		// accBucketKeyOf (marka+snapKey) — только ключ группировки выше.
+		rows = append(rows, row{key: snapKey(group[0]), kind: group[0].Kind, ip: group[0].IP, name: group[0].Name, deviceSN: group[0].DeviceSN, vc: vc})
 	}
 	if len(rows) == 0 {
 		return
@@ -184,27 +188,33 @@ func insertAverageBucket(pg *pgStore, start time.Time, snaps []deviceSnapshot) {
 	if err := retryPg(func() error {
 		return pg.withTx(func(q pgExecer) error {
 			for _, r := range rows {
-				if r.ip == meterDeviceKey {
+				if b := invBrandByKind(r.kind); b != nil {
+					if err := insertInvAveragedExec(q, pg.ctx, *b, r.key, r.ip, r.name, start, r.deviceSN, r.vc); err != nil {
+						return err
+					}
+					continue
+				}
+				if r.key == meterDeviceKey {
 					if err := insertDds238AveragedExec(q, pg.ctx, r.name, start, r.deviceSN, r.vc); err != nil {
 						return err
 					}
 					continue
 				}
-				if r.ip == mapDevKey {
+				if r.key == mapDevKey {
 					if err := insertMapAveragedExec(q, pg.ctx, r.name, start, r.deviceSN, r.vc); err != nil {
 						return err
 					}
 					continue
 				}
-				if isKesKey(r.ip) {
+				if isKesKey(r.key) {
 					if err := insertKesAveragedExec(q, pg.ctx, r.name, start, r.deviceSN, r.vc); err != nil {
 						return err
 					}
 					continue
 				}
-				if err := insertAveragedExec(q, pg.ctx, r.ip, r.name, start, r.deviceSN, r.vc); err != nil {
-					return err
-				}
+				// Неизвестная марка/устройство — не пишем (общая таблица averages
+				// выведена из эксплуатации); фиксируем для диагностики.
+				log.Printf("acc: пропуск устройства с неизвестным ключом %q (kind=%q)", r.key, r.kind)
 			}
 			return nil
 		})
@@ -216,9 +226,10 @@ func insertAverageBucket(pg *pgStore, start time.Time, snaps []deviceSnapshot) {
 // backfillAccumulator конвертирует уже накопленные в Redis данные (за последние
 // 2 календарных суток, окно удержания Redis) в 5-минутные усреднённые точки PG.
 // Вызывается однократно при старте, чтобы промежутки до текущего аккумулирования
-// не потерялись при переходе на новый режим. Читает ОДНИМ QuerySeries за всё
-// окно и группирует снимки по (ip, 5-минутный промежуток) в памяти, вместо того
-// чтобы ходить в Redis по каждому 5-минутному бакету (~576 раз за 2 суток).
+// не потерялись при переходе на новый режим. Читает ОДНИМ queryAllSeries за всё
+// окно (инверторы + обособленные DDS238/МАП/КЭС) и группирует снимки по
+// (accBucketKeyOf, 5-минутный промежуток) в памяти, вместо того чтобы ходить в
+// Redis по каждому 5-минутному бакету (~576 раз за 2 суток).
 func backfillAccumulator(store *redisStore, pg *pgStore, now time.Time) {
 	if pg == nil {
 		return
@@ -228,7 +239,7 @@ func backfillAccumulator(store *redisStore, pg *pgStore, now time.Time) {
 	if !start.Before(end) {
 		return
 	}
-	snaps, err := store.QuerySeries(start, end)
+	snaps, err := store.queryAllSeries(start, end)
 	if err != nil {
 		log.Printf("acc backfill: %v", err)
 		return
@@ -244,8 +255,21 @@ func backfillAccumulator(store *redisStore, pg *pgStore, now time.Time) {
 
 // accBucketKey — ключ группировки backfill: (устройство, начало 5-минутного бакета).
 type accBucketKey struct {
-	ip  string
+	key string
 	bts time.Time
+}
+
+// accBucketKeyOf — ключ устройства для группировки накопителя. Префикс марки
+// добавляется ТОЛЬКО для сетевых инверторов (deye/sofar): защищает от совпадения
+// серийника у разных марок. Для обособленных (DDS238/МАП/КЭС) уникальность уже
+// обеспечена snapKey, а Kind у них различается между живым (`kes`/`map`) и
+// восстановленным из PG ("") снимком — префикс по Kind ошибочно расщеплял бы один
+// аппарат на две группы с одним и тем же PK.
+func accBucketKeyOf(sn deviceSnapshot) string {
+	if invBrandByKind(sn.Kind) != nil {
+		return sn.Kind + "\x00" + snapKey(sn)
+	}
+	return snapKey(sn)
 }
 
 // groupForBackfill группирует снимки по 5-минутному бакету (floorToStep) в
@@ -263,7 +287,7 @@ func groupForBackfill(snaps []deviceSnapshot, start, end time.Time) map[accBucke
 		if ts.Before(start) || !ts.Before(end) {
 			continue
 		}
-		k := accBucketKey{ip: sn.IP, bts: floorToStep(ts)}
+		k := accBucketKey{key: accBucketKeyOf(sn), bts: floorToStep(ts)}
 		groups[k] = append(groups[k], sn)
 	}
 	return groups
@@ -285,7 +309,7 @@ func groupForBackfill(snaps []deviceSnapshot, start, end time.Time) map[accBucke
 // несколько), каждая — [b-avgStep, b).
 //
 // Сам averageBucket выполняется в отдельной горутине с обработкой stop: медленное
-// усреднение (QuerySeries + вставка в PG) не задерживает планировщик и не смещает
+// усреднение (queryAllSeries + вставка в PG) не задерживает планировщик и не смещает
 // границы следующих итераций. Так как avgDelay (2 мин) < avgStep (5 мин), между
 // усреднением промежутка b (в b+2 мин) и следующей границей (b+5 мин) есть запас
 // ~3 минуты — цикл не дрейфует. Останавливается по закрытию канала stop.

@@ -10,14 +10,14 @@
 
 - **Поток данных**: логгер → poller → Redis (каждое показание). Фоновый процесс
   `runAccumulator` (`accumulator.go`, для инверторов/МАП/счётчика) и отдельные
-  аккумуляторы (`ce308_accumulator.go`, `bms_accumulator.go`, `enBms_accumulator.go`)
+  аккумуляторы (`ce308_accumulator.go`, `bms_accumulator.go`, `bms26_store.go`)
   по завершении каждого 5-минутного промежутка усредняют накопленные в Redis
   снимки и пишут **одну** точку в PG. Прямой записи сырых снимков в PG из poller нет.
 - **Redis хранит только последние 2 календарных суток**: окно «сегодня» + «вчера»,
   от 00:00 вчерашнего дня (`recentCutoff(now)`). Старые точки удаляет фоновый
   процесс `runRedisCleanup` → `redisStore.PurgeOld`. HASH `current` не трогается.
 - **PostgreSQL хранит всю историю** усреднёнными 5-минутными точками
-  (`sunreceiver.averages` и родственные таблицы); старше двух суток — только здесь
+  (`*_averages` — марочные deye/sofar и обособленные `dds238_averages`/`map_averages`/`kes_averages`/`dts017m_averages`/`ce308_averages`/`bms26_averages`); старше двух суток — только здесь
   и никогда не удаляются.
 
 ## Redis (`redis_store.go`)
@@ -29,21 +29,25 @@
 Клиент — `github.com/redis/go-redis/v9` (ReadTimeout 3 с / WriteTimeout 2 с —
 зависший Redis не замораживает пулеры).
 
-Ключи:
+Ключи (сетевые инверторы **обособлены по марке**; ключ устройства — **серийный
+номер инвертора** `inverter_sn`, IP — информационное поле «откуда получено»):
 
-- **`sunreceiver:current`** — HASH текущих (последних) значений: поле = IP
-  инвертора, значение = JSON `deviceSnapshot`. `HGETALL` отдаёт состояние всех
-  инверторов — его читает дашборд для `/api/current`. Чистке старого не подлежит.
-- **`sunreceiver:series:<YYYY-MM>`** — временной ряд, месячный сегмент = ZSET:
-  score = Unix (сек.), member = JSON `deviceSnapshot`. Чтение периода
-  (`QuerySeries`) = `ZRANGEBYSCORE` по затронутым месяцам. TTL на сегмент ~40 дней
-  (запасной предохранитель; основную очистку делает `PurgeOld`).
+- **`sunreceiver:deye:current`** / **`sunreceiver:sofar:current`** — HASH текущих
+  (последних) значений: поле = серийник инвертора, значение = JSON `deviceSnapshot`.
+  `HGETALL` отдаёт состояние всех инверторов марки — читает дашборд. Чистке не подлежит.
+- **`sunreceiver:deye:series:<YYYY-MM>`** / **`sunreceiver:sofar:series:<YYYY-MM>`** —
+  временной ряд марки, месячный сегмент = ZSET: score = Unix (сек.),
+  member = JSON `deviceSnapshot`. TTL на сегмент ~40 дней (предохранитель; основную
+  очистку делает `PurgeOld`).
+- Общие **`sunreceiver:current`** / **`sunreceiver:series:*`** **выведены из
+  эксплуатации** (все классы устройств обособлены). Старые данные перенесены
+  скриптами `scripts/migrate_inv_split.py` + `backfill_inv_ip.py` (плюс
+  `scripts/cleanup_common_shared.py`, `scripts/fix_rudiment_sn.py`), общие ключи удалены.
 
-Сохранение снимка одним циклом: `HSet(current, ip, snap)` + `ZAdd(series, epoch,
-snap)` (PIPELINE/TxPipeline). `SaveSnapshot` пишет **каждое** снятое показание
-(дедуп только в пределах одной секунды на устройство); `SaveSnapshotMAP` — то же
-для МАП/MPPT, дополнительно дополняя недостающие МАП-теги из предыдущего снимка
-(гейт МАП нестабилен). 10-секундного окна/схлопывания больше нет.
+Сохранение снимка одним циклом: `HSet(<марка>:current, serial, snap)` +
+`ZAdd(<марка>:series, epoch, snap)` (PIPELINE/TxPipeline). `SaveSnapshot` пишет
+**каждое** снятое показание (дедуп только в пределах одной секунды на устройство) и
+диспетчерит марку по `deviceSnapshot.Kind` (`deye`/`sofar`).
 
 `recentCutoff(now)` — момент начала вторых из последних двух календарных суток
 (00:00 вчера в локальной зоне). Используется и очисткой Redis, и дашбордом для
@@ -52,10 +56,9 @@ snap)` (PIPELINE/TxPipeline). `SaveSnapshot` пишет **каждое** сня�
 (без дубля точки на cutoff и без разрыва).
 
 **Восстановление при пустом Redis**: `restoreRedisFromPG` при старте восстанавливает
-ряды НЕЗАВИСИМО друг от друга: инверторы/МАП/счётчик (`pg.Averages` за окно 2
-календарных суток), ANT BMS (`pg.BMSAveragesAll`), EnBMS (`pg.EnBmsAveragesAll`),
-DTS017M (`pg.Dts017AveragesAll`) и CE308 (`pg.CE308AveragesAll`; кроме режима
-`final_readings_only`) — каждый в свой ряд `sunreceiver:*:series:<YYYY-MM>`. Сбой
+ряды НЕЗАВИСИМО друг от друга: инверторы по марке (`pg.invAverages` deye/sofar за окно
+2 календарных суток), МАП/счётчик/КЭС и прочие обособленные (`averagesAll`),
+BMS26, DTS017M, CE308 — каждый в свой ряд `sunreceiver:*:series:<YYYY-MM>`. Сбой
 одного запроса не прерывает остальные. Если хотя бы один ряд восстановить не удалось
 (или пришёл сигнал остановки), ставится маркер `sunreceiver:restore:incomplete`, и
 реставрация повторяется при следующем старте даже при непустом Redis; маркер снимается
@@ -71,26 +74,26 @@ DTS017M (`pg.Dts017AveragesAll`) и CE308 (`pg.CE308AveragesAll`; кроме р�
 
 ## PostgreSQL (`pg_store.go`)
 
-- Таблица `sunreceiver.averages(ip, name, ts, device_sn, values jsonb)`, PK
-  `(ip, ts)`, индекс по `ts`. Вставка идемпотентна (`ON CONFLICT DO NOTHING`).
-- `InsertAveraged(ip, name, ts, deviceSN, vc)` — одна усреднённая точка (ts = начало
-  5-минутного промежутка).
-- `Averages(start, end, ips ...string)` — чтение усреднённых точек за период (для
-  дашборда и реставрации Redis); необязательный `ips` ограничивает выборку.
-- `MigrateLegacy()` — однократная конвертация старой таблицы сырых снимков
-  `sunreceiver.snapshots` (существовала до 2026-09-07) в 5-минутные усреднённые
-  точки `averages`, затем удаление `snapshots`. Идемпотентна (если таблицы нет —
-  бездействует).
-- `ensureSchema`/`ensureMeterTariffSchema` — создание `averages` и `daily_tariffs`.
+- Таблицы **`sunreceiver.deye_averages(serial, ip, name, ts, device_sn, values jsonb)`**
+  и **`sunreceiver.sofar_averages(...)`**, PK `(serial, ts)`, индекс по `ts`. Ключ —
+  серийник инвертора; `ip` — информационная колонка (для привязки размещения).
+  Общая `sunreceiver.averages` **выведена из эксплуатации и удалена**.
+- `insertInvAveragedExec(...)` — одна усреднённая точка марки (ts = начало
+  5-минутного промежутка), идемпотентна по `(serial, ts)`.
+- `invAverages(brand, start, end)` — чтение усреднённых точек марки за период (для
+  дашборда и реставрации Redis).
+- `ensureInvAveragesSchema` — создание марочных таблиц инверторов.
 - Тарифы счётчика: `DailyTariffsRange`, `StoreMeterBoundary` — см.
   [dds238-meter.md](../dds238-meter.md).
 - Счётчик DTS017M: **обособленные** ключи/ряд Redis (`sunreceiver:dts017m:current`,
   `sunreceiver:dts017m:series:*`) и таблицы PG (`dts017m_averages`,
   `dts017m_daily_tariffs`), отдельный аккумулятор; общие ключи/таблицы DDS238 не
   используются — [dts017m-meter.md](../dts017m-meter.md).
-- Счётчик в `averages` идентифицируется единым стабильным ключом `dds238` (колонка
-  `ip`), не зависящим от адреса; однократная миграция — `migrateMeterDeviceKey`
-  (`meter_migrate.go`).
+- Счётчик DDS238: **обособленные** ключи/ряд Redis
+  (`sunreceiver:dds238:current`, `sunreceiver:dds238:series:*`) и таблицы PG
+  (`dds238_averages`, `dds238_daily_tariffs`); логический ключ — `dds238`
+  (`meterDeviceKey`), общая `averages` не используется. Перенос старого ключа —
+  разовыми скриптами `scripts/migrate_dds238*.py`; в бинарнике миграций нет.
 
 ## Фоновые процессы (`accumulator.go`)
 
@@ -109,28 +112,27 @@ DTS017M (`pg.Dts017AveragesAll`) и CE308 (`pg.CE308AveragesAll`; кроме р�
 
 ## BMS/CE308: отдельные аккумуляторы и таблицы
 
-- **ANT BMS** (`bms_accumulator.go`): пулер пишет `current` (HASH `sunreceiver:bms`)
-  и КАЖДОЕ показание в ряд `sunreceiver:bms:series:<YYYY-MM>` (`saveBMSReading`,
-  окно 2 суток). 1-секундные снимки накапливаются **в памяти** и по завершении
-  5-минутного промежутка пишутся в PG `sunreceiver.bms_averages` (PK `(name, ts)`,
-  вечно). Неполный промежуток при остановке в PG не пишется (только полные бакеты).
-  Подробнее — [../antbms.md](../antbms.md).
-- **EnBMS** (`enBms_accumulator.go`): аналогично — `current` + сырой ряд
-  `sunreceiver:enbms:series:<YYYY-MM>`, PG `sunreceiver.enbms_averages` (5 мин).
-  См. [enbms.md](enbms.md).
+- **BMS (ANT + EnBMS + malina26)** — единое хранилище bms26: текущее в
+  `sunreceiver:bms26:current`, КАЖДОЕ показание в ряд `sunreceiver:bms26:series:<YYYY-MM>`,
+  5-минутные средние в PG `sunreceiver.bms26_averages` (name = serial). Пулер
+  malina26 пишет напрямую; старые пулеры ANT (`bms_poller.go`) и EnBMS
+  (`enBms_poller.go`) кормят те же ряды через шимы (`bms26_legacy.go`,
+  `enBms_store.go`). Подробнее — [bms26.md](bms26.md), [enbms.md](enbms.md),
+  [../antbms.md](../antbms.md).
 - **CE308** (`ce308_accumulator.go`): сырой ряд Redis (~2 с), PG
   `sunreceiver.ce308_averages` — усреднение **5 минут** (тот же `avgStep`), см.
   [ce308.md](ce308.md).
 
 Повторная запись того же (устройство, промежуток) в PG **заменяется**
-(`InsertBMSAveraged`/`InsertCe308Average` — ON CONFLICT DO UPDATE), а в Redis-ряду
+(`InsertCe308Average` и bms26-аккумулятор — ON CONFLICT DO UPDATE), а в Redis-ряду
 дедуп — по (устройство, секунда).
 
 ## Связанные документы
 
-- [Дашборд](dashboard.md) — читатель `current`/`series` + `Averages`.
-- [dds238-meter.md](../dds238-meter.md) — `daily_tariffs`.
-- [../antbms.md](../antbms.md) — ключи `sunreceiver:bms*`, `bms_averages`.
+- [Дашборд](dashboard.md) — читатель марочных `deye/sofar:current`/`:series` +
+  `invAverages` (обособленные — своими читалками).
+- [dds238-meter.md](../dds238-meter.md) — `dds238_daily_tariffs`.
+- [../antbms.md](../antbms.md) — ключи `sunreceiver:bms26:*`, `bms26_averages`.
 ## История ошибок устройств (`device_errors`)
 
 Таблица `sunreceiver.device_errors(device, kind, code, msg, ts)` — история

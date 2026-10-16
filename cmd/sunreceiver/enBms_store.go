@@ -21,7 +21,8 @@ import (
 	"fmt"
 )
 
-// SaveEnBmsCurrent пишет текущий снимок EnBMS в HASH (поле = MAC).
+// SaveEnBmsCurrent пишет текущий снимок EnBMS в ряд bms26 (единый EnBMS-serial),
+// т.е. старый EnBMS-пулер кормит то же хранилище, что и пулер malina26.
 func (s *redisStore) SaveEnBmsCurrent(snap enbmsSnapshot) error {
 	// КОСТЫЛЬ: старый EnBMS-пулер пишет в ряды bms26 (единый EnBMS-serial).
 	serial := legacyEnbmsSerial()
@@ -34,6 +35,3 @@ func (s *redisStore) SaveEnBmsCurrent(snap enbmsSnapshot) error {
 	}
 	return s.SaveBms26Current(map[string]string{serial: string(b)})
 }
-
-// SaveEnBmsSeries кладёт МГНОВЕННУЮ (сырую) точку в месячный ZSET ряда EnBMS
-// (score = секунда снятия; дедупликация по (имя, score) — как SaveBMSSeries).

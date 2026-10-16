@@ -68,7 +68,7 @@ Mercury_est(now, tariff, dir) = Mercury_manual(last)                  // пос�
 ручной точки `T0` (последний элемент раздела `mercury`) и живых показаний DDS238:
 
 ```
-delta[field] = Σ финализированных дней [date(T0), date(now))   // из PG daily_tariffs
+delta[field] = Σ финализированных дней [date(T0), date(now))   // из PG dds238_daily_tariffs
              + прирост сегодняшнего дня к now                    // meterTariffToday (Redis + границы PG)
              − прирост дня T0 к моменту T0                       // из границ 00:00/07:00/23:00 дня T0
 forecast[field] = manual[last][field] + max(0, delta[field])

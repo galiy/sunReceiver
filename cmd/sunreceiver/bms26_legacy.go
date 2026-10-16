@@ -17,7 +17,6 @@
 package main
 
 import (
-	"log"
 	"regexp"
 	"strconv"
 	"sync"
@@ -27,11 +26,7 @@ import (
 // antNameCap — ёмкость из старого имени ANT-устройства ("AntBms 160 A/h ...").
 var antNameCap = regexp.MustCompile(`AntBms\s+(\d+)\s*A/h`)
 
-// antBaseCap — ёмкость из нового BASE bms26 ("AntBMS-DSP-160").
-var antBaseCap = regexp.MustCompile(`AntBMS-DSP-(\d+)`)
-
 func antCapFromName(name string) (int, bool) { return capFromRe(antNameCap, name) }
-func antCapFromBase(base string) (int, bool) { return capFromRe(antBaseCap, base) }
 
 func capFromRe(re *regexp.Regexp, s string) (int, bool) {
 	m := re.FindStringSubmatch(s)
@@ -192,7 +187,6 @@ func enbmsSnapshotToBms26(s enbmsSnapshot, serial string) bms26Snapshot {
 	return sn
 }
 
-// antAveragedToBms26 — 5-мин среднее ANT → bms26Snapshot (name → serial по ёмкости).
 func itoa(n int) string {
 	if n == 0 {
 		return "0"
@@ -214,8 +208,6 @@ func itoa(n int) string {
 	}
 	return string(b[i:])
 }
-
-var _ = log.Printf
 
 // ---- Сборка двоичного alarm (19 Б) из старых данных (по упаковке bms-reader) ----
 

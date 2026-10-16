@@ -7,7 +7,7 @@
 (CID2 `0x42`); раскладка телеметрии у них совпадает.
 
 - Реализация: `enBms.go`, `enBms_client.go` (BLE), `enBms_rs485.go` (PACE),
-  `enBms_poller.go`, `enBms_accumulator.go`, `enBms_store.go`.
+  `enBms_poller.go`, `enBms_store.go`.
 - Протокол и живой срез: `/home/sasha/src/energybms` (`protocol-BLE.md`,
   `protocol-485.md`, `DEVICE_SNAPSHOT.md`).
 
@@ -209,19 +209,18 @@ YD/T 1363 (PACE):
 
 ## Хранение и усреднение
 
-Схема — как у ANT BMS:
+EnBMS не имеет собственного хранилища: и BLE/RS485-пулер (`enBms_poller.go`), и
+ANT-пулер, и пулер malina26 пишут в **единый ряд bms26** (шимы `enBms_store.go`,
+`bms26_legacy.go`):
 
-- Redis `sunreceiver:enbms:current` (HASH, поле = ключ устройства: MAC, иначе name) — текущий снимок;
-- Redis `sunreceiver:enbms:series:<YYYY-MM>` (ZSET) — **каждое снятое показание**
-  (score = секунда, `samples=1`; окно 2 суток, чистка PurgeOld);
-- PostgreSQL `sunreceiver.enbms_averages` (`name`=ключ, `ts`, `values` jsonb) —
-  вся история с гранулярностью **1 запись / 5 минут**; вставка с sample-count guard;
-- неполный 5-минутный промежуток при остановке в PG не пишется (только полные
-  бакеты); в Redis он не нужен — сырые показания уже записаны.
+- Redis `sunreceiver:bms26:current` (HASH, поле = serial) — текущий снимок;
+- Redis `sunreceiver:bms26:series:<YYYY-MM>` (ZSET) — **каждое снятое показание**
+  (score = секунда; окно 2 суток, чистка PurgeOld);
+- PostgreSQL `sunreceiver.bms26_averages` (`name`=serial, `ts`, `values` jsonb) —
+  вся история с гранулярностью **1 запись / 5 минут**.
 
-При полностью пустом Redis ряд `enbms:series` восстанавливается из PG
-(`EnBmsAveragesAll`) — восстановленный участок представлен 5-минутными средними
-(`samples>1`), до первых новых опросов ряд смешанный.
+Подробнее — [bms26.md](bms26.md). Старые ключи `sunreceiver:enbms:*`/PG
+`enbms_averages` выведены и удалены.
 
 Мгновенные поля (ток/мощность/SOC/ёмкости/напряжения ячеек/температуры)
 усредняются за 5 минут; дискретные (число ячеек, циклы) берутся по последнему

@@ -95,9 +95,9 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 `{"name", "ip", "port", "unit", "protocol", "first_reg", "register_count"}` (имеет приоритет над
 legacy-файлом `dds238.json`; `protocol` — `"tcp"` (Modbus TCP, по умолчанию) или `"rtu"`
 (Modbus RTU поверх TCP через прозрачный шлюз)). Идентификатор счётчика во всех
-хранилищах — единый стабильный ключ **`dds238`** (Redis current/ряд, PG `averages`),
-не зависящий от `ip`; смена адреса/транспорта не распадается на разные устройства
- (однократная миграция — `migrateMeterDeviceKey` в `meter_migrate.go`). Счётчик **DTS017M** (трёхфазный, Modbus RTU через
+хранилищах — единый стабильный ключ **`dds238`** (Redis `sunreceiver:dds238:current`/ряд, PG `sunreceiver.dds238_averages`),
+не зависящий от `ip`; смена адреса/транспорта не распадается на разные устройства.
+Счётчик **DTS017M** (трёхфазный, Modbus RTU через
 прозрачный шлюз; историю счётчика **не читаем** — посуточные тарифы считаются сами) —
 раздел **`dts017m`** `{"disabled", "name", "ip", "port", "unit", "protocol",
 "poll_interval"}` (**`disabled` — ОБЯЗАТЕЛЬНОЕ**: `true` — опрос выключен; `protocol` —
@@ -191,7 +191,7 @@ inverter 10, map 1, meter 1, ce308 5, antbms 1. Период EnBMS задаёт�
   (при `method=malina26`), в зависимости от выбранного способа мониторинга. Никаких
   агрегатов/эндпоинтов-ошибок с готовыми текстами — только сырые значения ячеек.
 - **Счётчик DDS238** — `meter_*.go`: мгновенные значения `meter_*` + посуточные
-  тарифы (`daily_tariffs`), добор пропущенных границ. Полное описание —
+  тарифы (`dds238_daily_tariffs`), добор пропущенных границ. Полное описание —
   [`docs/dds238-meter.md`](docs/dds238-meter.md).
 - **Счётчик DTS017M** — `dts017_*.go`: `dts017.go` (регистры/декодер/теги),
   `dts017_client`-транспорт — переиспользуемый `meter_client.go` (fn `0x04`),
@@ -216,7 +216,7 @@ inverter 10, map 1, meter 1, ce308 5, antbms 1. Период EnBMS задаёт�
   Полное описание — [`docs/modules/ce308.md`](docs/modules/ce308.md).
 - **BMS EnBMS** (BLE и/или RS485) — `enBms.go`, `enBms_client.go` (BLE-транспорт),
   `enBms_rs485.go` (ASCII PACE: TCP-шлюз/COM), `enBms_poller.go`,
-  `enBms_accumulator.go`, `enBms_store.go`: опрос BMS Enjie (EMU110x) — по BLE
+  `enBms_store.go`: опрос BMS Enjie (EMU110x) — по BLE
   блок Battery (CID2 `0x61`; алармы — из сигнального хвоста), по RS485 TeleMeter
   (CID2 `0x42`, та же раскладка телеметрии) плюс состояния/защиты TeleState
   (CID2 `0x44`: алармы, ключи, балансировка, режим — `parseEnBmsState`).

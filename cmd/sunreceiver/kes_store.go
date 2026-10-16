@@ -29,8 +29,8 @@ import (
 
 // Ключи Redis модуля КЭС (MPPT-контроллеры). Обособлены от инверторов/МАП/DDS238:
 // собственные current-HASH и месячный ряд. Ключ устройства — devKey (`mppt-<serial>`).
-// Чтение (Current/QuerySeries) собирает КЭС из этих ключей прозрачно, поэтому
-// дашборд/анимация видят снимок как раньше.
+// Читаются отдельными методами (KesCurrent/QueryKesSeries/KesAverages); в общие
+// читалки (снят) НЕ подмешиваются.
 const (
 	redisKesCurrentKey   = "sunreceiver:kes:current"
 	redisKesSeriesPrefix = "sunreceiver:kes:series:"

@@ -6,8 +6,10 @@ HTTP-сервер — адрес из обязательного поля `dashb
 
 ## API-эндпоинты
 
-- `/api/current` — `HGETALL sunreceiver:current` (последнее состояние всех
-  устройств). Go-сторона выделяет `total_power`/`total_pv` (сумма только
+- `/api/current` — чтение текущих снимков всех устройств: сетевые инверторы из
+  марочных `sunreceiver:deye:current`/`sofar:current`, обособленные (DDS238/МАП/КЭС)
+  — своими читалками (сборка `dashboardHandler.allCurrent`). Go-сторона выделяет
+  `total_power`/`total_pv` (сумма только
   fresh-устройств) и живые тарифы текущего дня (`meter_import_day`/...).
   Суммарные показатели дополнительно разбиваются по размещениям инверторов —
   полe `placement` в `sunReceiver.json` (по умолчанию «Дом»): список `placements`
@@ -180,7 +182,7 @@ Hammer не перехватывал жесты. Вьюпорт `maximum-scale=1
 
 ## Связанные документы
 
-- [Модуль хранения](storage.md) — источники данных (`current`, `series`, `averages`).
+- [Модуль хранения](storage.md) — источники данных (марочные `current`/`series` и `*_averages`).
 - [../universal-contract.md](../universal-contract.md) — теги `values`.
 - [МАП/MPPT](map-mppt.md) — плашки/графики МАП.
 - [../dds238-meter.md](../dds238-meter.md) — плашка счётчика и `/energy`.

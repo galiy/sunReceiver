@@ -13,10 +13,7 @@ var showDTS017 = document.body.dataset.showDts017 === '1';
 
 // ---------- Утилиты ----------
 function esc(s){ return String(s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
-function fmt(t){ var d=new Date(t); function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes()); }
 function fmtSec(t){ var d=new Date(t); function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds()); }
-function startOfToday(){ var d=new Date(); d.setHours(0,0,0,0); return d; }
-function endOfToday(){ var d=new Date(); d.setHours(23,59,59,999); return d; }
 
 // ---------- Сводная таблица параметров по инверторам ----------
 // Упорядоченный список строк: [тег, подпись, единица измерения].
@@ -58,7 +55,7 @@ function devTempValue(dev, which){
 }
 var GRID_COLOR='#428bca', MPPT_COLOR='#5cb85c';
 function renderPivot(devices){
-	if(!devices || !devices.length) return '<div class="missing">No data in Redis</div>';
+	if(!devices || !devices.length) return '<div class="missing">Нет данных</div>';
 	// Разбиваем колонки на две группы: сетевые инверторы (первые) и MPPT-контроллеры (последние).
 	// Устройство МАП (батарея/сеть) в сводной таблице не показываем — у него нет солнечных
 	// панелей; оно нужно только для верхних плашек и графиков. Маркер MPPT — ключ mppt-<serial>.
@@ -68,7 +65,7 @@ function renderPivot(devices){
 		if(isMAPDeviceJS(d) || isMeterDevice(d)) continue;
 		if(isMPPTDev(d)) mpts.push(d); else grid.push(d);
 	}
-	if(!grid.length && !mpts.length) return '<div class="missing">No data in Redis</div>';
+	if(!grid.length && !mpts.length) return '<div class="missing">Нет данных</div>';
 	// Единая таблица: общий первый столбец (заголовки строк и единиц), затем колонки
 	// сетевых инверторов и MPPT, разделённые тонкой цветной рамкой групп.
 	var h='<table class="pivot-table"><thead>';
@@ -149,13 +146,12 @@ function isMeterDevice(d){ return !!(d && d.values && d.values.meter_voltage !==
 // isMAPDeviceJS — маркер устройства МАП (батарея/сеть) в JS (аналог isMAPDevice в Go).
 function isMAPDeviceJS(d){ return !!(d && d.values && d.values.battery_voltage !== undefined); }
 // isMPPTDev — маркер MPPT-контроллера (КЭС) в JS (аналог isMPPTKey в Go): ключ
-// устройства вида "mppt-<serial>" (новый формат, без host). Поддержан и старый
-// формат "<host>#mppt-<uid>" — на случай снимков, не прошедших миграцию ключей.
-// Используется, чтобы токи/мощности КЭС не подмешивались к сетевым инверторам в
-// сводной таблице и не считались в «инверторах онлайн».
+// устройства вида "mppt-<serial>". Используется, чтобы токи/мощности КЭС не
+// подмешивались к сетевым инверторам в сводной таблице и не считались в
+// «инверторах онлайн».
 function isMPPTDev(d){
 	var ip=(d && d.ip) ? String(d.ip) : '';
-	return ip.lastIndexOf('mppt-',0)===0 || ip.indexOf('#mppt')>=0;
+	return ip.lastIndexOf('mppt-',0)===0;
 }
 // STALE_MS — окно «молчания» устройства: если последний снимок старше 20 минут
 // (то же окно, что TOOLTIP_MAX_GAP на графиках), устройство считаем оффлайн —

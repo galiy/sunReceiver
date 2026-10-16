@@ -31,7 +31,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 (инверторы — раз в 10 с; MPPT/счётчик/BMS — раз в 1 с; МАП — цикл 1 с, но при
 `method=rs485` фактически ~6 с из-за 2 последовательных чтений Modbus-блоков, см.
 [map-mppt.md](modules/map-mppt.md)). Дашборд только читает
-`current`/`series` (Redis) и `averages` (PG).
+марочные `current`/`series` (Redis) и `*_averages` (PG).
 
 ## Модули системы
 
@@ -39,10 +39,10 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 |---|---|---|
 | **internal/solarman/** | Клиент протокола Solarman V5: сборка кадра (Sofar/Deye), разбор ответа, CRC/checksum, чтение регистров, коды ошибок логгера | [modules/solarman-client.md](modules/solarman-client.md) |
 | **Poller инверторов** (`main.go`) | Опрос Deye/Sofar раз в 10 с в независимых циклах, маппинг регистров в `values` (Sofar/Deye), серийные номера, чистое завершение | [modules/inverter-poller.md](modules/inverter-poller.md) |
-| **Хранение** (`redis_store.go`, `pg_store.go`, `accumulator.go`, `bms_accumulator.go`, `enBms_accumulator.go`, `ce308_accumulator.go`) | Redis (2 суток, live) + PG (5-мин средние, вечно), фоновые аккумуляторы/очистка, реставрация Redis из PG при пустом старте | [modules/storage.md](modules/storage.md) |
+| **Хранение** (`redis_store.go`, `pg_store.go`, `accumulator.go`, `bms26_store.go`, `bms_accumulator.go`, `ce308_accumulator.go`) | Redis (2 суток, live) + PG (5-мин средние, вечно), фоновые аккумуляторы/очистка, реставрация Redis из PG при пустом старте | [modules/storage.md](modules/storage.md) |
 | **Веб-дашборд** (`dashboard.go`, `cmd/sunreceiver/web/`, `go:embed`) | HTML + JSON API (`/`, `/charts`, `/energy`, `/bms/<name>`) поверх Redis/PG, зум/панорама, offline-индикация, mobile-раскладка; шаблоны/статика (`cmd/sunreceiver/web/templates`, `cmd/sunreceiver/web/static/js`) встроены в бинарник | [modules/dashboard.md](modules/dashboard.md) |
 | **МАП + MPPT** (`mppt_api.go`, `malina26.go`, `internal/modbusmap/`) | МАП (батарея/сеть) через Modbus TCP / веб-API / API «Малина26»; MPPT-контроллеры через `read_json.php?device=mppt` или `/api/kes/raw` (динамический состав) | [modules/map-mppt.md](modules/map-mppt.md) |
-| **Счётчик DDS238** (`meter_*.go`) | Мгновенные значения `meter_*` + посуточные тарифы «День/Ночь» (`daily_tariffs`) с добором пропущенных границ; транспорт — Modbus TCP (`tcp`) или Modbus RTU через прозрачный шлюз (`rtu`) | [dds238-meter.md](dds238-meter.md) |
+| **Счётчик DDS238** (`meter_*.go`) | Мгновенные значения `meter_*` + посуточные тарифы «День/Ночь» (`dds238_daily_tariffs`) с добором пропущенных границ; транспорт — Modbus TCP (`tcp`) или Modbus RTU через прозрачный шлюз (`rtu`) | [dds238-meter.md](dds238-meter.md) |
 | **Счётчик DTS017M** (`dts017_*.go`) | Трёхфазный счётчик (Modbus RTU через прозрачный шлюз): телеметрия/энергии → **собственные** ключи/ряд Redis и **собственные** таблицы PG; посуточные тарифы «День/Ночь» считаются сами (историю счётчика не читаем); рамка «Гараж» и графики на странице «Электроэнергия», `/api/dts017m/current|tariffs` | [dts017m-meter.md](dts017m-meter.md) |
 | **Счётчик «Меркурий»** (энергосбыт, без мониторинга; прогноз) | Последовательно с DDS238; показания снимаются **вручную** (раздел конфига `mercury`), прогноз на текущий момент по последней ручной точке + статистике DDS238 (`mercury.go` → `/api/current` → рамка «Меркурий — прогноз») | [meter_mercury.md](meter_mercury.md) |
 | **Счётчик Энергомера CE308** (`ce308_*.go`) | Опрос по BLE (2 с): напряжения/токи/мощности по фазам + разовый снимок накопленной энергии по сигналу; в Redis — каждое показание (~2 с), в PG — 5-мин средние | [modules/ce308.md](modules/ce308.md) |
@@ -82,7 +82,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
   Поле `meter.protocol` задаёт транспорт: `"tcp"` (Modbus TCP, по умолчанию) или
   `"rtu"` (Modbus RTU поверх TCP — прозрачный шлюз, напр. USR-DR164; MBAP нет,
   кадр `unit+PDU+CRC16`). Идентификатор счётчика — единый стабильный ключ **`dds238`**
-  во всех хранилищах (Redis current/ряд, PG `averages`), не зависящий от `ip`.
+  во всех хранилищах (Redis current/ряд, PG `dds238_averages`), не зависящий от `ip`.
 - **Счётчик DTS017M** — раздел `dts017m`; `disabled` обязателен. `protocol` — `"rtu"`
   (по умолчанию, прозрачный шлюз) или `"tcp"`; `poll_interval` (сек, по умолчанию 1).
   **Обособленное хранилище**: собственные ключи/ряд Redis (`sunreceiver:dts017m:*`),
@@ -100,16 +100,19 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 ## Хранение данных
 
 - **Redis** — live-хранилище последних 2 календарных суток, **каждое снятое
-  показание** (полное разрешение пулера): HASH `sunreceiver:current` (последнее
-  состояние) + месячные ZSET `sunreceiver:series:<YYYY-MM>` (и отдельные ключи BMS/
-  CE308). Запускается с persistence (RDB+AOF). При полностью пустом Redis данные
-  восстанавливаются из PostgreSQL. (Подробнее — [modules/storage.md](modules/storage.md).)
-- **PostgreSQL** — вся история, **единая гранулярность 1 запись / 5 минут** для всех
-  рядов (`sunreceiver.averages`, `ce308_averages`, `bms_averages`, `enbms_averages`,
-  `dts017m_averages`), плюс таблицы тарифов (`sunreceiver.daily_tariffs` для DDS238 и
+  показание** (полное разрешение пулера): обособленные HASH+ZSET по марке
+  (`sunreceiver:deye:current`/`deye:series:*`, `sunreceiver:sofar:*`) и отдельные
+  ключи BMS/CE308/DDS238/МАП/КЭС/DTS017M. Общие `sunreceiver:current`/`series:*`
+  выведены из эксплуатации. Ключ инвертора — серийник (`inverter_sn`). Запускается
+  с persistence (RDB+AOF). При полностью пустом Redis данные восстанавливаются из
+  PostgreSQL. (Подробнее — [modules/storage.md](modules/storage.md).)
+- **PostgreSQL** — вся история, **единая гранулярность 1 запись / 5 минут** по марке
+  (`sunreceiver.deye_averages`/`sofar_averages`, а также `ce308_averages`,
+  `bms26_averages`, `dts017m_averages`, `dds238_averages`, `map_averages`,
+  `kes_averages`), плюс таблицы тарифов (`sunreceiver.dds238_daily_tariffs` и
   обособленная `sunreceiver.dts017m_daily_tariffs`). Фоновые аккумуляторы усредняют
   накопленные в Redis снимки.
-- **Тарифы счётчика** — `sunreceiver.daily_tariffs` (посуточно, «День/Ночь» ×
+- **Тарифы счётчика** — `sunreceiver.dds238_daily_tariffs` (посуточно, «День/Ночь» ×
   потребление/отдача).
 
 ## Конфигурация

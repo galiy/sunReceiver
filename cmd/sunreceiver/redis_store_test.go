@@ -18,7 +18,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"strconv"
 	"testing"
 	"time"
@@ -63,7 +62,8 @@ func cleanTestKeys(t *testing.T, s *redisStore) {
 }
 
 func snap(name string, ip string, ts time.Time, values valuesContract) deviceSnapshot {
-	return deviceSnapshot{Name: name, IP: ip, Timestamp: ts.Format(time.RFC3339), Values: values}
+	// Тестовые «инверторы» — марки deye, ключ хранения = InverterSN (здесь = ip).
+	return deviceSnapshot{Name: name, IP: ip, InverterSN: ip, Kind: "deye", Timestamp: ts.Format(time.RFC3339), Values: values}
 }
 
 func TestRedisStoreCurrentSorted(t *testing.T) {
@@ -81,9 +81,9 @@ func TestRedisStoreCurrentSorted(t *testing.T) {
 		}
 	}
 
-	cur, err := s.Current()
+	cur, err := s.invCurrent(deyeBrand)
 	if err != nil {
-		t.Fatalf("Current: %v", err)
+		t.Fatalf("invCurrent: %v", err)
 	}
 	if len(cur) != 2 {
 		t.Fatalf("len(Current)=%d, want 2", len(cur))
@@ -107,16 +107,18 @@ func TestRedisStoreQuerySeriesPeriod(t *testing.T) {
 		_ = s.SaveSnapshot(snap("A", "192.0.2.1", ts, valuesContract{"energy_total": 1.0}), ts)
 	}
 
-	got, err := s.QuerySeries(base.Add(-30*24*time.Hour), base)
+	got, err := s.queryInvSeries(deyeBrand, base.Add(-30*24*time.Hour), base)
 	if err != nil {
-		t.Fatalf("QuerySeries: %v", err)
+		t.Fatalf("queryInvSeries: %v", err)
 	}
 	if len(got) != 3 {
-		t.Fatalf("QuerySeries len=%d, want 3", len(got))
+		t.Fatalf("queryInvSeries len=%d, want 3", len(got))
 	}
 }
 
-func TestSaveSnapshotMAPPerReading(t *testing.T) {
+// TestSaveMapSnapshotMerge: обособленная запись МАП пишет каждое показание и
+// дополняет недостающие МАП-теги (grid_voltage) из предыдущего снимка.
+func TestSaveMapSnapshotMerge(t *testing.T) {
 	s := testStore(t)
 	cleanTestKeys(t, s)
 	t.Cleanup(func() { cleanTestKeys(t, s) })
@@ -129,13 +131,13 @@ func TestSaveSnapshotMAPPerReading(t *testing.T) {
 	sp1 := snap("MAP", ip, t1, valuesContract{"battery_voltage": 52.0, "grid_voltage": 230.0})
 	sp2 := snap("MAP", ip, t2, valuesContract{"battery_voltage": 52.1, "grid_voltage": 231.0})
 
-	if err := s.SaveSnapshotMAP(sp1, t1); err != nil {
-		t.Fatalf("SaveSnapshotMAP #1: %v", err)
+	if err := s.saveMapSnapshot(sp1, t1); err != nil {
+		t.Fatalf("saveMapSnapshot #1: %v", err)
 	}
-	if err := s.SaveSnapshotMAP(sp2, t2); err != nil {
-		t.Fatalf("SaveSnapshotMAP #2: %v", err)
+	if err := s.saveMapSnapshot(sp2, t2); err != nil {
+		t.Fatalf("saveMapSnapshot #2: %v", err)
 	}
-	key := redisSeriesKey(t1)
+	key := mapSeriesKey(t1)
 	countAt := func(ts time.Time) int {
 		members, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{
 			Min: strconv.FormatInt(ts.Unix(), 10), Max: strconv.FormatInt(ts.Unix(), 10)}).Result()
@@ -152,24 +154,23 @@ func TestSaveSnapshotMAPPerReading(t *testing.T) {
 		t.Fatalf("members на t2=%d, want 1", n)
 	}
 	// Повторная запись в ту же секунду — замена, не дубль.
-	if err := s.SaveSnapshotMAP(snap("MAP", ip, t1, valuesContract{"battery_voltage": 52.2}), t1); err != nil {
-		t.Fatalf("SaveSnapshotMAP повтор: %v", err)
+	if err := s.saveMapSnapshot(snap("MAP", ip, t1, valuesContract{"battery_voltage": 52.2}), t1); err != nil {
+		t.Fatalf("saveMapSnapshot повтор: %v", err)
 	}
 	if n := countAt(t1); n != 1 {
 		t.Fatalf("после повтора members на t1=%d, want 1", n)
 	}
 	// MAP-merge: снимок без grid_voltage получает последнее известное значение.
 	t3 := t2.Add(3 * time.Second)
-	if err := s.SaveSnapshotMAP(snap("MAP", ip, t3, valuesContract{"battery_voltage": 52.3}), t3); err != nil {
-		t.Fatalf("SaveSnapshotMAP #3: %v", err)
+	if err := s.saveMapSnapshot(snap("MAP", ip, t3, valuesContract{"battery_voltage": 52.3}), t3); err != nil {
+		t.Fatalf("saveMapSnapshot #3: %v", err)
 	}
-	raw, err := s.rdb.HGet(s.ctx, redisCurrentKey, ip).Result()
+	got, err := s.MapCurrent()
 	if err != nil {
-		t.Fatalf("HGET current: %v", err)
+		t.Fatalf("MapCurrent: %v", err)
 	}
-	var got deviceSnapshot
-	if err := json.Unmarshal([]byte(raw), &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	if got == nil {
+		t.Fatal("MapCurrent: nil")
 	}
 	if _, ok := got.Values["grid_voltage"]; !ok {
 		t.Fatalf("merge не дополнил grid_voltage: %+v", got.Values)
@@ -198,7 +199,7 @@ func TestRedisStoreSnapshotDedup(t *testing.T) {
 		}
 	}
 
-	key := redisSeriesKey(ts)
+	key := deyeBrand.seriesKey(ts)
 	score := strconv.FormatInt(ts.Unix(), 10)
 	members, err := s.rdb.ZRangeByScore(s.ctx, key, &redis.ZRangeBy{Min: score, Max: score}).Result()
 	if err != nil {
@@ -207,9 +208,9 @@ func TestRedisStoreSnapshotDedup(t *testing.T) {
 	if len(members) != 2 {
 		t.Fatalf("members со score секунды=%d, want 2 (A заменён на 1, B без изменений): %v", len(members), members)
 	}
-	got, err := s.QuerySeries(ts, ts)
+	got, err := s.queryInvSeries(deyeBrand, ts, ts)
 	if err != nil {
-		t.Fatalf("QuerySeries: %v", err)
+		t.Fatalf("queryInvSeries: %v", err)
 	}
 	if len(got) != 2 {
 		t.Fatalf("точки за секунду: %+v, want 2 (A заменён на свежую, B без изменений)", got)

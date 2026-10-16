@@ -342,10 +342,6 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 			kind = kindDeyeString
 		case "sofar":
 			kind = kindSofar
-		case "map", "mppt":
-			// map/mppt вынесены в отдельные разделы; записи в invertors игнорируются.
-			log.Printf("config: тип %q для %s не ожидается в invertors (используйте раздел map/mppt) — пропущен", t.Type, t.IP)
-			continue
 		default:
 			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: неизвестный тип %q для %s", path, t.Type, t.IP)
 		}
@@ -646,10 +642,10 @@ func (s *mpptPollState) shouldPrune(empty bool) bool {
 	return true
 }
 
-// mapDevKey — постоянный ключ устройства МАП в хранилище (поле в HASH current,
-// ip в снимках ряда Redis и в PG averages). Не зависит от того, на каком адресе
-// находится МАП (Modbus TCP/RS485 или веб-API) и от его IP: МАП всегда одна
-// колонка/ряд с ключом "map".
+// mapDevKey — постоянный ключ устройства МАП в хранилище (логический ключ
+// обособленных ключей sunreceiver:map:current/:series:*; поле в PG map_averages —
+// name). Не зависит от адреса МАП (Modbus TCP/RS485 или веб-API) и его IP: МАП
+// всегда одна колонка/ряд с ключом "map".
 const mapDevKey = "map"
 
 // devKey возвращает ключ устройства в хранилище (поле IP снимка): для обычных
@@ -659,7 +655,7 @@ const mapDevKey = "map"
 // UID (стабильный серийник), а не по индексу в массиве API: отвал контроллера с
 // меньшим индексом сдвигает остальных в ответе, и индексный ключ склеил бы ряды
 // двух разных аппаратов. Префикс "mppt-" сохраняется (isMPPTKey/PruneMPPT/
-// PruneLegacyMPPT ищут ключи по strings.HasPrefix(ip, "mppt-")).
+// PruneMPPT ищет ключи по strings.HasPrefix(ip, "mppt-")).
 func devKey(t invTarget) string {
 	if t.Kind == kindMPPT {
 		if t.UID != "" {
@@ -1996,7 +1992,7 @@ func saveWindowSnapshot(store *redisStore, pg *pgStore, t invTarget, res DeviceR
 		}
 		return
 	}
-	if err := store.SaveSnapshotMAP(snap, ts); err != nil {
+	if err := store.SaveSnapshot(snap, ts); err != nil {
 		log.Printf("redis save %s: %v", devKey(t), err)
 	}
 }
@@ -2099,9 +2095,6 @@ func pollAndSaveMap(ctx context.Context, store *redisStore, pg *pgStore, now tim
 	if pruneMPPT {
 		store.PruneMPPT(activeMPPT)
 	}
-	// Разовая зачистка устаревших ключей старого формата "<host>#mppt-*" (внутри
-	// защищена флагом: реально выполняет HGetAll только при первом вызове).
-	store.PruneLegacyMPPT()
 }
 
 func main() {
@@ -2259,10 +2252,6 @@ func main() {
 		} else {
 			defer pg.Close()
 			log.Printf("pg: persistent-хранилище подключено (5-минутные усреднённые точки)")
-			// Конвертируем старую сырую таблицу snapshots в 5-минутные средние.
-			if merr := pg.MigrateLegacy(); merr != nil {
-				log.Printf("pg legacy миграция: %v", merr)
-			}
 			// Если Redis пуст — восстановить в нём данные из PG. Реставрация
 			// выполняется СИНХРОННО, ДО запуска runAccumulator ниже: иначе
 			// backfillAccumulator мог бы прочитать наполовину восстановленный
@@ -2279,11 +2268,11 @@ func main() {
 				if incomplete > 0 {
 					log.Printf("pg restore: прошлая реставрация неполная — повторяю")
 				}
-				// IsEmpty (redis_store.go) учитывает только инверторное current +
-				// серию инверторов. Данные ANT BMS лежат в ОТДЕЛЬНЫХ ключах
-				// (HASH sunreceiver:bms, ряд sunreceiver:bms:series:*), в него не
-				// входят. Проверяем их, чтобы сложившийся BMS-«магазин» не был
-				// засчитан пустым и не перетёрся реставрацией.
+				// IsEmpty (redis_store.go) учитывает инверторные current/ряды +
+				// обособленные DDS238/МАП/КЭС. Данные ANT/EnBMS BMS лежат в
+				// ОТДЕЛЬНЫХ ключах (HASH bms26:current, ряд bms26:series:*), в
+				// IsEmpty не входят. Проверяем их, чтобы сложившийся BMS-«магазин»
+				// не был засчитан пустым и не перетёрся реставрацией.
 				bmsPresent, berr := redisBMSDataPresent(store)
 				dtsPresent, derr := redisDts017DataPresent(store)
 				cePresent, ceerr := redisCE308DataPresent(store)
@@ -2394,7 +2383,7 @@ func main() {
 		log.Printf("notify: опрос МАП выключен или нет источника МАП — уведомления в MAX не формируются")
 	}
 	// ANT BMS (read_bms.php) — 1 раз в секунду: актуальное состояние в отдельном
-	// Redis-ключе (HASH sunreceiver:bms) + накопление 5-минутных усреднённых
+	// Redis-ключе (HASH bms26) + накопление 5-минутных усреднённых
 	// точек в Redis (ряд, окно 2 суток) и PG (bms_averages), см. bms_poller.go
 	// и bms_accumulator.go.
 	if bmsSite != nil {
@@ -2687,24 +2676,31 @@ func runInverterPoll(store *redisStore, pg *pgStore, t invTarget, stop context.C
 				}
 				lastFaults = cur
 			}
+			// Нормализуем аппаратный серийник (Sofar иногда отдаёт хвостовой
+			// суффикс версии) — иначе один аппарат распадается на два ключа.
+			res.InverterSN = normalizeInverterSN(invKindName(t.Kind), res.InverterSN)
 			// Аппаратные серийные номера постоянны: если в этом цикле не удалось их
 			// прочитать (инвертор выключился на закате, регистры/диапазон HW не
 			// отдались), берём из предыдущего снимка — иначе номер «пропадает» в
 			// таблице у оффлайн-инвертора.
+			liveInverterSN := res.InverterSN // прочитан ли серийник ЖИВЬЁМ в этом цикле
 			if res.InverterSN == "" || res.DeviceSN == "" {
-				if prev, err := store.CurrentOne(t.IP); err == nil {
-					if res.InverterSN == "" {
-						res.InverterSN = prev.InverterSN
-					}
-					if res.DeviceSN == "" {
-						res.DeviceSN = prev.DeviceSN
+				if b := invBrandByKind(invKindName(t.Kind)); b != nil {
+					if prev, err := store.invSnapshotByIP(*b, t.IP); err == nil {
+						if res.InverterSN == "" {
+							res.InverterSN = normalizeInverterSN(b.name, prev.InverterSN)
+						}
+						if res.DeviceSN == "" {
+							res.DeviceSN = prev.DeviceSN
+						}
 					}
 				}
 			}
-			// Кэшируем серийник инвертора на время жизни пулера: в следующем опросе
-			// pollDevice не будет перечитывать HW-диапазон с 3 ретраями.
-			if res.InverterSN != "" {
-				t.InverterSN = res.InverterSN
+			// Кэшируем серийник инвертора на время жизни пулера ТОЛЬКО если он прочитан
+			// живьём: значение из fallback (прошлый снимок) кэшировать нельзя — при
+			// замене железа на том же IP старый серийник «залипнет» и склеит устройства.
+			if liveInverterSN != "" {
+				t.InverterSN = liveInverterSN
 			}
 			snap := deviceSnapshot{
 				Name:       t.Name,
@@ -2854,7 +2850,7 @@ func redisCE308DataPresent(store *redisStore) (bool, error) {
 // за период [now-window, now], но не старше окна удержания Redis (последние 2
 // календарных суток), иначе фоновая очистка сразу удалит восстановленное.
 // Запускается в фоне при пустом Redis. Восстанавливаются ОБА ряда:
-//   - снимки инверторов/МАП/счётчика (pg.Averages) — SaveSnapshot в месячный
+//   - снимки инверторов (invAverages) и обособленных (averagesAll) — SaveSnapshot в месячный
 //     ZSET ряда;
 //   - точки BMS (pg.Bms26AveragesAll) — SaveBms26Series в ряд
 //     sunreceiver:bms26:series:<YYYY-MM>;
@@ -2880,7 +2876,7 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, re
 	log.Printf("pg restore: восстанавливаю Redis из PG за [%s, %s]",
 		start.Format(time.RFC3339), end.Format(time.RFC3339))
 	complete = true
-	snaps, err := pg.Averages(start, end)
+	snaps, err := pg.averagesAll(start, end)
 	if err != nil {
 		log.Printf("pg restore: query: %v", err)
 		complete = false
@@ -2889,9 +2885,12 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, re
 		// оставлена как страховка): в цикле ниже каждый SaveSnapshot кладёт точку в
 		// HASH current[ip] — остаётся «последний из итерации». Сортируем, чтобы
 		// последний HSet был самым свежим (детерминированный current[ip]).
-		sort.Slice(snaps, func(i, j int) bool {
-			ti, _ := parseTS(snaps[i].Timestamp)
-			tj, _ := parseTS(snaps[j].Timestamp)
+		sort.SliceStable(snaps, func(i, j int) bool {
+			ti, oki := parseTS(snaps[i].Timestamp)
+			tj, okj := parseTS(snaps[j].Timestamp)
+			if !oki || !okj {
+				return false // битый ts не переставляем (стабильная сортировка)
+			}
 			return ti.Before(tj)
 		})
 		var restored int
@@ -2906,9 +2905,9 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, re
 			if perr != nil {
 				continue
 			}
-			// Ключ месячного сегмента ряда строится по ts (redisSeriesKey =
-			// ts.Format("2006-01")). Живая запись пишет по локальной зоне, а тут ts
-			// из RFC3339 обычно в UTC — приводим к time.Local для того же месяца-ключа.
+			// Ключ месячного сегмента ряда строится по ts (<prefix><YYYY-MM>).
+			// Живая запись пишет по локальной зоне, а тут ts из RFC3339 обычно в UTC
+			// — приводим к time.Local для того же месяца-ключа.
 			ts = ts.In(time.Local)
 			if snap.IP == meterDeviceKey {
 				// DDS238 восстанавливаем в обособленные ключи.
@@ -2916,7 +2915,9 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, re
 					log.Printf("pg restore: dds238 save: %v", serr)
 					continue
 				}
-				_ = store.SaveDds238Current(snap)
+				if serr := store.SaveDds238Current(snap); serr != nil {
+					log.Printf("pg restore: dds238 current: %v", serr)
+				}
 				restored++
 				continue
 			}

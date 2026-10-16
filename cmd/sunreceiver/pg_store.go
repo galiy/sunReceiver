@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -82,18 +81,7 @@ func openPG(ctx context.Context, dsn string) (*pgStore, error) {
 
 // ensureSchema создаёт схему и таблицу усреднённых точек (идемпотентно).
 func (s *pgStore) ensureSchema() error {
-	_, err := s.pool.Exec(s.ctx, `
-CREATE SCHEMA IF NOT EXISTS sunreceiver;
-CREATE TABLE IF NOT EXISTS sunreceiver.averages (
-	ip        text        NOT NULL,
-	name      text        NOT NULL,
-	ts        timestamptz NOT NULL,
-	device_sn text        NOT NULL DEFAULT '',
-	values    jsonb       NOT NULL DEFAULT '{}'::jsonb,
-	PRIMARY KEY (ip, ts)
-);
-CREATE INDEX IF NOT EXISTS averages_ts_ip_idx ON sunreceiver.averages (ts, ip);
-`)
+	_, err := s.pool.Exec(s.ctx, `CREATE SCHEMA IF NOT EXISTS sunreceiver;`)
 	if err != nil {
 		return fmt.Errorf("pg schema: %w", err)
 	}
@@ -108,6 +96,10 @@ CREATE INDEX IF NOT EXISTS averages_ts_ip_idx ON sunreceiver.averages (ts, ip);
 		return err
 	}
 	if err := ensureKesSchema(s); err != nil {
+		return err
+	}
+	// Обособленные таблицы сетевых инверторов по марке (deye/sofar), ключ — серийник.
+	if err := ensureInvAveragesSchema(s); err != nil {
 		return err
 	}
 	// Обособленные таблицы счётчика DTS017M (5-мин средние + посуточные тарифы).
@@ -211,39 +203,6 @@ func (s *pgStore) withTx(fn func(q pgExecer) error) error {
 	return tx.Commit(s.ctx)
 }
 
-// InsertAveraged сохраняет одну усреднённую за 5 минут точку (ts — начало
-// промежутка). Идемпотентна по (ip, ts), но повторная запись ОБНОВЛЯЕТ строку:
-// поздняя запись того же промежутка побеждает (last-write-wins), как в
-// InsertBMSAveraged. Нужно как страховка при перезапуске/пересчёте: backfill
-// при старте не трогает незавершённый бакет (строго [start, end)), так что
-// нормального перекрытия backfill↔живой цикл нет, но если такое перекрытие
-// возникнет — более полная (поздняя) запись переопределит раннюю частичную.
-func (s *pgStore) InsertAveraged(ip, name string, ts time.Time, deviceSN string, vc valuesContract) error {
-	return insertAveragedExec(s.pool, s.ctx, ip, name, ts, deviceSN, vc)
-}
-
-// insertAveragedExec — реализация вставки одной усреднённой точки в
-// sunreceiver.averages; вызывается и напрямую на пуле (InsertAveraged), и внутри
-// транзакции (insertAverageBucket). Идемпотентна по (ip, ts).
-func insertAveragedExec(q pgExecer, ctx context.Context, ip, name string, ts time.Time, deviceSN string, vc valuesContract) error {
-	vals, err := json.Marshal(vc)
-	if err != nil {
-		return fmt.Errorf("pg marshal values %s: %w", ip, err)
-	}
-	_, err = q.Exec(ctx, `
-INSERT INTO sunreceiver.averages (ip, name, ts, device_sn, values)
-VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT (ip, ts) DO UPDATE
-  SET name = EXCLUDED.name,
-      device_sn = EXCLUDED.device_sn,
-      values = EXCLUDED.values`,
-		ip, name, ts.UTC(), deviceSN, vals)
-	if err != nil {
-		return fmt.Errorf("pg insert avg %s: %w", ip, err)
-	}
-	return nil
-}
-
 // InsertCe308Average сохраняет одну усреднённую за 5 минут точку CE308
 // (ts — начало промежутка). Идемпотентна по (name, ts), повторная запись
 // ОБНОВЛЯЕТ строку (last-write-wins), как в InsertAveraged.
@@ -301,73 +260,31 @@ ORDER BY ts`,
 	return out, rows.Err()
 }
 
-// Averages возвращает усреднённые точки за период [start, end] включительно.
-// Необязательный фильтр ips ограничивает выборку конкретными устройствами
-// (nil или пустой — все устройства). Порядок — по возрастанию ts (индекс
-// averages_ts_ip_idx (ts, ip)); потребители не полагаются на порядок выборки.
-func (s *pgStore) Averages(start, end time.Time, ips ...string) ([]deviceSnapshot, error) {
-	q := `
-SELECT ip, name, ts, device_sn, values
-FROM sunreceiver.averages
-WHERE ts >= $1 AND ts <= $2
-ORDER BY ts ASC`
-	args := []interface{}{start.UTC(), end.UTC()}
-	if len(ips) > 0 {
-		q += ` AND ip = ANY($3)`
-		args = append(args, ips)
+// averagesAll возвращает 5-минутные точки за [start, end] по ВСЕМ устройствам:
+// сетевые инверторы (deye/sofar, их таблицы) + обособленные DDS238/МАП/КЭС.
+// Инверторным точкам проставляется Kind (deye/sofar), чтобы маршрутизация
+// восстановления/накопителя знала марку. Общий sunreceiver.averages выведен из
+// эксплуатации.
+func (s *pgStore) averagesAll(start, end time.Time) ([]deviceSnapshot, error) {
+	var snaps []deviceSnapshot
+	for _, b := range []invBrand{deyeBrand, sofarBrand} {
+		pts, err := s.invAverages(b, start, end)
+		if err != nil {
+			return nil, err
+		}
+		for i := range pts {
+			pts[i].Kind = b.name
+		}
+		snaps = append(snaps, pts...)
 	}
-	rows, err := s.pool.Query(s.ctx, q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("pg query averages: %w", err)
+	if ds, derr := s.Dds238Averages(start, end); derr == nil {
+		snaps = append(snaps, ds...)
 	}
-	defer rows.Close()
-
-	snaps := []deviceSnapshot{}
-	for rows.Next() {
-		var ip, name, deviceSN string
-		var ts time.Time
-		var vals json.RawMessage
-		if err := rows.Scan(&ip, &name, &ts, &deviceSN, &vals); err != nil {
-			return nil, fmt.Errorf("pg scan: %w", err)
-		}
-		if ip == meterDeviceKey {
-			continue // старые строки DDS238 в averages — игнорируем (см. dds238_averages)
-		}
-		if ip == mapDevKey {
-			continue // старые строки МАП в averages — игнорируем (см. map_averages)
-		}
-		if isKesKey(ip) {
-			continue // старые строки КЭС в averages — игнорируем (см. kes_averages)
-		}
-		var vc valuesContract
-		if len(vals) > 0 {
-			if err := json.Unmarshal(vals, &vc); err != nil {
-				continue
-			}
-		}
-		snaps = append(snaps, deviceSnapshot{
-			Name:      name,
-			IP:        ip,
-			Timestamp: ts.Format(time.RFC3339),
-			DeviceSN:  deviceSN,
-			Values:    vc,
-		})
+	if ms, merr := s.MapAverages(start, end); merr == nil {
+		snaps = append(snaps, ms...)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("pg rows: %w", err)
-	}
-	// DDS238 хранится обособленно (dds238_averages) — подмешиваем его точки при
-	// запросе «все устройства» (ips пуст), чтобы дашборд/реставрация видели снимок.
-	if len(ips) == 0 {
-		if ds, derr := s.Dds238Averages(start, end); derr == nil {
-			snaps = append(snaps, ds...)
-		}
-		if ms, merr := s.MapAverages(start, end); merr == nil {
-			snaps = append(snaps, ms...)
-		}
-		if ks, kerr := s.KesAverages(start, end); kerr == nil {
-			snaps = append(snaps, ks...)
-		}
+	if ks, kerr := s.KesAverages(start, end); kerr == nil {
+		snaps = append(snaps, ks...)
 	}
 	return snaps, nil
 }
@@ -457,8 +374,8 @@ func (s *pgStore) DeviceErrorsCount(from, to time.Time, kind, device string) (in
 	return n, nil
 }
 
-// EnBmsAverages возвращает 5-минутные усреднённые точки одного устройства EnBMS
-// (name = MAC) за период [start, end] включительно, по возрастанию ts.
+// Bms26Averages возвращает 5-минутные усреднённые точки одной BMS (name = serial)
+// за период [start, end] включительно, по возрастанию ts.
 func (s *pgStore) Bms26Averages(name string, start, end time.Time) ([]bms26Snapshot, error) {
 	rows, err := s.pool.Query(s.ctx, `
 SELECT ts, values
@@ -671,108 +588,6 @@ WHERE day = $1`, day).Scan(
 	return &row, nil
 }
 
-// MigrateLegacy конвертирует старую таблицу сырых снимков snapshots в
-// 5-минутные усреднённые точки таблицы averages, после чего удаляет snapshots.
-// Идемпотентна: вторая попытка находит, что таблицы уже нет, и бездействует.
-func (s *pgStore) MigrateLegacy() error {
-	var exists bool
-	if err := s.pool.QueryRow(s.ctx, `
-SELECT EXISTS (
-	SELECT 1 FROM information_schema.tables
-	WHERE table_schema = 'sunreceiver' AND table_name = 'snapshots'
-)`).Scan(&exists); err != nil {
-		return fmt.Errorf("pg legacy exists: %w", err)
-	}
-	if !exists {
-		log.Println("pg legacy: таблица sunreceiver.snapshots не найдена — миграция не требуется")
-		return nil
-	}
-
-	var n int
-	if err := s.pool.QueryRow(s.ctx, `SELECT count(*) FROM sunreceiver.snapshots`).Scan(&n); err != nil {
-		return fmt.Errorf("pg legacy count: %w", err)
-	}
-	if n == 0 {
-		return s.dropLegacy()
-	}
-	log.Printf("pg legacy: конвертирую %d сырых снимков snapshots в 5-минутные усреднённые точки", n)
-
-	rows, err := s.pool.Query(s.ctx, `
-SELECT ip, name, ts, device_sn, values
-FROM sunreceiver.snapshots
-ORDER BY ip, ts`)
-	if err != nil {
-		return fmt.Errorf("pg legacy query: %w", err)
-	}
-	defer rows.Close()
-
-	// Стриминг: строки идут ORDER BY ip, ts, поэтому снимки одного (ip, 5-минутного
-	// бакета) идут подряд. Держим в памяти только текущую группу, а не всю таблицу
-	// (раньше весь набор сырых снимков собирался в map — риск OOM на большой истории).
-	var (
-		inserted, failed int
-		curIP            string
-		curBucket        time.Time
-		group            []deviceSnapshot
-		haveGroup        bool
-	)
-	flush := func() {
-		if !haveGroup || len(group) == 0 {
-			return
-		}
-		vc := averageValues(group)
-		if len(vc) == 0 {
-			return
-		}
-		if err := s.InsertAveraged(curIP, group[0].Name, curBucket, group[0].DeviceSN, vc); err != nil {
-			log.Printf("pg legacy insert %s @ %s: %v", curIP, curBucket.Format(time.RFC3339), err)
-			failed++
-			return
-		}
-		inserted++
-	}
-	for rows.Next() {
-		var ip, name, deviceSN string
-		var ts time.Time
-		var vals json.RawMessage
-		if err := rows.Scan(&ip, &name, &ts, &deviceSN, &vals); err != nil {
-			return fmt.Errorf("pg legacy scan: %w", err)
-		}
-		var vc valuesContract
-		if len(vals) > 0 {
-			if err := json.Unmarshal(vals, &vc); err != nil {
-				continue
-			}
-		}
-		bucket := floorToStep(ts)
-		if !haveGroup || ip != curIP || !bucket.Equal(curBucket) {
-			flush()
-			curIP, curBucket, haveGroup = ip, bucket, true
-			group = group[:0]
-		}
-		group = append(group, deviceSnapshot{
-			Name:      name,
-			IP:        ip,
-			Timestamp: ts.Format(time.RFC3339),
-			DeviceSN:  deviceSN,
-			Values:    vc,
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("pg legacy rows: %w", err)
-	}
-	flush()
-	log.Printf("pg legacy: усреднённых точек записано: %d (ошибок: %d)", inserted, failed)
-
-	if failed > 0 {
-		// Не удаляем исходные snapshots: иначе не вставившиеся группы будут
-		// потеряны навсегда. InsertAveraged — идемпотентный upsert, поэтому
-		// повторный запуск миграции безопасен.
-		return fmt.Errorf("pg legacy: %d групп не вставлено, таблица snapshots сохранена для повтора", failed)
-	}
-	return s.dropLegacy()
-}
-
 // parseTS разбирает timestamp снимка (RFC3339) в time.Time. При ошибке
 // парсинга — ok=false (вызывающий должен пропустить снимок).
 func parseTS(s string) (time.Time, bool) {
@@ -781,15 +596,6 @@ func parseTS(s string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return ts, true
-}
-
-// dropLegacy удаляет старую сырую таблицу snapshots.
-func (s *pgStore) dropLegacy() error {
-	if _, err := s.pool.Exec(s.ctx, `DROP TABLE IF EXISTS sunreceiver.snapshots`); err != nil {
-		return fmt.Errorf("pg drop snapshots: %w", err)
-	}
-	log.Println("pg legacy: таблица sunreceiver.snapshots удалена")
-	return nil
 }
 
 // Close закрывает пул соединений.

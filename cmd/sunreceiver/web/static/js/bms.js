@@ -24,7 +24,7 @@ function renderKPIs(d){
   h+='<div class="kpi"><div class="lbl">Заряд (SOC)</div><div class="val socval">'
     +'<span class="mini-batt"><span class="mini-batt-fill" style="width:'+soc+'%;background:'+socCol+';display:block"></span></span>'
     +'<span>'+soc+'<span class="unit">%</span></span></div>'
-    +'<div class="sub">остаток '+fmtNum(d.remaining_ah,1)+' А·ч из '+fmtNum(d.capacity_ah,0)+' А·ч</div></div>';
+    +'<div class="sub">остаток '+fmtNum(d.remaining_ah,1)+' А·ч / '+fmtNum(d.capacity_ah,0)+' А·ч</div></div>';
   h+='<div class="kpi"><div class="lbl">Напряжение пакета</div><div class="val">'+fmtNum(packV,2)+'<span class="unit">V</span></div>'
     +'<div class="sub">'+d.cell_count+' ячеек, сред. '+fmtNum(d.avg_cell_v,3)+' В/яч</div></div>';
   if(Number(d.port_voltage_v)>0){ h+='<div class="kpi"><div class="lbl">Напряжение порта</div><div class="val">'+fmtNum(d.port_voltage_v,2)+'<span class="unit">V</span></div></div>'; }
@@ -59,12 +59,10 @@ function renderCells(d){
   }
   document.getElementById('cellsGrid').innerHTML=h;
   var delta=(d.max_cell_v-d.min_cell_v);
-  document.getElementById('cellDelta').textContent='разброс: '+delta.toFixed(3)+' В (макс '+d.max_cell_v.toFixed(3)+' / мин '+d.min_cell_v.toFixed(3)+' В)';
+  document.getElementById('cellDelta').textContent='разброс: '+delta.toFixed(3)+' В (макс '+d.max_cell_v.toFixed(3)+' / минимум '+d.min_cell_v.toFixed(3)+' В)';
 }
 
-// Подписи каналов T1–T6 (реконструкция — см. docs/antbms/antbms-protocol-status-frame.md).
-var TEMP_NAMES=['Батарея 1','Батарея 2','Силовая плата','Плата управления','Резерв','Резерв'];
-// Для EnBMS соответствие каналов не восстанавливалось — нейтральные подписи.
+// Для EnBMS соответствие каналов температуры не восстанавливалось — нейтральные подписи.
 function tempName(i){ return 'Датчик '+(i+1); }
 function renderTemps(d){
   var t=d.temperatures_c||[];

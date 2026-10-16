@@ -74,11 +74,11 @@ func TestGroupForBackfill(t *testing.T) {
 	if len(groups) != 1 {
 		t.Fatalf("groupForBackfill бакетов=%d, want 1: %+v", len(groups), groups)
 	}
-	k := accBucketKey{ip: "192.0.2.1", bts: start}
+	k := accBucketKey{key: "192.0.2.1", bts: start}
 	if len(groups[k]) != 2 {
 		t.Fatalf("бакет 10:00 снимков=%d, want 2 (start + внутри): %+v", len(groups[k]), groups[k])
 	}
-	if _, ok := groups[accBucketKey{ip: "192.0.2.1", bts: end}]; ok {
+	if _, ok := groups[accBucketKey{key: "192.0.2.1", bts: end}]; ok {
 		t.Fatal("точка ts==end попала в текущий бакет — backfill не должен его трогать")
 	}
 }

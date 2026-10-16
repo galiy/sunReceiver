@@ -106,15 +106,16 @@ HTTP-клиент и токен (см. [`map-mppt.md`](map-mppt.md)). Пулер
      и в истории на странице BMS, и на общей странице «Ошибки» (`/errors`).
    - Тексты тревог переведены (ru/en/zh): i18n `i18n.js` переводит и сами фразы
      (`высокое напряжение…`, `защита от…`, одиночные warn, Ext_Bit), и подписи групп.
-3. **Миграция истории** (сделано): `bms26_migrate.go` (`migrateBms26History`,
-   идемпотентно по маркеру `sunreceiver:migrated:bms26`) переносит ряды из
+3. **Миграция истории** (сделано ранее): разовыми Python-скриптами перенесены ряды
+   из
    `sunreceiver:bms:series:*`/`enbms:series:*` и PG `bms_averages`/`enbms_averages` в
    `sunreceiver:bms26:*`/`bms26_averages` (JSON приводится к форме `bms26Snapshot`;
    дедуп). Связка id: ANT — по ёмкости (`AntBms <cap> A/h` → `AntBMS-DSP-<cap>-NNNNN`),
-   EnBMS — единственный MAC → единственный EnBMS-serial. Также переносится **история
+   EnBMS — единственный MAC → единственный EnBMS-serial. Также перенесена **история
    ошибок** `device_errors`: `kind='antbms'`/`'enbms'` → `kind='bms'`, `device` → serial.
    `current` не мигрируется (перезаписывается пулером). Старые данные удалены
-   (`pruneBms26Legacy`; старые строки `device_errors` удаляются в ходе миграции ошибок).
+   (старые ключи/таблицы и строки `device_errors`). В бинарнике миграций нет
+   (правило проекта: миграции — только скриптами).
 
 ## Связанные документы
 

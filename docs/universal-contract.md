@@ -37,11 +37,13 @@
 ### Структура записи JSON
 
 > **Актуальная модель хранения:** сырые снимки теперь хранятся не в файлах
-> `data/…`, а в Redis (HASH `sunreceiver:current` + месячные ZSET
-> `sunreceiver:series:<YYYY-MM>`, последние 2 суток) и PostgreSQL (5-минутные
-> усреднённые точки `sunreceiver.averages`). Конфиг — единый `sunReceiver.json`
-> (не `config.json`). Описанная ниже структура объекта снимка (поля
-> `name`/`ip`/`timestamp`/`device_sn`/`values`) сохранена и в Redis/PG.
+> `data/…`, а в Redis (обособленные по марке HASH+ZSET:
+> `sunreceiver:deye:current`/`deye:series:*`, `sunreceiver:sofar:*`, последние
+> 2 суток; ключ инвертора — серийник `inverter_sn`) и PostgreSQL (5-минутные
+> усреднённые точки `sunreceiver.deye_averages`/`sofar_averages`). Конфиг — единый
+> `sunReceiver.json` (не `config.json`). Описанная ниже структура объекта снимка
+> (поля `name`/`ip`/`timestamp`/`device_sn`/`values`) сохранена и в Redis/PG
+> (`ip` — информационное поле).
 
 Каждый снимок устройства — объект вида:
 
@@ -267,7 +269,7 @@
 Знаки приведены к семантике дашборда (а не сырому фирменному выводу mapread.py) и уже так
 показываются на плашках и графиках МАП.
 - **`grid_power` у Deye** (0xCB) и **`grid_power` у МАП** — одноимённые теги, но на разных
-  устройствах (разные ключи IP в Redis/PG), конфликта нет.
+  устройствах (разные устройства: ключ инвертора — серийник, МАП — `map`), конфликта нет.
 
 ---
 

@@ -32,9 +32,9 @@ func TestMeterBackfillMaxDist(t *testing.T) {
 	b := time.Now().Truncate(time.Minute)
 
 	save := func(at time.Time, imp float64) {
-		snap := deviceSnapshot{IP: cfg.IP, Name: "meter", Timestamp: at.Format(time.RFC3339)}
+		snap := deviceSnapshot{Name: "meter", Timestamp: at.Format(time.RFC3339)}
 		snap.Values = valuesContract{"meter_import": imp, "meter_export": imp + 1}
-		if err := s.SaveSnapshot(snap, at); err != nil {
+		if err := s.SaveDds238Series(snap, at); err != nil {
 			t.Fatalf("save snapshot @%v: %v", at, err)
 		}
 	}

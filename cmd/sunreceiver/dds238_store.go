@@ -28,9 +28,9 @@ import (
 
 // Ключи Redis модуля DDS238 (электросчётчик). Обособлены от инверторов/МАП/DTS017M:
 // у счётчика собственные current-HASH и месячный ряд. Общие
-// sunreceiver:current / sunreceiver:series:* БОЛЬШЕ не используются для DDS238;
-// однако чтение (Current/QuerySeries) собирает DDS238 из этих ключей прозрачно,
-// поэтому остальной код/дашборд видят снимок как раньше.
+// sunreceiver:current / sunreceiver:series:* БОЛЬШЕ не используются для DDS238.
+// Читаются отдельными методами (Dds238Current/QueryDds238Series/Dds238Averages);
+// в общие читалки (снят) НЕ подмешиваются.
 const (
 	// redisDds238CurrentKey — HASH текущего снимка DDS238: поле = meterDeviceKey,
 	// значение = JSON deviceSnapshot.
