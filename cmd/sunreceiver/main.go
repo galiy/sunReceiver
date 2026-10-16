@@ -25,7 +25,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -1576,21 +1575,12 @@ func asciiFromRegisters(vals []uint16) string {
 	return b.String()
 }
 
-// sofarVersionsRe — суффикс версий HW-строки Sofar: три подряд идущих токена
-// «V<цифры>» в конце (аппаратная/программная/польз. платформы), напр.
-// "…V480V100V480". Такие версии выводить в качестве серийного номера НЕ нужно.
-var sofarVersionsRe = regexp.MustCompile(`V\d+V\d+V\d+$`)
+// (Суффикс версий Sofar обрабатывается normalizeInverterSN — одна реализация.)
 
-// trimSofarVersions отрезает от HW-строки Sofar хвост-версии (если он есть),
-// оставляя только серийный код инвертора. Напр. "SA3ES033KAQ846V480V100V480" →
-// "SA3ES033KAQ846".
-func trimSofarVersions(s string) string {
-	loc := sofarVersionsRe.FindStringIndex(s)
-	if loc == nil || loc[0] == 0 {
-		return s
-	}
-	return s[:loc[0]]
-}
+// trimSofarVersions отрезает от HW-строки Sofar хвост-версии — единая реализация
+// с нормализацией серийника на выходе пулера (`normalizeInverterSN`), чтобы правило
+// обрезки жило в одном месте.
+func trimSofarVersions(s string) string { return normalizeInverterSN(sofarBrand.name, s) }
 
 func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 	res := DeviceResult{OK: true}

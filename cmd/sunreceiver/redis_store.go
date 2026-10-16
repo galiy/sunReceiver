@@ -329,17 +329,17 @@ func (s *redisStore) queryAllSeries(start, end time.Time) ([]deviceSnapshot, err
 		all = append(all, pts...)
 	}
 	if d, derr := s.QueryDds238Series(start, end); derr != nil {
-		log.Printf("queryAllSeries dds238: %v", derr)
+		return nil, fmt.Errorf("queryAllSeries dds238: %w", derr)
 	} else {
 		all = append(all, d...)
 	}
 	if m, merr := s.QueryMapSeries(start, end); merr != nil {
-		log.Printf("queryAllSeries map: %v", merr)
+		return nil, fmt.Errorf("queryAllSeries map: %w", merr)
 	} else {
 		all = append(all, m...)
 	}
 	if ks, kerr := s.QueryKesSeries(start, end); kerr != nil {
-		log.Printf("queryAllSeries kes: %v", kerr)
+		return nil, fmt.Errorf("queryAllSeries kes: %w", kerr)
 	} else {
 		all = append(all, ks...)
 	}

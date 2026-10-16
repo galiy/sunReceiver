@@ -437,9 +437,7 @@ func isMeterDevice(v valuesContract) bool {
 // isMPPTKey возвращает true для ключа/IP устройства MPPT-контроллера (devKey вида
 // mppt-<serial>). Используется, чтобы MPPT-контроллеры сортировались и
 // выводились после сетевых инверторов.
-func isMPPTKey(ip string) bool {
-	return strings.HasPrefix(ip, "mppt-")
-}
+func isMPPTKey(ip string) bool { return isKesKey(ip) }
 
 // placementTotals группирует свежие снимки сетевых инверторов (Deye/Sofar) по
 // размещениям (field placement) и считает суммарные активную и PV-мощности.
