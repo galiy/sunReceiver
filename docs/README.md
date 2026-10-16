@@ -212,7 +212,6 @@ arm-linux-musleabihf -static` (статичный elf32 ARM), поэтому н�
 - [`modules/solarman-client.md`](modules/solarman-client.md) — клиент Solarman V5.
 - [`modules/inverter-poller.md`](modules/inverter-poller.md) — poller инверторов.
 - [`modules/storage.md`](modules/storage.md) — Redis + PG + аккумулятор.
-- [`averages-partitioned-plan.md`](averages-partitioned-plan.md) — перенос 5-мин средних в партиционированные колоночные `*_averages_r` (этапы 1–6, выполнено).
 - [`modules/dashboard.md`](modules/dashboard.md) — веб-дашборд.
 - [`modules/map-mppt.md`](modules/map-mppt.md) — МАП + MPPT.
 - [`modules/ce308.md`](modules/ce308.md) — счётчик Энергомера CE308 (BLE).

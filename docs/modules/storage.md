@@ -78,8 +78,8 @@ BMS26, DTS017M, CE308 — каждый в свой ряд `sunreceiver:*:series:
 `<orig>_averages_r` (суффикс `R`): `PARTITION BY RANGE (ts)` помесячно, `PK (ключ, ts)`,
 значения — типизированные колонки `double precision` (вместо `values jsonb`),
 информационные метаданные — `text`. **FOREIGN KEY нет — только индексы**;
-согласованность связанной группы строк (BMS) — общей транзакцией. Детали и порядок
-миграции — [`../averages-partitioned-plan.md`](../averages-partitioned-plan.md).
+согласованность связанной группы строк (BMS) — общей транзакцией. Миграция истории
+выполнена (тул `--migrate-avg`), старые jsonb-таблицы удалены.
 
 - Инверторы: **`deye_averages_r`/`sofar_averages_r`** (`serial`, `ts`, `name`,
   `device_sn`, `ip`, 17 метрик), ключ — серийник. `insertAveraged`-ы и читатели — в
