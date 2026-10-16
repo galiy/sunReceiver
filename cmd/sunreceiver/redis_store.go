@@ -60,6 +60,9 @@ func openRedis(addr string) (*redis.Client, error) {
 		Addr:         addr,
 		ReadTimeout:  3 * time.Second,
 		WriteTimeout: 2 * time.Second,
+		// RESP2: TS.MRANGE/TS.RANGE возвращают массивные ответы (в RESP3 — map), а
+		// парсер ответов ожидает RESP2. Явно фиксируем протокол.
+		Protocol: 2,
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
