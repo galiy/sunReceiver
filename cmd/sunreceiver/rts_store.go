@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -61,6 +62,18 @@ func tsKey(kind, device, tag string) string {
 	return tsSeriesPrefix + tsSlug(kind) + ":" + tsSlug(device) + ":" + tsSlug(tag)
 }
 
+// tsLabelVal кодирует значение метки: RedisTimeSeries не принимает пробелы и
+// служебные символы в LABELS (напр. имя «MAP (батарея/сеть)»). Percent-escape.
+func tsLabelVal(s string) string { return url.QueryEscape(s) }
+
+// tsLabelUnescape — обратная операция для значений меток.
+func tsLabelUnescape(s string) string {
+	if v, err := url.QueryUnescape(s); err == nil {
+		return v
+	}
+	return s
+}
+
 // tsLabelArgs возвращает аргументы LABELS (пары ключ-значение) без пустых значений.
 func tsLabelArgs(pairs [][2]string) []any {
 	args := []any{"LABELS"}
@@ -68,7 +81,7 @@ func tsLabelArgs(pairs [][2]string) []any {
 		if kv[1] == "" {
 			continue
 		}
-		args = append(args, kv[0], kv[1])
+		args = append(args, kv[0], tsLabelVal(kv[1]))
 	}
 	return args
 }
@@ -280,12 +293,12 @@ func tsGroupSnapshots(series []tsSeries) []deviceSnapshot {
 	}
 	byKey := map[dk]*deviceSnapshot{}
 	for _, ser := range series {
-		dev := ser.Labels["device"]
-		name := ser.Labels["name"]
-		ip := ser.Labels["ip"]
+		dev := tsLabelUnescape(ser.Labels["device"])
+		name := tsLabelUnescape(ser.Labels["name"])
+		ip := tsLabelUnescape(ser.Labels["ip"])
 		kind := ser.Labels["kind"]
-		deviceSN := ser.Labels["device_sn"]
-		tag := ser.Labels["tag"]
+		deviceSN := tsLabelUnescape(ser.Labels["device_sn"])
+		tag := tsLabelUnescape(ser.Labels["tag"])
 		for _, p := range ser.Points {
 			k := dk{dev, p.TS}
 			sn := byKey[k]

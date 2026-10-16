@@ -440,9 +440,9 @@ func assembleBms26Series(series []tsSeries) []bms26Snapshot {
 	}
 	byKey := map[dk]*bms26Snapshot{}
 	for _, ser := range series {
-		serial := ser.Labels["device"]
-		name := ser.Labels["name"]
-		tag := ser.Labels["tag"]
+		serial := tsLabelUnescape(ser.Labels["device"])
+		name := tsLabelUnescape(ser.Labels["name"])
+		tag := tsLabelUnescape(ser.Labels["tag"])
 		for _, p := range ser.Points {
 			k := dk{serial, p.TS}
 			sn := byKey[k]
