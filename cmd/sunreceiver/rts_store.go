@@ -176,9 +176,9 @@ func (s *redisStore) tsAddValueContract(pipe redis.Pipeliner, kind, device, name
 	}
 }
 
-// tsMRange выполняет TS.MRANGE from..to FILTER <filters...> и парсит ответ.
+// tsMRange выполняет TS.MRANGE from..to WITHLABELS FILTER <filters...> и парсит ответ.
 func (s *redisStore) tsMRange(from, to time.Time, filters ...string) ([]tsSeries, error) {
-	args := []any{"TS.MRANGE", from.UnixMilli(), to.UnixMilli(), "FILTER"}
+	args := []any{"TS.MRANGE", from.UnixMilli(), to.UnixMilli(), "WITHLABELS", "FILTER"}
 	for _, f := range filters {
 		args = append(args, f)
 	}
@@ -223,8 +223,15 @@ func parseTSMRange(v any) []tsSeries {
 		}
 		ser := tsSeries{Key: tsString(row[0]), Labels: map[string]string{}}
 		if lbls, ok := row[1].([]any); ok {
-			for i := 0; i+1 < len(lbls); i += 2 {
-				ser.Labels[tsString(lbls[i])] = tsString(lbls[i+1])
+			for i := 0; i < len(lbls); i++ {
+				if pair, ok := lbls[i].([]any); ok && len(pair) >= 2 {
+					// RESP2 WITHLABELS: метки как массив пар [k,v].
+					ser.Labels[tsString(pair[0])] = tsString(pair[1])
+				} else if i+1 < len(lbls) {
+					// плоский список k,v,k,v
+					ser.Labels[tsString(lbls[i])] = tsString(lbls[i+1])
+					i++
+				}
 			}
 		}
 		ser.Points = parseTSRange(row[2])
