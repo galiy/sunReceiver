@@ -153,14 +153,19 @@ func enbmsSnapshotToBms26(s enbmsSnapshot, serial string) bms26Snapshot {
 		BalanceMask: enbmsBalanceMask(s.BalanceCells), Mode: legacyModeFromText(s.Mode),
 		MaxCellV: s.MaxCellV, MinCellV: s.MinCellV, AvgCellV: s.AvgCellV,
 	}
-	// Двоичный alarm: прямая копия (собрана EnBMS-парсером из сырых нибблов);
-	// если её нет (BLE-путь), fallback — восстановление из строк.
+	// Двоичный alarm: прямая копия (собрана EnBMS-парсером из сырых нибблов, RS485
+	// 0x44). Если её нет (BLE-путь — 0x44 не читается), биты восстанавливаем из строк
+	// хвоста best-effort (для масок), а человекочитаемые Alarms СОХРАНЯЕМ как есть
+	// (декод из частично собранных бит их бы потерял).
 	if len(s.AlarmBytes) > 0 {
 		sn.AlarmBytes = s.AlarmBytes
+		finalizeBms26(&sn) // alarms+маски из сырых бит
 	} else {
 		sn.AlarmBytes = enbmsAlarmBytesFromStrings(s.Alarms, s.CellCount, len(s.TemperaturesC))
+		sn.Alarms = s.Alarms
+		sn.CellWarnMask, sn.CellProtMask = bms26CellMasks(sn)
+		sn.TempWarnMask, sn.TempProtMask = bms26TempMasks(sn)
 	}
-	finalizeBms26(&sn)
 	return sn
 }
 
