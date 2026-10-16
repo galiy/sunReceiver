@@ -670,7 +670,7 @@ func (h *dashboardHandler) apiBMSSeries(w http.ResponseWriter, r *http.Request, 
 		pts = append(pts, old...)
 	}
 	if rOK {
-		recent, err := h.store.QueryBms26Series(name, rStart, rEnd)
+		recent, err := h.store.QueryBms26SeriesAgg(name, rStart, rEnd, rtBucket(rEnd.Sub(rStart)))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -2331,10 +2331,9 @@ func meterSeries(snaps []deviceSnapshot, key string) []seriesPoint {
 	return pts
 }
 
-// maxSeriesPoints — порог размера серии /api/series: если точек больше, ряд
-// усредняется (downsampleSeries), чтобы фронт не тянул и не рендерил десятки
-// тысяч точек на длинных периодах.
-const maxSeriesPoints = 1000
+// maxSeriesPoints — порог размера серии /api/series на стороне БЭКА: если точек
+// больше, ряд усредняется (downsampleSeries). Значение задаётся конфигом
+// series_target_points (см. main.go `maxSeriesPoints`).
 
 // downsampleSeries усредняет серию, если в ней больше maxSeriesPoints точек.
 // Прореживание — по ФАКТИЧЕСКОМУ числу точек: ряд делится на последовательные
@@ -2717,7 +2716,8 @@ func (h *dashboardHandler) mapSeriesRange(from, to, now time.Time) []deviceSnaps
 		}
 	}
 	if rOK {
-		if rs, err := h.store.QueryMapSeries(rStart, rEnd); err != nil {
+		bucket := rtBucket(rEnd.Sub(rStart))
+		if rs, err := h.store.rtSnapshots("map", rStart, rEnd, rtMapInst, bucket); err != nil {
 			log.Printf("dashboard: mapSeriesRange redis: %v", err)
 		} else if len(rs) == 0 && h.pg != nil {
 			// Redis пуст (сбой/долгий простой) — дополняем из PG, как loadRange.
@@ -3181,6 +3181,41 @@ func (h *dashboardHandler) loadRange(start, end time.Time, now time.Time) ([]dev
 	return c.snaps, c.err
 }
 
+// Теги, реально нужные графикам (/api/series): фильтр по ним уменьшает объём
+// чтения из RedisTimeSeries (не тянем pv*/l* и пр.).
+var (
+	rtInvInst = []string{"ac_active_power", "temperature_inner", "temperature_module", "temperature_radiator", "temperature_igbt"}
+	rtMapInst = []string{"grid_voltage", "grid_power", "battery_voltage", "battery_current", "battery_power", "map_temp_battery", "map_temp_tor", "map_temp_transistor"}
+	rtDdsInst = []string{"meter_voltage", "meter_current", "meter_active_power", "meter_reactive_power", "meter_frequency", "meter_power_factor"}
+)
+
+// rtBucket — размер бакета серверной агрегации RT (мс) для окна, либо 0 (без агр.).
+// Целимся в seriesTargetPoints точек на серию; узкие окна — сырьё (bucket<1с).
+func rtBucket(window time.Duration) int64 {
+	if seriesRedisTargetPoints <= 0 {
+		return 0
+	}
+	b := window.Milliseconds() / int64(seriesRedisTargetPoints)
+	if b < 1000 {
+		return 0
+	}
+	return b
+}
+
+// rtSnapshots читает снимки устройств марки kind из RedisTimeSeries за [from,to]
+// с серверной агрегацией avg и опц. фильтром по тегам (пусто — все теги).
+func (s *redisStore) rtSnapshots(kind string, from, to time.Time, tags []string, bucketMs int64) ([]deviceSnapshot, error) {
+	filters := []string{"kind=" + kind}
+	if len(tags) > 0 {
+		filters = append(filters, tsTagFilter(tags))
+	}
+	ser, err := s.tsMRangeAgg(from, to, "avg", bucketMs, filters...)
+	if err != nil {
+		return nil, err
+	}
+	return tsGroupSnapshots(ser), nil
+}
+
 // loadRangeUncached — реальное чтение ряда устройств для /api/series из PG
 // (старая часть) и Redis (рецентная часть). Читаются обособленные ряды сетевых
 // инверторов (deye/sofar) И обособленные МАП и DDS238 — они нужны этому эндпоинту
@@ -3219,22 +3254,29 @@ func (h *dashboardHandler) loadRangeUncached(start, end time.Time, now time.Time
 	// Если в Redis снимков нет (сбой/долгий простой, а реставрация из PG срабатывает
 	// только при полностью пустом Redis) — дополняем 5-мин средними из PG.
 	if rOK {
+		bucket := rtBucket(rEnd.Sub(rStart))
 		var redisSnaps []deviceSnapshot
 		for _, b := range []invBrand{deyeBrand, sofarBrand} {
-			pts, err := h.store.queryInvSeries(b, rStart, rEnd)
+			pts, err := h.store.rtSnapshots(b.name, rStart, rEnd, rtInvInst, bucket)
 			if err != nil {
 				return nil, err
 			}
 			redisSnaps = append(redisSnaps, pts...)
 		}
-		if ms, err := h.store.QueryMapSeries(rStart, rEnd); err != nil {
+		if ms, err := h.store.rtSnapshots("map", rStart, rEnd, rtMapInst, bucket); err != nil {
 			log.Printf("dashboard: loadRange map series: %v", err)
 		} else {
+			for i := range ms {
+				ms[i].IP = mapDevKey
+			}
 			redisSnaps = append(redisSnaps, ms...)
 		}
-		if ds, err := h.store.QueryDds238Series(rStart, rEnd); err != nil {
+		if ds, err := h.store.rtSnapshots("dds238", rStart, rEnd, rtDdsInst, bucket); err != nil {
 			log.Printf("dashboard: loadRange dds238 series: %v", err)
 		} else {
+			for i := range ds {
+				ds[i].IP = meterDeviceKey
+			}
 			redisSnaps = append(redisSnaps, ds...)
 		}
 		if len(redisSnaps) == 0 && h.pg != nil {

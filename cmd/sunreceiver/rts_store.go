@@ -198,6 +198,33 @@ func (s *redisStore) tsRange(key string, from, to time.Time) ([]tsPoint, error) 
 	return parseTSRange(res), nil
 }
 
+// tsTagFilter формирует выражение FILTER по тегам (один — tag=x, много — tag=(x,y)).
+func tsTagFilter(tags []string) string {
+	if len(tags) == 1 {
+		return "tag=" + tags[0]
+	}
+	return "tag=(" + strings.Join(tags, ",") + ")"
+}
+
+// tsMRangeAgg — TS.MRANGE с опциональной серверной агрегацией (AGGREGATION agg
+// bucket, ALIGN 0) без компакт-серий и произвольными FILTER-ами (kind/device/tag).
+// bucketMs=0 или agg="" — без агрегации (сырьё).
+func (s *redisStore) tsMRangeAgg(from, to time.Time, agg string, bucketMs int64, filters ...string) ([]tsSeries, error) {
+	args := []any{"TS.MRANGE", from.UnixMilli(), to.UnixMilli(), "WITHLABELS"}
+	if bucketMs > 0 && agg != "" {
+		args = append(args, "AGGREGATION", agg, bucketMs, "ALIGN", 0)
+	}
+	args = append(args, "FILTER")
+	for _, f := range filters {
+		args = append(args, f)
+	}
+	res, err := s.rdb.Do(s.ctx, args...).Result()
+	if err != nil {
+		return nil, fmt.Errorf("TS.MRANGE agg: %w", err)
+	}
+	return parseTSMRange(res), nil
+}
+
 // parseTSRange парсит ответ TS.RANGE/TS.MRANGE-внутренний: [[ts,val],...].
 func parseTSRange(v any) []tsPoint {
 	items, _ := v.([]any)

@@ -189,7 +189,7 @@ type mapMalina26Section struct {
 // Пароль указывается прямо в pg-DSN (sunReceiver.json — приватный конфиг, в git не
 // коммитится).
 type dbConfig struct {
-	Redis           string `json:"redis"`             // адрес Redis в формате host:port
+	Redis           string `json:"redis"`             // адрес Redis: host:port либо путь к unix-сокету (напр. /run/redis/redis.sock)
 	PG              string `json:"pg"`                // DSN PostgreSQL (с паролем)
 	PGRestoreWindow string `json:"pg_restore_window"` // окно РЕСТАВРАЦИИ Redis из PG (duration-строка, напр. "720h"); пусто — дефолт 30 суток
 }
@@ -266,6 +266,11 @@ type configFile struct {
 	Notify        *notifySection   `json:"notify"`
 	Relay         *relaySection    `json:"relay"`          // сетевое реле SR-201 (лампы), управление по UDP
 	DashboardPort int              `json:"dashboard_port"` // порт веб-дашборда; обязательное поле (0 — ошибка загрузки конфига)
+	// SeriesTargetPoints — цель точек/серию на стороне БЭКА (downsample); обязательное.
+	SeriesTargetPoints *int `json:"series_target_points,omitempty"`
+	// SeriesRedisTargetPoints — цель серверной агрегации RedisTimeSeries (≤ backend);
+	// обязательное. 0 — агрегация RT отключена.
+	SeriesRedisTargetPoints *int `json:"series_redis_target_points,omitempty"`
 	// Необязательные учётные данные HTTP Basic для `/api/*` веб-дашборда. Если оба
 	// пусты — API открыт (обратный прокси закрывает доступ снаружи сам).
 	DashboardUser     string `json:"dashboard_user,omitempty"`
@@ -491,6 +496,18 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	if cf.DashboardPort < 1 || cf.DashboardPort > 65535 {
 		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: dashboard_port=%d вне диапазона 1..65535 (порт веб-дашборда)", path, cf.DashboardPort)
 	}
+	// series_target_points / series_redis_target_points — ОБЯЗАТЕЛЬНЫЕ.
+	if cf.SeriesTargetPoints == nil {
+		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: не задано обязательное поле series_target_points (цель точек/серию на бэке)", path)
+	}
+	if cf.SeriesRedisTargetPoints == nil {
+		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: не задано обязательное поле series_redis_target_points (цель агрегации RedisTimeSeries)", path)
+	}
+	maxSeriesPoints = *cf.SeriesTargetPoints
+	seriesRedisTargetPoints = *cf.SeriesRedisTargetPoints
+	if seriesRedisTargetPoints > maxSeriesPoints && maxSeriesPoints > 0 {
+		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: series_redis_target_points=%d > series_target_points=%d (Redis-цель должна быть не больше бэкенд-цели)", path, seriesRedisTargetPoints, maxSeriesPoints)
+	}
 	// Учётные данные HTTP Basic для `/api/*` дашборда (необязательны). Заданы обе —
 	// требовать авторизацию; иначе API открыт (доступ снаружи закрывает прокси).
 	dashboardAuthUser = cf.DashboardUser
@@ -651,6 +668,17 @@ func devKey(t invTarget) string {
 	}
 	return t.IP
 }
+
+// maxSeriesPoints — цель числа точек на серию на СТОРОНЕ БЭКА (downsampleSeries/
+// downsampleBMSSeries). Конфиг series_target_points (обязательное).
+// seriesRedisTargetPoints — цель для серверной агрегации RedisTimeSeries
+// (должна быть НЕ больше backend-цели, обычно чуть меньше: тогда RT отдаёт не больше
+// точек, чем ждёт backend, и бэк не перепрореживает ряд из Redis). Конфиг
+// series_redis_target_points (обязательное). 0 — соответствующая агрегация off.
+var (
+	maxSeriesPoints         = 1000
+	seriesRedisTargetPoints = 1000
+)
 
 // version — версия сборки сервиса. Переопределяется при сборке через
 // -ldflags "-X main.version=<версия>"; по умолчанию "dev" (локальная сборка).

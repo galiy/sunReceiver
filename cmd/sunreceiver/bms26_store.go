@@ -425,6 +425,19 @@ func (s *redisStore) QueryBms26Series(serial string, start, end time.Time) ([]bm
 	return assembleBms26Series(series), nil
 }
 
+// QueryBms26SeriesAgg — как QueryBms26Series, но с серверной агрегацией avg
+// (bucketMs; 0 — сырьё) для графиков BMS.
+func (s *redisStore) QueryBms26SeriesAgg(serial string, start, end time.Time, bucketMs int64) ([]bms26Snapshot, error) {
+	if start.After(end) {
+		return nil, errors.New("start after end")
+	}
+	series, err := s.tsMRangeAgg(start, end, "avg", bucketMs, "kind=bms26", "device="+serial)
+	if err != nil {
+		return nil, err
+	}
+	return assembleBms26Series(series), nil
+}
+
 // assembleBms26Series собирает bms26Snapshot из per-tag серий BMS (скаляры +
 // cell_i/temp_i/alarm_i) по (serial, ts).
 func assembleBms26Series(series []tsSeries) []bms26Snapshot {

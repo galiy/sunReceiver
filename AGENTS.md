@@ -90,6 +90,8 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 `{"redis": "host:port", "pg": "DSN", "pg_restore_window": "720h"}` (адреса напрямую из
 конфига; `pg_restore_window` — duration-строка окна реставрации Redis из PG, пусто/нет =
 дефолт 30 суток; пароль PG — в DSN, конфиг приватный). Порт веб-дашборда — корневое поле
+**`series_target_points`** / **`series_redis_target_points`** — **ОБЯЗАТЕЛЬНЫЕ** поля графиков: цель точек/серию на бэке (`downsampleSeries`/`downsampleBMSSeries`) и цель серверной агрегации RedisTimeSeries (`TS.MRANGE AGGREGATION avg`, bucket=окно/цель; узко — сырьё). Redis-цель должна быть **не больше** бэкенд-цели (обычно чуть меньше — тогда RT отдаёт не больше точек, чем ждёт бэк, и ряд из Redis не перепрореживается). `0` — агрегация off. Читаются только нужные теги. `db.redis` допускает host:port **или путь к unix-сокету** (`/run/redis/redis.sock`).
+
 **`dashboard_port`** — **ОБЯЗАТЕЛЬНОЕ** (отсутствие = ошибка загрузки конфига; в
 `sunReceiver.sample.json` указан 80, на проде 8080). Счётчик DDS238 — раздел **`meter`**
 `{"name", "ip", "port", "unit", "protocol", "first_reg", "register_count"}` (имеет приоритет над

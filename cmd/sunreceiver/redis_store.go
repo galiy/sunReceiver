@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,14 +57,22 @@ type mapWinMember struct {
 // OOM-свопа/сбоев TCP не должен замораживать всех пулеров и дашборд);
 // go-redis сам переподнимает зависшее соединение.
 func openRedis(addr string) (*redis.Client, error) {
-	rdb := redis.NewClient(&redis.Options{
-		Addr:         addr,
+	opts := &redis.Options{
 		ReadTimeout:  3 * time.Second,
 		WriteTimeout: 2 * time.Second,
 		// RESP2: TS.MRANGE/TS.RANGE возвращают массивные ответы (в RESP3 — map), а
 		// парсер ответов ожидает RESP2. Явно фиксируем протокол.
 		Protocol: 2,
-	})
+	}
+	// Адрес может быть host:port либо путём к unix-сокету (начинается с "/") —
+	// на одном хосте сокет быстрее TCP (меньше syscalls/round-trip).
+	if strings.HasPrefix(addr, "/") {
+		opts.Network = "unix"
+		opts.Addr = addr
+	} else {
+		opts.Addr = addr
+	}
+	rdb := redis.NewClient(opts)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {
