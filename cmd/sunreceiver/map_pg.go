@@ -38,8 +38,15 @@ func (s *pgStore) MapAverages(start, end time.Time) ([]deviceSnapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	for i := range out {
-		out[i].IP = mapDevKey
+	// Пропускаем строки, у которых все метрики NULL (пустые заглушки в PG):
+	// иначе они попадают в карту с пустым Values и засоряют current/TS.
+	filtered := out[:0]
+	for _, sn := range out {
+		if len(sn.Values) == 0 {
+			continue
+		}
+		sn.IP = mapDevKey
+		filtered = append(filtered, sn)
 	}
-	return out, nil
+	return filtered, nil
 }
