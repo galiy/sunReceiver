@@ -41,18 +41,18 @@ import (
 // sunreceiver.bms26_averages_r.
 
 // bms26Source — источник BMS: HTTP-клиент «Малина26» (token/Bearer/401). Клиент
-// переиспользует тот же источник, что и method=malina26 раздела map (общий
+// переиспользует тот же источник, что и МАП/КЭС раздела map (общий
 // host/port/password и токен) — отдельного раздела в конфиге у BMS нет.
 type bms26Source struct {
 	http         *malina26Source
 	pollInterval time.Duration
 }
 
-// bms26 — глобальный источник BMS; nil — опрос отключён (нет method=malina26).
+// bms26 — глобальный источник BMS; nil — опрос отключён (раздел map выключен).
 var bms26 *bms26Source
 
 // newBms26Source создаёт источник BMS на общем HTTP-клиенте «Малина26».
-// Вызывается только когда method=malina26 активен (источник malina26 != nil).
+// Вызывается только когда активен источник malina26 (раздел map включён).
 func newBms26Source(httpSrc *malina26Source) *bms26Source {
 	if httpSrc == nil {
 		return nil
@@ -305,7 +305,6 @@ func pollBms26Once(ctx context.Context) []bms26Snapshot {
 		sn.DeviceName = d.Serial
 		sn.Timestamp = now.Format(time.RFC3339)
 		finalizeBms26(&sn)
-		cacheBms26Snapshot(sn) // костыль: кэш serial для старых пулеров
 		out = append(out, sn)
 	}
 	return out
@@ -339,7 +338,6 @@ func bmsDeviceFromBms26(sn bms26Snapshot) bmsDevice {
 		Kind:          "bms26",
 		DeviceName:    sn.Serial,
 		Key:           sn.Serial,
-		Port:          sn.BmsType,
 		CellCount:     sn.CellCount,
 		CellsV:        sn.CellsV,
 		TotalV:        sn.TotalV,

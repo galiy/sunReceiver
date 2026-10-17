@@ -31,7 +31,7 @@ import (
 	"time"
 )
 
-// Пулер МАП/КЭС через новый HTTP-API ПАК «Малина26» (method=malina26).
+// Пулер МАП/КЭС через HTTP-API «Малина26».
 //
 // Протокол (см. проект cleaning.malina, docs/api-auth.md, docs/map-reader.md,
 // docs/map-contract.md, docs/kes-contract.md):
@@ -52,6 +52,13 @@ const (
 	malina26RequestTimeout = 3 * time.Second
 	malina26ClientTimeout  = 5 * time.Second
 
+	// Fallback: пока опрашивается резервный МАП — перечитывать список раз в 60 с,
+	// чтобы вернуться на основной; основной после 2 неуспехов raw/decode считается
+	// недоступным на 60 с.
+	malina26ListRecheck    = 60 * time.Second
+	malina26PrimaryBackoff = 60 * time.Second
+	malina26PrimaryFailMax = 2
+
 	// Порядок МАП на дашборде (инверторы — 0..N, MPPT — mpptOrderBase+slot).
 	malina26MapOrder = 9000
 )
@@ -62,38 +69,39 @@ type malina26Source struct {
 	host     string
 	name     string
 	password string
-	serial   string // серийник «своего» МАП (число строкой)
+	serial   string // серийник «своего» МАП (число строкой; идентичность)
+	// fallbackSerial — резервный серийник: опрашивается, если основной недоступен.
+	// Идентичность (ключи/device_sn) при этом остаётся по serial.
+	fallbackSerial string
 
 	client *http.Client
 
-	mu      sync.Mutex
-	token   string
-	mapID   int
-	mapGen  uint64
-	haveMap bool
+	mu             sync.Mutex
+	token          string
+	mapID          int
+	mapGen         uint64
+	haveMap        bool
+	activeFallback bool      // сейчас опрашивается резервный прибор
+	probingPrimary bool      // идёт проба основного при активном резервном
+	lastListCheck  time.Time // когда последний раз читали /api/map/devices
+	primaryFail    int       // подряд неуспехов raw/decode основного
+	primaryBroken  time.Time // до какого времени основной считается недоступным
 }
 
-// malina26 — глобальный источник (method=malina26); nil — метод не выбран.
+// malina26 — глобальный источник; nil — раздел отключён/не настроен.
 var malina26 *malina26Source
 
-// loadMalina26 собирает источник из блока map.malina26. Возвращает nil, если
-// method != malina26, раздел отключён или блок неполный (тогда опрос не запускается).
+// loadMalina26 собирает источник из плоского раздела map. Возвращает nil, если
+// раздел отключён или неполный (тогда опрос не запускается).
 func loadMalina26(sec *mapSection) *malina26Source {
 	if sec == nil || (sec.Disabled != nil && *sec.Disabled) {
 		return nil
 	}
-	if sec.Method != "malina26" {
+	if sec.Host == "" || sec.Password == "" || strings.TrimSpace(sec.Serial) == "" {
+		log.Printf("map: раздел неполный (нужны host, password, serial) — опрос не запускается")
 		return nil
 	}
-	m := sec.Malina26
-	if m == nil {
-		return nil
-	}
-	if m.Host == "" || m.Password == "" || strings.TrimSpace(m.Serial) == "" {
-		log.Printf("map malina26: блок неполный (нужны host, password, serial) — опрос не запускается")
-		return nil
-	}
-	port := m.Port
+	port := sec.Port
 	if port == 0 {
 		port = 80
 	}
@@ -102,12 +110,13 @@ func loadMalina26(sec *mapSection) *malina26Source {
 		scheme = "https"
 	}
 	return &malina26Source{
-		baseURL:  fmt.Sprintf("%s://%s:%d", scheme, m.Host, port),
-		host:     m.Host,
-		name:     "MAP (батарея/сеть)",
-		password: m.Password,
-		serial:   strings.TrimSpace(m.Serial),
-		client:   &http.Client{Timeout: malina26ClientTimeout},
+		baseURL:        fmt.Sprintf("%s://%s:%d", scheme, sec.Host, port),
+		host:           sec.Host,
+		name:           "MAP (батарея/сеть)",
+		password:       sec.Password,
+		serial:         strings.TrimSpace(sec.Serial),
+		fallbackSerial: strings.TrimSpace(sec.FallbackSerial),
+		client:         &http.Client{Timeout: malina26ClientTimeout},
 	}
 }
 
@@ -249,7 +258,7 @@ func serialFromLabel(label string) string {
 
 // ---- Пулер МАП ----
 
-// pollMAPMalina26 опрашивает «свой» МАП через новый API (method=malina26).
+// pollMAPMalina26 опрашивает «свой» МАП через API «Малина26».
 func pollMAPMalina26(ctx context.Context) DeviceResult {
 	res := DeviceResult{OK: true}
 	now := time.Now()
@@ -288,54 +297,174 @@ func pollMAPMalina26(ctx context.Context) DeviceResult {
 	return res
 }
 
-// fetchMapRaw возвращает сырой payload MapData «своего» МАП. nil,nil — МАП не найден
-// в списке или потерян (id+gen протух) — вызывающий повторит поиск в следующем цикле.
-func (s *malina26Source) fetchMapRaw(ctx context.Context) ([]byte, error) {
+// fetchMapRaw возвращает сырой payload MapData выбранного МАП. nil,nil — ни
+// основной, ни резервный не найдены/потеряны (не ошибка; повторим в след. цикле).
+func (s *malina26Source) fetchMapRaw(ctx context.Context) (body []byte, isFallback, isProbe bool, err error) {
+	now := time.Now()
 	s.mu.Lock()
 	haveMap, id, gen := s.haveMap, s.mapID, s.mapGen
+	activeFallback := s.activeFallback
+	probing := s.probingPrimary
+	broken := !s.primaryBroken.IsZero() && now.Before(s.primaryBroken)
+	needResolve := !haveMap
+	if activeFallback && !probing && now.Sub(s.lastListCheck) >= malina26ListRecheck {
+		needResolve = true
+	}
+	// Основной «отдохнул» — одна проба. primaryFail НЕ обнуляем: если проба
+	// неудачна, счётчик сразу снова взведёт backoff (а не потребует двух проб).
+	if !s.primaryBroken.IsZero() && !now.Before(s.primaryBroken) {
+		s.primaryBroken = time.Time{}
+		needResolve = true
+	}
+	// Не спамим список каждую секунду, если и основной в backoff, и резервного нет:
+	// перечитываем не чаще раза в 60 с.
+	if !haveMap && broken && !probing && now.Sub(s.lastListCheck) < malina26ListRecheck {
+		s.mu.Unlock()
+		return nil, activeFallback, probing, nil
+	}
 	s.mu.Unlock()
 
-	if !haveMap {
+	if needResolve {
 		devs, err := s.devices(ctx, "map")
 		if err != nil {
-			return nil, err
+			return nil, activeFallback, probing, err
 		}
-		found := false
-		for _, d := range devs {
-			if deviceSerial(d) == s.serial {
-				s.mu.Lock()
-				s.mapID, s.mapGen, s.haveMap = d.ID, d.Gen, true
-				s.mu.Unlock()
-				id, gen, found = d.ID, d.Gen, true
-				break
+		find := func(serial string) (malina26Device, bool) {
+			for _, d := range devs {
+				if deviceSerial(d) == serial {
+					return d, true
+				}
+			}
+			return malina26Device{}, false
+		}
+		var (
+			d       malina26Device
+			ok      bool
+			isFall  bool
+			isProbe bool
+		)
+		switch {
+		case activeFallback && !broken:
+			// Активен резервный и подошло время перепроверки: пробуем основной, но
+			// остаёмся на резервном до успешного raw+decode (см. markPrimarySuccess).
+			if d, ok = find(s.serial); ok {
+				isFall, isProbe = true, true
+			} else if d, ok = find(s.fallbackSerial); ok {
+				isFall = true
+			}
+		case activeFallback:
+			// Основной в backoff — держим резервный.
+			if d, ok = find(s.fallbackSerial); ok {
+				isFall = true
+			}
+		default:
+			if !broken {
+				if d, ok = find(s.serial); ok {
+					isFall = false
+				}
+			}
+			if !ok && s.fallbackSerial != "" {
+				if d, ok = find(s.fallbackSerial); ok {
+					isFall = true
+				}
 			}
 		}
-		if !found {
-			return nil, nil // наш МАП не в списке — ждём
+		if !ok {
+			s.mu.Lock()
+			s.haveMap = false
+			s.probingPrimary = false
+			s.activeFallback = false
+			s.lastListCheck = now
+			s.mu.Unlock()
+			return nil, activeFallback, probing, nil
 		}
+		s.mu.Lock()
+		prevFallback := s.activeFallback
+		s.mapID, s.mapGen, s.haveMap = d.ID, d.Gen, true
+		s.activeFallback = isFall
+		s.probingPrimary = isProbe
+		s.lastListCheck = now
+		s.mu.Unlock()
+		if isProbe {
+			log.Printf("map malina26: проба основного МАП %s (резервный продолжает опрос при неудаче)", s.serial)
+		} else if isFall != prevFallback {
+			if isFall {
+				log.Printf("map malina26: основной МАП %s недоступен — опрос резервного %s (идентичность остаётся %s)", s.serial, s.fallbackSerial, s.serial)
+			}
+		}
+		id, gen, activeFallback, probing = d.ID, d.Gen, isFall, isProbe
 	}
 
 	code, b, err := s.get(ctx, fmt.Sprintf("/api/map/raw?id=%d&gen=%d", id, gen))
 	if err != nil {
-		return nil, err
+		s.failActive(activeFallback, probing)
+		return nil, activeFallback, probing, err
 	}
-	if code == http.StatusNotFound {
-		// Потеря (id+gen протух) — в следующем цикле ищем заново.
-		s.mu.Lock()
-		s.haveMap = false
-		s.mu.Unlock()
-		return nil, nil
+	if code == http.StatusNotFound || code != http.StatusOK {
+		s.failActive(activeFallback, probing)
+		if code == http.StatusNotFound {
+			return nil, activeFallback, probing, nil
+		}
+		return nil, activeFallback, probing, fmt.Errorf("map/raw: status %d", code)
 	}
-	if code != http.StatusOK {
-		return nil, fmt.Errorf("map/raw: status %d", code)
-	}
-	return b, nil
+	// Успех raw ещё не успех: переключение/сброс backoff — только после decode
+	// (см. fetchMAP). Иначе битый payload никогда не накопит 2 неуспеха.
+	return b, activeFallback, probing, nil
 }
 
-// fetchMAP находит «свой» МАП (по serial) и декодирует его raw-payload. nil,nil —
-// МАП отсутствует в списке/потерян (не ошибка; повторим в следующем цикле).
+// failActive фиксирует неуспех raw для активного устройства.
+func (s *malina26Source) failActive(activeFallback, probing bool) {
+	if activeFallback && !probing {
+		// Потерян резервный — ищем заново, состояние основного не трогаем.
+		s.resetActive()
+		return
+	}
+	s.markPrimaryFailure()
+}
+
+// markPrimaryFailure фиксирует подряд идущий неуспех основного МАП.
+func (s *malina26Source) markPrimaryFailure() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.primaryFail++
+	s.haveMap = false
+	s.probingPrimary = false
+	if s.primaryFail >= malina26PrimaryFailMax {
+		s.primaryBroken = time.Now().Add(malina26PrimaryBackoff)
+		// Форсируем одно разрешение списка, чтобы сразу найти резервный;
+		// если его нет — следующий поиск не раньше чем через 60 с.
+		s.lastListCheck = time.Time{}
+	}
+}
+
+// markPrimarySuccess сбрасывает состояние недоступности основного. Вызывается
+// только после успешного raw И декодирования.
+func (s *malina26Source) markPrimarySuccess() {
+	s.mu.Lock()
+	wasFallback := s.activeFallback
+	s.primaryFail = 0
+	s.primaryBroken = time.Time{}
+	s.activeFallback = false
+	s.probingPrimary = false
+	s.mu.Unlock()
+	if wasFallback {
+		log.Printf("map malina26: возврат на основной МАП %s (сырой ответ успешен)", s.serial)
+	}
+}
+
+// resetActive сбрасывает найденное устройство (для повторного поиска).
+func (s *malina26Source) resetActive() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.haveMap = false
+	s.activeFallback = false
+	s.probingPrimary = false
+}
+
+// fetchMAP находит «свой» МАП (основной или резервный) и декодирует raw-payload.
+// nil,nil — МАП отсутствует/потерян (не ошибка; повторим в следующем цикле).
 func (s *malina26Source) fetchMAP(ctx context.Context) (valuesContract, int64, error) {
-	b, err := s.fetchMapRaw(ctx)
+	b, isFall, isProbe, err := s.fetchMapRaw(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -344,7 +473,14 @@ func (s *malina26Source) fetchMAP(ctx context.Context) (valuesContract, int64, e
 	}
 	vals, lastSeen, ok := decodeMalina26Map(b)
 	if !ok {
+		s.failActive(isFall, isProbe)
 		return nil, 0, fmt.Errorf("map/raw: не удалось декодировать payload (len=%d)", len(b))
+	}
+	// Успешный raw + декодирование основного (в т.ч. проба) — сбрасываем backoff.
+	// Успех/неуспех привязываем к прибору, чьё тело реально получено (isFall/isProbe),
+	// а не к текущему глобальному состоянию: map- и error-циклы конкурентны.
+	if !isFall || isProbe {
+		s.markPrimarySuccess()
 	}
 	if vals == nil {
 		// Контракт валиден, но данных нет (например, нет напряжения АКБ) — это не
@@ -354,19 +490,23 @@ func (s *malina26Source) fetchMAP(ctx context.Context) (valuesContract, int64, e
 	return vals, lastSeen, nil
 }
 
-// mapErrCells возвращает сырые байт-ячейки ошибок МАП из бинарного MapData (ячейки
-// 0x41C..0x449). Используется пулером ошибок при method=malina26.
+// mapErrCells возвращает сырые байт-ячейки ошибок МАП из бинарного MapData.
+// nil,nil — активного МАП нет (чтение не состоялось; состояние ошибок не трогаем).
 func (s *malina26Source) mapErrCells(ctx context.Context) (map[uint16]byte, error) {
-	b, err := s.fetchMapRaw(ctx)
+	b, isFall, isProbe, err := s.fetchMapRaw(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if b == nil {
-		return nil, errNoMapErrSource
+		return nil, nil
 	}
 	p, ok := parseMapPayload(b)
 	if !ok {
+		s.failActive(isFall, isProbe)
 		return nil, fmt.Errorf("map/raw: битый payload (len=%d)", len(b))
+	}
+	if !isFall || isProbe {
+		s.markPrimarySuccess()
 	}
 	cells := map[uint16]byte{}
 	for addr, id := range malina26ErrCellIDs {
@@ -449,7 +589,6 @@ var malina26ErrCellIDs = map[uint16]int{
 	0x42C: 157, // RSErrJob
 	0x42D: 158, // RSWarning
 	0x447: 171, // RSErrDop
-	0x449: 172, // ThFMAPSync
 }
 
 // mapPayload — разобранный заголовок MapData с доступом к значениям по id.
@@ -502,8 +641,8 @@ func parseMapPayload(b []byte) (mapPayload, bool) {
 //	[unit u8][reserved u8][reserved u32][gen u64][lastSeen u64]
 //	[presence ceil(nfields/8)][values nfields×uint32 LE]
 //
-// Возвращает значения универсального контракта теми же формулами, что rs485-ветка
-// (mapMAPRegisters), и lastSeen (unix). ok=false при неверной магии/версии/размере.
+// Возвращает значения универсального контракта (те же формулы/теги, что и
+// прежняя Modbus-ветка) и lastSeen (unix). ok=false при неверной магии/версии/размере.
 func decodeMalina26Map(b []byte) (valuesContract, int64, bool) {
 	p, ok := parseMapPayload(b)
 	if !ok {
@@ -580,7 +719,7 @@ func decodeMalina26Map(b []byte) (valuesContract, int64, bool) {
 }
 
 // decodeMalina26KES разбирает бинарный payload КЭС (1536 Б = [KESE 512][KESR 512][KESS 512])
-// и возвращает те же теги, что legacy read_json.php?device=mppt (mapMPPTAPI):
+// и возвращает те же теги контракта КЭС, что и прежний legacy-путь:
 // pv1_voltage/current/power, l1_voltage/current, ac_active_power, energy_today.
 // Также возвращает серийник КЭС (KESE.Serial) и время снимка (KESR.LastSeen).
 func decodeMalina26KES(b []byte) (valuesContract, uint16, time.Time, bool) {
@@ -609,7 +748,7 @@ func decodeMalina26KES(b []byte) (valuesContract, uint16, time.Time, bool) {
 	// Суммарная энергия за сутки, кВт·ч. Воспроизводим РОВНО поле legacy-API ПАК
 	// «Малина» `Pwr_kW = fmt("%d.%03d", PwrKW, PwrW)` (cleaning.malina
 	// web/internal/web/kesmem.go:333) — именно это значение sunReceiver исторически
-	// писал в energy_today через legacy-путь (read_json.php?device=mppt), поэтому при
+	// писал в energy_today через legacy-путь, поэтому при
 	// смене источника оно не должно меняться. Численно строка равна `PwrKW + PwrW/1000`
 	// при 3-значном PwrW, но при 4-значном (реальный аппарат отдаёт PwrW≈6326) — уже
 	// `PwrKW + PwrW/10000`. Значения поля «сырые», масштаб задаёт формат строки.

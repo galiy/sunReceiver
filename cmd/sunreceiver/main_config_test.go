@@ -32,28 +32,28 @@ func TestLoadConfigLoggerSNRequired(t *testing.T) {
 	path := filepath.Join(dir, "cfg.json")
 
 	// Deye без logger_sn — ошибка с упоминанием logger_sn.
-	if err := os.WriteFile(path, []byte(`{"poll":{"inverter":10,"map":1,"meter":1,"ce308":5,"antbms":1},"dashboard_port":8080,"series_target_points":1050,"series_redis_target_points":1000,"invertors":[{"ip":"192.0.2.91","name":"D1","type":"deye","disabled":false}]}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"poll":{"inverter":10,"map":1,"meter":1},"dashboard_port":8080,"series_target_points":1050,"series_redis_target_points":1000,"invertors":[{"ip":"192.0.2.91","name":"D1","type":"deye","disabled":false}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, _, _, _, _, _, err := loadConfig(path); err == nil {
+	if _, _, _, _, _, _, _, err := loadConfig(path); err == nil {
 		t.Fatal("ожидали ошибку для Deye без logger_sn")
 	} else if !strings.Contains(err.Error(), "logger_sn") {
 		t.Fatalf("err=%v, want упоминание logger_sn", err)
 	}
 
 	// Sofar без logger_sn — тоже ошибка.
-	if err := os.WriteFile(path, []byte(`{"poll":{"inverter":10,"map":1,"meter":1,"ce308":5,"antbms":1},"dashboard_port":8080,"series_target_points":1050,"series_redis_target_points":1000,"invertors":[{"ip":"192.0.2.76","name":"S1","type":"sofar","disabled":false}]}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"poll":{"inverter":10,"map":1,"meter":1},"dashboard_port":8080,"series_target_points":1050,"series_redis_target_points":1000,"invertors":[{"ip":"192.0.2.76","name":"S1","type":"sofar","disabled":false}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, _, _, _, _, _, err := loadConfig(path); err == nil {
+	if _, _, _, _, _, _, _, err := loadConfig(path); err == nil {
 		t.Fatal("ожидали ошибку для Sofar без logger_sn")
 	}
 
 	// С logger_sn — валиден.
-	if err := os.WriteFile(path, []byte(`{"poll":{"inverter":10,"map":1,"meter":1,"ce308":5,"antbms":1},"dashboard_port":8080,"series_target_points":1050,"series_redis_target_points":1000,"invertors":[{"ip":"192.0.2.91","name":"D1","type":"deye","disabled":false,"logger_sn":1234567890}]}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"poll":{"inverter":10,"map":1,"meter":1},"dashboard_port":8080,"series_target_points":1050,"series_redis_target_points":1000,"invertors":[{"ip":"192.0.2.91","name":"D1","type":"deye","disabled":false,"logger_sn":1234567890}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	targets, _, _, _, _, _, _, _, err := loadConfig(path)
+	targets, _, _, _, _, _, _, err := loadConfig(path)
 	if err != nil {
 		t.Fatalf("валидный конфиг: %v", err)
 	}
@@ -111,10 +111,10 @@ func TestMeterProtocol(t *testing.T) {
 func TestLoadConfigDashboardPortRequired(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cfg.json")
-	if err := os.WriteFile(path, []byte(`{"poll":{"inverter":10,"map":1,"meter":1,"ce308":5,"antbms":1},"invertors":[{"ip":"192.0.2.91","name":"D1","type":"deye","disabled":false,"logger_sn":1234567890}]}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"poll":{"inverter":10,"map":1,"meter":1},"invertors":[{"ip":"192.0.2.91","name":"D1","type":"deye","disabled":false,"logger_sn":1234567890}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, _, _, _, _, _, err := loadConfig(path); err == nil {
+	if _, _, _, _, _, _, _, err := loadConfig(path); err == nil {
 		t.Fatal("ожидали ошибку при отсутствии dashboard_port")
 	} else if !strings.Contains(err.Error(), "dashboard_port") {
 		t.Fatalf("err=%v, want упоминание dashboard_port", err)
@@ -130,56 +130,45 @@ func TestLoadConfigPollRequired(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"dashboard_port":8080,"series_target_points":1050,"series_redis_target_points":1000,`+inv+`}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, _, _, _, _, _, err := loadConfig(path); err == nil || !strings.Contains(err.Error(), "poll") {
+	if _, _, _, _, _, _, _, err := loadConfig(path); err == nil || !strings.Contains(err.Error(), "poll") {
 		t.Fatalf("без poll ожидали ошибку про poll, got %v", err)
 	}
-	// Поле poll.ce308 отсутствует/0.
-	if err := os.WriteFile(path, []byte(`{"dashboard_port":8080,"series_target_points":1050,"series_redis_target_points":1000,"poll":{"inverter":10,"map":1,"meter":1,"antbms":1},`+inv+`}`), 0o644); err != nil {
+	// Валидный poll (inverter/map/meter) — ошибки про poll нет.
+	if err := os.WriteFile(path, []byte(`{"dashboard_port":8080,"series_target_points":1050,"series_redis_target_points":1000,"poll":{"inverter":10,"map":1,"meter":1},`+inv+`}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, _, _, _, _, _, err := loadConfig(path); err == nil || !strings.Contains(err.Error(), "poll.ce308") {
-		t.Fatalf("ожидали ошибку про poll.ce308, got %v", err)
+	if _, _, _, _, _, _, _, err := loadConfig(path); err != nil {
+		t.Fatalf("валидный poll: %v", err)
 	}
 }
 
-// TestLoadConfigCE308FinalReadingsOnly: final_readings_only обязателен в разделе
-// ce308; оба значения корректно парсятся в ce308Config.
-func TestLoadConfigCE308FinalReadingsOnly(t *testing.T) {
+// TestLoadConfigRejectsLegacyFields: удалённые настройки дают понятную ошибку.
+func TestLoadConfigRejectsLegacyFields(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cfg.json")
-	poll := `"poll":{"inverter":10,"map":1,"meter":1,"ce308":5,"antbms":1}`
-	base := `"ce308":{"disabled":false,"mac":"AA:BB:CC:DD:EE:FF","pin":"000000"`
-
-	// Поле отсутствует — ошибка загрузки конфига.
-	if err := os.WriteFile(path, []byte(`{`+poll+`,"dashboard_port":8080,"series_target_points":1050,"series_redis_target_points":1000,`+base+`}}`), 0o644); err != nil {
-		t.Fatal(err)
+	base := `"dashboard_port":8080,"series_target_points":1050,"series_redis_target_points":1000,`
+	cases := []struct {
+		name string
+		cfg  string
+		want string
+	}{
+		{"antBms", `"antBms":{"disabled":true}`, "antBms"},
+		{"enBms", `"enBms":{"disabled":true}`, "enBms"},
+		{"map.method", `"map":{"method":"malina26"}`, "map.method"},
+		{"map.rs485", `"map":{"rs485":{}}`, "map.rs485"},
+		{"poll.ce308", `"poll":{"inverter":10,"map":1,"meter":1,"ce308":5}`, "poll.ce308"},
+		{"poll.antbms", `"poll":{"inverter":10,"map":1,"meter":1,"antbms":1}`, "poll.antbms"},
+		{"ce308.final", `"ce308":{"final_readings_only":true}`, "ce308.final_readings_only"},
 	}
-	if _, _, _, _, _, _, _, _, err := loadConfig(path); err == nil || !strings.Contains(err.Error(), "final_readings_only") {
-		t.Fatalf("без final_readings_only ожидали ошибку, got %v", err)
-	}
-
-	// false — обычный режим.
-	if err := os.WriteFile(path, []byte(`{`+poll+`,"dashboard_port":8080,"series_target_points":1050,"series_redis_target_points":1000,`+base+`,"final_readings_only":false}}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	_, _, _, _, _, ce, _, _, err := loadConfig(path)
-	if err != nil {
-		t.Fatalf("final_readings_only=false: %v", err)
-	}
-	if ce == nil || ce.FinalReadingsOnly {
-		t.Fatalf("ce=%+v, want непустой с FinalReadingsOnly=false", ce)
-	}
-
-	// true — режим «только итоговые показания».
-	if err := os.WriteFile(path, []byte(`{`+poll+`,"dashboard_port":8080,"series_target_points":1050,"series_redis_target_points":1000,`+base+`,"final_readings_only":true}}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	_, _, _, _, _, ce, _, _, err = loadConfig(path)
-	if err != nil {
-		t.Fatalf("final_readings_only=true: %v", err)
-	}
-	if ce == nil || !ce.FinalReadingsOnly {
-		t.Fatalf("ce=%+v, want FinalReadingsOnly=true", ce)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if err := os.WriteFile(path, []byte(`{`+base+c.cfg+`}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, _, _, _, _, _, err := loadConfig(path); err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("ожидали ошибку про %q, got %v", c.want, err)
+			}
+		})
 	}
 }
 
@@ -202,13 +191,13 @@ func TestDefaultPGRestoreWindow(t *testing.T) {
 func TestLoadConfigDuplicateIPRejected(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cfg.json")
-	body := `{"poll":{"inverter":10,"map":1,"meter":1,"ce308":5,"antbms":1},"dashboard_port":8080,"series_target_points":1050,"series_redis_target_points":1000,"invertors":[` +
+	body := `{"poll":{"inverter":10,"map":1,"meter":1},"dashboard_port":8080,"series_target_points":1050,"series_redis_target_points":1000,"invertors":[` +
 		`{"ip":"192.0.2.10","name":"A","type":"deye","disabled":false,"logger_sn":1},` +
 		`{"ip":"192.0.2.10","name":"B","type":"deye","disabled":false,"logger_sn":2}]}`
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, _, _, _, _, _, err := loadConfig(path); err == nil {
+	if _, _, _, _, _, _, _, err := loadConfig(path); err == nil {
 		t.Fatal("ожидали ошибку для дублирующегося ip")
 	} else if !strings.Contains(err.Error(), "дублирующийся ip") {
 		t.Fatalf("err=%v, want упоминание дубля ip", err)
@@ -219,11 +208,11 @@ func TestLoadConfigDuplicateIPRejected(t *testing.T) {
 func TestLoadConfigMeterOnlyAccepted(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cfg.json")
-	body := `{"poll":{"inverter":10,"map":1,"meter":1,"ce308":5,"antbms":1},"dashboard_port":8080,"series_target_points":1050,"series_redis_target_points":1000,"meter":{"disabled":false,"name":"M","ip":"192.0.2.40","port":502,"unit":1}}`
+	body := `{"poll":{"inverter":10,"map":1,"meter":1},"dashboard_port":8080,"series_target_points":1050,"series_redis_target_points":1000,"meter":{"disabled":false,"name":"M","ip":"192.0.2.40","port":502,"unit":1}}`
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, _, _, _, _, _, err := loadConfig(path); err != nil {
+	if _, _, _, _, _, _, _, err := loadConfig(path); err != nil {
 		t.Fatalf("meter-only конфиг должен грузиться, got %v", err)
 	}
 }
@@ -259,5 +248,36 @@ func TestSampleConfigParses(t *testing.T) {
 	var cf configFile
 	if err := json.Unmarshal(b, &cf); err != nil {
 		t.Fatalf("sunReceiver.sample.json не парсится: %v", err)
+	}
+}
+
+// TestLoadConfigMapFlat: плоский map с числовыми serial/fallback_serial грузится;
+// нечисловой serial и порт вне диапазона — ошибки.
+func TestLoadConfigMapFlat(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cfg.json")
+	base := `"poll":{"inverter":10,"map":1,"meter":1},"dashboard_port":8080,"series_target_points":1050,"series_redis_target_points":1000`
+	okCfg := `{` + base + `,"map":{"disabled":false,"host":"192.0.2.10","port":80,"password":"x","serial":"10001","fallback_serial":"20002"}}`
+	if err := os.WriteFile(path, []byte(okCfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, mp, _, _, _, err := loadConfig(path); err != nil || mp == nil {
+		t.Fatalf("плоский map: mp=%v err=%v", mp, err)
+	}
+
+	badSerial := `{` + base + `,"map":{"disabled":false,"host":"192.0.2.10","password":"x","serial":"abc"}}`
+	if err := os.WriteFile(path, []byte(badSerial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, _, _, _, err := loadConfig(path); err == nil || !strings.Contains(err.Error(), "serial") {
+		t.Fatalf("нечисловой serial: err=%v", err)
+	}
+
+	badPort := `{` + base + `,"map":{"disabled":false,"host":"192.0.2.10","port":70000,"password":"x","serial":"10001"}}`
+	if err := os.WriteFile(path, []byte(badPort), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, _, _, _, err := loadConfig(path); err == nil || !strings.Contains(err.Error(), "port") {
+		t.Fatalf("некорректный port: err=%v", err)
 	}
 }

@@ -27,17 +27,14 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 | Счётчик DTS017M | [`docs/dts017m-meter.md`](docs/dts017m-meter.md) |
 | Счётчик Энергомера CE308 (BLE) | [`docs/modules/ce308.md`](docs/modules/ce308.md) |
 | Счётчик энергосбыта «Меркурий» (прогноз) | [`docs/meter_mercury.md`](docs/meter_mercury.md) |
-| BMS EnBMS (Enjie EMU110x, BLE/RS485) | [`docs/modules/enbms.md`](docs/modules/enbms.md) |
 | BMS через malina26 (ANT+EnBMS, единый тип) | [`docs/modules/bms26.md`](docs/modules/bms26.md) |
-| ANT BMS | [`docs/antbms.md`](docs/antbms.md) |
-| Шлюз Modbus TCP↔RTU (`daemons/mapgateway/`, C) | [`daemons/mapgateway/README.md`](daemons/mapgateway/README.md) |
 | Уведомления в MAX | [`docs/modules/notify.md`](docs/modules/notify.md) |
 | Сетевое реле SR-201 (лампы-индикаторы) | [`docs/relay_sr-201(2light).md`](docs/relay_sr-201(2light).md) |
 | Windows-трей и логирование (`tray_*.go`, `logfile_*.go`) | [`docs/modules/tray-logging.md`](docs/modules/tray-logging.md) |
 | Протокол Solarman V5 (реверс) | [`docs/research/solarman-v5.md`](docs/research/solarman-v5.md) |
 | Регистры Sofar K-TLX | [`docs/research/sofar-registers.md`](docs/research/sofar-registers.md) |
 | Регистры Deye string | [`docs/research/deye-registers.md`](docs/research/deye-registers.md) |
-| API ПАК «Малина» | [`docs/read_json.md`](docs/read_json.md), [`docs/malina-web-api.md`](docs/malina-web-api.md) |
+| API «Малина26» (МАП/КЭС/BMS) | [`docs/modules/map-mppt.md`](docs/modules/map-mppt.md) |
 | Универсальный контракт `values` | [`docs/universal-contract.md`](docs/universal-contract.md) |
 
 **Справочник ячеек/регистров МАП** (протокол «SVEN POWER MANAGER II», RAM/EEPROM,
@@ -60,33 +57,21 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 "logger_sn": uint32, "disabled": bool}]`; `name` — логическое имя (обязательно);
 **`disabled` — ОБЯЗАТЕЛЬНОЕ поле** (`false` = опрашивается, `true` = временно
 отключён — устройство в конфиге, но не опрашивается, при старте логируется; отсутствие
-поля = ошибка загрузки конфига). Раздел **`map`** (МАП Титанатор + КЭС/MPPT) имеет
-общие поля **`disabled`** (ОБЯЗАТЕЛЬНОЕ; `true` отключает все пулеры раздела) и
-**`method`** (`"rs485"` | `"malina"` | `"malina26"`, обязателен при `disabled=false`);
-способы опроса — равнозначные вложенные блоки, обязателен только блок выбранного
-`method`:
-- **`rs485`** `{"name", "ip", "unit"}` — МАП по Modbus TCP/RS485 (unit по умолч. 1);
-- **`malina`** `{"base_url", "mppt_path", "map_path", "login", "password"}` — legacy
-  веб-API ПАК «Малина» (`read_json.php`): МАП (`device=map`) и КЭС (`device=mppt`);
-  `mppt_path` — путь к `read_json.php?device=mppt`; `map_path` (необязательный) —
-  явный путь к данным МАП, иначе выводится из `mppt_path` подменой `device`;
-- **`malina26`** `{"host", "port", "password", "serial"}` — новый HTTP-API «Малина26»
-  (токен по паролю + бинарные контракты): `host` — IP/имя, `port` — 80/443, `serial` —
-  серийник «своего» МАП (число строкой). КЭС берутся из того же API (блок `malina` при
-  `malina26` не используется). Пароли в открытом виде (файл в git не выгружается).
-  При `method=malina26` ключ КЭС в хранилище — `mppt-<serial>` (без host). BMS (ANT +
-  EnBMS) через «Малина26» — **отдельного раздела конфига нет**: используется уже
-  имеющийся блок **`map.malina26`** (host/port/password + общий токен), пулер
-  запускается при `method=malina26`. Контракт телеметрии — единый бинарный 107 Б,
-  **копия** пакета `internal/bmscontract` (оригинал —
-  `github.com/galiy/malina-26/daemons/lib/bmscontract`; см.
-  [`docs/modules/bms26.md`](docs/modules/bms26.md)); хранение — Redis
-  `sunreceiver:bms26:*` + PG `bms26_averages_r`. Старые разделы **`antBms`**
-  `{"url", "disabled"}` (**`disabled` — ОБЯЗАТЕЛЬНОЕ**: `false` — ANT BMS
-  опрашивается, `true` — опрос отключён; `url` — **полный** адрес `read_bms.php` ПАК
-  «Малина», при необходимости с Basic-auth прямо в URL:
-  `http://user:pass@host/read_bms.php`) и **`enBms`** (BLE/RS485 напрямую) сохранены в
-  коде, но на проде отключены (`disabled=true`). Расположение баз — раздел **`db`**
+поля = ошибка загрузки конфига). Раздел **`map`** (МАП Титанатор + КЭС/MPPT + BMS26)
+имеет поля **`disabled`** (ОБЯЗАТЕЛЬНОЕ; `true` отключает все пулеры раздела),
+**`host`**, **`port`** (80/443), **`password`**, **`serial`** (серийник «своего» МАП,
+число строкой) и необязательный **`fallback_serial`** (резервный серийник: опрос при
+недоступности основного; идентичность/ключи/`device_sn` остаются по `serial`).
+Единственный способ — HTTP-API «Малина26» (токен по паролю + бинарные контракты).
+КЭС берутся из того же API; ключ КЭС в хранилище — `mppt-<serial>` (без host). Пароли
+в открытом виде (файл в git не выгружается). BMS (ANT + EnBMS) через «Малина26» —
+**отдельного раздела конфига нет**: используется общий блок `map`
+(host/port/password + токен). Контракт телеметрии — единый бинарный 107 Б,
+**копия** пакета `internal/bmscontract` (оригинал —
+`github.com/galiy/malina-26/daemons/lib/bmscontract`; см.
+[`docs/modules/bms26.md`](docs/modules/bms26.md)); хранение — Redis
+`sunreceiver:bms26:*` + PG `bms26_averages_r`. Отдельные разделы `antBms`/`enBms`
+и методы `rs485`/`malina` **удалены**. Расположение баз — раздел **`db`**
 `{"redis": "host:port", "pg": "DSN", "pg_restore_window": "720h"}` (адреса напрямую из
 конфига; `pg_restore_window` — duration-строка окна реставрации Redis из PG, пусто/нет =
 дефолт 30 суток; пароль PG — в DSN, конфиг приватный). Порт веб-дашборда — корневое поле
@@ -109,40 +94,22 @@ legacy-файлом `dds238.json`; `protocol` — `"tcp"` (Modbus TCP, по ум
 (`dts017m_averages_r`, `dts017m_daily_tariffs`), отдельный аккумулятор; общие
 ключи/таблицы DDS238 не используются. Описан в
 [`docs/dts017m-meter.md`](docs/dts017m-meter.md). Счётчик Энергомера **CE308** (опрос по BLE) — раздел
-**`ce308`** `{"disabled", "final_readings_only", "name", "mac", "pin"}`
+**`ce308`** `{"disabled", "name", "mac", "pin"}`
 (**`disabled` — ОБЯЗАТЕЛЬНОЕ** поле: `false` — счётчик опрашивается, `true` — опрос
-CE308 отключён; **`final_readings_only` — ОБЯЗАТЕЛЬНОЕ** поле: `false` — обычный
-режим (постоянное BLE-соединение, телеметрия current/series в Redis + 5-мин средние
-в PG), `true` — режим «только итоговые показания»: пулер НЕ держит соединение и НЕ
-пишет телеметрию/агрегаты, а раз в 30 мин (или по кнопке «Обновить» с дашборда)
-однократно снимает накопленную энергию (панель «показания») и отключается; на
-дашборде не показывается рамка «текущие данные», ряды/API ce308 не отдаются;
-`mac` — BD_ADDR счётчика, `pin` — BLE-PIN радиоинтерфейса для спаривания),
-полностью описан в [`docs/modules/ce308.md`](docs/modules/ce308.md). Счётчик
+CE308 отключён). Единственный режим — «только итоговые показания»: пулер НЕ держит
+соединение и НЕ пишет телеметрию/агрегаты, а раз в 30 мин (или по кнопке «Обновить»
+с дашборда) однократно снимает накопленную энергию (панель «показания») и
+отключается; `mac` — BD_ADDR счётчика, `pin` — BLE-PIN радиоинтерфейса для
+спаривания), полностью описан в [`docs/modules/ce308.md`](docs/modules/ce308.md). Счётчик
 энергосбыта **«Меркурий»** (без интерфейса мониторинга, установлен последовательно с
 DDS238) — раздел **`mercury`**: коллекция ручных снятий показаний `[{"taken_at"
 (RFC3339), "import_day", "import_night", "export_day", "export_night"}]` (kWh);
 прогноз показаний на текущий момент считается по последней ручной точке + статистике
 DDS238 (реализовано в `mercury.go`, отдаётся в `/api/current` → рамка «Меркурий —
 прогноз» в рамке DDS238). Описан в
-[`docs/meter_mercury.md`](docs/meter_mercury.md). BMS **EnBMS** (Enjie EMU110x,
-метод опроса BLE или RS485 у каждого устройства) — раздел **`enBms`**
-`{"disabled", "poll_interval_ble", "poll_interval_rs485", "devices": [{"name",
-"mac", "method", "rs485", "disabled"}]}` (**`disabled` — ОБЯЗАТЕЛЬНОЕ** поле на
-уровне раздела и у каждого устройства: `false` — опрашивается, `true` —
-отключён). Период задаётся для КАЖДОГО метода (`poll_interval_ble` /
-`poll_interval_rs485`, секунды, оба > 0; sample: BLE 3, RS485 1). **`method` — у
-КАЖДОГО устройства** (`"ble"` | `"rs485"`), поэтому в одной коллекции устройства
-могут одновременно опрашиваться разными методами (каждый своим периодом). Для
-`method=rs485` обязателен вложенный блок `rs485` (`transport` — `"tcp"`
-(прозрачный IP-RS485-шлюз, `address` host:port) или `"com"` (COM-порт `port`,
-`baud` по умолч. 19200); `port_type` — `"rs485"`|`"rm485"`; `unit` — адрес в кадре
-PACE (поле ADR, как есть; для этой BMS ADR=0)). Для `method=ble` блок `rs485` не
-нужен (может отсутствовать). В BLE `mac` обязателен (подключение); для RS485 MAC
-не нужен, но остаётся ключом хранилища, если задан (иначе ключ — `name`). BLE-имя
-устройства не используется (у всех EnBMS оно одинаковое — `BP00`): отображаемое
-имя = `<name> <MAC/ключ>`. Описан в
-[`docs/modules/enbms.md`](docs/modules/enbms.md). Уведомления в мессенджер MAX — раздел **`notify`**
+[`docs/meter_mercury.md`](docs/meter_mercury.md). BMS (ANT + EnBMS) опрашивается
+единым типом BMS26 через API «Малина26» (раздел `map`), см.
+[`docs/modules/bms26.md`](docs/modules/bms26.md). Уведомления в мессенджер MAX — раздел **`notify`**
 `{"token", "user_id", "chat_id", "disabled", "stable_window_sec", "map_undeclared_sec", "grid_voltage_low"}`
 (токен бота MAX обязателен; адресат `user_id`/`chat_id` — **необязателен**: если
 пуст, бот регистрирует первого подписчика по `bot_started`/`bot_added`/`message_created`
@@ -154,14 +121,12 @@ PACE (поле ADR, как есть; для этой BMS ADR=0)). Для `method
 управляются; `ip` обязателен при `disabled=false`), полностью описан в
 [`docs/relay_sr-201(2light).md`](docs/relay_sr-201(2light).md). **Периоды опроса
 устройств задаются обязательным разделом `poll` (в СЕКУНДАХ)**: `{"inverter",
-"map", "meter", "ce308", "antbms"}` — все поля обязательны и > 0
+"map", "meter"}` — все поля обязательны и > 0
 (отсутствие/ноль = ошибка загрузки конфига); значения по умолчанию в sample:
-inverter 10, map 1, meter 1, ce308 5, antbms 1. Период EnBMS задаётся НЕ здесь, а
- в разделе `enBms` отдельно для каждого метода (`poll_interval_ble` /
-`poll_interval_rs485`). Период **DTS017M** задаётся НЕ здесь, а полем `poll_interval`
-в разделе `dts017m`. **В Redis пишется КАЖДОЕ
+inverter 10, map 1, meter 1. Период **DTS017M** задаётся НЕ здесь, а полем `poll_interval`
+в разделе `dts017m`. Период CE308 фиксирован (30 мин). **В Redis пишется КАЖДОЕ
 снятое показание** (окно 2 календарных суток), **в PG все ряды усредняются до 1 записи
-за 5 минут** (инверторы, МАП/MPPT, DDS238, CE308, ANT BMS, EnBMS, DTS017M).
+за 5 минут** (инверторы, МАП/MPPT, DDS238, BMS26, DTS017M).
 
 **Шаблон `sunReceiver.sample.json`** (в git) — публичный пример структуры конфига.
 **Всегда** обновлять его при любом изменении структуры/содержимого `sunReceiver.json`
@@ -186,12 +151,10 @@ inverter 10, map 1, meter 1, ce308 5, antbms 1. Период EnBMS задаёт�
   Полное описание — [`docs/modules/storage.md`](docs/modules/storage.md).
 - **Дашборд** — `dashboard.go`, HTTP + JSON API. Полное описание —
   [`docs/modules/dashboard.md`](docs/modules/dashboard.md).
-- **МАП + MPPT** — `mppt_api.go`, `malina26.go`, `internal/modbusmap/`, `runMapPoll`.
+- **МАП + MPPT** — `malina26.go`, `runMapPoll`.
   Полное описание — [`docs/modules/map-mppt.md`](docs/modules/map-mppt.md). **Ошибки МАП
-  читать только «сырыми»** — через Modbus (при `method=rs485`) либо из Малины через
-  `read_memory.php` (при `method=malina`) либо из бинарного контракта `MapData`
-  (при `method=malina26`), в зависимости от выбранного способа мониторинга. Никаких
-  агрегатов/эндпоинтов-ошибок с готовыми текстами — только сырые значения ячеек.
+  читать только «сырыми»** — из бинарного контракта `MapData` (`/api/map/raw`).
+  Никаких агрегатов/эндпоинтов-ошибок с готовыми текстами — только сырые значения ячеек.
 - **Счётчик DDS238** — `meter_*.go`: мгновенные значения `meter_*` + посуточные
   тарифы (`dds238_daily_tariffs`), добор пропущенных границ. Полное описание —
   [`docs/dds238-meter.md`](docs/dds238-meter.md).
@@ -207,39 +170,19 @@ inverter 10, map 1, meter 1, ce308 5, antbms 1. Период EnBMS задаёт�
   **Хранилище обособлено** от DDS238. На дашборде отображается: рамка
   «Гараж» с плашками тарифов и графики на странице «Электроэнергия»
   (`/api/dts017m/current`, `/api/dts017m/tariffs`), а на схеме анимации мощность
-  счётчика гаража `garage_meter_power` = `dts017_active_power` (резервно CE308).
+  счётчика гаража `garage_meter_power` = `dts017_active_power`.
   Полное описание — [`docs/dts017m-meter.md`](docs/dts017m-meter.md).
 - **Счётчик Энергомера CE308** (BLE) — `ce308_*.go`: `ce308_client.go` (BLE-транспорт),
-  `ce308.go` (маппинг/энергоснимок), `ce308_poller.go` (цикл с периодом
-  `poll.ce308`, в sample 5 с; реконнект; режим `final_readings_only` — без
-  телеметрии, раз в 30 мин/по кнопке только итоговая энергия),
-  `ce308_accumulator.go` (усреднение до 1 записи за 5 мин в PG),
-  `ce308_store.go` (Redis: current/series/energy), `ce308_agent_linux.go` (BlueZ-агент PIN).
+  `ce308.go` (маппинг/энергоснимок), `ce308_poller.go` (единственный режим:
+  без постоянного соединения, раз в 30 мин/по кнопке только итоговая энергия),
+  `ce308_store.go` (Redis: energy), `ce308_agent_linux.go` (BlueZ-агент PIN).
   Полное описание — [`docs/modules/ce308.md`](docs/modules/ce308.md).
-- **BMS EnBMS** (BLE и/или RS485) — `enBms.go`, `enBms_client.go` (BLE-транспорт),
-  `enBms_rs485.go` (ASCII PACE: TCP-шлюз/COM), `enBms_poller.go`,
-  `enBms_store.go`: опрос BMS Enjie (EMU110x) — по BLE
-  блок Battery (CID2 `0x61`; алармы — из сигнального хвоста), по RS485 TeleMeter
-  (CID2 `0x42`, та же раскладка телеметрии) плюс состояния/защиты TeleState
-  (CID2 `0x44`: алармы, ключи, балансировка, режим — `parseEnBmsState`).
-  Метод задаётся у каждого устройства, поэтому BLE- и RS485-устройства
-  опрашиваются независимыми циклами со своими периодами
-  (`poll_interval_ble`/`poll_interval_rs485`), внутри цикла — последовательно;
-  постоянные соединения (структура BLE — из CE308, схема хранения/усреднения — из
-  ANT BMS). Redis: current + каждое снятое показание; PG: 5-минутные средние.
-  Полное описание — [`docs/modules/enbms.md`](docs/modules/enbms.md).
 - **BMS через malina26** (единый тип ANT+EnBMS) — `bms26.go`, `bms26_store.go`:
   опрос через HTTP-API «Малина26» (`/api/bms/devices` + `/api/bms/raw`), бинарный
   контракт 107 Б — копия пакета `internal/bmscontract` (оригинал —
   `github.com/galiy/malina-26/daemons/lib/bmscontract`). Redis current `sunreceiver:bms26:current`
   + серии RedisTimeSeries `sunreceiver:ts:bms26:*`; PG `bms26_averages_r` (5-мин средние). Полное
   описание — [`docs/modules/bms26.md`](docs/modules/bms26.md).
-- **ANT BMS** — `bms_poller.go`, `bms_accumulator.go`, `daemons/bmslistener/`. Полное описание —
-  [`docs/antbms.md`](docs/antbms.md). Демон bmslistener (установка на ПАК «Малина») —
-  [`docs/modules/bms-listener.md`](docs/modules/bms-listener.md).
-- **Шлюз Modbus TCP↔RTU** — `daemons/mapgateway/mapgateway.c` (C, systemd на ПАК «Малина»):
-  публикует последовательный порт МАП как Modbus TCP (:502) для пулера. Сборка
-  (`make mapgateway`) и эксплуатация — [`daemons/mapgateway/README.md`](daemons/mapgateway/README.md).
 - **Уведомления в MAX** — `notify.go` (`maxClient` + трекер состояния МАП
   `mapTrack` + `runNotifyMonitor`): события мониторинга МАП (недоступен / нет
   напряжения сети) и восстановление, отправка через Bot API MAX с гистерезисом
@@ -324,9 +267,8 @@ scp поверх `/opt/sunreceiver/sunReceiver`, `systemctl restart sunreceiver.
 - **обнаруженные ошибки НЕ добавлять в ключи телеметрии** (`values`/`current`/
   `series`) — телеметрические ключи и их наборы не трогаем, ошибки идут только в
   журнал ошибок PG;
-- источник ошибок МАП — только «сырые» значения (Modbus при `method=rs485`,
-  `read_memory.php` при `method=malina`, бинарный `MapData` при `method=malina26`);
-  агрегирующие эндпоинты-ошибки не использовать.
+- источник ошибок МАП — только «сырые» значения бинарного `MapData`
+  (`/api/map/raw`); агрегирующие эндпоинты-ошибки не использовать.
 
 **Перед любым коммитом/пушем — проверка на чувствительные данные** (обязательно):прогнать по индексу/рабочему дереву и по истории поиск секретов и приватных идентификаторов — реальные IP (`192.168.x.*`), реальные MAC, серийные номера
 логгеров, пароли/токены/DSN, ключи, внешние адреса. Приватные значения держать
@@ -337,15 +279,12 @@ scp поверх `/opt/sunreceiver/sunReceiver`, `systemctl restart sunreceiver.
 
 Релизы собираются через корневой **`Makefile`** (версия подставляется в имя файла и
 в `main.version` через `-ldflags "-X main.version=<версия>"`; по умолч. `dev`).
-`VERSION ?= dev`, `dist/` создаётся автоматически. Требуется установленный `zig`
-(для целей `bmslistener` и `mapgateway`).
+`VERSION ?= dev`, `dist/` создаётся автоматически.
 
 ```sh
 make VERSION=1.2.3 linux-x64     # dist/sunReceiver-linux-amd64-1.2.3
 make VERSION=1.2.3 win-x64       # dist/sunReceiver-windows-amd64-1.2.3.exe (-H windowsgui)
-make VERSION=1.2.3 bmslistener   # dist/bmslistener-armv7l-1.2.3 (zig, кросс-сборка под Малину)
-make VERSION=1.2.3 mapgateway    # dist/mapgateway-armv7l-1.2.3 (zig, кросс-сборка под Малину)
-make VERSION=1.2.3 all           # все четыре
+make VERSION=1.2.3 all           # linux-x64 + win-x64
 make clean                       # rm -rf dist
 ```
 
@@ -361,11 +300,6 @@ macOS консоль). Флаг `--version`/`-version` печатает `sunRece
 `-H windowsgui` в stdout при запуске из проводника не виден (запускать из cmd /
 перенаправлять).
 
-**bmslistener (Малина)** — кросс-сборка через `zig cc -target
-arm-linux-musleabihf -static` (статичный elf32 ARM); не зависит от libc платы,
-запускается и на старом Raspbian jessie. Артефакт кладётся в `dist/`, **на плату не
-переносится** (только артефакт/кросс-сборка).
-
 ## Окружение
 
 - Репо: github.com/galiy/sunReceiver (remote git@github.com:galiy/sunReceiver.git,
@@ -379,13 +313,9 @@ arm-linux-musleabihf -static` (статичный elf32 ARM); не зависи�
 
 Сырые диагностические логи **отключены** (включаются константами в коде):
 
-- **EnBMS** — `enbmsRawLog` в `enBms_poller.go` (`enbms: RAW ...`);
 - **Deye** — `deyeRawAlertLog` в `main.go` (`deye alert ...`).
 
 Снятые за 2026-10-01…05 логи проанализированы:
-- EnBMS: 4171 записей (BLE до 04.10, RS485 с 04.10); ненулевая warn-область
-  хвоста Battery — только **ячейка 9** (165 раз, 0x02) и **ячейка 16** (10 раз),
-  всегда при высоком SOC/заряде (макс. ячейка); прочие warn-поля нулевые.
 - Deye: 3526 записей (5 инверторов); единственная ненулевая аварийная область —
   рег. `0x69 = 0x0004` при `status(0x3B)=4`; `0x229-0x22E` всегда нули.
 
@@ -402,11 +332,7 @@ arm-linux-musleabihf -static` (статичный elf32 ARM); не зависи�
 
 ## BMS: опрос только с согласования (правило пользователя)
 
-**BMS (EnBMS) не опрашивать без явного согласования с пользователем.**
-По прямому разрешению пользователя опрос EnBMS **включён** на проде (`enBms`
-устройство `disabled=false`). С 2026-10-04 активный метод устройства — **RS485**
-(TCP-шлюз: `devices[].method=rs485`, период `enBms.poll_interval_rs485=1`);
-период BLE в конфиге сохранён (`enBms.poll_interval_ble=3`). Любое изменение
-состояния опроса (`enBms.disabled`, `devices[].disabled`, `devices[].method`) —
-только с явного согласования. Правки конфига на проде синхронизировать с
-локальным (см. выше).
+**BMS (ANT + EnBMS) опрашивается только через единый BMS26 (API «Малина26»).**
+Отдельные legacy-пулеры ANT (`read_bms.php`) и EnBMS (BLE/RS485 напрямую) удалены;
+их разделы конфига и поля `poll.antbms`/`poll.ce308` больше не поддерживаются.
+Правки конфига на проде синхронизировать с локальным (см. выше).

@@ -26,10 +26,8 @@ import (
 // Пулер ОШИБОК МАП (Титанатор). Отдельный цикл, читает только сырые ячейки-ошибки
 // МАП и пишет появление ошибок в PG device_errors. Телеметрию не трогает.
 //
-// Источник сырых значений — по выбранному в конфиге способу мониторинга (`method`):
-//   - rs485 — Modbus (daemons/mapgateway/Modbus TCP), блок 0x41C..0x449;
-//   - malina — веб-API ПАК «Малина» read_memory.php?offset=<ячейка>&count=<n>;
-//   - malina26 — бинарный контракт MapData (/api/map/raw), ячейки по id.
+// Источник сырых значений — бинарный контракт MapData (/api/map/raw, malina26),
+// ячейки ошибок по id.
 //
 // Разметка — из protocol_MAP_cells_2026_07_15.doc (SVEN POWER MANAGER II).
 const mapErrPollInterval = 30 * time.Second
@@ -101,12 +99,6 @@ var mapErrCells = []mapErrCell{
 		{2, "Переход на генерацию: перегрузка по сети"},
 		{8, "Выключение по многократным перегрузкам по сети"},
 	}},
-	{0x448, "_I2C_Err", []mapErrBit{ // адрес не подтверждён (вероятно 0x448)
-		{1, "I2C: ошибка подтверждения (Ack)"},
-		{2, "I2C: ошибка контрольной суммы"},
-		{4, "I2C: ошибка размера данных"},
-		{8, "I2C: ошибка протокола"},
-	}},
 	{0x447, "_RSErrDop", []mapErrBit{
 		{1, "3ф: нет связи с предыдущей фазой"},
 		{2, "3ф: выход за окно синхронизации"},
@@ -137,56 +129,32 @@ func decodeMapErrors(cells map[uint16]byte) []string {
 
 var errNoMapErrSource = errors.New("источник МАП не задан")
 
-// readMapErrCells читает сырые ячейки ошибок МАП. t != nil — Modbus-путь;
-// иначе веб-API (mppt).
-func readMapErrCells(ctx context.Context, t *invTarget) (map[uint16]byte, error) {
-	cells := map[uint16]byte{}
-	if t != nil {
-		mc := mapClientFor(t.IP, t.Unit)
-		// ReadRegisters(start,count) читает count слов и возвращает 2*count байт,
-		// которые соответствуют байт-ячейкам start..start+2*count-1.
-		// Один блок 0x41C..0x449 покрывает _F_AccOver(0x41C), _F_NETOver(0x41D),
-		// _RSErrSis/JobM/Job/Warning(0x42A..0x42D), _RSErrDop(0x447), _I2C_Err(0x448).
-		if b, err := mc.ReadRegisters(ctx, 0x041C, 0x17); err != nil {
-			return nil, err
-		} else {
-			for i := 0; i < len(b); i++ {
-				cells[0x041C+uint16(i)] = b[i]
-			}
-		}
-		return cells, nil
-	}
-	if malina26 != nil {
-		// method=malina26: ошибки — из бинарного контракта MapData (/api/map/raw).
-		return malina26.mapErrCells(ctx)
-	}
-	if mppt == nil {
+// readMapErrCells читает сырые ячейки ошибок МАП из бинарного контракта MapData
+// (malina26). Возвращает errNoMapErrSource, если источник не задан.
+func readMapErrCells(ctx context.Context) (map[uint16]byte, error) {
+	if malina26 == nil {
 		return nil, errNoMapErrSource
 	}
-	m1, err := mppt.FetchMemory(ctx, 0x041C, 0x2E)
-	if err != nil {
-		return nil, err
-	}
-	for k, v := range m1 {
-		if k >= 0x41C && k <= 0x449 {
-			cells[uint16(k)] = byte(v)
-		}
-	}
-	return cells, nil
+	return malina26.mapErrCells(ctx)
 }
 
 // runMapErrorPoll — отдельный цикл опроса ошибок МАП. Не чаще 1 раза в 30 с.
 // Пишет появление ошибок в PG device_errors (device="map", kind="map"); дубли на
 // каждом чтении не создаются.
-func runMapErrorPoll(pg *pgStore, t *invTarget, ctx context.Context) {
+func runMapErrorPoll(pg *pgStore, ctx context.Context) {
 	if pg == nil {
 		return
 	}
 	last := map[string]bool{}
 	poll := func() {
-		cells, err := readMapErrCells(ctx, t)
+		cells, err := readMapErrCells(ctx)
 		if err != nil {
 			log.Printf("map errors: %v", err)
+			return
+		}
+		if cells == nil {
+			// Чтения не было (активного МАП нет) — не сбрасываем историю ошибок:
+			// иначе при возврате МАП те же ошибки запишутся как новые.
 			return
 		}
 		cur := map[string]bool{}

@@ -77,18 +77,14 @@ const ce308EnergyMinInterval = 5 * time.Minute
 //   - ShowMap — показывать блок «Данные МАП» (map.disabled != true);
 //   - ShowMeter — показывать блок счётчика и тарифов, кнопку «Электроэнергия»
 //     (счётчик опрашивается, meter.disabled != true);
-//   - ShowBMS — показывать блок BMS-батареек (пулер ANT BMS запущен);
-//   - ShowCE308 — показывать рамки «Электросчётчик CE308» (раздел ce308 настроен).
+//   - ShowBMS — показывать блок BMS-батареек (BMS26 через malina26);
+//   - ShowCE308 — показывать рамку «Электросчётчик CE308» (раздел ce308 настроен).
 type dashFlags struct {
 	ShowMap   bool
 	ShowMeter bool
 	ShowBMS   bool
 	ShowRelay bool
 	ShowCE308 bool
-	// CE308FinalReadingsOnly — режим ce308.final_readings_only: рамку «текущие
-	// данные» не показываем, графики/API рядов ce308 отключены; видна только
-	// панель «показания» (итоговая энергия).
-	CE308FinalReadingsOnly bool
 	// ShowDTS017 — опрос DTS017M включён (раздел dts017m активен): на графики
 	// добавляются фазные напряжения и активные мощности DTS017M.
 	ShowDTS017 bool
@@ -280,8 +276,8 @@ type animScheme struct {
 	// инверторы). Положительная — потребление гаража, отрицательная — отдача.
 	// Только в схеме Гаража.
 	GaragePower float64 `json:"garage_power"`
-	// GarageMeterPower — активная мощность счётчика гаража (DTS017M, при
-	// недоступности — CE308): знак как у счётчика (потребление +, отдача в сеть −).
+	// GarageMeterPower — активная мощность счётчика гаража (DTS017M): знак как у
+	// счётчика (потребление +, отдача в сеть −).
 	// Только в схеме Гаража.
 	GarageMeterPower float64 `json:"garage_meter_power"`
 	// MapTemps — температуры МАП для панели над изображением МАП: Тор и Транзисторы
@@ -337,13 +333,6 @@ type seriesResponse struct {
 	HouseInverterPower []seriesPoint  `json:"house_inverter_power,omitempty"`
 	MeterVoltage       []seriesPoint  `json:"meter_voltage,omitempty"`
 	MeterActivePower   []seriesPoint  `json:"meter_active_power,omitempty"`
-	// Ряды электросчётчика CE308 (опрос по BLE, отдельный пулер/хранилище):
-	// фазные напряжения и суммарная активная мощность для наложения на графики
-	// напряжений и мощностей (аналог белых линий счётчика DDS238).
-	CE308L1Voltage   []seriesPoint `json:"ce308_l1_voltage,omitempty"`
-	CE308L2Voltage   []seriesPoint `json:"ce308_l2_voltage,omitempty"`
-	CE308L3Voltage   []seriesPoint `json:"ce308_l3_voltage,omitempty"`
-	CE308ActivePower []seriesPoint `json:"ce308_active_power,omitempty"`
 	// Ряды счётчика DTS017M (Modbus, обособленное хранилище): фазные напряжения и
 	// активные мощности (3 фазы + Σ) для наложения на графики напряжений/мощностей.
 	// Заполняются только при активном разделе dts017m (h.flags.ShowDTS017).
@@ -589,9 +578,9 @@ func (h *dashboardHandler) apiBMS(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// apiBMSOne отдаёт актуальное состояние одной ANT BMS по ключу bmsKey
+// apiBMSOne отдаёт актуальное состояние BMS по ключу bmsKey
 // (/api/bms/<name>) для страницы деталей (обновление раз в секунду). name в URL —
-// ключ устройства (deviceName или "deviceName@Port", см. bmsKey); отображаемое имя
+// ключ устройства (Key/serial или deviceName, см. bmsKey); отображаемое имя
 // берётся из поля deviceName самого JSON.
 // /api/bms/<name>/series — временной ряд показаний BMS (Redis — сырые,
 // PG — 5-мин средние; см. apiBMSSeries).
@@ -1352,22 +1341,12 @@ func (h *dashboardHandler) apiAnimation(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	now := time.Now()
-	// Счётчик гаража — DTS017M. CE308 читаем как резервный источник (в обычном
-	// режиме); в режиме final_readings_only мгновенной мощности CE308 нет.
-	var ce308 map[string]ce308Snapshot
-	if !h.flags.CE308FinalReadingsOnly {
-		ce308, err = h.store.CE308Current()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
 	dts017, err := h.store.Dts017Current()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	res := buildAnimationResponse(devices, dts017, ce308, h.placeByIP, now)
+	res := buildAnimationResponse(devices, dts017, h.placeByIP, now)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(res)
@@ -1378,11 +1357,11 @@ func (h *dashboardHandler) apiAnimation(w http.ResponseWriter, r *http.Request) 
 // размещению (пустое → «Дом»), MPPT-контроллеры (КЭС) — в схему Дома, из МАП и
 // счётчика берёт мощности сети/батареи/счётчика. Считает мощность Дома по
 // формуле-разнице. Для Гаража берёт активную мощность счётчика гаража — DTS017M
-// (dts017), при недоступности — резервно CE308 (ce308) — и считает мощность
-// Гаража на развилке (см. GaragePower/GarageMeterPower). Устройства со снимком
+// (dts017) и считает мощность Гаража на развилке (см. GaragePower/GarageMeterPower).
+// Устройства со снимком
 // старше окна (20 мин) помечаются Stale — клиент показывает их мощность нулём
 // (ночью инверторы/КЭС не отдают данные).
-func buildAnimationResponse(devices []deviceSnapshot, dts017 *dts017Snapshot, ce308 map[string]ce308Snapshot, placeByIP map[string]string, now time.Time) animationResponse {
+func buildAnimationResponse(devices []deviceSnapshot, dts017 *dts017Snapshot, placeByIP map[string]string, now time.Time) animationResponse {
 	// Сортируем как apiCurrent: MPPT — последними, остальные по Order.
 	sort.SliceStable(devices, func(i, j int) bool {
 		mi, mj := isMPPTKey(devices[i].IP), isMPPTKey(devices[j].IP)
@@ -1519,13 +1498,13 @@ func buildAnimationResponse(devices []deviceSnapshot, dts017 *dts017Snapshot, ce
 	// Итог: P_гараж = garageMeterPower + Σac — нагрузка гаража (внешняя сеть + инверторы).
 	// Пример: сеть +120 Вт (потребление), инверторы +1 Вт → в гараж +121 Вт;
 	// при отдаче в сеть meterPower отрицателен и вычитается из выработки.
-	// Источник мощности счётчика гаража — DTS017M (при недоступности — CE308).
+	// Источник мощности счётчика гаража — DTS017M.
 	// Если свежего снимка нет — мощности гаража не считаем (узел статичен).
 	garageAC := 0.0
 	for _, inv := range garage.Inverters {
 		garageAC += inv.AC
 	}
-	if meterPower, ok := freshGarageMeterPower(dts017, ce308, now); ok {
+	if meterPower, ok := freshGarageMeterPower(dts017, now); ok {
 		garage.GarageMeterPower = meterPower
 		garage.GaragePower = meterPower + garageAC
 	} else {
@@ -1561,11 +1540,9 @@ func buildAnimationResponse(devices []deviceSnapshot, dts017 *dts017Snapshot, ce
 }
 
 // freshGarageMeterPower возвращает активную мощность счётчика гаража для схемы
-// анимации. Приоритет — DTS017M (dts017_active_power): если его снимок свежий
-// (не старше окна 20 мин), берётся он. Иначе — резервно CE308 (ce308,
-// freshCE308Power). ok=false, если ни одного свежего снимка нет — тогда мощность
-// гаража на схеме не считаем.
-func freshGarageMeterPower(dts017 *dts017Snapshot, ce308 map[string]ce308Snapshot, now time.Time) (float64, bool) {
+// анимации из DTS017M (dts017_active_power). ok=false, если снимка нет или он
+// старше окна 20 мин — тогда мощность гаража на схеме не считаем.
+func freshGarageMeterPower(dts017 *dts017Snapshot, now time.Time) (float64, bool) {
 	if dts017 != nil {
 		if ts, err := time.Parse(time.RFC3339, dts017.Timestamp); err == nil && ts.After(now.Add(-20*time.Minute)) {
 			if v, ok := dts017.Values[dts017ActivePower]; ok {
@@ -1573,39 +1550,7 @@ func freshGarageMeterPower(dts017 *dts017Snapshot, ce308 map[string]ce308Snapsho
 			}
 		}
 	}
-	return freshCE308Power(ce308, now)
-}
-
-// freshCE308Power возвращает суммарную активную мощность электросчётчика CE308
-// из свежего снимка (не старше окна staleCutoff, аналог stale в
-// buildAnimationResponse). ok=false, если CE308 не настроен/не опрошен или снимок
-// устарел — тогда мощность гаража на схеме не считаем. Резервный источник для
-// гаража (основной — DTS017M, см. freshGarageMeterPower).
-func freshCE308Power(ce308 map[string]ce308Snapshot, now time.Time) (float64, bool) {
-	staleCutoff := now.Add(-inverterStaleWindow)
-	for _, sn := range ce308 {
-		ts, err := time.Parse(time.RFC3339, sn.Timestamp)
-		if err != nil || !ts.After(staleCutoff) {
-			continue
-		}
-		if v, ok := sn.Values[ce308ActiveP]; ok {
-			return v, true
-		}
-	}
 	return 0, false
-}
-
-// ce308Name возвращает имя устройства CE308 детерминированно (лексикографически
-// минимальный ключ): map обходится в случайном порядке, а имя нужно как ключ
-// выборки PG/Redis. "" — если текущих снимков CE308 нет.
-func ce308Name(cur map[string]ce308Snapshot) string {
-	name := ""
-	for k := range cur {
-		if name == "" || k < name {
-			name = k
-		}
-	}
-	return name
 }
 
 // inverterKind определяет марку сетевого инвертора по снимку: поле Kind задаётся
@@ -1784,7 +1729,7 @@ func temperatureSeries(snaps []deviceSnapshot) []deviceSeries {
 // (полное разрешение), более старая часть — из PostgreSQL (5-минутные средние).
 // seamWindows делит запрошенный диапазон [start, end] на часть из PostgreSQL
 // (строго старше cutoff) и часть из Redis (cutoff и новее). Единая точка стыка
-// для ВСЕХ рядов (инверторы/МАП/счётчик, BMS, CE308):
+// для ВСЕХ рядов (инверторы/МАП/счётчик, BMS):
 //
 //	PG:    [start, min(end, cutoff-1s)] — если start < cutoff;
 //	Redis: [max(start, cutoff), end]    — если end > cutoff.
@@ -1944,23 +1889,6 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	// графика температур. Только Redis (в PG температуры не усредняются).
 	res.Temps = temperatureSeries(snaps)
 
-	// Ряды электросчётчика CE308 (опрос по BLE): фазные напряжения и суммарная
-	// активная мощность. CE308 хранится в собственных ключах Redis/PG (нет
-	// универсального контракта значений), поэтому читается отдельно от loadRange.
-	// В режиме final_readings_only телеметрия CE308 не собирается — ряды не
-	// запрашиваем и в ответ не отдаём.
-	if !h.flags.CE308FinalReadingsOnly {
-		ce308, err := h.ce308SeriesRange(from, to, now)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		res.CE308L1Voltage = ce308[ce308L1Voltage]
-		res.CE308L2Voltage = ce308[ce308L2Voltage]
-		res.CE308L3Voltage = ce308[ce308L3Voltage]
-		res.CE308ActivePower = ce308[ce308ActiveP]
-	}
-
 	// Ряды счётчика DTS017M (Modbus, собственные ключи Redis/PG): фазные
 	// напряжения и активные мощности (3 фазы + Σ). Только при активном разделе
 	// dts017m (иначе рядов нет).
@@ -1995,10 +1923,6 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	res.HouseInverterPower = downsampleSeries(res.HouseInverterPower, from, to)
 	res.MeterVoltage = downsampleSeries(res.MeterVoltage, from, to)
 	res.MeterActivePower = downsampleSeries(res.MeterActivePower, from, to)
-	res.CE308L1Voltage = downsampleSeries(res.CE308L1Voltage, from, to)
-	res.CE308L2Voltage = downsampleSeries(res.CE308L2Voltage, from, to)
-	res.CE308L3Voltage = downsampleSeries(res.CE308L3Voltage, from, to)
-	res.CE308ActivePower = downsampleSeries(res.CE308ActivePower, from, to)
 	res.DTS017VoltageA = downsampleSeries(res.DTS017VoltageA, from, to)
 	res.DTS017VoltageB = downsampleSeries(res.DTS017VoltageB, from, to)
 	res.DTS017VoltageC = downsampleSeries(res.DTS017VoltageC, from, to)
@@ -3453,34 +3377,14 @@ func (h *dashboardHandler) apiDts017Current(w http.ResponseWriter, r *http.Reque
 	writeJSONResponse(w, snap)
 }
 
-// apiCE308Current отвечает на GET /api/ce308/current: текущий снимок CE308
-// (мгновенные значения + время актуальности). 404, если счётчик ещё не опрошен.
-func (h *dashboardHandler) apiCE308Current(w http.ResponseWriter, r *http.Request) {
-	if h.flags.CE308FinalReadingsOnly {
-		// В режиме final_readings_only мгновенная телеметрия не собирается.
-		http.Error(w, "нет данных CE308 (режим final_readings_only)", http.StatusNotFound)
-		return
-	}
-	cur, err := h.store.CE308Current()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if len(cur) == 0 {
-		http.Error(w, "нет данных CE308", http.StatusNotFound)
-		return
-	}
-	writeJSONResponse(w, cur)
-}
-
 // apiCE308Energy обрабатывает GET и POST /api/ce308/energy. GET отдаёт последний
 // разовый снимок накопленной энергии CE308; POST — сигнал пулеру снять свежий
 // снимок (не чаще раза в ce308EnergyMinInterval, иначе 429).
 func (h *dashboardHandler) apiCE308Energy(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		// Ручной снимок энергии ограничен по частоте (не чаще ce308EnergyMinInterval):
-		// иначе частые клики «Обновить» заставляют пулер подолгу читать END01..END04 и
-		// блокируют опрос мгновенных значений. Повторный запрос — 429 + retry_after.
+		// иначе частые клики «Обновить» заставляют пулер подолгу читать END01..END04.
+		// Повторный запрос — 429 + retry_after.
 		h.ce308EnergyMu.Lock()
 		if !h.ce308EnergyAt.IsZero() {
 			if d := time.Since(h.ce308EnergyAt); d < ce308EnergyMinInterval {
@@ -3517,167 +3421,6 @@ func (h *dashboardHandler) apiCE308Energy(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSONResponse(w, snap)
-}
-
-// apiCE308Series отвечает на GET /api/ce308/series?from&to: история мгновенных
-// значений CE308 за период [from, to] (RFC3339; по умолчанию — последние 24 ч).
-// Рецентная часть (окно удержания Redis) — из Redis-ряда (~1 точка за 2 с),
-// более старая — из PostgreSQL (10-сек усреднённые точки). Точки объединяются
-// и сортируются по времени.
-func (h *dashboardHandler) apiCE308Series(w http.ResponseWriter, r *http.Request) {
-	if h.flags.CE308FinalReadingsOnly {
-		// В режиме final_readings_only история мгновенных значений не собирается.
-		http.Error(w, "нет данных CE308 (режим final_readings_only)", http.StatusNotFound)
-		return
-	}
-	now := time.Now()
-	to := now
-	if s := r.URL.Query().Get("to"); s != "" {
-		if t, err := time.Parse(time.RFC3339, s); err == nil {
-			to = t
-		}
-	}
-	from := to.Add(-24 * time.Hour)
-	if s := r.URL.Query().Get("from"); s != "" {
-		if t, err := time.Parse(time.RFC3339, s); err == nil {
-			from = t
-		}
-	}
-	if to.After(now) {
-		to = now
-	}
-	if minFrom := recentCutoff(now).AddDate(0, 0, -400); from.Before(minFrom) {
-		from = minFrom
-	}
-	if !from.Before(to) {
-		http.Error(w, "from >= to", http.StatusBadRequest)
-		return
-	}
-	cur, _ := h.store.CE308Current()
-	name := ce308Name(cur)
-	if name == "" {
-		http.Error(w, "нет данных CE308", http.StatusNotFound)
-		return
-	}
-	cutoff := seriesReadCutoff(from, now)
-	var pts []seriesPoint
-	// Старая часть — из PostgreSQL (5-мин средние), рецентная — из Redis-ряда
-	// (сырые показания). Границы — общий seamWindows.
-	pgStart, pgEnd, pgOK, rStart, rEnd, rOK := seamWindows(from, to, cutoff)
-	if h.pg != nil && pgOK {
-		old, err := h.pg.QueryCE308Averages(name, pgStart, pgEnd)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		for _, p := range old {
-			pts = append(pts, ce308SeriesPoint(p))
-		}
-	}
-	if rOK {
-		recent, err := h.store.QueryCE308Series(rStart, rEnd)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		for _, sn := range recent {
-			if fn, ferr := toFloat(sn.Values[ce308ActiveP]); ferr {
-				pts = append(pts, seriesPoint{T: sn.Timestamp, V: fn})
-			}
-		}
-	}
-	sort.Slice(pts, func(i, j int) bool { return pts[i].T < pts[j].T })
-	pts = downsampleSeries(pts, from, to)
-	if pts == nil {
-		pts = []seriesPoint{}
-	}
-	writeJSONResponse(w, map[string]any{
-		"name":   name,
-		"from":   from.Format(time.RFC3339),
-		"to":     to.Format(time.RFC3339),
-		"points": pts,
-	})
-}
-
-// ce308SeriesPoint преобразует усреднённую 10-сек точку PG в seriesPoint
-// (одна линия суммарной активной мощности CE308).
-func ce308SeriesPoint(p ce308PGPoint) seriesPoint {
-	f, _ := toFloat(p.Values[ce308ActiveP])
-	return seriesPoint{T: p.TS.Format(time.RFC3339), V: f}
-}
-
-// ce308SeriesRange собирает по электросчётчику CE308 за период [from, to]
-// временные ряды фазных напряжений (ce308_l1/l2/l3_voltage) и суммарной активной
-// мощности (ce308_active_power) для наложения на графики напряжений и мощностей.
-// Рецентная часть (окно удержания Redis) — из Redis-ряда (~1 точка за 2 с),
-// более старая — из PostgreSQL (10-сек усреднённые точки). Возвращает map
-// «тег → ряд». Если счётчик ещё не опрошен (нет текущего имени) — nil.
-func (h *dashboardHandler) ce308SeriesRange(from, to time.Time, now time.Time) (map[string][]seriesPoint, error) {
-	if h.flags.CE308FinalReadingsOnly {
-		return nil, nil
-	}
-	cur, err := h.store.CE308Current()
-	if err != nil {
-		return nil, err
-	}
-	name := ce308Name(cur)
-	if name == "" {
-		return nil, nil
-	}
-	type rec struct {
-		ts   time.Time
-		vals map[string]float64
-	}
-	var recs []rec
-	cutoff := seriesReadCutoff(from, now)
-	// Старая часть — из PostgreSQL (5-мин средние), рецентная — из Redis-ряда
-	// (сырые показания). Границы — общий seamWindows.
-	pgStart, pgEnd, pgOK, rStart, rEnd, rOK := seamWindows(from, to, cutoff)
-	if h.pg != nil && pgOK {
-		old, err := h.pg.QueryCE308Averages(name, pgStart, pgEnd)
-		if err != nil {
-			return nil, err
-		}
-		for _, p := range old {
-			recs = append(recs, rec{ts: p.TS, vals: p.Values})
-		}
-	}
-	if rOK {
-		recent, err := h.store.QueryCE308Series(rStart, rEnd)
-		if err != nil {
-			return nil, err
-		}
-		for _, sn := range recent {
-			ts, terr := time.Parse(time.RFC3339, sn.Timestamp)
-			if terr != nil {
-				continue
-			}
-			recs = append(recs, rec{ts: ts, vals: sn.Values})
-		}
-	}
-	sort.Slice(recs, func(i, j int) bool { return recs[i].ts.Before(recs[j].ts) })
-	out := map[string][]seriesPoint{}
-	for _, metric := range []string{ce308L1Voltage, ce308L2Voltage, ce308L3Voltage, ce308ActiveP} {
-		var pts []seriesPoint
-		lastT := ""
-		for _, r := range recs {
-			v, ok := r.vals[metric]
-			if !ok {
-				continue
-			}
-			t := r.ts.Format(time.RFC3339)
-			if t == lastT {
-				if n := len(pts); n > 0 {
-					pts[n-1].V = v
-				}
-				continue
-			}
-			lastT = t
-			pts = append(pts, seriesPoint{T: t, V: v})
-		}
-		out[metric] = pts
-	}
-	return out, nil
 }
 
 // dts017SeriesRange собирает по счётчику DTS017M за период [from, to] временные
@@ -3780,9 +3523,7 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayCon
 		"/agm":             h.apiAGMCurrent,
 		"/agm/series":      h.apiAGMSeries,
 		"/errors":          h.apiErrors,
-		"/ce308/current":   h.apiCE308Current,
 		"/ce308/energy":    h.apiCE308Energy,
-		"/ce308/series":    h.apiCE308Series,
 		"/dts017m/current": h.apiDts017Current,
 	}
 	if relay != nil {

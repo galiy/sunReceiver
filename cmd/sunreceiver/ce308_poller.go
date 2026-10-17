@@ -18,163 +18,54 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"time"
 )
 
-// ce308PollInterval — период опроса мгновенных значений CE308 (настраивается
-// через "poll.ce308", по умолчанию 5 с). Ticker буферизует один тик и сбрасывает
-// лишние, поэтому при более длинном чтении BLE цикл не накапливает опоздания.
-
 // ce308EnergyInterval — период АВТОНОМНОГО снимка накопленной энергии: раз в
 // 30 минут пулер сам (без внешнего HTTP-запроса) перечитывает END01..END04 и
-// обновляет разовый снимок. Первый запуск при инициализации ориентируется на
-// время последнего снимка (см. ce308EnergyDelay).
+// обновляет разовый снимок. Первый запуск ориентируется на время последнего
+// снимка (см. ce308EnergyDelay).
 const ce308EnergyInterval = 30 * time.Minute
 
-// ce308FinalReadingsInterval — период снятия итоговых показаний в режиме
-// final_readings_only. Совпадает с автономным снимком энергии обычного режима.
+// ce308FinalReadingsInterval — период снятия итоговых показаний.
 const ce308FinalReadingsInterval = ce308EnergyInterval
 
 // ce308ReconnectDelay — базовая пауза между попытками переподключения при обрыве связи.
 const ce308ReconnectDelay = 2 * time.Second
 
-// ce308ReconnectMaxDelay — верхняя граница ограниченного бэкоффа переподключения
-// (база удваивается после каждой неудачной попытки): не долбить радиоканал
-// непрерывно при длительном отсутствии связи, но и не ждать слишком долго.
+// ce308ReconnectMaxDelay — верхняя граница ограниченного бэкоффа переподключения.
 const ce308ReconnectMaxDelay = 30 * time.Second
 
-// ce308ReadRetries — число ПОВТОРОВ после первой неудачной попытки чтения при
-// таймауте (итого до ce308ReadRetries+1 попыток на одну команду). Транзиентный
-// сбой радио лечится повтором того же чтения, не разрывая постоянное соединение.
-const ce308ReadRetries = 2
-
-// ce308ConsecutiveFailLimit — число подряд неудачных опросов, после которых пулер
-// разрывает постоянное соединение и переподключается. Ниже порога одиночные сбои
-// (в т.ч. после исчерпания ретраев) не рвут связь.
-const ce308ConsecutiveFailLimit = 3
-
 // ce308ConnFailLogInterval — порог логирования неудачных подключений:
-// первый сбой — сразу, далее не чаще раза в 10 минут (при длительном отсутствии
-// связи журнал не засоряется).
+// первый сбой — сразу, далее не чаще раза в 10 минут.
 const ce308ConnFailLogInterval = 10 * time.Minute
 
 // ce308CommErrPersist — сколько «нет связи» должно держаться непрерывно (без
-// успешного подключения), прежде чем попасть в историю ошибок (антишум: частые
-// le-connection-abort-by-local не пишем).
+// успешного подключения), прежде чем попасть в историю ошибок (антишум).
 const ce308CommErrPersist = time.Hour
 
-// runCe308Poll — отдельный поток опроса счётчика Энергомера CE308 по BLE:
-//   - держит BLE-соединение постоянно (не закрывает между опросами);
-//   - каждые ce308PollInterval читает мгновенные значения (напряжения/токи/
-//     активная и реактивная мощность по фазам) и пишет снимок в Redis:
-//     текущее значение (SaveCE308Current, перезапись) + точка истории
-//     (SaveCE308History ~1 за 2 с);
-//   - усреднение истории до 1 записи за 5 мин в PG делает runCe308Accumulator;
-//   - при обрыве соединения сам его восстанавливает (переподключение с паузой);
-//   - по сигналу (triggerCE308EnergySnapshot) в ближайшем цикле снимает
-//     накопленную электроэнергию (Актив/Реактив × День/Ночь × Потребление/Отдача)
-//     и сохраняет разовый снимок в отдельный ключ Redis (истории нет).
-func runCe308Poll(store *redisStore, pg *pgStore, cfg *ce308Config, ctx context.Context) {
-	if cfg == nil {
-		return
-	}
-	// Канал запроса снимка энергии: привязываем к пулеру, чтобы внешний сигнал
-	// (HTTP /api/ce308/energy) попадал в этот цикл.
-	trig := make(chan struct{}, 1)
-	setCE308TriggerChan(trig)
-	defer setCE308TriggerChan(nil)
-
-	var lastFailLog time.Time
-	// История ошибок: пишем «нет связи» только если держится ≥ ce308CommErrPersist
-	// без успешного подключения (иначе частые блипы BLE засоряют историю).
-	var commErrSince time.Time
-	var commErrLogged bool
-	reconnect := ce308ReconnectDelay
-	for {
-		// Внешняя переинициализация контроллера (watchdog перезагружает драйвер
-		// btusb, см. ce308_agent_linux.go) может сменить его номер/объект BlueZ —
-		// сбрасываем кэш id, чтобы каждая попытка подключения заново обнаружила
-		// реальный адаптер. Иначе ремонт BT без рестарта сервиса не привёл бы к
-		// переподключению (пулер остался бы на мёртвом hci0).
-		ce308AdapterIDReset()
-		m, err := openCE308(cfg.MAC, cfg.PIN, ctx)
-		if err != nil {
-			if time.Since(lastFailLog) >= ce308ConnFailLogInterval {
-				logCE308("подключение к %s не удалось: %v", cfg.MAC, err)
-				lastFailLog = time.Now()
-			}
-			now := time.Now()
-			if commErrSince.IsZero() {
-				commErrSince = now
-			}
-			if pg != nil && !commErrLogged && now.Sub(commErrSince) >= ce308CommErrPersist {
-				if e := pg.InsertDeviceError(cfg.Name, "ce308", "comm", err.Error(), now); e != nil {
-					logCE308("error pg: %v", e)
-				}
-				commErrLogged = true
-			}
-			if !waitCtx(ctx, reconnect) {
-				return
-			}
-			// Ограниченный бэкофф: при устойчивой проблеме с BLE не долбить повторно.
-			reconnect = ce308Backoff(reconnect)
-			continue
-		}
-		// Успешное подключение сбрасывает бэкофф к базовой паузе и историю ошибки.
-		reconnect = ce308ReconnectDelay
-		commErrSince = time.Time{}
-		commErrLogged = false
-		logCE308("подключено к %s", cfg.MAC)
-		err = ce308PollConnected(store, cfg, m, trig, ctx)
-		// Закрытие соединения: фиксируем результат (неуспешный Disconnect при
-		// остановке оставляет полу-открытую связь на адаптере — см. Close).
-		if cerr := m.Close(); cerr != nil {
-			logCE308("закрытие соединения с %s: %v", cfg.MAC, cerr)
-		}
-		if ctx.Err() != nil {
-			return
-		}
-		if err != nil {
-			logCE308("соединение с %s потеряно: %v — переподключение", cfg.MAC, err)
-		}
-		if !waitCtx(ctx, reconnect) {
-			return
-		}
-		reconnect = ce308Backoff(reconnect)
-	}
-}
-
-// runCe308FinalReadings — режим «только итоговые показания» (final_readings_only).
-// В отличие от runCe308Poll:
+// runCe308FinalReadings — единственный режим CE308: только итоговые показания.
 //   - НЕ держит постоянное BLE-соединение (подключается только на время снятия);
-//   - НЕ читает и НЕ пишет мгновенную телеметрию (Redis current/series, PG-агрегация
-//     не выполняются — аккумулятор в этом режиме не запускается);
+//   - НЕ читает и НЕ пишет мгновенную телеметрию;
 //   - раз в ce308FinalReadingsInterval (30 мин) подключается, однократно снимает
-//     накопленную энергию END01..END04 (панель «показания» на дашборде) и
-//     отключается;
-//   - дополнительно снимает снимок по сигналу (кнопка «Обновить» на дашборде,
-//     triggerCE308EnergySnapshot).
+//     накопленную энергию END01..END04 (панель «показания») и отключается;
+//   - дополнительно снимает снимок по сигналу (кнопка «Обновить», triggerCE308EnergySnapshot).
 //
 // При инициализации момент первого снятия ориентируется на время последнего
-// снимка энергии в Redis (ce308EnergyDelay): свежий снимок — ждём до (last+30 мин),
-// снимка нет/устарел — снимаем сразу. Ошибка подключения/чтения не роняет поток:
-// следующая попытка — через ограниченный бэкофф (база 2 с, до 30 с).
+// снимка энергии в Redis (ce308EnergyDelay). Ошибка подключения/чтения не роняет
+// поток: следующая попытка — через ограниченный бэкофф (база 2 с, до 30 с).
 func runCe308FinalReadings(store *redisStore, pg *pgStore, cfg *ce308Config, ctx context.Context) {
 	if cfg == nil {
 		return
 	}
-	// Канал запроса снимка энергии (POST /api/ce308/energy) привязываем к этому
-	// циклу, чтобы кнопка «Обновить» работала и в режиме только итоговых показаний.
 	trig := make(chan struct{}, 1)
 	setCE308TriggerChan(trig)
 	defer setCE308TriggerChan(nil)
 
-	logCE308("режим final_readings_only: итоговые показания раз в %s (или по кнопке)", ce308FinalReadingsInterval)
+	logCE308("режим final: итоговые показания раз в %s (или по кнопке)", ce308FinalReadingsInterval)
 	var lastFailLog time.Time
 	reconnect := ce308ReconnectDelay
-	// История ошибок: пишем «нет связи» только если держится ≥ ce308CommErrPersist
-	// (как в runCe308Poll), иначе одиночный сбой не засоряет журнал.
+	// История ошибок: пишем «нет связи» только если держится ≥ ce308CommErrPersist.
 	var commErrSince time.Time
 	commErrLogged := false
 	// next — момент следующего ПЛАНОВОГО снятия.
@@ -235,8 +126,6 @@ func runCe308FinalReadings(store *redisStore, pg *pgStore, cfg *ce308Config, ctx
 			next = time.Now().Add(reconnect)
 			continue
 		}
-		// Успех: следующий плановый снимок — через полный интервал. Ручной запрос
-		// лишь сдвигает расписание от текущего момента (как и в обычном режиме).
 		if manual {
 			logCE308("итоговые показания сняты по запросу")
 		}
@@ -251,72 +140,6 @@ func ce308Backoff(d time.Duration) time.Duration {
 		return ce308ReconnectMaxDelay
 	}
 	return d
-}
-
-// ce308PollConnected — цикл опроса на установленном соединении. Возвращает
-// ошибку при потере связи (тогда вызывающий переподключается).
-func ce308PollConnected(store *redisStore, cfg *ce308Config, m *ce308Meter, trig chan struct{}, ctx context.Context) error {
-	ticker := time.NewTicker(ce308PollInterval)
-	defer ticker.Stop()
-	// Автономный снимок энергии (без внешнего запроса): раз в ce308EnergyInterval.
-	// Первый запуск при инициализации ориентируется на время последнего снимка в
-	// Redis (см. ce308EnergyDelay): если он свежее периода — ждём до (last+период),
-	// иначе снимаем сразу. После каждого автоперечитывания таймер взводится заново.
-	energyT := time.NewTimer(ce308EnergyDelay(store))
-	defer energyT.Stop()
-	consecFails := 0
-	for {
-		select {
-		case <-ticker.C:
-			if err := ce308PollOnce(store, cfg, m); err != nil {
-				if isCE308Closed(err) {
-					// Остановка сервиса: чтение прервано — выходим и закрываем соединение.
-					return err
-				}
-				consecFails++
-				if consecFails >= ce308ConsecutiveFailLimit {
-					// Счётчик подряд молчит / чтения не проходят — соединение считаем
-					// нерабочим, разрываем и переподключаемся.
-					logCE308("опрос %s: %d опросов подряд не удались (последняя: %v) — переподключение",
-						cfg.MAC, consecFails, err)
-					return err
-				}
-				// Одиночный сбой не рвёт постоянное соединение: он мог быть
-				// транзиентным (радио/нет ответа от счётчика).
-				logCE308("опрос %s: не удался (%d подряд): %v — соединение сохраняю",
-					cfg.MAC, consecFails, err)
-			} else {
-				if consecFails > 0 {
-					logCE308("опрос %s: связь восстановлена (%d неудачных сброшены)", cfg.MAC, consecFails)
-				}
-				consecFails = 0
-			}
-		case <-energyT.C:
-			if err := ce308CaptureEnergy(store, cfg, m); err != nil {
-				if isCE308Closed(err) {
-					return err
-				}
-				// Ошибка чтения энергии не рвёт постоянное соединение — просто
-				// логируем; следующий опрос мгновенных значений продолжится.
-				logCE308("автоснимок энергии не удался: %v", err)
-			}
-			energyT.Reset(ce308EnergyInterval)
-		case <-trig:
-			if err := ce308CaptureEnergy(store, cfg, m); err != nil {
-				if isCE308Closed(err) {
-					return err
-				}
-				// Ошибка чтения энергии не рвёт постоянное соединение — просто
-				// логируем; следующий опрос мгновенных значений продолжится.
-				logCE308("снимок энергии не удался: %v", err)
-			}
-			// Сдвигаем автотаймер от ручного снимка, чтобы вскоре не запустился
-			// автономный и не читал END01..END04 дважды подряд.
-			energyT.Reset(ce308EnergyInterval)
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
 }
 
 // ce308EnergyDelay — задержка до первого автономного снимка энергии (при
@@ -337,33 +160,6 @@ func ce308EnergyDelay(store *redisStore) time.Duration {
 		return d
 	}
 	return 0
-}
-
-// ce308PollOnce выполняет один опрос мгновенных значений и пишет снимок.
-func ce308PollOnce(store *redisStore, cfg *ce308Config, m *ce308Meter) error {
-	now := time.Now()
-	reads, err := buildCE308Reads(m)
-	if err != nil {
-		return fmt.Errorf("опрос %s: %w", cfg.MAC, err)
-	}
-	if !ce308ReadsValid(reads) {
-		// Нестабильный BLE-канал: кадр искажён (NaN/Inf или нереальные значения) —
-		// снимок отбрасываем, но постоянное соединение не разрываем.
-		logCE308("опрос %s: невалидные показания — снимок отброшен", cfg.MAC)
-		return nil
-	}
-	snap := ce308Snapshot{
-		Name:      cfg.Name,
-		Timestamp: ce308Timestamp(now),
-		Values:    valuesCE308(reads),
-	}
-	if err := store.SaveCE308Current(snap); err != nil {
-		logCE308("redis current %s: %v", cfg.MAC, err)
-	}
-	if err := store.SaveCE308History(snap, now); err != nil {
-		logCE308("redis history %s: %v", cfg.MAC, err)
-	}
-	return nil
 }
 
 // ce308CaptureEnergy снимает накопленную энергию и сохраняет разовый снимок.

@@ -95,7 +95,7 @@ func (s *pgStore) ensureSchema() error {
 	if err := ensureDts017TariffSchema(s); err != nil {
 		return fmt.Errorf("pg dts017m tariff schema: %w", err)
 	}
-	// История ошибок ВСЕХ устройств (инверторы/МАП/счётчик/CE308/BMS): запись —
+	// История ошибок ВСЕХ устройств (инверторы/МАП/счётчик/BMS26/CE308): запись —
 	// только при ПОЯВЛЕНИИ ошибки (переход «не было → есть»), без дублей.
 	if _, err := s.pool.Exec(s.ctx, `
 CREATE TABLE IF NOT EXISTS sunreceiver.device_errors (
@@ -166,41 +166,6 @@ func (s *pgStore) withTx(fn func(q pgExecer) error) error {
 	return tx.Commit(s.ctx)
 }
 
-// InsertCe308Average сохраняет одну усреднённую за 5 минут точку CE308
-// (ts — начало промежутка). Идемпотентна по (name, ts), повторная запись
-// ОБНОВЛЯЕТ строку (last-write-wins), как в InsertAveraged.
-func (s *pgStore) InsertCe308Average(name string, ts time.Time, vc map[string]float64) error {
-	cv := make(valuesContract, len(vc))
-	for k, v := range vc {
-		cv[k] = v
-	}
-	return insertAvgRow(s.pool, s.ctx, avgSpecByTable("sunreceiver.ce308_averages_r"), name, ts, nil, cv)
-}
-
-// ce308PGPoint — усреднённая точка CE308 из PostgreSQL (ts — начало 5-мин
-// промежутка, Values — усреднённые мгновенные значения).
-type ce308PGPoint struct {
-	Name   string
-	TS     time.Time
-	Values map[string]float64
-}
-
-// QueryCE308Averages возвращает усреднённые 5-мин точки CE308 за период
-// [start, end] включительно. PK (name, ts) даёт эффективный range-scan
-// «устройство за период времени».
-func (s *pgStore) QueryCE308Averages(name string, start, end time.Time) ([]ce308PGPoint, error) {
-	snaps, err := s.selectAvgRows(avgSpecByTable("sunreceiver.ce308_averages_r"), name, start, end)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]ce308PGPoint, 0, len(snaps))
-	for _, sn := range snaps {
-		ts, _ := time.Parse(time.RFC3339, sn.Timestamp)
-		out = append(out, ce308PGPoint{Name: name, TS: ts, Values: vcToFloatMap(sn.Values)})
-	}
-	return out, nil
-}
-
 // averagesAll возвращает 5-минутные точки за [start, end] по ВСЕМ устройствам:
 // сетевые инверторы (deye/sofar, их таблицы) + обособленные DDS238/МАП/КЭС.
 // Инверторным точкам проставляется Kind (deye/sofar), чтобы маршрутизация
@@ -240,8 +205,8 @@ type DeviceErrorRow struct {
 }
 
 // InsertDeviceError записывает появление ошибки устройства (history of appearance):
-// device — ключ устройства, kind — тип ("inverter"/"map"/"meter"/"ce308"/"antbms"/
-// "enbms"), code — код/категория, msg — текст. Вызывается только на переходе
+// device — ключ устройства, kind — тип ("inverter"/"map"/"mppt"/"meter"/"ce308"/
+// "bms"), code — код/категория, msg — текст. Вызывается только на переходе
 // «ошибки не было → появилась»; PK (device,kind,code,ts) страхует от повторов.
 func (s *pgStore) InsertDeviceError(device, kind, code, msg string, ts time.Time) error {
 	_, err := s.pool.Exec(s.ctx, `
@@ -325,18 +290,6 @@ func (s *pgStore) Bms26Averages(name string, start, end time.Time) ([]bms26Snaps
 // (malina26) за период [start, end] — для восстановления Redis-ряда.
 func (s *pgStore) Bms26AveragesAll(start, end time.Time) ([]bms26Snapshot, error) {
 	return s.selectBms26Range("", start, end)
-}
-
-func (s *pgStore) CE308AveragesAll(start, end time.Time) ([]ce308Snapshot, error) {
-	snaps, err := s.selectAvgRows(avgSpecByTable("sunreceiver.ce308_averages_r"), "", start, end)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]ce308Snapshot, 0, len(snaps))
-	for _, sn := range snaps {
-		out = append(out, ce308Snapshot{Name: sn.Name, Timestamp: sn.Timestamp, Values: vcToFloatMap(sn.Values)})
-	}
-	return out, nil
 }
 
 // Dts017AveragesAll возвращает 5-минутные усреднённые точки DTS017M за период

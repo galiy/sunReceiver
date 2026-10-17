@@ -6,9 +6,7 @@ var showMap = document.body.dataset.showMap === '1';
 var showMeter = document.body.dataset.showMeter === '1';
 var showBMS = document.body.dataset.showBms === '1';
 var showCE308 = document.body.dataset.showCe308 === '1';
-// Режим ce308.final_readings_only: мгновенная телеметрия (текущие данные) не
-// собирается/не отдаётся — рамка скрыта шаблоном, /api/ce308/current не опрашиваем.
-var ce308Final = document.body.dataset.ce308Final === '1';
+// CE308: показывать рамку показаний (data-show-ce308).
 var showDTS017 = document.body.dataset.showDts017 === '1';
 
 // ---------- Утилиты ----------
@@ -181,11 +179,6 @@ function agoStr(t){
 // 20 с молчания означают, что данных нет. Отличается от «просто нулей»: ноль —
 // это реальное значение счётчика, «—» — данных оперативных нет.
 var MTR_STALE_MS=20*1000;
-// CE308_STALE_MS — окно «молчания» электросчётчика CE308: опрашивается раз в ~2 с,
-// поэтому уже 20 с без обновления снимка означают, что данные зависли (счётчик не
-// отвечает / радиоканал потерян). При устаревании метка «Актуально» окрашивается
-// в красный и рядом показывается возраст снимка (аналогично offline-инверторам).
-var CE308_STALE_MS=20*1000;
 // METER_PARAMS — параметры счётчика для плашки: [тег, подпись, единица, знаковый,
 // накопленный]. Знаковые (активная/реактивная мощность) окрашиваются: отрицательная —
 // отдача. Последние три (накопленные) продолжают отображаться даже при устаревшем
@@ -390,60 +383,12 @@ function renderInvPlates(placements){
 	box.innerHTML=h;
 }
 
-// ---------- Электросчётчик CE308 (текущие данные + показания) ----------
-// Данные — из Redis через /api/ce308/current и /api/ce308/energy, обновление раз в секунду
-// (вместе с tick спойлера «Детальные данные»). Текущий снимок приходит map имя→снимок,
-// показания энергии — один объект (см. ce308.go). Знаки мощности: положительная —
-// потребление, отрицательная — отдача в сеть.
+// ---------- Электросчётчик CE308 (только показания) ----------
+// Данные — из Redis через /api/ce308/energy (см. ce308.go).
 function ce308Num(v){ return (v===undefined || v===null || !isFinite(Number(v))) ? null : Number(v); }
 // ce308Fmt — 2 знака + разделители разрядов (для показаний энергии, левый столбец).
 // Показания энергии показываем целыми (дробную часть отбрасываем, не округляем).
 function ce308Fmt(v){ var n=ce308Num(v); return n===null ? '—' : Math.trunc(n).toLocaleString('ru-RU',{maximumFractionDigits:0}); }
-function setCe308Cell(id, v, signed){
-	var el=document.getElementById(id);
-	if(!el) return;
-	var n=ce308Num(v);
-	if(n===null){ el.textContent='—'; el.className='ce-num'; return; }
-	// 2 знака после запятой + разделители разрядов. Знаковые (мощности): инверсия —
-	// положительное (потребление) — красное, отрицательное (отдача) — зелёное.
-	el.textContent=n.toLocaleString('ru-RU',{minimumFractionDigits:2, maximumFractionDigits:2});
-	if(signed){ el.className='ce-num '+(n<0 ? 'ce-pos' : 'ce-neg'); }
-	else{ el.className='ce-num'; }
-}
-function renderCE308Current(cur){
-	var ts=document.getElementById('ce308CurTs');
-	var name=Object.keys(cur||{})[0];
-	var snap=name ? cur[name] : null;
-	if(ts){
-		if(snap && snap.timestamp){
-			ts.textContent='Актуально: '+fmtSec(snap.timestamp);
-			var t=new Date(snap.timestamp).getTime();
-			// Свежесть снимка: при зависании (> CE308_STALE_MS) метка краснеет и
-			// рядом показывается возраст — «данные заморожены» видно сразу.
-			var stale=!isFinite(t) || (Date.now()-t)>CE308_STALE_MS;
-			ts.classList.toggle('stale-time', stale);
-			ts.title=stale ? ('Данные не обновляются: '+(Math.round((Date.now()-t)/1000))+' с назад') : '';
-		}else{
-			ts.textContent='Актуально: —';
-			ts.classList.remove('stale-time');
-			ts.title='';
-		}
-	}
-	var v=(snap && snap.values) ? snap.values : null;
-	var v1=ce308Num(v&&v.ce308_l1_voltage), v2=ce308Num(v&&v.ce308_l2_voltage), v3=ce308Num(v&&v.ce308_l3_voltage);
-	setCe308Cell('ce308V1', v1); setCe308Cell('ce308V2', v2); setCe308Cell('ce308V3', v3);
-	var i1=ce308Num(v&&v.ce308_l1_current), i2=ce308Num(v&&v.ce308_l2_current), i3=ce308Num(v&&v.ce308_l3_current);
-	setCe308Cell('ce308I1', i1); setCe308Cell('ce308I2', i2); setCe308Cell('ce308I3', i3);
-	setCe308Cell('ce308Isum', (i1!==null&&i2!==null&&i3!==null) ? (i1+i2+i3) : null);
-	var p1=ce308Num(v&&v.ce308_l1_active_power), p2=ce308Num(v&&v.ce308_l2_active_power), p3=ce308Num(v&&v.ce308_l3_active_power);
-	setCe308Cell('ce308P1', p1, true); setCe308Cell('ce308P2', p2, true); setCe308Cell('ce308P3', p3, true);
-	// Сумма по фазам — с учётом знака (L1+L2+L3), а не Σ от датчика (дам появляться
-	// взаимоисключающие фазы: одна отдаёт в сеть, другая потребляет).
-	setCe308Cell('ce308Psum', (p1!==null&&p2!==null&&p3!==null) ? (p1+p2+p3) : null, true);
-	var q1=ce308Num(v&&v.ce308_l1_reactive_power), q2=ce308Num(v&&v.ce308_l2_reactive_power), q3=ce308Num(v&&v.ce308_l3_reactive_power);
-	setCe308Cell('ce308Q1', q1, true); setCe308Cell('ce308Q2', q2, true); setCe308Cell('ce308Q3', q3, true);
-	setCe308Cell('ce308Qsum', (q1!==null&&q2!==null&&q3!==null) ? (q1+q2+q3) : null, true);
-}
 function renderCE308Energy(snap){
 	var ts=document.getElementById('ce308EnTs');
 	if(ts) ts.textContent = (snap && snap.timestamp) ? ('Актуально: '+fmtSec(snap.timestamp)) : 'Актуально: —';
@@ -472,16 +417,13 @@ function ce308RefreshReserve(){
 		}
 	}, 5*60*1000);
 }
-// tickCE308 — опрос текущих данных и показаний CE308 (вызывается из tick раз в секунду).
+// tickCE308 — опрос показаний CE308 (вызывается из tick раз в секунду).
 // Кнопка «Обновить» шлёт POST /api/ce308/energy — сигнал пулеру снять свежий снимок энергии.
 async function tickCE308(){
 	if(!showCE308 || (window.srRefresh && !window.srRefresh.isEnabled())) return;
 	try{
-		// В режиме final_readings_only текущих данных нет — только показания.
-		if(!ce308Final){
-			var r=await fetch('/api/ce308/current');
-			if(r.ok) renderCE308Current(await r.json());
-		}
+		// У CE308 только показания (итоговая энергия).
+
 		var re=await fetch('/api/ce308/energy');
 		if(re.ok) renderCE308Energy(await re.json());
 	}catch(e){}
@@ -509,8 +451,8 @@ async function tickCE308(){
 async function tick(){
 	if(window.srRefresh && !window.srRefresh.isEnabled()) return;
 	try{
-		// Электросчётчик CE308 (текущие данные + показания) — опрашивается тем же
-		// ежесекундным циклом спойлера «Детальные данные» (свои /api/ce308/*).
+		// Электросчётчик CE308 (только показания) — опрашивается тем же ежесекундным
+		// циклом спойлера «Детальные данные» (/api/ce308/energy).
 		tickCE308();
 		// Гаражный счётчик DTS017M — отдельный /api/dts017m/current.
 		tickDts017();
@@ -650,7 +592,7 @@ async function tickBMS(){
       var soc=Math.max(0,Math.min(100,Number(d.soc)||0));
       var isAGM=(d.kind==='agm');
       var href=isAGM? '/agm' : '/bms/'+encodeURIComponent(d.key||d.deviceName);
-      var title=isAGM? 'Свинцово-кислотный АКБ (AGM) — графики тока и мощности' : ('Порт: '+esc(d.port));
+      var title=isAGM? 'Свинцово-кислотный АКБ (AGM) — графики тока и мощности' : (esc(d.model||'BMS')+': '+esc(d.deviceName));
       h+='<a class="bms-btn" href="'+href+'" title="'+title+'">'
         +'<div class="bms-batt">'
         +'<div class="bms-batt-fill" style="width:'+Math.max(4,soc)+'%;background:'+bmsSocColor(soc)+'"></div>'

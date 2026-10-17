@@ -156,39 +156,6 @@ func (s *redisStore) PruneMPPT(active map[string]struct{}) {
 	}
 }
 
-// SetBMS обновляет коллекцию BMS-устройств в HASH sunreceiver:bms одной
-// транзакцией: пишет все активные (поле = ключ bmsKey, значение = JSON bmsDevice)
-// и удаляет те, которых нет в active (устройство исчезло из коллекции —
-// адаптер отключился/замолчал, bmslistener уже забыл его).
-func (s *redisStore) SetBMS(active map[string]string) error {
-	// КОСТЫЛЬ: старый ANT-пулер пишет не в sunreceiver:bms, а в ряды bms26
-	// (sunreceiver:bms26:current) с новым serial (ANT — по ёмкости). См. bms26_legacy.go.
-	cur := make(map[string]string, len(active))
-	for _, raw := range active {
-		var d bmsDevice
-		if json.Unmarshal([]byte(raw), &d) != nil {
-			continue
-		}
-		cap, ok := antCapFromName(d.DeviceName)
-		if !ok {
-			continue
-		}
-		serial := legacyAntSerial(cap)
-		if serial == "" {
-			continue
-		}
-		b, err := json.Marshal(antDeviceToBms26(d, serial))
-		if err != nil {
-			continue
-		}
-		cur[serial] = string(b)
-	}
-	if len(cur) == 0 {
-		return nil
-	}
-	return s.SaveBms26Current(cur)
-}
-
 // eachMonth вызывает fn для каждого календарного месяца в диапазоне [start, end]
 // (включительно), начиная с месяца start. fn возвращает false — прервать обход.
 
@@ -221,7 +188,7 @@ func (s *redisStore) IsEmpty() (bool, error) {
 	for _, key := range []string{
 		deyeBrand.curKey, sofarBrand.curKey,
 		redisDds238CurrentKey, redisMapCurrentKey, redisKesCurrentKey,
-		redisBms26CurrentKey, redisDts017CurrentKey, redisCE308CurrentKey,
+		redisBms26CurrentKey, redisDts017CurrentKey,
 	} {
 		n, err := s.rdb.HLen(s.ctx, key).Result()
 		if err != nil {
@@ -274,7 +241,7 @@ func seriesReadCutoff(start, now time.Time) time.Time {
 }
 
 // PurgeOld удаляет из временных рядов Redis (месячные сегменты: инверторы deye/sofar,
-// МАП, DDS238, КЭС, DTS017M, BMS26, мгновенные CE308) точки старше окна последних
+// МАП, DDS238, КЭС, DTS017M, BMS26) точки старше окна последних
 // 2 календарных суток (recentCutoff). Пустые сегменты удаляются целиком. Текущие
 // HASH (current-ключи модулей) не трогаются — последнее состояние хранится всегда.
 // Вызывается фоновым процессом (см. runRedisCleanup).

@@ -34,13 +34,13 @@ import (
 // Уведомления в мессенджер MAX (через Bot API). Отправляются по событиям
 // мониторинга МАП Титанатор:
 //   - МАП недоступен (API Малины недоступно / отдаёт устаревшее время и оно не
-//     изменяется / опрос RS232/Modbus не удаётся);
+//     изменяется / опрос МАП не удаётся);
 //   - МАП показывает, что напряжение сети отсутствует либо ниже порога (195 В),
 //     со справочным напряжением электросчётчика, если он опрашивается;
 //   - события восстановления по обоим случаям.
 //
 // Мониторинг работает ТОЛЬКО если включён опрос МАП в целом (map.disabled != true
-// и есть источник МАП: RS232/Modbus или веб-API ПАК «Малина»). Если опрос МАП
+// и есть источник МАП (API «Малина26»). Если опрос МАП
 // выключен — уведомления не формируются.
 //
 // Адресат (user_id/chat_id) можно не указывать вручную: если он пуст, бот
@@ -60,7 +60,7 @@ const maxRequestTimeout = 5 * time.Second
 // Пороги/окна мониторинга МАП (по умолчанию, переопределяются в разделе notify).
 const (
 	// defaultMapUndeclaredWindow — окно, в течение которого отсутствие валидного
-	// опроса МАП считается недоступностью. Покрывает Modbus-опрос МАП (~9 с:
+	// опроса МАП считается недоступностью.
 	// три последовательных чтения блоков) с запасом; для API — 1 с.
 	defaultMapUndeclaredWindow = 20 * time.Second
 	// defaultStableWindow — «стабильность» перед отправкой события: авария и
@@ -70,7 +70,7 @@ const (
 	// defaultGridVoltageLow — порог напряжения сети МАП, ниже которого напряжение
 	// считается пропавшим (низким). Значение 195 В.
 	defaultGridVoltageLow = 195.0
-	// maxAPITimeBehind — насколько поле timestamp ответа read_json.php?device=map
+	// maxAPITimeBehind — насколько поле timestamp ответа API «Малина26» (МАП)
 	// может «отставать» от реального времени, прежде чем считаться устаревшим.
 	maxAPITimeBehind = 5 * time.Minute
 	// notifyPollEvery — период чтения состояния в мониторе.
@@ -96,7 +96,7 @@ type notifySection struct {
 	GridVoltageLow   float64 `json:"grid_voltage_low"`
 }
 
-// notifyCfg — глобально заполненный раздел notify (аналогично mapAPI/mppt).
+// notifyCfg — глобально заполненный раздел notify.
 var notifyCfg *notifySection
 
 // maxClient — клиент отправки сообщений в MAX (Bot API). Адресат может быть
@@ -186,18 +186,18 @@ func (m *maxClient) sendTo(ctx context.Context, userID, chatID, text string) err
 }
 
 // mapTrack — потокобезопасное состояние последних опросов МАП, заполняется
-// poll-функциями (Modbus и веб-API) и читается монитором уведомлений.
+// poll-функцией (API «Малина26») и читается монитором уведомлений.
 type mapTrack struct {
 	mu sync.Mutex
 
-	source string // "modbus" | "api" — последний источник, давший опрос
+	source string // "malina26" — последний источник, давший опрос
 
 	lastOK    time.Time // время последнего ВАЛИДНОГО опроса (данные получены)
 	lastErr   string    // текст последней ошибки опроса (пусто, если последний ок)
 	lastErrAt time.Time
 
-	// Устаревшее время / его неизменность — признак зависшего веб-API Малины.
-	apiTS       int64     // последний timestamp из ответа device=map
+	// Устаревшее время / его неизменность — признак зависшего API «Малина26».
+	apiTS       int64     // последний timestamp из ответа API «Малина26» (МАП)
 	apiTSChange time.Time // когда timestamp последний раз изменился
 
 	gridHas  bool
@@ -224,7 +224,7 @@ func (t *mapTrack) trackErr(source, reason string, now time.Time) {
 	t.lastErrAt = now
 }
 
-// trackAPITS регистрирует timestamp ответа веб-API Малины (device=map). Используется
+// trackAPITS регистрирует timestamp ответа API «Малина26» (МАП). Используется
 // для детекции «отдаёт сильно устаревшее время и оно не изменяется».
 func (t *mapTrack) trackAPITS(ts int64, now time.Time) {
 	t.mu.Lock()
@@ -239,12 +239,12 @@ func (t *mapTrack) trackAPITS(ts int64, now time.Time) {
 // status возвращает текущее состояние МАП:
 //
 //	""      — МАП доступен (последние данные валидны);
-//	"stale" — веб-API отдаёт устаревшее время, и оно не изменяется;
+//	"stale" — API отдаёт устаревшее время, и оно не изменяется;
 //	"down"  — МАП недоступен (нет валидных данных дольше undeclared window).
 func (t *mapTrack) status(now time.Time, undeclared time.Duration) string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.source == "api" && t.apiTSChange != (time.Time{}) {
+	if t.source == "malina26" && t.apiTSChange != (time.Time{}) {
 		// Время из ответа отстаёт от реального и не менялось — зависший API.
 		if now.Sub(t.apiTSChange) >= undeclared && now.Sub(time.Unix(t.apiTS, 0)) > maxAPITimeBehind {
 			return "stale"
@@ -491,7 +491,7 @@ func (m *monitorState) downRecoverMessage() string {
 func mapDownReason(t *mapTrack, statusStr string) string {
 	switch statusStr {
 	case "stale":
-		return "веб-API ПАК «Малина» отдаёт сильно устаревшее время, и оно не изменяется"
+		return "API «Малина26» отдаёт сильно устаревшее время, и оно не изменяется"
 	case "down":
 		reason, ok := t.lastError()
 		if ok {

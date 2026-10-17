@@ -5,9 +5,7 @@
   "poll": {
     "inverter": 10,
     "map": 1,
-    "meter": 1,
-    "ce308": 5,
-    "antbms": 1
+    "meter": 1
   },
   "invertors": [
     {
@@ -85,29 +83,11 @@
   ],
   "map": {
     "disabled": false,
-    "method": "rs485",
-    "rs485": {
-      "name": "MAP (батарея/сеть)",
-      "ip": "192.168.0.20",
-      "unit": 1
-    },
-    "malina": {
-      "base_url": "http://192.168.0.30",
-      "mppt_path": "/read_json.php?device=mppt",
-      "map_path": "/read_json.php?device=map",
-      "login": "admin",
-      "password": "CHANGE_ME"
-    },
-    "malina26": {
-      "host": "192.168.0.30",
-      "port": 80,
-      "password": "CHANGE_ME_PASSWORD",
-      "serial": "12345"
-    }
-  },
-  "antBms": {
-    "disabled": false,
-    "url": "http://admin:CHANGE_ME@192.168.0.30/read_bms.php"
+    "host": "192.168.0.30",
+    "port": 80,
+    "password": "CHANGE_ME_PASSWORD",
+    "serial": "12345",
+    "fallback_serial": "67890"
   },
   "db": {
     "redis": "192.168.0.253:6379",
@@ -126,35 +106,9 @@
   },
   "ce308": {
     "disabled": false,
-    "final_readings_only": false,
     "name": "CE308 #000000000",
     "mac": "AA:BB:CC:DD:EE:FF",
     "pin": "CHANGE_ME_PIN"
-  },
-  "enBms": {
-    "disabled": false,
-    "poll_interval_ble": 3,
-    "poll_interval_rs485": 1,
-    "devices": [
-      {
-        "name": "BMS EnBMS #1 (BLE)",
-        "mac": "AA:BB:CC:11:22:33",
-        "method": "ble",
-        "disabled": false
-      },
-      {
-        "name": "BMS EnBMS #2 (RS485)",
-        "mac": "AA:BB:CC:44:55:66",
-        "method": "rs485",
-        "disabled": false,
-        "rs485": {
-          "transport": "tcp",
-          "address": "192.168.0.77:502",
-          "port_type": "rs485",
-          "unit": 0
-        }
-      }
-    ]
   },
   "dts017m": {
     "disabled": false,

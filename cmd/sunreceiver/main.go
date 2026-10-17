@@ -31,7 +31,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/galiy/sunReceiver/internal/modbusmap"
 	"github.com/galiy/sunReceiver/internal/solarman"
 )
 
@@ -41,10 +40,6 @@ var (
 	pollPeriod        = 10 * time.Second // инверторы (Deye/Sofar)
 	mapPollInterval   = time.Second      // МАП + MPPT
 	meterPollInterval = time.Second      // счётчик DDS238
-	ce308PollInterval = 5 * time.Second  // счётчик CE308 (BLE)
-	bmsPollInterval   = time.Second      // ANT BMS
-	// EnBMS: период задаётся в разделе enBms отдельно для каждого метода
-	// (ble.poll_interval / rs485.poll_interval), см. enBmsConfig.PollInterval.
 )
 
 const (
@@ -61,9 +56,9 @@ const (
 	// идут до ~30 с (Sofar pacing), Deye ~8 с; «зомби»-логгер без лимита держал
 	// бы Exchange часами.
 	maxExchangeTotal = 60 * time.Second
-	// mpptEmptyTolerance — сколько подряд идущих ПУСТЫХ (len(arr)==0) успешных
-	// ответов read_json.php?device=mppt терпим ДО прунинга составa MPPT из current.
-	// Одиночная/короткая пустота (перезапуск Малины, транзиентный сбой) не должна
+	// mpptEmptyTolerance — сколько подряд идущих ПУСТЫХ успешных ответов КЭС
+	// (API «Малина26») терпим ДО прунинга состава MPPT из current.
+	// Одиночная/короткая пустота (перезапуск, транзиентный сбой) не должна
 	// сносить все MPPT-ключи дашборда; пруним только при устойчивой пустоте.
 	mpptEmptyTolerance = 3
 )
@@ -74,12 +69,12 @@ const (
 	kindSofar targetKind = iota
 	kindDeyeString
 	kindMAP
-	kindMPPT // MPPT-контроллер (КЭС) через веб-API read_json.php?device=mppt ПАК «Малина»
+	kindMPPT // MPPT-контроллер (КЭС) через API «Малина26»
 )
 
-// mpptOrderBase — базовый порядок для MPPT-контроллеров (динамических, из API ПАК
-// «Малина»): они всегда размещаются на дашборде последними, после всех статических
-// устройств из конфига (инверторы + МАП). Order = mpptOrderBase + slot.
+// mpptOrderBase — базовый порядок для MPPT-контроллеров (динамических, из API
+// «Малина26»): они всегда размещаются на дашборде последними, после всех
+// статических устройств из конфига (инверторы + МАП). Order = mpptOrderBase + slot.
 const mpptOrderBase = 10000
 
 // String — короткое имя типа для логов.
@@ -117,18 +112,14 @@ func invKindName(k targetKind) string {
 // invTarget — целевой инвертор. LoggerSN — серийный номер даталоггера,
 // обязателен для Deye (иначе логгер отвечает кодом 0x06 "serial number not match").
 // Name — логическое имя из sunReceiver.json (например, "Deye Left").
-// Unit — Modbus-адрес устройства для МАП (kindMAP), по умолчанию 1.
-// Slot — для kindMAP: индекс MPPT-контроллера (0..15), -1 = агрегат/база батареи-сети;
-//
-//	для kindMPPT: индекс контроллера (слот) в ответе read_json.php?device=mppt.
+// Slot — для kindMAP: -1 (агрегат); для kindMPPT: индекс контроллера (слот) в ответе API.
 type invTarget struct {
 	IP       string
 	Name     string
 	LoggerSN uint32
 	Kind     targetKind
-	Unit     byte
 	Slot     int
-	UID      string // для kindMPPT: UID контроллера из read_json.php (стабильный идентификатор)
+	UID      string // для kindMPPT: UID контроллера из API «Малина26» (стабильный идентификатор)
 	Order    int    // порядок устройства на дашборде (индекс в конфиге; MPPT — всегда последними)
 	// Placement — размещение инвертора (группа на дашборде «Мощности инверторов»),
 	// из поля placement sunReceiver.json; пустое значение приводится к «Дом».
@@ -155,34 +146,21 @@ type configInverter struct {
 	Disabled  *bool  `json:"disabled"`
 }
 
-// mapRS485Section — блок способа опроса МАП по Modbus TCP/RS485 (method=rs485).
-// Не входит в invertors: это устройство Modbus TCP (RS485), а не инвертор.
-type mapRS485Section struct {
-	Name string `json:"name"`
-	IP   string `json:"ip"`
-	Unit int    `json:"unit,omitempty"`
-}
-
-// mapMalinaSection — блок legacy веб-API ПАК «Малина» (method=malina): чтение МАП
-// (read_json.php?device=map) и MPPT-контроллеров (read_json.php?device=mppt).
-// Пароль в открытом виде (sunReceiver.json — приватный, в git не выгружается).
-type mapMalinaSection struct {
-	BaseURL  string `json:"base_url"`
-	MPPTPath string `json:"mppt_path"`
-	MapPath  string `json:"map_path"`
-	Login    string `json:"login"`
-	Password string `json:"password"`
-}
-
-// mapMalina26Section — блок нового HTTP-API «Малина26» (method=malina26): токен по
+// mapSection — раздел "map" sunReceiver.json (HTTP-API «Малина26»): токен по
 // паролю + бинарные контракты МАП (`/api/map/raw`) и КЭС (`/api/kes/raw`).
 // host — IP или имя; port — 80/443; serial — серийник МАП (число строкой), по нему
-// ищем «свой» МАП в `/api/map/devices`. Логин не нужен (API принимает только пароль).
-type mapMalina26Section struct {
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	Password string `json:"password"`
-	Serial   string `json:"serial"`
+// ищем «свой» МАП в `/api/map/devices`; fallback_serial — необязательный резервный
+// серийник (опрос при недоступности основного, идентичность остаётся основной).
+//
+// Disabled — ОБЯЗАТЕЛЬНОЕ поле (отсутствие = ошибка конфига): true отключает ВСЕ
+// пулеры раздела map (МАП, КЭС, BMS26); на пулеры сетевых инверторов не влияет.
+type mapSection struct {
+	Disabled       *bool  `json:"disabled"`
+	Host           string `json:"host"`
+	Port           int    `json:"port"`
+	Password       string `json:"password"`
+	Serial         string `json:"serial"`
+	FallbackSerial string `json:"fallback_serial"`
 }
 
 // dbConfig — расположение баз данных. Задаётся в sunReceiver.json в разделе "db".
@@ -212,44 +190,12 @@ type meterSection struct {
 	Disabled    *bool  `json:"disabled"`
 }
 
-// mapSection — раздел "map" sunReceiver.json. Общие поля: disabled (обязателен) и
-// method. Способы опроса МАП — равнозначные блоки: rs485 (Modbus TCP/RS485),
-// malina (legacy веб-API ПАК «Малина»), malina26 (новый HTTP-API «Малина26»).
-// Обязателен только блок выбранного method.
-//   - method=rs485   → МАП по Modbus (map.rs485.ip); КЭС — через блок malina;
-//   - method=malina  → МАП и КЭС через блок malina (read_json.php);
-//   - method=malina26→ МАП и КЭС через блок malina26 (токен + бинарные контракты).
-//
-// Disabled — ОБЯЗАТЕЛЬНОЕ поле (отсутствие = ошибка конфига): true отключает ВСЕ
-// пулеры раздела map (МАП и КЭС); на пулеры сетевых инверторов не влияет.
-type mapSection struct {
-	Disabled *bool               `json:"disabled"`
-	Method   string              `json:"method"` // "rs485" | "malina" | "malina26"
-	RS485    *mapRS485Section    `json:"rs485"`
-	Malina   *mapMalinaSection   `json:"malina"`
-	Malina26 *mapMalina26Section `json:"malina26"`
-}
-
-// antBmsSection — раздел "antBms" sunReceiver.json: ANT BMS через веб-API ПАК
-// «Малина» (read_bms.php). URL — ПОЛНЫЙ адрес эндпоинта (хост и путь; при
-// необходимости учётные данные Basic-auth в виде http://user:pass@host/path).
-// Disabled — ОБЯЗАТЕЛЬНОЕ поле (отсутствие = ошибка конфига): false — опрос идёт,
-// true — пулер ANT BMS не запускается (плашки-батарейки на дашборде скрываются).
-type antBmsSection struct {
-	URL      string `json:"url"`
-	Disabled *bool  `json:"disabled"`
-}
-
 // pollSection — периоды опроса устройств в СЕКУНДАХ (обязательный раздел "poll").
 // Все поля обязательны и должны быть > 0 (отсутствие = ошибка загрузки конфига).
 type pollSection struct {
 	Inverter int `json:"inverter"` // инверторы Deye/Sofar
 	Map      int `json:"map"`      // МАП + MPPT
 	Meter    int `json:"meter"`    // счётчик DDS238
-	Ce308    int `json:"ce308"`    // счётчик CE308 (BLE)
-	AntBms   int `json:"antbms"`   // ANT BMS
-	// EnBMS-периода здесь нет: он задаётся в разделе enBms отдельно для каждого
-	// метода (ble.poll_interval / rs485.poll_interval).
 }
 
 type configFile struct {
@@ -259,8 +205,6 @@ type configFile struct {
 	DB            *dbConfig        `json:"db"`
 	Meter         *meterSection    `json:"meter"`
 	Ce308         *ce308Section    `json:"ce308"`
-	EnBms         *enBmsSection    `json:"enBms"`
-	AntBms        *antBmsSection   `json:"antBms"`
 	Dts017        *dts017Section   `json:"dts017m"`
 	Mercury       []mercurySection `json:"mercury"` // ручные снятия показаний счётчика энергосбыта «Меркурий»
 	Notify        *notifySection   `json:"notify"`
@@ -291,8 +235,6 @@ func applyPollConfig(p *pollSection) error {
 		{"inverter", p.Inverter},
 		{"map", p.Map},
 		{"meter", p.Meter},
-		{"ce308", p.Ce308},
-		{"antbms", p.AntBms},
 	}
 	for _, f := range fields {
 		if f.val <= 0 {
@@ -302,8 +244,6 @@ func applyPollConfig(p *pollSection) error {
 	pollPeriod = time.Duration(p.Inverter) * time.Second
 	mapPollInterval = time.Duration(p.Map) * time.Second
 	meterPollInterval = time.Duration(p.Meter) * time.Second
-	ce308PollInterval = time.Duration(p.Ce308) * time.Second
-	bmsPollInterval = time.Duration(p.AntBms) * time.Second
 	return nil
 }
 
@@ -317,15 +257,80 @@ func configPath() string {
 }
 
 // loadConfig читает и проверяет sunReceiver.json, возвращает список целей
-// (инверторы + МАП, без отключённых), настройки БД/счётчика/МАП-веб-API и порт дашборда.
-func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection, *relaySection, *ce308Config, *enBmsConfig, int, error) {
+// (инверторы, без отключённых), настройки БД/счётчика/МАП и порт дашборда.
+// rejectLegacyConfigFields явно отклоняет удалённые поля конфига: json.Unmarshal
+// молча игнорирует неизвестные ключи, поэтому «старый вид» иначе загрузился бы
+// без ошибки. Возвращает первую найденную legacy-настройку.
+func rejectLegacyConfigFields(b []byte) error {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(b, &top); err != nil {
+		return err
+	}
+	// JSON-ключи в Go-структурах сопоставляются без учёта регистра, поэтому и
+	// legacy-ключи ищем так же.
+	hasFold := func(m map[string]json.RawMessage, name string) bool {
+		for k := range m {
+			if strings.EqualFold(k, name) {
+				return true
+			}
+		}
+		return false
+	}
+	rawFold := func(m map[string]json.RawMessage, name string) json.RawMessage {
+		for k, v := range m {
+			if strings.EqualFold(k, name) {
+				return v
+			}
+		}
+		return nil
+	}
+	check := func(raw json.RawMessage, section string, fields ...string) error {
+		if raw == nil {
+			return nil
+		}
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &m); err != nil {
+			return nil // структура проверится обычным Unmarshal
+		}
+		for _, f := range fields {
+			if hasFold(m, f) {
+				if section == "" {
+					return fmt.Errorf("поле %q удалено (рудимент)", f)
+				}
+				return fmt.Errorf("поле %s.%s удалено (рудимент)", section, f)
+			}
+		}
+		return nil
+	}
+	if hasFold(top, "antBms") {
+		return fmt.Errorf("раздел antBms удалён (единый BMS26 через map)")
+	}
+	if hasFold(top, "enBms") {
+		return fmt.Errorf("раздел enBms удалён (единый BMS26 через map)")
+	}
+	if err := check(rawFold(top, "map"), "map", "method", "rs485", "malina", "malina26"); err != nil {
+		return err
+	}
+	if err := check(rawFold(top, "poll"), "poll", "ce308", "antbms"); err != nil {
+		return err
+	}
+	if err := check(rawFold(top, "ce308"), "ce308", "final_readings_only"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection, *relaySection, *ce308Config, int, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("read config %s: %w", path, err)
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("read config %s: %w", path, err)
 	}
 	var cf configFile
 	if err := json.Unmarshal(b, &cf); err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("parse config %s: %w", path, err)
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	if err := rejectLegacyConfigFields(b); err != nil {
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
 	}
 	targets := make([]invTarget, 0, len(cf.Invertors)+1)
 	nextOrder := 0                // порядок устройства на дашборде = позиция в конфиге (в порядке invertors, затем map)
@@ -334,7 +339,7 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	// Инверторы (Deye/Sofar) из invertors; отключённые (disabled=true) пропускаются.
 	for _, t := range cf.Invertors {
 		if t.Disabled == nil {
-			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: для %s (%s) не задано обязательное поле disabled (false/true)", path, t.Name, t.IP)
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: для %s (%s) не задано обязательное поле disabled (false/true)", path, t.Name, t.IP)
 		}
 		if *t.Disabled {
 			log.Printf("config: %s (%s) отключён (disabled=true) — не опрашивается", t.Name, t.IP)
@@ -347,166 +352,124 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 		case "sofar":
 			kind = kindSofar
 		default:
-			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: неизвестный тип %q для %s", path, t.Type, t.IP)
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: неизвестный тип %q для %s", path, t.Type, t.IP)
 		}
 		if t.IP == "" {
-			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустой ip (type=%s)", path, t.Type)
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустой ip (type=%s)", path, t.Type)
 		}
 		if t.Name == "" {
-			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустое имя name для %s", path, t.IP)
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустое имя name для %s", path, t.IP)
 		}
 		// Deye/Sofar: без серийного номера логгера (logger_sn=0) логгер отвечает
 		// кодом 0x06 (heartbeat_only) — данные получать невозможно. Ловим при
 		// старте (fatal), а не маскируем вечным heartbeat_only с логами на poll.
 		if (kind == kindDeyeString || kind == kindSofar) && t.LoggerSN == 0 {
-			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %s (%s): не задан logger_sn — без SN логгера логгер отвечает кодом 0x06 и данные получать невозможно", path, t.Name, t.IP)
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %s (%s): не задан logger_sn — без SN логгера логгер отвечает кодом 0x06 и данные получать невозможно", path, t.Name, t.IP)
 		}
 		if prev, dup := seenIP[t.IP]; dup {
-			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: дублирующийся ip %s (%s и %s) — опрос одного IP двумя целями недопустим", path, t.IP, prev, t.Name)
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: дублирующийся ip %s (%s и %s) — опрос одного IP двумя целями недопустим", path, t.IP, prev, t.Name)
 		}
 		seenIP[t.IP] = t.Name
 		placement := t.Placement
 		if placement == "" {
 			placement = "Дом"
 		}
-		targets = append(targets, invTarget{IP: t.IP, Name: t.Name, LoggerSN: t.LoggerSN, Kind: kind, Unit: 1, Slot: -1, Order: nextOrder, Placement: placement})
+		targets = append(targets, invTarget{IP: t.IP, Name: t.Name, LoggerSN: t.LoggerSN, Kind: kind, Slot: -1, Order: nextOrder, Placement: placement})
 		nextOrder++
 	}
 
 	// Раздел "map" — обязательный общий флаг disabled (отключает все пулеры
-	// МАП и КЭС). Способ опроса (method) и блоки валидируются ниже.
+	// МАП и КЭС). Параметры раздела валидируются ниже.
 	if cf.Map != nil && cf.Map.Disabled == nil {
-		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано обязательное поле disabled (false/true)", path)
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано обязательное поле disabled (false/true)", path)
 	}
 	if cf.Map != nil && *cf.Map.Disabled {
 		log.Printf("config: map disabled=true — пулеры МАП и КЭС не запускаются")
 	}
-	// ANT BMS (раздел "antBms") — отдельный веб-API read_bms.php ПАК «Малина».
-	// Disabled обязателен; при активном разделе требуется непустой url.
-	if cf.AntBms != nil {
-		if cf.AntBms.Disabled == nil {
-			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе antBms не задано обязательное поле disabled (false/true)", path)
-		}
-		if !*cf.AntBms.Disabled && cf.AntBms.URL == "" {
-			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе antBms не задан url", path)
-		}
-	}
-	antBmsSec = cf.AntBms
 	if cf.Meter != nil && cf.Meter.Disabled == nil {
-		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе meter не задано обязательное поле disabled (false/true)", path)
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе meter не задано обязательное поле disabled (false/true)", path)
 	}
 	// Счётчик Энергомера CE308 (раздел "ce308"). Disabled обязателен; при
 	// отключённом — опрос не запускается (ce308Cfg = nil), при включённом —
 	// требуется mac и pin (BLE-PIN радиоинтерфейса).
 	if cf.Ce308 != nil && cf.Ce308.Disabled == nil {
-		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе ce308 не задано обязательное поле disabled (false/true)", path)
-	}
-	if cf.Ce308 != nil && cf.Ce308.FinalReadingsOnly == nil {
-		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе ce308 не задано обязательное поле final_readings_only (false/true)", path)
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе ce308 не задано обязательное поле disabled (false/true)", path)
 	}
 	ce308Cfg, err := ce308ConfigFromSection(cf.Ce308)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
-	}
-	// BMS EnBMS (раздел "enBms"): коллекция устройств опроса по BLE. Общий
-	// disabled обязателен; у каждого устройства disabled тоже обязателен, для
-	// активных нужен mac. Без активных устройств — пулер не запускается.
-	if cf.EnBms != nil && cf.EnBms.Disabled == nil {
-		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе enBms не задано обязательное поле disabled (false/true)", path)
-	}
-	enBmsCfg, err := enBmsConfigFromSection(cf.EnBms)
-	if err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
 	}
 	// Счётчик DTS017M (раздел "dts017m") — отдельные ключи/ряд Redis и таблицы PG.
 	// Disabled обязателен; при активном разделе нужны name/ip (остальное — дефолты).
 	if cf.Dts017 != nil && cf.Dts017.Disabled == nil {
-		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе dts017m не задано обязательное поле disabled (false/true)", path)
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе dts017m не задано обязательное поле disabled (false/true)", path)
 	}
 	if err := loadDts017Config(cf.Dts017); err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
 	}
 	// Ручные снятия показаний счётчика энергосбыта «Меркурий» (раздел "mercury").
 	if err := loadMercuryConfig(cf.Mercury); err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
 	}
 	// Сетевое реле SR-201 (лампы) — раздел "relay". Disabled обязателен: true
 	// отключает контроллер ламп; false — запускает управление по UDP. IP обязателен
 	// только при активном контроллере.
 	if cf.Relay != nil {
 		if cf.Relay.Disabled == nil {
-			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе relay не задано обязательное поле disabled (false/true)", path)
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе relay не задано обязательное поле disabled (false/true)", path)
 		}
 		if !*cf.Relay.Disabled && cf.Relay.IP == "" {
-			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе relay не задан ip устройства relay-sr201-2l", path)
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе relay не задан ip устройства relay-sr201-2l", path)
 		}
 	}
-	// МАП (батарея/сеть) и КЭС — раздел "map". Способ опроса — общее поле method:
-	//   rs485    — МАП по Modbus TCP (цель kindMAP); КЭС через блок malina (legacy);
-	//   malina   — МАП и КЭС через блок malina (read_json.php);
-	//   malina26 — МАП и КЭС через блок malina26 (токен + бинарные контракты).
+	// МАП (батарея/сеть), КЭС и BMS26 — раздел "map" (HTTP-API «Малина26»).
+	// Способ единственный; поле method удалено.
 	if cf.Map != nil && !*cf.Map.Disabled {
-		switch cf.Map.Method {
-		case "rs485":
-			if cf.Map.RS485 == nil || cf.Map.RS485.IP == "" {
-				return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: method=rs485 требует непустой map.rs485.ip", path)
+		if cf.Map.Host == "" || cf.Map.Password == "" || strings.TrimSpace(cf.Map.Serial) == "" {
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: раздел map требует host, password и serial", path)
+		}
+		if _, err := strconv.ParseUint(strings.TrimSpace(cf.Map.Serial), 10, 64); err != nil {
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: map.serial должен быть числом строкой: %w", path, err)
+		}
+		fs := strings.TrimSpace(cf.Map.FallbackSerial)
+		if fs != "" {
+			if _, err := strconv.ParseUint(fs, 10, 64); err != nil {
+				return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: map.fallback_serial должен быть числом строкой: %w", path, err)
 			}
-			rs485 := cf.Map.RS485
-			name := rs485.Name
-			if name == "" {
-				name = "MAP (батарея/сеть)"
+			if fs == strings.TrimSpace(cf.Map.Serial) {
+				return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: map.fallback_serial не должен совпадать с map.serial", path)
 			}
-			if prev, dup := seenIP[rs485.IP]; dup {
-				return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: дублирующийся ip %s (%s и %s)", path, rs485.IP, prev, name)
-			}
-			seenIP[rs485.IP] = name
-			unit := byte(1)
-			if rs485.Unit > 0 {
-				unit = byte(rs485.Unit)
-			}
-			targets = append(targets, invTarget{IP: rs485.IP, Name: name, Kind: kindMAP, Unit: unit, Slot: -1, Order: nextOrder})
-			nextOrder++
-		case "malina":
-			if m := cf.Map.Malina; m == nil || m.BaseURL == "" || m.MPPTPath == "" || m.Login == "" || m.Password == "" {
-				return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: method=malina требует map.malina (base_url, mppt_path, login, password)", path)
-			}
-			name := "MAP (батарея/сеть)"
-			mapAPI = &mapAPISource{name: name, ip: hostOf(cf.Map.Malina.BaseURL), order: nextOrder}
-			nextOrder++
-		case "malina26":
-			if m := cf.Map.Malina26; m == nil || m.Host == "" || m.Password == "" || strings.TrimSpace(m.Serial) == "" {
-				return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: method=malina26 требует map.malina26 (host, password, serial)", path)
-			}
-		default:
-			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе map не задано/некорректно поле method (ожидается rs485|malina|malina26, получено %q)", path, cf.Map.Method)
+		}
+		if cf.Map.Port != 0 && (cf.Map.Port < 1 || cf.Map.Port > 65535) {
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: map.port должен быть в диапазоне 1..65535", path)
 		}
 	}
 
 	meterActive := cf.Meter != nil && cf.Meter.Disabled != nil && !*cf.Meter.Disabled
 	relayActive := cf.Relay != nil && cf.Relay.Disabled != nil && !*cf.Relay.Disabled
 	mapActive := cf.Map != nil && (cf.Map.Disabled == nil || !*cf.Map.Disabled)
-	if len(targets) == 0 && mapAPI == nil && !mapActive && ce308Cfg == nil && !meterActive && !relayActive && dts017Cfg == nil {
-		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: нет ни одного активного устройства", path)
+	if len(targets) == 0 && !mapActive && ce308Cfg == nil && !meterActive && !relayActive && dts017Cfg == nil {
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: нет ни одного активного устройства", path)
 	}
 	// Периоды опроса устройств (секунды) — обязательный раздел "poll".
 	if err := applyPollConfig(cf.Poll); err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
 	}
 	// Порт веб-дашборда — обязательное поле dashboard_port в диапазоне 1..65535.
 	if cf.DashboardPort < 1 || cf.DashboardPort > 65535 {
-		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: dashboard_port=%d вне диапазона 1..65535 (порт веб-дашборда)", path, cf.DashboardPort)
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: dashboard_port=%d вне диапазона 1..65535 (порт веб-дашборда)", path, cf.DashboardPort)
 	}
 	// series_target_points / series_redis_target_points — ОБЯЗАТЕЛЬНЫЕ.
 	if cf.SeriesTargetPoints == nil {
-		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: не задано обязательное поле series_target_points (цель точек/серию на бэке)", path)
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: не задано обязательное поле series_target_points (цель точек/серию на бэке)", path)
 	}
 	if cf.SeriesRedisTargetPoints == nil {
-		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: не задано обязательное поле series_redis_target_points (цель агрегации RedisTimeSeries)", path)
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: не задано обязательное поле series_redis_target_points (цель агрегации RedisTimeSeries)", path)
 	}
 	maxSeriesPoints = *cf.SeriesTargetPoints
 	seriesRedisTargetPoints = *cf.SeriesRedisTargetPoints
 	if seriesRedisTargetPoints > maxSeriesPoints && maxSeriesPoints > 0 {
-		return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: series_redis_target_points=%d > series_target_points=%d (Redis-цель должна быть не больше бэкенд-цели)", path, seriesRedisTargetPoints, maxSeriesPoints)
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: series_redis_target_points=%d > series_target_points=%d (Redis-цель должна быть не больше бэкенд-цели)", path, seriesRedisTargetPoints, maxSeriesPoints)
 	}
 	// Учётные данные HTTP Basic для `/api/*` дашборда (необязательны). Заданы обе —
 	// требовать авторизацию; иначе API открыт (доступ снаружи закрывает прокси).
@@ -521,10 +484,10 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 			log.Printf("config: notify disabled=true — уведомления в MAX выключены (раздел в конфиге, но без оповещений)")
 			notifyCfg = nil
 		} else if notifyCfg.Token == "" {
-			return nil, nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе notify не задан token", path)
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе notify не задан token", path)
 		}
 	}
-	return targets, cf.DB, cf.Meter, cf.Map, cf.Relay, ce308Cfg, enBmsCfg, cf.DashboardPort, nil
+	return targets, cf.DB, cf.Meter, cf.Map, cf.Relay, ce308Cfg, cf.DashboardPort, nil
 }
 
 // placementOrder возвращает упорядоченный список размещений сетевых инверторов
@@ -616,8 +579,8 @@ func defaultPGDSN(db *dbConfig) string {
 	return "postgres://localhost:5432/sunreceiver?sslmode=disable"
 }
 
-// mpptPollState — межцикловое состояние пулера MPPT-контроллеров через веб-API
-// ПАК «Малина» (сохраняется между вызовами pollAndSaveMap; доступ из одной
+// mpptPollState — межцикловое состояние пулера MPPT-контроллеров через API
+// «Малина26» (сохраняется между вызовами pollAndSaveMap; доступ из одной
 // горутины). Счётчик подряд идущих ПУСТЫХ успешных ответов: до порога
 // mpptEmptyTolerance не вызываем PruneMPPT, чтобы одиночная пустота не снесла
 // все MPPT-ключи из current.
@@ -642,7 +605,7 @@ func (s *mpptPollState) shouldPrune(empty bool) bool {
 
 // mapDevKey — постоянный ключ устройства МАП в хранилище (логический ключ
 // обособленных ключей sunreceiver:map:current/:series:*; поле в PG map_averages_r —
-// name). Не зависит от адреса МАП (Modbus TCP/RS485 или веб-API) и его IP: МАП
+// name). Не зависит от адреса МАП/API и его IP: МАП
 // всегда одна колонка/ряд с ключом "map".
 const mapDevKey = "map"
 
@@ -685,17 +648,9 @@ var (
 var version = "dev"
 
 // mapSourceIdentity возвращает devKey (IP) и логическое имя МАП, по которому
-// ведётся мониторинг уведомлений. Источник МАП — RS232/Modbus (цель kindMAP) или
-// веб-API ПАК «Малина» (mapAPI). При ни одного — ("", ""): мониторинг не запускается.
+// ведётся мониторинг уведомлений. Источник МАП — API «Малина26».
+// При отсутствии источника — ("", ""): мониторинг не запускается.
 func mapSourceIdentity() (string, string) {
-	for _, t := range targets {
-		if t.Kind == kindMAP {
-			return devKey(t), t.Name
-		}
-	}
-	if mapAPI != nil {
-		return mapDevKey, mapAPI.name
-	}
 	if malina26 != nil {
 		return mapDevKey, malina26.name
 	}
@@ -704,14 +659,6 @@ func mapSourceIdentity() (string, string) {
 
 // mapSourceName возвращает строковое имя активного источника МАП (для логов).
 func mapSourceName() string {
-	for _, t := range targets {
-		if t.Kind == kindMAP {
-			return "RS232/Modbus"
-		}
-	}
-	if mapAPI != nil {
-		return "веб-API ПАК «Малина»"
-	}
 	if malina26 != nil {
 		return "API «Малина26»"
 	}
@@ -719,28 +666,6 @@ func mapSourceName() string {
 }
 
 var targets []invTarget
-
-// mppt — конфигурация доступа к веб-API ПАК «Малина» для мониторинга MPPT (КЭС)
-// через read_json.php?device=mppt. Заполняется в main() из раздела "mppt"
-// sunReceiver.json.
-var mppt *mpptSite
-
-// mapAPI — когда МАП опрашивается НЕ через Modbus, а через веб-API ПАК «Малина»
-// (read_json.php?device=map). Заполняется в loadConfig, если в разделе "map"
-// sunReceiver.json задано disabled=true. name/ip — логическое имя и ключ устройства
-// (IP МАП из конфига, тот же devKey, что у МАП по Modbus). Если nil — МАП
-// опрашивается через Modbus по-прежнему.
-var mapAPI *mapAPISource
-
-// antBmsSec — раздел "antBms" sunReceiver.json, заполняется в loadConfig.
-// Используется в main() для сборки клиента read_bms.php (см. loadBmsSite).
-var antBmsSec *antBmsSection
-
-type mapAPISource struct {
-	name  string
-	ip    string
-	order int
-}
 
 var statusNames = map[uint16]string{
 	0: "standby", 1: "self-checking", 2: "normal", 3: "fault", 4: "permanent",
@@ -790,7 +715,7 @@ var commonContractTags = []string{
 	// Энергия
 	"energy_today",
 	"energy_total",
-	// МАП modbus: батарея и сеть (для дашборда КЭС)
+	// МАП: батарея и сеть (для дашборда КЭС)
 	"grid_voltage",
 	"grid_power",
 	"battery_voltage",
@@ -1438,150 +1363,6 @@ func clientFor(ip string, sn uint32) *solarman.Client {
 	return c
 }
 
-// MAP clients — переиспользуемое TCP-соединение, но для МАП гейт отвечает
-// медленно, и соединение живёт. Каждая цель (КЭС) опрашивается из одной горутины,
-// поэтому сокет не гоняется между опросами.
-var (
-	mapClientsMu    sync.Mutex
-	mapClientsByKey = map[string]*modbusmap.Client{}
-)
-
-// mapClientFor возвращает (и при первом обращении создаёт) клиент МАП-гейта
-// для адреса ip:502 с Modbus-адресом unit.
-func mapClientFor(ip string, unit byte) *modbusmap.Client {
-	key := ip + ":" + modbusmap.DefaultPort
-	mapClientsMu.Lock()
-	defer mapClientsMu.Unlock()
-	if c, ok := mapClientsByKey[key]; ok {
-		return c
-	}
-	c := &modbusmap.Client{Address: key, Unit: unit}
-	mapClientsByKey[key] = c
-	return c
-}
-
-// mapMAPRegisters строит значения универсального контракта цели «КЭС» (МАП
-// Титанатор — агрегат батареи/сети) из байт-ячеек МАП. Per-слотовые MPPT
-// контроллеры больше не читаются через Modbus (они переехали на веб-API read_json);
-// эта функция обслуживает единственный агрегат (slot = -1) из sunReceiver.json.
-//
-// Маппинг полей (ТЗ КЭС):
-//   - l1_voltage = напряжение АКБ МАП _UAcc_med_VH/VL (0x405/0x406), (VH*256+VL)/10.
-//     V_Bat самих контроллеров гейт МАП не отдаёт (проверено живьём 0x4D5=0),
-//     поэтому источник — то же напряжение АКБ, что заряжают контроллеры.
-//   - l1_current / ac_active_power для МАП НЕ выставляются: это теги AC-инверторов,
-//     для МАП они дублировали ток/мощность АКБ и нигде не используются (дашборд МАП
-//     читает battery_power/grid_power). Ток АКБ _IAcc (0x432/0x433) идёт только в battery_power.
-//   - grid_frequency = 0 (частоты сети инвертор МППТ не отдаёт).
-//   - pv1/pv2, ac_reactive_power, l2/l3 — в values не пишутся (нет данных).
-func mapMAPRegisters(cells map[uint16]byte) valuesContract {
-	out := valuesContract{}
-
-	// Напряжение АКБ МАП: _UAcc_med_VH=0x405, _UAcc_med_VL=0x406, U=(VH*256+VL)/10.
-	vh, ok1 := cells[0x405]
-	vl, ok2 := cells[0x406]
-	if !ok1 || !ok2 {
-		return out
-	}
-	uAcc := float64(vh)*256 + float64(vl)
-	if uAcc <= 0 {
-		return out
-	}
-	uAcc /= 10
-	out["l1_voltage"] = uAcc
-	out["battery_voltage"] = uAcc
-
-	// Ток АКБ: _IAcc_med_A_u16_L=0x432, _IAcc_med_A_u16_H=0x433,
-	// I[А] = (L + H*256)/16. Это более точный ток батареи (заряд/разряд АКБ);
-	// токи MPPT (0x530) — это токи контроллеров, а не ток самой АКБ.
-	//
-	// Знак: в режиме заряда (MODE=0x400 == 4) ток АКБ считаем ОТРИЦАТЕЛЬНЫМ —
-	// согласовано с API-веткой mapMAPAPI (_Iacc знаковый, заряд отрицательный),
-	// чтобы при переключении map.disabled (Modbus ↔ API) знак одного и того же
-	// контрактного тега l1_current/ac_active_power не менялся и графики двух
-	// источников были совместимы (раньше Modbus-ветка вела ток беззнаковым).
-	mapMode := byte(0)
-	if m, okM := cells[0x400]; okM {
-		mapMode = m
-	}
-	var iAcc float64
-	hasIAcc := false
-	if l, okL := cells[0x432]; okL {
-		if h, okH := cells[0x433]; okH {
-			iAcc = float64(uint16(h)<<8|uint16(l)) / 16
-			hasIAcc = true
-		}
-	}
-	if mapMode == 4 {
-		iAcc = -iAcc
-	}
-
-	// NB: l1_current/ac_active_power для МАП НЕ выставляем — это теги AC-инверторов;
-	// для МАП они дублировали ток/мощность АКБ и нигде не используются. Ток АКБ отдаём
-	// отдельным контрактным тегом battery_current (знак как у battery_power: заряд −,
-	// отдача +) для плашки «Ток батареи» на дашборде.
-	if hasIAcc {
-		out["battery_current"] = iAcc
-	}
-	out["grid_frequency"] = 0.0
-
-	// ---- Данные батареи и сети МАП (для дашборда КЭС) ----
-	// Напряжение сети: _UNET=0x422; UNET=0 → нет сети, иначе U=(UNET+100).
-	if un, ok := cells[0x422]; ok {
-		if un == 0 {
-			out["grid_voltage"] = 0.0
-		} else {
-			out["grid_voltage"] = float64(un) + 100
-		}
-	}
-	// Мощность сети: _PNET (16 бит) = 0x59A(L),0x59B(H), Pnet=((H*256+L)/8)*100.
-	// Знак по _PNET_Sign_P=0x587 (как в mapread.py) семантики дашборда:
-	// 1 — положительная (потребляем из сети), 0 — отрицательная (продажа/отдача в сеть).
-	if lo, okL := cells[0x59A]; okL {
-		if hi, okH := cells[0x59B]; okH {
-			pnet := (float64(hi)*256 + float64(lo)) / 8 * 100
-			if sign, okS := cells[0x587]; okS && sign == 0 {
-				pnet = -pnet
-			}
-			out["grid_power"] = pnet
-		}
-	}
-	// Мощность батареи со знаком (семантика дашборда: заряд = отрицательная,
-	// отдача в нагрузку/сеть = положительная). Батарейная мощность = I_АКБ × U_АКБ
-	// (ток 0x432/0x433, I[А]=(L+H*256)/16; напряжение 0x405/0x406). Знак — как у
-	// актуального тока: в заряде (MODE==4) ток iAcc уже отрицательный → P = I×U
-	// отрицательная; при отдаче ток положительный → P = I×U положительная.
-	// НЕ используем _PLoad: это мощность НАГРУЗКИ по АКБ (потребителя), не
-	// батарейная (при заряде завышена: 8100 Вт против I×U 5685 Вт).
-	batP := uAcc * iAcc
-	out["battery_power"] = batP
-
-	// ---- Температуры МАП (тор, радиатор транзисторов, внешний датчик АКБ) ----
-	// Ячейки (сырые, T = raw − 50): _Temp_Grad0=0x42E (внешний датчик АКБ),
-	// _Temp_Grad1=0x42F (тор), _Temp_Grad2=0x430 (транзисторы). Признаки отсутствия
-	// датчиков — _Temp_off=0x43C: бит0 — внешний (АКБ) нет, бит1 — тора нет,
-	// бит2 — транзисторов нет. При отсутствии датчика температуру не выставляем.
-	// Ячейки 0x42E-0x430 и 0x43C входят в блок 0x400 (0x400..0x43F), читаемый в
-	// pollDevice (см. kindMAP): не требуется отдельного чтения.
-	tempOff := byte(0)
-	if o, okO := cells[0x43C]; okO {
-		tempOff = o
-	}
-	putTemp := func(addr uint16, bit byte, tag string) {
-		if tempOff&(1<<bit) != 0 {
-			return // датчик отсутствует
-		}
-		if v, okB := cells[addr]; okB {
-			out[tag] = float64(v) - 50
-		}
-	}
-	putTemp(0x42E, 0, "map_temp_battery")
-	putTemp(0x42F, 1, "map_temp_tor")
-	putTemp(0x430, 2, "map_temp_transistor")
-
-	return out
-}
-
 // asciiFromRegisters собирает ASCII-строку из регистров (2 байта/регистр,
 // старший байт первый — как в строках SN-областей Deye и Sofar). Не-печатные
 // байты (напр. регистр длины 0x2000 у Sofar) пропускаются.
@@ -1776,55 +1557,6 @@ func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 			}
 		}
 
-	case kindMAP:
-		// МАП Титанатор («КЭС») — Modbus TCP (порт 502), не Solarman-кадр.
-		// Читаем блоки байт-ячеек: 0x400 (0x400..0x43F — режим/АКБ/сети) и мощности
-		// сети/батареи 0x580 (0x580..0x5A3, т.ч. 0x587 sign, 0x59A/0x59B PNET,
-		// 0x59E/0x59F PLOAD). Блок 0x530 (токи MPPT) не читаем: mapMAPRegisters его
-		// ячейки не использует (пер-слотовые MPPT берутся из веб-API), а чтение
-		// добавляло к циклу до ~3 с.
-		mc := mapClientFor(t.IP, t.Unit)
-		cells := map[uint16]byte{}
-		// Блок 0x400 (0x20 слов = 0x400..0x43F) охватывает режим (0x400), мощности
-		// (_PLoad_L 0x409), напряжения (_UNET 0x422, _INET 0x423, _PNET_L 0x424)
-		// и ток АКБ (_IAcc_med 0x432/0x433). Отдельного чтения 0x420 нет — оно было
-		// строгим подмножеством этого блока (ReadRegisters проверяет bytecount,
-		// поэтому при успехе 0x422 уже в cells).
-		if b, err := mc.ReadRegisters(ctx, 0x0400, 0x20); err == nil {
-			for i := 0; i < len(b); i++ {
-				cells[0x0400+uint16(i)] = b[i]
-			}
-		} else {
-			log.Printf("%s: MAP: блок 0x0400: %v", t.IP, err)
-		}
-		if b, err := mc.ReadRegisters(ctx, 0x0580, 0x24); err == nil {
-			for i := 0; i < len(b); i++ {
-				cells[0x0580+uint16(i)] = b[i]
-			}
-		} else {
-			log.Printf("%s: MAP: блок 0x0580: %v", t.IP, err)
-		}
-		res.Values = mapMAPRegisters(cells)
-		if _, has := cells[0x405]; has && cells[0x406] > 0 {
-			res.HasData = true
-		}
-		if len(res.Values) > 0 {
-			res.HasData = true
-			res.DeviceSN = mapDevKey
-		}
-		// Фиксируем результат Modbus-опроса МАП для монитора уведомлений.
-		now := time.Now()
-		if res.HasData {
-			// Напряжение сети МАП (grid_voltage): 0 = нет сети (см. mapMAPRegisters).
-			grid, hasGrid := 0.0, false
-			if v, ok := res.Values["grid_voltage"]; ok {
-				grid, hasGrid = toFloat(v)
-			}
-			mapTracker.trackOK("modbus", now, hasGrid, grid)
-		} else {
-			mapTracker.trackErr("modbus", "опрос по RS232/Modbus не удался (нет данных от МАП)", now)
-		}
-
 	default:
 		log.Printf("%s: неизвестный kind %s — опрос пропущен", t.IP, t.Kind)
 	}
@@ -1846,45 +1578,9 @@ func pollDevice(ctx context.Context, t invTarget) DeviceResult {
 	return res
 }
 
-// pollMPPTFromArr строит DeviceResult для MPPT-контроллера (t.Slot) из УЖЕ
-// полученного ответа ПАК «Малина» (arr = read_json.php?device=mppt). Вынесена из
-// pollDevice, чтобы один HTTP-запрос FetchMPPTs переиспользовался для всех слотов
-// за цикл, а не повторялся на каждый контроллер.
-func pollMPPTFromArr(t invTarget, arr []mpptRaw) DeviceResult {
-	res := DeviceResult{OK: true}
-	if t.Slot < 0 || t.Slot >= len(arr) {
-		res.OK = false
-		log.Printf("%s: mppt api: слот %d вне диапазона (получено %d контроллеров)", t.IP, t.Slot, len(arr))
-		return res
-	}
-	vals, ts, ok := mapMPPTAPI(arr[t.Slot])
-	if !ok {
-		res.OK = false
-		log.Printf("%s: mppt api: слот %d не дал данных", t.IP, t.Slot)
-		return res
-	}
-	res.OK = true
-	res.HasData = true
-	res.Values = vals
-	if arr[t.Slot].UID != "" {
-		res.DeviceSN = fmt.Sprintf("mppt-%s", arr[t.Slot].UID)
-	}
-	// Актуальность данных из API (для таймстампа снимка). mapMPPTAPI вернул нулевое
-	// время при timestamp=0; здесь дополнительно отбрасываем устаревший (>5 мин) или
-	// будущий timestamp — дрейф часов Малины не должен уводить снимок от now.
-	if !ts.IsZero() {
-		if d := time.Since(ts); d > 5*time.Minute || d < -5*time.Minute {
-			ts = time.Time{}
-		}
-	}
-	res.Time = ts
-	return res
-}
-
-// runMapPoll — отдельный 1-секундный цикл опроса быстрых целей — МАП (kindMAP,
-// Modbus TCP) и MPPT-контроллеров (веб-API ПАК «Малина») — и записи в Redis
-// каждого снятого показания (Score = секунда снятия; см. saveMapSnapshot).
-// МАП-цели исключены из 10-сек циклов инверторов (см. runInverterPoll); MPPT не
+// runMapPoll — отдельный 1-секундный цикл опроса МАП (kindMAP) и
+// MPPT-контроллеров через API «Малина26» и записи в Redis каждого снятого
+// показания (Score = секунда снятия; см. saveMapSnapshot). MPPT не
 // регистрируются в конфиге вовсе (см. pollAndSaveMap).
 func runMapPoll(store *redisStore, pg *pgStore, stop context.Context) {
 	ticker := time.NewTicker(mapPollInterval)
@@ -1934,9 +1630,9 @@ func (e *mapErrState) clear(key string) {
 // pollAndSaveMap опрашивает быстрые источники параллельно и пишет в Redis
 // КАЖДОЕ снятое показание (Score = секунда снятия; + актуальное current) через
 // saveMapSnapshot:
-//   - МАП (kindMAP, Modbus TCP) — цели из targets;
-//   - MPPT-контроллеры — ДИНАМИЧЕСКИ: состав определяется фактически подключёнными
-//     к ПАК «Малина» контроллерами из ответа read_json.php?device=mppt, а не из
+//   - МАП (kindMAP) — через API «Малина26» (malina26);
+//   - MPPT-контроллеры (КЭС) — ДИНАМИЧЕСКИ: состав определяется фактически
+//     подключёнными к ПАК «Малина» контроллерами из ответа API «Малина26», а не из
 //     sunReceiver.json. Поэтому MPPT появляются/исчезают с дашборда по факту наличия
 //     в ответе API; исчезнувшие удаляются и из HASH current (их строка не числится
 //     «актуальной».
@@ -2003,29 +1699,7 @@ func pollAndSaveMap(ctx context.Context, store *redisStore, pg *pgStore, now tim
 	var wg sync.WaitGroup
 	activeMPPT := map[string]struct{}{}
 	pruneMPPT := false // MPPT-состав чистим из current только по решению state.shouldPrune
-	// МАП (батарея/сеть) — из targets (Modbus) или через веб-API ПАК «Малина».
-	for i := range targets {
-		t := targets[i]
-		if t.Kind != kindMAP {
-			continue
-		}
-		wg.Add(1)
-		go func(t invTarget) {
-			defer wg.Done()
-			saveWindowSnapshot(store, pg, t, pollDevice(ctx, t), now, errState)
-		}(t)
-	}
-	// МАП через веб-API (map.disabled=true): Modbus-пулер не запущен (цели kindMAP в
-	// targets нет), параметры батареи/сети берём из read_json.php?device=map.
-	if mapAPI != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			t := invTarget{IP: mapAPI.ip, Name: mapAPI.name, Kind: kindMAP, Slot: -1, Order: mapAPI.order}
-			saveWindowSnapshot(store, pg, t, pollMAPAPI(ctx), now, errState)
-		}()
-	}
-	// МАП через новый API «Малина26» (method=malina26): цель kindMAP с ключом "map".
+	// МАП через API «Малина26»: цель kindMAP с ключом "map".
 	if malina26 != nil {
 		wg.Add(1)
 		go func() {
@@ -2034,41 +1708,7 @@ func pollAndSaveMap(ctx context.Context, store *redisStore, pg *pgStore, now tim
 			saveWindowSnapshot(store, pg, t, pollMAPMalina26(ctx), now, errState)
 		}()
 	}
-	// MPPT-контроллеры — по факту подключённых из API. Состав определяется
-	// фактически подключёнными к ПАК «Малина» контроллерами (один HTTP-запрос
-	// FetchMPPTs переиспользуется для всех слотов за цикл). Каждый контроллер
-	// ответа — отдельное устройство с ключом devKey(MPPT слотом); имя MPPT-<n+1>.
-	if mppt != nil {
-		arr, err := mppt.FetchMPPTs(ctx)
-		if err != nil {
-			log.Printf("mppt api: %v", err)
-			// При ошибке запроса НЕ чистим «исчезнувшие» контроллеры: одиночный
-			// сбой (таймаут, перезапуск Малины) не должен вычистить все MPPT из
-			// current. Чистим только когда API ответил, но контроллера нет в ответе.
-		} else {
-			for slot := range arr {
-				slot := slot
-				// Ключ/имя MPPT — по стабильному серийнику (UID). Пустой UID
-				// (нет данных) — контроллер пропускаем (без индекса-фолбэка).
-				uid := arr[slot].UID
-				if uid == "" {
-					log.Printf("%s: mppt api: слот %d без UID — пропуск", mppt.Host, slot)
-					continue
-				}
-				name := "MPPT-" + uid
-				t := invTarget{IP: mppt.Host, Name: name, Kind: kindMPPT, Slot: slot, UID: uid, Order: mpptOrderBase + slot}
-				activeMPPT[devKey(t)] = struct{}{}
-				wg.Add(1)
-				go func(t invTarget) {
-					defer wg.Done()
-					saveWindowSnapshot(store, pg, t, pollMPPTFromArr(t, arr), now, errState)
-				}(t)
-			}
-			// Прунинг — только по устойчивой пустоте (несколько пустых ответов подряд).
-			pruneMPPT = state.shouldPrune(len(arr) == 0)
-		}
-	}
-	// КЭС через новый API «Малина26» (method=malina26): все контроллеры, один пулер,
+	// КЭС через API «Малина26»: все контроллеры, один пулер,
 	// последовательно. Ключ устройства — mppt-<serial>.
 	if malina26 != nil {
 		readings, err := malina26.FetchKES(ctx)
@@ -2122,10 +1762,9 @@ func main() {
 	var mapSec *mapSection
 	var relaySec *relaySection
 	var ce308Cfg *ce308Config
-	var enBmsCfg *enBmsConfig
 	var dashPort int
 	var err error
-	targets, dbCfg, meterSec, mapSec, relaySec, ce308Cfg, enBmsCfg, dashPort, err = loadConfig(cfgPath)
+	targets, dbCfg, meterSec, mapSec, relaySec, ce308Cfg, dashPort, err = loadConfig(cfgPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -2138,30 +1777,14 @@ func main() {
 
 	log.Printf("poller started: version=%s config=%s targets=%v period=%s", version, cfgPath, targets, pollPeriod)
 
-	// Конфигурация веб-API ПАК «Малина» для мониторинга MPPT (КЭС) — блок map.malina
-	// (legacy read_json.php). При method=malina26 блок malina не задан → nil (КЭС
-	// опрашивает новый клиент malina26).
-	mppt = loadMPPTSite(mapSec)
-	// Новый HTTP-API «Малина26» (method=malina26) — МАП и КЭС (токен + бинарные
-	// контракты). nil при другом method.
+	// HTTP-API «Малина26» — МАП, КЭС и BMS26 (токен + бинарные контракты).
 	malina26 = loadMalina26(mapSec)
 	if malina26 != nil {
 		log.Printf("map malina26: опрос через %s (serial %s)", malina26.baseURL, malina26.serial)
 	}
-	// ANT BMS (ANT BMS, web-API read_bms.php ПАК «Малина») — отдельный 1-сек цикл,
-	// актуальное состояние в отдельном Redis-ключе (HASH sunreceiver:bms).
-	bmsSite = loadBmsSite(antBmsSec)
-	if bmsSite != nil {
-		log.Printf("bms: опрос ANT BMS через %s (1 раз в секунду)", bmsSite.url)
-	}
 	// BMS через malina26 (единый тип ANT+EnBMS): используем общий клиент
-	// method=malina26 (те же host/port/password и токен), отдельного раздела нет.
+	// (те же host/port/password и токен), отдельного раздела нет.
 	bms26 = newBms26Source(malina26)
-	// Если МАП опрашивается через legacy веб-API (method=malina), обязателен доступ
-	// к ПАК «Малина» (блок map.malina) — иначе неоткуда взять параметры батареи/сети.
-	if mapAPI != nil && mppt == nil {
-		log.Fatalf("config: method=malina, но блок map.malina неполный — нужны base_url, mppt_path, login, password")
-	}
 	// Конфигурация электросчётчика DDS238 — раздел "meter" sunReceiver.json
 	// или файл dds238.json (обратная совместимость).
 	meterCfg := loadMeterConfig(meterSec)
@@ -2176,12 +1799,6 @@ func main() {
 	} else {
 		log.Printf("ce308: не настроен (нет раздела ce308) — опрос CE308 отключён")
 	}
-	// BMS EnBMS — раздел "enBms" sunReceiver.json (опрос по BLE).
-	if desc := describeEnBmsConfig(enBmsCfg); desc != "" {
-		log.Printf("enbms: %s", desc)
-	} else {
-		log.Printf("enbms: не настроен (нет активных устройств в разделе enBms) — опрос отключён")
-	}
 	// Счётчик DTS017M — раздел "dts017m" (Modbus RTU/TCP, обособленное хранилище).
 	if desc := describeDts017Config(dts017Cfg); desc != "" {
 		log.Printf("dts017m: %s", desc)
@@ -2192,16 +1809,15 @@ func main() {
 	// Флаги видимости блоков дашборда, вычисленные из конфигурации:
 	//   - ShowMap — МАП/MPPT включены (map.disabled != true);
 	//   - ShowMeter — счётчик реально опрашивается (не disabled и не «неполный»);
-	//   - ShowBMS — пулер ANT BMS запущен (раздел antBms с disabled=false и url);
+	//   - ShowBMS — пулер BMS26 активен (единый ANT+EnBMS через malina26).
 	//   - ShowRelay — контроллер ламп SR-201 включен (relay.disabled != true).
 	dash := dashFlags{
-		ShowMap:                mapSec != nil && (mapSec.Disabled == nil || !*mapSec.Disabled),
-		ShowMeter:              meterCfg != nil,
-		ShowBMS:                bmsSite != nil || enBmsCfg != nil || bms26 != nil,
-		ShowRelay:              relaySec != nil && (relaySec.Disabled == nil || !*relaySec.Disabled),
-		ShowCE308:              ce308Cfg != nil,
-		CE308FinalReadingsOnly: ce308Cfg != nil && ce308Cfg.FinalReadingsOnly,
-		ShowDTS017:             dts017Cfg != nil,
+		ShowMap:    mapSec != nil && (mapSec.Disabled == nil || !*mapSec.Disabled),
+		ShowMeter:  meterCfg != nil,
+		ShowBMS:    bms26 != nil,
+		ShowRelay:  relaySec != nil && (relaySec.Disabled == nil || !*relaySec.Disabled),
+		ShowCE308:  ce308Cfg != nil,
+		ShowDTS017: dts017Cfg != nil,
 	}
 
 	// Сетевое реле SR-201 (лампы): управление по UDP, состояние поддерживает
@@ -2288,16 +1904,13 @@ func main() {
 				// не был засчитан пустым и не перетёрся реставрацией.
 				bmsPresent, berr := redisBMSDataPresent(store)
 				dtsPresent, derr := redisDts017DataPresent(store)
-				cePresent, ceerr := redisCE308DataPresent(store)
 				switch {
 				case berr != nil:
 					log.Printf("redis empty-check (bms): %v", berr)
 				case derr != nil:
 					log.Printf("redis empty-check (dts017m): %v", derr)
-				case ceerr != nil:
-					log.Printf("redis empty-check (ce308): %v", ceerr)
-				case incomplete == 0 && empty && (bmsPresent || dtsPresent || cePresent):
-					log.Printf("redis empty-check: в Redis есть данные BMS/DTS017M/CE308 — реставрация не требуется")
+				case incomplete == 0 && empty && (bmsPresent || dtsPresent):
+					log.Printf("redis empty-check: в Redis есть данные BMS/DTS017M — реставрация не требуется")
 				default:
 					// SETNX-маркер: защита от повторной/одновременной реставрации
 					// (два экземпляра на одном Redis). Захвативший маркер — единственный,
@@ -2309,8 +1922,7 @@ func main() {
 					} else if !locked {
 						log.Printf("pg restore: реставрацию уже выполняет другой процесс — пропускаю")
 					} else {
-						restoreCE308Series := ce308Cfg == nil || !ce308Cfg.FinalReadingsOnly
-						complete := restoreRedisFromPG(store, pg, restoreWindow, restoreCE308Series, stopCtx)
+						complete := restoreRedisFromPG(store, pg, restoreWindow, stopCtx)
 						store.rdb.Del(store.ctx, redisRestoreLockKey)
 						// Маркер неполной реставрации: при сбое ряда она повторится
 						// при следующем старте (см. redisRestoreIncompleteKey).
@@ -2326,9 +1938,6 @@ func main() {
 	} else {
 		log.Printf("pg: отключено (флаг -pg пустой); работаем только через Redis")
 	}
-
-	// Кэш serial BMS26 (BASE→serial, EnBMS) — для «костыля» старых пулеров.
-	loadBms26SerialCache(store)
 
 	// Фоновые процессы: усреднение данных за 5 минут в PG и очистка старых
 	// данных Redis (старше 2 календарных суток).
@@ -2347,48 +1956,31 @@ func main() {
 		defer bgWg.Done()
 		runAvgPartitionMaintenance(pg, stopCtx)
 	}()
-	// МАП («КЭС», Modbus TCP) и MPPT-контроллеры (веб-API ПАК «Малина»)
-	// опрашиваются отдельно, 1 раз в секунду, и пишутся в Redis каждым снятым
-	// показанием (см. saveMapSnapshot). Быстрый 1-сек цикл
-	// запускается только если есть хоть один источник МАП/MPPT: при map.disabled=true
-	// (или отсутствии источников) горутина не стартует вовсе.
-	hasMapSource := mapAPI != nil || mppt != nil || malina26 != nil
-	if !hasMapSource {
-		for _, t := range targets {
-			if t.Kind == kindMAP {
-				hasMapSource = true
-				break
-			}
-		}
-	}
+	// МАП и КЭС опрашиваются отдельно, 1 раз в секунду, и пишутся в Redis каждым
+	// снятым показанием (см. saveMapSnapshot). Быстрый 1-сек цикл запускается
+	// только если есть источник (malina26); при map.disabled=true — не стартует.
+	hasMapSource := malina26 != nil
 	if hasMapSource {
 		bgWg.Add(1)
 		go func() {
 			defer bgWg.Done()
 			runMapPoll(store, pg, stopCtx)
 		}()
-		// Отдельный пулер ОШИБОК МАП (не чаще 1/30 с): сырые ячейки ошибок через
-		// Modbus или read_memory.php, запись появления в PG device_errors.
-		var mapErrTarget *invTarget
-		for i := range targets {
-			if targets[i].Kind == kindMAP {
-				mapErrTarget = &targets[i]
-				break
-			}
-		}
-		if pg != nil && (mapErrTarget != nil || mppt != nil || malina26 != nil) {
+		// Отдельный пулер ОШИБОК МАП (не чаще 1/30 с): сырые ячейки через
+		// malina26.mapErrCells, запись появления в PG device_errors.
+		if pg != nil {
 			bgWg.Add(1)
 			go func() {
 				defer bgWg.Done()
-				runMapErrorPoll(pg, mapErrTarget, stopCtx)
+				runMapErrorPoll(pg, stopCtx)
 			}()
 		}
 	} else {
-		log.Printf("map/mppt: опрос отключён (map.disabled=true или нет источников МАП/MPPT)")
+		log.Printf("map: опрос отключён (map.disabled=true или нет источника malina26)")
 	}
 	// Уведомления в MAX. Мониторинг МАП выполняется ТОЛЬКО если включён опрос МАП
-	// в целом (есть источник МАП — RS232/Modbus или веб-API ПАК «Малина»). Если
-	// опрос МАП выключен — уведомления не формируются, даже при настроенном notify.
+	// (есть источник malina26). Если опрос МАП выключен — уведомления не
+	// формируются, даже при настроенном notify.
 	mapIP, mapName := mapSourceIdentity()
 	if notifyCfg != nil && mapIP != "" {
 		bgWg.Add(1)
@@ -2399,17 +1991,6 @@ func main() {
 		log.Printf("notify: уведомления в MAX включены (МАП %s, источник %s)", mapName, mapSourceName())
 	} else if notifyCfg != nil {
 		log.Printf("notify: опрос МАП выключен или нет источника МАП — уведомления в MAX не формируются")
-	}
-	// ANT BMS (read_bms.php) — 1 раз в секунду: актуальное состояние в отдельном
-	// Redis-ключе (HASH bms26) + накопление 5-минутных усреднённых
-	// точек в Redis (ряд, окно 2 суток) и PG (bms26_averages_r), см. bms_poller.go
-	// и bms_accumulator.go.
-	if bmsSite != nil {
-		bgWg.Add(1)
-		go func() {
-			defer bgWg.Done()
-			runBmsPoll(store, pg, stopCtx)
-		}()
 	}
 	// BMS через malina26 (единый тип ANT+EnBMS): отдельный цикл, Redis
 	// sunreceiver:bms26:* + PG bms26_averages_r, см. bms26.go.
@@ -2462,74 +2043,15 @@ func main() {
 		}()
 	}
 
-	// Счётчик Энергомера CE308 — отдельный цикл опроса по BLE с периодом poll.ce308
-	// (в sample по умолчанию 5 с; текущие
-	// значения + история в Redis (каждое показание), усреднение до 1 записи за 5 мин в PG), см.
-	// ce308_poller.go и ce308_accumulator.go. Разовый снимок энергии — по сигналу.
-	// Раздел ce308 независим от счётчика DDS238 (meter) и запускается даже без него.
+	// Счётчик Энергомера CE308 — только итоговые показания: без постоянного
+	// соединения, телеметрии и PG-агрегации; раз в 30 мин (или по кнопке) —
+	// разовый снимок накопленной энергии. Раздел независим от DDS238 (meter).
 	if ce308Cfg != nil {
-		if ce308Cfg.FinalReadingsOnly {
-			// Режим «только итоговые показания»: без постоянного соединения,
-			// телеметрии и PG-агрегации; раз в 30 мин (или по кнопке) — разовый
-			// снимок накопленной энергии и отключение. Аккумулятор не запускаем.
-			bgWg.Add(1)
-			go func() {
-				defer bgWg.Done()
-				runCe308FinalReadings(store, pg, ce308Cfg, stopCtx)
-			}()
-		} else {
-			bgWg.Add(1)
-			go func() {
-				defer bgWg.Done()
-				runCe308Poll(store, pg, ce308Cfg, stopCtx)
-			}()
-			bgWg.Add(1)
-			go func() {
-				defer bgWg.Done()
-				runCe308Accumulator(store, pg, ce308Cfg.Name, stopCtx)
-			}()
-		}
-	}
-
-	// BMS EnBMS — отдельный цикл опроса выбранным методом (BLE или RS485; см.
-	// enBms.method). Устройства опрашиваются последовательно с периодом метода;
-	// соединения не рвутся между опросами. Данные — Redis current/series + PG
-	// bms26_averages_r, см. enBms_poller.go/enBms_store.go. Для BLE перед
-	// запуском проверяем суммарное число BLE-устройств (enBms + CE308): реальный
-	// BLE-контроллер держит ограниченное число одновременных соединений; при
-	// превышении опрос EnBMS не запускается вовсе. Для RS485 этого лимита нет.
-	if enBmsCfg != nil {
-		// Лимит BLE-контроллера касается только BLE-устройств EnBMS (+ CE308).
-		bleDevs := 0
-		for _, d := range enBmsCfg.Devices {
-			if d.Method == enBmsMethodBLE {
-				bleDevs++
-			}
-		}
-		start := true
-		if bleDevs > 0 {
-			// В режиме final_readings_only CE308 не держит постоянное BLE-соединение
-			// (подключается лишь на время снятия), поэтому в лимит не входит.
-			ceCount := 0
-			if ce308Cfg != nil && !ce308Cfg.FinalReadingsOnly {
-				ceCount = 1
-			}
-			btCount := bleDevs + ceCount
-			if btCount > enbmsMaxBTDevices {
-				start = false
-				log.Printf("enbms: суммарное число BLE-устройств %d (enBms %d + CE308 %d) превышает лимит %d — опрос EnBMS НЕ запускается",
-					btCount, bleDevs, ceCount, enbmsMaxBTDevices)
-			}
-		}
-		if start {
-			bgWg.Add(1)
-			go func() {
-				defer bgWg.Done()
-				runEnBmsPoll(store, pg, enBmsCfg, stopCtx)
-			}()
-			log.Printf("enbms: опрос %d устройств запущен (BLE-цикл %s, RS485-цикл %s)",
-				len(enBmsCfg.Devices), enBmsCfg.PollBLE, enBmsCfg.PollRS485)
-		}
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			runCe308FinalReadings(store, pg, ce308Cfg, stopCtx)
+		}()
 	}
 
 	if relayCtl != nil {
@@ -2572,9 +2094,6 @@ func main() {
 	// раз в 10 секунд, влияния друг на друга нет вовсе. Снятие делается по
 	// отмене stopCtx.
 	for _, t := range targets {
-		if t.Kind == kindMAP || t.Kind == kindMPPT {
-			continue // МАП и MPPT API опрашиваются отдельным 1-сек циклом (runMapPoll)
-		}
 		bgWg.Add(1)
 		go func(t invTarget) {
 			defer bgWg.Done()
@@ -2846,24 +2365,6 @@ func redisDts017DataPresent(store *redisStore) (bool, error) {
 	return len(keys) > 0, nil
 }
 
-// redisCE308DataPresent — true, если в Redis есть данные счётчика CE308
-// (HASH sunreceiver:ce308:current или ряд sunreceiver:ce308:series:*).
-// Отдельно от IsEmpty (тот учитывает только инверторное current/series).
-func redisCE308DataPresent(store *redisStore) (bool, error) {
-	n, err := store.rdb.HLen(store.ctx, redisCE308CurrentKey).Result()
-	if err != nil {
-		return false, err
-	}
-	if n > 0 {
-		return true, nil
-	}
-	keys, err := store.scanPrefixKeys(tsSeriesPrefix + "ce308" + ":*")
-	if err != nil {
-		return false, err
-	}
-	return len(keys) > 0, nil
-}
-
 // restoreRedisFromPG восстанавливает Redis из persistent-хранилища PostgreSQL
 // за период [now-window, now], но не старше окна удержания Redis (последние 2
 // календарных суток), иначе фоновая очистка сразу удалит восстановленное.
@@ -2873,9 +2374,7 @@ func redisCE308DataPresent(store *redisStore) (bool, error) {
 //   - точки BMS (pg.Bms26AveragesAll) — SaveBms26Series в ряд
 //     sunreceiver:ts:bms26:*;
 //   - точки DTS017M (pg.Dts017AveragesAll) — SaveDts017Series/SaveDts017Current в
-//     обособленный ряд sunreceiver:ts:dts017m:*;
-//   - точки CE308 (pg.CE308AveragesAll) — SaveCE308History/SaveCE308Current в
-//     обособленный ряд sunreceiver:ts:ce308:*.
+//     обособленный ряд sunreceiver:ts:dts017m:*.
 //
 // Восстановление каждого ряда независимо: сбой одного запроса не прерывает
 // остальные. Возвращает complete=false, если хотя бы один ряд восстановить не
@@ -2885,7 +2384,7 @@ func redisCE308DataPresent(store *redisStore) (bool, error) {
 // Замечание: штатно Redis-ряд BMS — сырые показания (samples=1), а
 // восстановленный из PG участок представлен 5-минутными средними (samples>1);
 // после первых новых опросов он дополняется сырыми точками.
-func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, restoreCE308Series bool, stop context.Context) (complete bool) {
+func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, stop context.Context) (complete bool) {
 	end := time.Now()
 	start := recentCutoff(end)
 	if w := end.Add(-window); w.After(start) {
@@ -3035,49 +2534,5 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, re
 		log.Printf("pg restore: DTS017M восстановлено точек: %d", dtsRestored)
 	}
 
-	// Ряд CE308 — из pg.ce308_averages_r (5-мин средние) в
-	// sunreceiver:ts:ce308:* (то же окно удержания); current —
-	// последняя восстановленная точка. В режиме final_readings_only телеметрия
-	// CE308 не пишется/не отдаётся — реставрация ряда не выполняется (это не сбой).
-	if !restoreCE308Series {
-		log.Printf("pg restore: CE308 в режиме final_readings_only — ряд не восстанавливается")
-		return complete
-	}
-	cePts, err := pg.CE308AveragesAll(start, end)
-	if err != nil {
-		log.Printf("pg restore: ce308 query: %v", err)
-		complete = false
-	} else {
-		var ceRestored int
-		var ceLast *ce308Snapshot
-		for i := range cePts {
-			select {
-			case <-stop.Done():
-				log.Printf("pg restore: остановлено по сигналу (CE308 восстановлено точек: %d)", ceRestored)
-				return false
-			default:
-			}
-			snap := cePts[i]
-			ts, perr := time.Parse(time.RFC3339, snap.Timestamp)
-			if perr != nil {
-				continue
-			}
-			// Ключ месяца (ce308SeriesKey) приводим к локальной зоне, как живая запись.
-			ts = ts.In(time.Local)
-			if serr := store.SaveCE308History(snap, ts); serr != nil {
-				log.Printf("pg restore: ce308 save %s: %v", snap.Name, serr)
-				continue
-			}
-			cur := snap
-			ceLast = &cur
-			ceRestored++
-		}
-		if ceLast != nil {
-			if serr := store.SaveCE308Current(*ceLast); serr != nil {
-				log.Printf("pg restore: ce308 current: %v", serr)
-			}
-		}
-		log.Printf("pg restore: CE308 восстановлено точек: %d", ceRestored)
-	}
 	return complete
 }

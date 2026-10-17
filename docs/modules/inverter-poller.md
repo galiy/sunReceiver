@@ -13,7 +13,7 @@
 
 - раздел `invertors` → `type` "deye"→`kindDeyeString`, "sofar"→`kindSofar`
   (поле `disabled` обязательно; `true` — пропускается);
-- блок `map` (`method=rs485`) → `kindMAP` (КЭС — `kindMPPT` — в конфиг НЕ задаётся,
+- блок `map` → МАП/КЭС через API «Малина26» (КЭС в конфиг НЕ задаётся,
   появляется динамически, см. [map-mppt.md](map-mppt.md)).
 
 Название — «логическое имя» инвертора (обязательное поле, напр. `Deye Left`,
@@ -44,9 +44,8 @@ Deye — реальный SN даталоггера (`ReadRegistersDeye`); Sofar
 
 ## Маппинг МАП/MPPT
 
-`mapMAPRegisters`/`mapMAPAPI`/`mapMPPTAPI` — значения МАП/MPPT в тот же контракт,
-см. [map-mppt.md](map-mppt.md). `pollDevice` (case `kindMAP`) читает блоки
-`modbusmap`.
+`decodeMalina26Map`/`decodeMalina26KES` — значения МАП/MPPT в тот же контракт,
+см. [map-mppt.md](map-mppt.md).
 
 ## Серийные номера в снимке
 
@@ -81,4 +80,4 @@ defer'ы закрывают пулы Redis/PG — записи при остан
 - [research/sofar-registers.md](../research/sofar-registers.md),
   [research/deye-registers.md](../research/deye-registers.md) — маппинг регистров.
 - [universal-contract.md](../universal-contract.md) — контракт `values`.
-- [МАП/MPPT](map-mppt.md), [BMS](../antbms.md) — прочие типы целей.
+- [МАП/MPPT](map-mppt.md), [BMS26](bms26.md) — прочие типы целей.

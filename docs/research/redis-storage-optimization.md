@@ -85,7 +85,6 @@ graph TD
 | `KesCurrent` / `QueryKesSeries` | КЭС | `HGETALL`; `ZRANGEBYSCORE` |
 | `Dts017Current` / `QueryDts017Series` | DTS017M | то же |
 | `Bms26Current` / `Bms26One` / `QueryBms26Series` | BMS | `HGETALL`; `ZRANGEBYSCORE` + **фильтр по serial в Go** |
-| `CE308Current` / `QueryCE308Series` | CE308 | current + (в режиме `final_readings_only` ряд не пишется) |
 | `CurrentOne` | уведомления/лампы | точечный `HGET` |
 | `queryAllSeries` | накопитель/бэкфилл | сумма по всем модульным рядам за окно |
 
@@ -203,7 +202,7 @@ graph LR
 `TS.ADD` лишь кладёт точку (`ON_DUPLICATE LAST`).
 - Массивы: BMS `cells_v` -> `cell_1..N`, `temperatures_c` -> `temp_1..N`,
   `alarm_bytes` -> `alarm_1..19` (по индексу). CE308 в режиме
-  `final_readings_only` в RT не пишется (только `ce308-energy:current`).
+  мгновенная телеметрия CE308 не пишется — только `ce308-energy:current`.
 
 ### 8.2 Запись
 На каждый снимок — набор `TS.ADD` (пайплайном). `RETENTION`/`DUPLICATE_POLICY`

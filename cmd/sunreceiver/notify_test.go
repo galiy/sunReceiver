@@ -113,17 +113,17 @@ func TestMapTrackStatusDown(t *testing.T) {
 func TestMapTrackStatusStale(t *testing.T) {
 	var tr mapTrack
 	now := time.Now()
-	tr.source = "api"
+	tr.source = "malina26"
 	// Timestamp из ответа сильно отстаёт и не меняется — stale.
 	old := time.Now().Add(-time.Hour)
-	tr.trackOK("api", now, true, 230)
+	tr.trackOK("malina26", now, true, 230)
 	tr.trackAPITS(old.Add(10*time.Minute).Unix(), now)
 	tr.trackAPITS(old.Add(10*time.Minute).Unix(), now.Add(time.Second)) // не меняется
 	if st := tr.status(now.Add(30*time.Second), 20*time.Second); st != "stale" {
 		t.Fatalf("устаревшее неизменное время: status=%q, want stale", st)
 	}
 	// Когда время снова начинает изменяться/свежее — не stale, и данные ещё валидны.
-	tr.trackOK("api", now.Add(31*time.Second), true, 230)
+	tr.trackOK("malina26", now.Add(31*time.Second), true, 230)
 	tr.trackAPITS(time.Now().Unix(), now.Add(31*time.Second))
 	if st := tr.status(now.Add(35*time.Second), 20*time.Second); st != "" {
 		t.Fatalf("свежее время: status=%q, want \"\"", st)
@@ -133,7 +133,7 @@ func TestMapTrackStatusStale(t *testing.T) {
 func TestMapTrackStatusFreshAPI(t *testing.T) {
 	var tr mapTrack
 	now := time.Now()
-	tr.trackOK("api", now, true, 230)
+	tr.trackOK("malina26", now, true, 230)
 	tr.trackAPITS(now.Add(-time.Minute).Unix(), now)
 	if st := tr.status(now.Add(5*time.Second), 20*time.Second); st == "stale" {
 		t.Fatalf("свежий timestamp не должен давать stale: %q", st)

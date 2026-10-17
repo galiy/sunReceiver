@@ -10,7 +10,6 @@
       data-show-meter="{{if .flags.ShowMeter}}1{{else}}0{{end}}"
       data-show-bms="{{if .flags.ShowBMS}}1{{else}}0{{end}}"
       data-show-ce308="{{if .flags.ShowCE308}}1{{else}}0{{end}}"
-      data-ce308-final="{{if .flags.CE308FinalReadingsOnly}}1{{else}}0{{end}}"
       data-show-dts017="{{if .flags.ShowDTS017}}1{{else}}0{{end}}">
 <link rel="stylesheet" href="/static/css/site.css?v={{.CacheBust}}">
 <div class="top-nav">
@@ -69,29 +68,6 @@
     <span class="spoiler-title">Детальные данные</span>
   </button>
   <div class="spoiler-body">
-
-  {{if and .flags.ShowCE308 (not .flags.CE308FinalReadingsOnly)}}
-  <div class="group group-top">
-    <div class="group-head">
-      <span class="group-title">Электросчётчик CE308 &mdash; текущие данные</span>
-      <span class="meter-ts" id="ce308CurTs">Актуально: &mdash;</span>
-    </div>
-    <div class="ce308-scroll">
-      <table class="pivot-table ce308-table" id="ce308Cur">
-        <thead>
-          <tr><th class="p-label">Параметр</th><th>L1</th><th>L2</th><th>L3</th><th>&Sigma;</th></tr>
-        </thead>
-        <tbody>
-          <tr><td class="p-label">Напряжение (V)</td><td id="ce308V1">&mdash;</td><td id="ce308V2">&mdash;</td><td id="ce308V3">&mdash;</td><td></td></tr>
-          <tr><td class="p-label">Ток (A)</td><td id="ce308I1">&mdash;</td><td id="ce308I2">&mdash;</td><td id="ce308I3">&mdash;</td><td id="ce308Isum">&mdash;</td></tr>
-          <tr><td class="p-label">Активная мощность (W)</td><td id="ce308P1">&mdash;</td><td id="ce308P2">&mdash;</td><td id="ce308P3">&mdash;</td><td id="ce308Psum">&mdash;</td></tr>
-          <tr><td class="p-label">Реактивная мощность (var)</td><td id="ce308Q1">&mdash;</td><td id="ce308Q2">&mdash;</td><td id="ce308Q3">&mdash;</td><td id="ce308Qsum">&mdash;</td></tr>
-        </tbody>
-      </table>
-    </div>
-    <div class="meter-note">Отрицательное значение &mdash; отдача в сеть (генерация); положительное &mdash; потребление.</div>
-  </div>
-  {{end}}
 
   {{if or .flags.ShowMeter .flags.ShowCE308}}
   <div class="duo-row">

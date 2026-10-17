@@ -17,8 +17,14 @@
 package main
 
 import (
+	"context"
 	"encoding/binary"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
+	"time"
 )
 
 // buildMapPayload собирает MapData с заданными значениями ячеек (id→value).
@@ -207,5 +213,259 @@ func TestDeviceSerial(t *testing.T) {
 	noField := malina26Device{Label: "Titanator · 51510 · /dev/ttyAMA0 · 115200"}
 	if got := deviceSerial(noField); got != "51510" {
 		t.Fatalf("deviceSerial без поля serial = %q, want 51510", got)
+	}
+}
+
+// fallbackTestServer поднимает минимальный API «Малина26»: token, список МАП и raw.
+type fallbackTestServer struct {
+	mu         sync.Mutex
+	devices    []malina26Device
+	primary    []byte
+	fallback   []byte
+	broken     bool // raw основного отдаёт 500
+	primary404 bool // raw основного отдаёт 404
+}
+
+func (f *fallbackTestServer) handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token":
+			_, _ = w.Write([]byte(`{"token":"t"}`))
+		case r.URL.Path == "/api/map/devices":
+			f.mu.Lock()
+			b, _ := json.Marshal(f.devices)
+			f.mu.Unlock()
+			_, _ = w.Write(b)
+		case r.URL.Path == "/api/map/raw":
+			id := r.URL.Query().Get("id")
+			f.mu.Lock()
+			broken, notFound, pr, fb := f.broken, f.primary404, f.primary, f.fallback
+			f.mu.Unlock()
+			switch id {
+			case "1":
+				if notFound {
+					http.NotFound(w, r)
+					return
+				}
+				if broken {
+					http.Error(w, "broken", http.StatusInternalServerError)
+					return
+				}
+				_, _ = w.Write(pr)
+			case "2":
+				_, _ = w.Write(fb)
+			default:
+				http.NotFound(w, r)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+
+func newFallbackSource(t *testing.T, f *fallbackTestServer) (*malina26Source, *httptest.Server) {
+	t.Helper()
+	srv := httptest.NewServer(f.handler())
+	s := &malina26Source{
+		baseURL:        srv.URL,
+		serial:         "10001",
+		fallbackSerial: "20002",
+		client:         srv.Client(),
+	}
+	return s, srv
+}
+
+func mapPayloadForTest() []byte {
+	return buildMapPayload(map[int]uint32{
+		mapCellUAccMedVH: 2,
+		mapCellUAccMedVL: 21,
+	})
+}
+
+func TestMalina26FallbackSelectsReserve(t *testing.T) {
+	payload := mapPayloadForTest()
+	f := &fallbackTestServer{
+		devices:  []malina26Device{{Type: "map", ID: 2, Gen: 1, Serial: "20002"}},
+		fallback: payload,
+	}
+	s, srv := newFallbackSource(t, f)
+	defer srv.Close()
+
+	vals, _, err := s.fetchMAP(context.Background())
+	if err != nil || vals == nil {
+		t.Fatalf("fallback: vals=%v err=%v", vals, err)
+	}
+	s.mu.Lock()
+	activeFallback := s.activeFallback
+	s.mu.Unlock()
+	if !activeFallback {
+		t.Fatal("должен быть активен резервный МАП")
+	}
+	// Идентичность снимка остаётся по основному серийнику, даже если опрошен резервный.
+	old := malina26
+	malina26 = s
+	defer func() { malina26 = old }()
+	res := pollMAPMalina26(context.Background())
+	if !res.HasData || res.DeviceSN != "10001" {
+		t.Fatalf("DeviceSN=%q HasData=%v, ожидали основной серийник 10001", res.DeviceSN, res.HasData)
+	}
+}
+
+func TestMalina26FallbackReturnsToPrimaryAfterSuccess(t *testing.T) {
+	payload := mapPayloadForTest()
+	f := &fallbackTestServer{
+		devices: []malina26Device{
+			{Type: "map", ID: 1, Gen: 1, Serial: "10001"},
+			{Type: "map", ID: 2, Gen: 1, Serial: "20002"},
+		},
+		primary:  payload,
+		fallback: payload,
+	}
+	s, srv := newFallbackSource(t, f)
+	defer srv.Close()
+	// Сначала основной «отсутствует» — уходим на резервный.
+	f.devices = []malina26Device{{Type: "map", ID: 2, Gen: 1, Serial: "20002"}}
+	if _, _, err := s.fetchMAP(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// Появился основной; имитируем истечение 60-с окна перепроверки.
+	f.mu.Lock()
+	f.devices = []malina26Device{
+		{Type: "map", ID: 1, Gen: 1, Serial: "10001"},
+		{Type: "map", ID: 2, Gen: 1, Serial: "20002"},
+	}
+	f.mu.Unlock()
+	s.mu.Lock()
+	s.lastListCheck = time.Now().Add(-61 * time.Second)
+	s.mu.Unlock()
+
+	if _, _, err := s.fetchMAP(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	activeFallback, broken := s.activeFallback, !s.primaryBroken.IsZero()
+	s.mu.Unlock()
+	if activeFallback || broken {
+		t.Fatalf("ожидали возврат на основной: activeFallback=%v broken=%v", activeFallback, broken)
+	}
+}
+
+func TestMalina26FallbackAfterTwoPrimaryFailures(t *testing.T) {
+	payload := mapPayloadForTest()
+	f := &fallbackTestServer{
+		devices: []malina26Device{
+			{Type: "map", ID: 1, Gen: 1, Serial: "10001"},
+			{Type: "map", ID: 2, Gen: 1, Serial: "20002"},
+		},
+		primary:  payload,
+		fallback: payload,
+		broken:   true,
+	}
+	s, srv := newFallbackSource(t, f)
+	defer srv.Close()
+	for i := 0; i < 2; i++ {
+		_, _, _ = s.fetchMAP(context.Background())
+	}
+	s.mu.Lock()
+	broken := !s.primaryBroken.IsZero()
+	s.mu.Unlock()
+	if !broken {
+		t.Fatal("после 2 неуспехов основной должен быть в backoff")
+	}
+	// Следующий цикл — резервный.
+	vals, _, err := s.fetchMAP(context.Background())
+	if err != nil || vals == nil {
+		t.Fatalf("после backoff ожидали данные с резервного: vals=%v err=%v", vals, err)
+	}
+}
+
+func TestMalina26FallbackAfterDecodeFailures(t *testing.T) {
+	f := &fallbackTestServer{
+		devices: []malina26Device{
+			{Type: "map", ID: 1, Gen: 1, Serial: "10001"},
+			{Type: "map", ID: 2, Gen: 1, Serial: "20002"},
+		},
+		primary:  []byte("broken"),
+		fallback: mapPayloadForTest(),
+	}
+	s, srv := newFallbackSource(t, f)
+	defer srv.Close()
+	// Две ошибки декодирования основного → backoff.
+	for i := 0; i < 2; i++ {
+		if _, _, err := s.fetchMAP(context.Background()); err == nil {
+			t.Fatal("ожидали ошибку декодирования основного")
+		}
+	}
+	vals, _, err := s.fetchMAP(context.Background())
+	if err != nil || vals == nil {
+		t.Fatalf("после backoff ожидали данные с резервного: vals=%v err=%v", vals, err)
+	}
+	s.mu.Lock()
+	fallback := s.activeFallback
+	s.mu.Unlock()
+	if !fallback {
+		t.Fatal("должен быть активен резервный")
+	}
+}
+
+func TestMalina26NoDevices(t *testing.T) {
+	f := &fallbackTestServer{devices: nil}
+	s, srv := newFallbackSource(t, f)
+	defer srv.Close()
+	vals, _, err := s.fetchMAP(context.Background())
+	if err != nil || vals != nil {
+		t.Fatalf("нет устройств: vals=%v err=%v", vals, err)
+	}
+}
+
+func TestMalina26FallbackAfter404(t *testing.T) {
+	f := &fallbackTestServer{
+		devices: []malina26Device{
+			{Type: "map", ID: 1, Gen: 1, Serial: "10001"},
+			{Type: "map", ID: 2, Gen: 1, Serial: "20002"},
+		},
+		fallback:   mapPayloadForTest(),
+		primary404: true,
+	}
+	s, srv := newFallbackSource(t, f)
+	defer srv.Close()
+	for i := 0; i < 2; i++ {
+		_, _, _ = s.fetchMAP(context.Background())
+	}
+	vals, _, err := s.fetchMAP(context.Background())
+	if err != nil || vals == nil {
+		t.Fatalf("после 2×404 ожидали резервный: vals=%v err=%v", vals, err)
+	}
+}
+
+func TestMalina26ProbeFailureKeepsFallback(t *testing.T) {
+	f := &fallbackTestServer{
+		devices:  []malina26Device{{Type: "map", ID: 2, Gen: 1, Serial: "20002"}},
+		fallback: mapPayloadForTest(),
+	}
+	s, srv := newFallbackSource(t, f)
+	defer srv.Close()
+	if _, _, err := s.fetchMAP(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// Основной «появился», но raw отдаёт 404; подошло окно перепроверки.
+	f.mu.Lock()
+	f.devices = []malina26Device{
+		{Type: "map", ID: 1, Gen: 1, Serial: "10001"},
+		{Type: "map", ID: 2, Gen: 1, Serial: "20002"},
+	}
+	f.primary404 = true
+	f.mu.Unlock()
+	s.mu.Lock()
+	s.lastListCheck = time.Now().Add(-61 * time.Second)
+	s.mu.Unlock()
+	for i := 0; i < 2; i++ {
+		if _, _, err := s.fetchMAP(context.Background()); err == nil {
+			// 404 трактуется как «нет данных», не ошибка — это ок.
+		}
+	}
+	vals, _, err := s.fetchMAP(context.Background())
+	if err != nil || vals == nil {
+		t.Fatalf("после неудачной пробы ожидали резервный: vals=%v err=%v", vals, err)
 	}
 }

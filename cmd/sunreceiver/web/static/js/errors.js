@@ -7,7 +7,7 @@ function toLocalInput(d){ return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad
 function fmtTs(s){ var d=new Date(s); if(isNaN(d)) return s; return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds()); }
 function esc(s){ return String(s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
 
-var KIND_LABEL={inverter:'Инвертор',map:'МАП',mppt:'MPPT',meter:'Счётчик',ce308:'CE308',antbms:'ANT BMS',enbms:'EnBMS'};
+var KIND_LABEL={inverter:'Инвертор',map:'МАП',mppt:'MPPT',meter:'Счётчик',ce308:'CE308',bms:'BMS'};
 
 var errOffset=0;
 var errLimit=100;

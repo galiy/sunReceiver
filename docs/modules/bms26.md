@@ -39,7 +39,7 @@ ANT BMS и EnBMS переехали в ПАК «Малина26» в **едины
 
 Документация контракта (оригинал): `cleaning.malina/docs/bms-reader.md` §1 (раскладка
 107 Б, big-endian), архитектура — `cleaning.malina/docs/bms-reader-arch.md` (§12),
-типы и раскладка `alarm` — `cleaning.malina/docs/bms/{antbms-dsp,enbms-rs485}.md`.
+типы и раскладка `alarm` — документация протоколов ANT/EnBMS (локальные материалы реверса).
 
 Поля контракта (кратко): `cell_count`, `temp_count`, `flags` (charge/discharge MOS,
 balancer), `cells_mv[16]`, `temps_dc[8]`, `current_da` (разряд «+», заряд «−»), `power_w`,
@@ -48,24 +48,23 @@ balancer), `cells_mv[16]`, `temps_dc[8]`, `current_da` (разряд «+», за
 
 ## Конфигурация
 
-Отдельного раздела у BMS **нет** — используется уже существующий блок
-**`map.malina26`** (`host`, `port`, `password`): тот же ПАК «Малина26», общий
-HTTP-клиент и токен (см. [`map-mppt.md`](map-mppt.md)). Пулер BMS запускается
-автоматически при `map.method = "malina26"`; при другом методе (`rs485`/`malina`)
-источник «Малина26» не сконфигурирован и опрос BMS не идёт.
+Отдельного раздела у BMS **нет** — используется общий блок **`map`**
+(`host`, `port`, `password`, `serial`, необязательный `fallback_serial`): тот же
+ПАК «Малина26», общий HTTP-клиент и токен (см. [`map-mppt.md`](map-mppt.md)).
+Пулер BMS запускается автоматически, если раздел `map` активен
+(`disabled=false`).
 
 ```json
-"map": { "disabled": false, "method": "malina26",
-         "malina26": { "host": "192.168.13.60", "port": 80,
-                       "password": "CHANGE_ME_PASSWORD", "serial": "51510" } }
+"map": { "disabled": false, "host": "192.168.0.30", "port": 80,
+         "password": "CHANGE_ME_PASSWORD", "serial": "12345",
+         "fallback_serial": "67890" }
 ```
 
-Старые разделы `antBms` (read_bms.php) и `enBms` (BLE/RS485 напрямую) сохранены в
-коде, но на проде **отключены** (`disabled=true`).
+Отдельные разделы `antBms`/`enBms` и методы `rs485`/`malina` **удалены**.
 
 ## Хранение
 
-Обособлено от прежних ANT (`sunreceiver:bms`) и EnBMS (`sunreceiver:enbms:*`):
+Прежние legacy-ключи ANT/EnBMS удалены; теперь:
 
 - **Redis current**: HASH `sunreceiver:bms26:current`, поле = `serial`, значение = JSON
   `bms26Snapshot`;
@@ -90,8 +89,8 @@ HTTP-клиент и токен (см. [`map-mppt.md`](map-mppt.md)). Пулер
 2. **UI** (сделано): страница BMS (`/bms/<serial>`), батарейки на главной (`/api/bms`)
    и графики деталей (`/api/bms/<serial>/series`) переведены на новый ключ `bms26` и
    единый тип. Снимок `bms26Snapshot` адаптируется в прежнюю форму `bmsDevice`
-   (`bmsDeviceFromBms26`, `kind="bms26"`), поэтому страница/JS переиспользованы; при
-   `method=malina26` legacy ANT/EnBMS-ключи не подмешиваются (их пулеры отключены).
+   (`bmsDeviceFromBms26`, `kind="bms26"`), поэтому страница/JS переиспользованы;
+   legacy ANT/EnBMS-ключи не подмешиваются (их пулеры удалены).
 2.5. **Тревоги/ошибки** (сделано): `alarm` (19 Б) трактуется по `bms_type`
    (`bms26_alarm.go`); человекочитаемый список кладётся в `bms26Snapshot.alarms`
    (Redis/PG, страница BMS) и группируется на странице по категориям.
@@ -110,11 +109,11 @@ HTTP-клиент и токен (см. [`map-mppt.md`](map-mppt.md)). Пулер
      (`высокое напряжение…`, `защита от…`, одиночные warn, Ext_Bit), и подписи групп.
 3. **Миграция истории** (сделано ранее): разовыми Python-скриптами перенесены ряды
    из
-   `RedisTimeSeries `sunreceiver:ts:bms:*``/`enbms:series:*` и PG `bms_averages_r`/`enbms_averages_r` в
+   старые ключи/таблицы (`sunreceiver:bms`, `enbms:*`, `bms_averages_r`/`enbms_averages_r`) в
    `sunreceiver:bms26:*`/`bms26_averages_r` (JSON приводится к форме `bms26Snapshot`;
    дедуп). Связка id: ANT — по ёмкости (`AntBms <cap> A/h` → `AntBMS-DSP-<cap>-NNNNN`),
    EnBMS — единственный MAC → единственный EnBMS-serial. Также перенесена **история
-   ошибок** `device_errors`: `kind='antbms'`/`'enbms'` → `kind='bms'`, `device` → serial.
+   ошибок** `device_errors`: живой kind — `bms`, `device` → serial.
    `current` не мигрируется (перезаписывается пулером). Старые данные удалены
    (старые ключи/таблицы и строки `device_errors`). В бинарнике миграций нет
    (правило проекта: миграции — только скриптами).
@@ -124,4 +123,4 @@ HTTP-клиент и токен (см. [`map-mppt.md`](map-mppt.md)). Пулер
 - [`docs/bms-reader.md` (malina-26)](../../cleaning.malina/docs/bms-reader.md) — контракт и общие циклы;
 - [`docs/bms-reader-arch.md` (malina-26)](../../cleaning.malina/docs/bms-reader-arch.md) — архитектура;
 - [`map-mppt.md`](map-mppt.md) — клиент «Малина26» (token/Bearer), общий с BMS;
-- Старые модули: [`../antbms.md`](../antbms.md), [`enbms.md`](enbms.md).
+- Легаси-модули ANT/EnBMS удалены; остаётся единый BMS26.

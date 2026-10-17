@@ -60,7 +60,7 @@ func normalizeInverterSN(kind, sn string) string {
 //
 // Общие ключи sunreceiver:current / :series:* и PG averages выведены из
 // эксплуатации (см. BACKLOG): сюда переехали инверторы, всё остальное давно
-// обособлено (DDS238/МАП/КЭС/DTS017M/CE308/BMS).
+// обособлено (DDS238/МАП/КЭС/DTS017M/BMS).
 type invBrand struct {
 	name   string // "deye"/"sofar"
 	curKey string // HASH текущих снимков марки (поле = серийник)

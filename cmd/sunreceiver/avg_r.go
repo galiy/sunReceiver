@@ -64,11 +64,6 @@ var avgSpecs = []avgSpec{
 	{"sunreceiver.kes_averages_r", "name", []string{"device_sn"}, []string{
 		"ac_active_power", "energy_today", "l1_current", "l1_voltage",
 		"pv1_current", "pv1_power", "pv1_voltage"}, nil},
-	{"sunreceiver.ce308_averages_r", "name", nil, []string{
-		"ce308_l1_current", "ce308_l1_voltage", "ce308_l2_current", "ce308_l2_voltage",
-		"ce308_l3_current", "ce308_l3_voltage", "ce308_active_power", "ce308_reactive_power",
-		"ce308_l1_active_power", "ce308_l2_active_power", "ce308_l3_active_power",
-		"ce308_l1_reactive_power", "ce308_l2_reactive_power", "ce308_l3_reactive_power"}, nil},
 	{"sunreceiver.dts017m_averages_r", "name", []string{"device_sn"}, []string{
 		"dts017_active_power", "dts017_active_power_a", "dts017_active_power_b",
 		"dts017_active_power_c", "dts017_apparent_power", "dts017_apparent_power_a",
@@ -427,7 +422,7 @@ func vcFloat(vc valuesContract, key string) (float64, bool) {
 }
 
 // vcToFloatMap конвертирует контракт в плоскую map[string]float64 (для модулей,
-// у которых Values — именно такая map, напр. CE308/DTS017M).
+// у которых Values — именно такая map, напр. DTS017M).
 func vcToFloatMap(vc valuesContract) map[string]float64 {
 	out := make(map[string]float64, len(vc))
 	for k := range vc {

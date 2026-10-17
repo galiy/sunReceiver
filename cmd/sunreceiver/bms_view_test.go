@@ -16,22 +16,15 @@
 
 package main
 
-import (
-	"encoding/json"
-	"fmt"
-)
+import "testing"
 
-// SaveEnBmsCurrent пишет текущий снимок EnBMS в ряд bms26 (единый EnBMS-serial),
-// т.е. старый EnBMS-пулер кормит то же хранилище, что и пулер malina26.
-func (s *redisStore) SaveEnBmsCurrent(snap enbmsSnapshot) error {
-	// КОСТЫЛЬ: старый EnBMS-пулер пишет в ряды bms26 (единый EnBMS-serial).
-	serial := legacyEnbmsSerial()
-	if serial == "" {
-		return nil
+func TestBmsKey(t *testing.T) {
+	d := bmsDevice{DeviceName: "AntBms 320 A/h"}
+	if bmsKey(d) != "AntBms 320 A/h" {
+		t.Fatalf("bmsKey(DeviceName) = %q", bmsKey(d))
 	}
-	b, err := json.Marshal(enbmsSnapshotToBms26(snap, serial))
-	if err != nil {
-		return fmt.Errorf("marshal enbms→bms26 %s: %w", snap.MAC, err)
+	d.Key = "custom-key"
+	if bmsKey(d) != "custom-key" {
+		t.Fatalf("bmsKey(Key) = %q", bmsKey(d))
 	}
-	return s.SaveBms26Current(map[string]string{serial: string(b)})
 }

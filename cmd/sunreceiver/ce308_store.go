@@ -19,52 +19,13 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
-// Ключи Redis модуля CE308. Обособлены от общего ряда инверторов: у CE308 нет
-// универсального контракта значений, его данные не участвуют в суммах дашборда
-// (общий kindMAP-подход для МАП/счётчика не подходит), поэтому текущие значения,
-// временной ряд и снимок энергии храним в собственных ключах.
-const (
-	// redisCE308CurrentKey — HASH текущего снимка CE308: поле = имя устройства,
-	// значение = JSON deviceSnapshot. Перезаписывается после каждого успешного опроса.
-	redisCE308CurrentKey = "sunreceiver:ce308:current"
-	// Ключи вида sunreceiver:ts:ce308:* (серии RedisTimeSeries).
-	// (сек.), member = JSON deviceSnapshot. Пишется после каждого успешного опроса
-	// (~1 точка за 2 с); усреднение до 1 записи за 5 мин — в PG (ce308_accumulator).
-	// redisCE308EnergyKey — разовый снимок накопленной электроэнергии CE308
-	// (JSON ce308EnergySnapshot). Один ключ, история по энергии не ведётся.
-	redisCE308EnergyKey = "sunreceiver:ce308-energy:current"
-)
-
-// SaveCE308Current пишет ТОЛЬКО текущее значение CE308 (HASH current[имя]),
-// перезаписывая предыдущий снимок. Используется программным способом в каждом
-// успешном опросе. Ограничение удержания — у current нет TTL (последнее состояние
-// всегда хранится, как у инверторов).
-func (s *redisStore) SaveCE308Current(snap ce308Snapshot) error {
-	b, err := json.Marshal(snap)
-	if err != nil {
-		return fmt.Errorf("marshal ce308 current %s: %w", snap.Name, err)
-	}
-	return s.rdb.HSet(s.ctx, redisCE308CurrentKey, snap.Name, b).Err()
-}
-
-// SaveCE308History кладёт точку во временной ряд CE308 (score = Unix-секунды).
-// Перед записью удаляет предыдущую версию того же устройства на том же score,
-// чтобы не было дублей в один момент времени.
-func (s *redisStore) SaveCE308History(snap ce308Snapshot, ts time.Time) error {
-	pipe := s.rdb.TxPipeline()
-	for tag, v := range snap.Values {
-		s.tsAdd(pipe, "ce308", snap.Name, snap.Name, "", "", tag, ts, v)
-	}
-	if _, err := pipe.Exec(s.ctx); err != nil {
-		return fmt.Errorf("save ce308 history %s: %w", snap.Name, err)
-	}
-	return nil
-}
+// Ключ Redis модуля CE308: разовый снимок накопленной электроэнергии
+// (JSON ce308EnergySnapshot). Один ключ, история по энергии не ведётся.
+const redisCE308EnergyKey = "sunreceiver:ce308-energy:current"
 
 // SaveCE308Energy сохраняет разовый снимок энергии (отдельный ключ).
 func (s *redisStore) SaveCE308Energy(snap *ce308EnergySnapshot) error {
@@ -73,23 +34,6 @@ func (s *redisStore) SaveCE308Energy(snap *ce308EnergySnapshot) error {
 		return fmt.Errorf("marshal ce308 energy: %w", err)
 	}
 	return s.rdb.Set(s.ctx, redisCE308EnergyKey, b, 0).Err()
-}
-
-// CE308Current возвращает все текущие снимки CE308 из HASH (поле = имя).
-func (s *redisStore) CE308Current() (map[string]ce308Snapshot, error) {
-	m, err := s.rdb.HGetAll(s.ctx, redisCE308CurrentKey).Result()
-	if err != nil {
-		return nil, fmt.Errorf("HGETALL %s: %w", redisCE308CurrentKey, err)
-	}
-	out := make(map[string]ce308Snapshot, len(m))
-	for k, v := range m {
-		var snap ce308Snapshot
-		if err := json.Unmarshal([]byte(v), &snap); err != nil {
-			continue
-		}
-		out[k] = snap
-	}
-	return out, nil
 }
 
 // CE308Energy возвращает последний снимок энергии CE308; пусто, если ещё не было.
@@ -107,25 +51,3 @@ func (s *redisStore) CE308Energy() (*ce308EnergySnapshot, error) {
 	}
 	return &snap, nil
 }
-
-// QueryCE308Series возвращает мгновенные снимки CE308 за период [start, end]
-// включительно из временного ряда (по сериям RedisTimeSeries, объединяя по времени).
-func (s *redisStore) QueryCE308Series(start, end time.Time) ([]ce308Snapshot, error) {
-	if start.After(end) {
-		return nil, fmt.Errorf("ce308 series: start after end")
-	}
-	series, err := s.tsMRange(start, end, "kind=ce308")
-	if err != nil {
-		return nil, err
-	}
-	snaps := tsGroupSnapshots(series)
-	out := make([]ce308Snapshot, 0, len(snaps))
-	for _, sn := range snaps {
-		out = append(out, ce308Snapshot{Name: sn.Name, Timestamp: sn.Timestamp, Values: vcToFloatMap(sn.Values)})
-	}
-	return out, nil
-}
-
-// keyAfter — true, если ключ месяца key строго позже time end (для выхода из цикла).
-
-// Формат ключа: sunreceiver:ce308:series:YYYY-MM.

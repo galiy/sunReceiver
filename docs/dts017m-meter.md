@@ -20,8 +20,7 @@
 > **В дашборде:** рамка «Гараж» с плашками тарифов (главная) и графики «Гараж» на
 > странице «Электроэнергия» (`/api/dts017m/current`, `/api/dts017m/tariffs`).
 > Дополнительно активная мощность `dts017_active_power` используется на схеме
-> анимации как мощность счётчика гаража (`/api/animation`, `garage_meter_power`;
-> резервно — CE308, см. [ce308.md](../modules/ce308.md)).
+> анимации как мощность счётчика гаража (`/api/animation`, `garage_meter_power`).
 
 ## Источник протокола
 
@@ -209,7 +208,7 @@ export_night = (Export(07:00) − Export(00:00)) + (Export(00:00 след.дня
 При полностью пустом Redis (и отсутствии в нём данных BMS/DTS017M) ряд и current
 DTS017M восстанавливаются из `sunreceiver.dts017m_averages_r` за окно
 `db.pg_restore_window` (по умолчанию 30 суток, не старше окна удержания Redis 2
-суток) — в `restoreRedisFromPG`, как для общего ряда/BMS/EnBMS. Наличие данных
+суток) — в `restoreRedisFromPG`, как для остальных рядов/BMS. Наличие данных
 DTS017M в Redis проверяется отдельно (`redisDts017DataPresent`), чтобы не перетереть
 сложившийся ряд.
 

@@ -19,42 +19,11 @@ package main
 import (
 	"errors"
 	"fmt"
-	"math"
 	"testing"
+	"time"
 )
 
 // Данные ответов — из кампании 2026-09-22 (../ce308/docs/READ-RESULTS.md).
-func TestValuesCE308(t *testing.T) {
-	reads := ce308Reads{
-		Volta:     []float64{240.186, 239.058, 238.953},
-		Curre:     []float64{0.77701, 0.81489, 0.25237},
-		ActiveP:   toWatts([]float64{-0.161307, -0.165584, 0.036134, 0.363025}),
-		ReactiveP: toWatts([]float64{-0.087436, -0.09889, 0.043991, 0.230317}),
-	}
-	v := valuesCE308(reads)
-	if got := v[ce308L1Voltage]; got != 240.2 {
-		t.Errorf("ce308_l1_voltage = %v, want 240.2", got)
-	}
-	if got := v[ce308L3Current]; got != 0.3 {
-		t.Errorf("ce308_l3_current = %v, want 0.3", got)
-	}
-	// Мощность: кВт → Вт, округление до 1 знака.
-	if got := v[ce308L1ActiveP]; got != -161.3 {
-		t.Errorf("ce308_l1_active_power = %v, want -161.3", got)
-	}
-	// Σ — знаковая сумма фаз (-161.3 + -165.6 + 36.1 = -290.8), а не Σ счётчика.
-	if got := v[ce308ActiveP]; got != -290.8 {
-		t.Errorf("ce308_active_power = %v, want -290.8", got)
-	}
-	if got := v[ce308L3ReactP]; got != 44.0 {
-		t.Errorf("ce308_l3_reactive_power = %v, want 44.0", got)
-	}
-	// Σ реактивной — знаковая сумма фаз (-87.4 + -98.9 + 44.0 = -142.3).
-	if got := v[ce308ReactP]; got != -142.3 {
-		t.Errorf("ce308_reactive_power = %v, want -142.3", got)
-	}
-}
-
 func TestParseCE308End(t *testing.T) {
 	cases := []struct {
 		cmd, resp         string
@@ -135,45 +104,29 @@ func TestCE308IsReadTimeout(t *testing.T) {
 	}
 }
 
-func TestCE308ReadsValid(t *testing.T) {
-	good := ce308Reads{
-		Volta:     []float64{240.186, 239.058, 238.953},
-		Curre:     []float64{0.77701, 0.81489, 0.25237},
-		ActiveP:   toWatts([]float64{-0.161307, -0.165584, 0.036134, 0.363025}),
-		ReactiveP: toWatts([]float64{-0.087436, -0.09889, 0.043991, 0.230317}),
+func TestCE308Backoff(t *testing.T) {
+	d := ce308ReconnectDelay
+	if got := ce308Backoff(d); got != 4*time.Second {
+		t.Fatalf("ce308Backoff(%v)=%v", d, got)
 	}
-	if !ce308ReadsValid(good) {
-		t.Error("valid reads rejected")
+	if got := ce308Backoff(ce308ReconnectMaxDelay); got != ce308ReconnectMaxDelay {
+		t.Fatalf("ce308Backoff(max)=%v", got)
 	}
+}
 
-	// Недостающие фазы (обрыв кадра).
-	short := good
-	short.Volta = []float64{240.1, 238.9}
-	if ce308ReadsValid(short) {
-		t.Error("reads with missing phases accepted")
+func TestCE308EnergyTrigger(t *testing.T) {
+	ch := make(chan struct{}, 1)
+	setCE308TriggerChan(ch)
+	defer setCE308TriggerChan(nil)
+	if !triggerCE308EnergySnapshot() {
+		t.Fatal("первый сигнал должен быть принят")
 	}
-
-	// NaN / Inf.
-	nan := good
-	nan.Curre = []float64{0.7, math.NaN(), 0.25}
-	if ce308ReadsValid(nan) {
-		t.Error("reads with NaN current accepted")
+	if triggerCE308EnergySnapshot() {
+		t.Fatal("второй сигнал при занятой очереди должен быть отвергнут")
 	}
-	inf := good
-	inf.ActiveP = []float64{math.Inf(1), 0, 0, 0}
-	if ce308ReadsValid(inf) {
-		t.Error("reads with Inf power accepted")
-	}
-
-	// Выход за физический диапазон.
-	over := good
-	over.Volta = []float64{900, 239, 238}
-	if ce308ReadsValid(over) {
-		t.Error("reads with absurd voltage accepted")
-	}
-	overN := good
-	overN.Curre = []float64{-5, 0.8, 0.25}
-	if ce308ReadsValid(overN) {
-		t.Error("reads with negative current accepted")
+	<-ch
+	setCE308TriggerChan(nil)
+	if triggerCE308EnergySnapshot() {
+		t.Fatal("без пулера сигнал должен быть отвергнут")
 	}
 }

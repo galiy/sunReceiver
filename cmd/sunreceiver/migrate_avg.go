@@ -56,7 +56,6 @@ var avgMigMaps = []avgMigMap{
 	{"dds238_averages", "sunreceiver.dds238_averages_r"},
 	{"map_averages", "sunreceiver.map_averages_r"},
 	{"kes_averages", "sunreceiver.kes_averages_r"},
-	{"ce308_averages", "sunreceiver.ce308_averages_r"},
 	{"dts017m_averages", "sunreceiver.dts017m_averages_r"},
 }
 

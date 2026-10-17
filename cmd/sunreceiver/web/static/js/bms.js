@@ -158,7 +158,7 @@ async function load(){
     applyBmsKind();
     document.title=d.deviceName+' — SunReceiver';
     document.getElementById('bmsTitle').textContent=d.deviceName;
-    document.getElementById('bmsSub').textContent=(d.model||'BMS')+(d.port?' · '+d.port:'')+' · актуально: '+(d.time||'—');
+    document.getElementById('bmsSub').textContent=(d.model||'BMS')+' · актуально: '+(d.time||'—');
     renderKPIs(d); renderCells(d); renderTemps(d); renderMos(d); renderAlarms(d);
     document.getElementById('bmsFoot').textContent=(d.model||'BMS')+' · '+d.deviceName+' · обновляется каждую секунду';
   }catch(e){}

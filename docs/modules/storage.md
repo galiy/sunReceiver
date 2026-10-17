@@ -2,22 +2,22 @@
 
 Схема хранения (обновлено 2026-09-30): **Redis — горячие данные за последние
 2 календарных суток, КАЖДОЕ снятое показание** (полное разрешение пулера;
-инверторы ~10 с, МАП/MPPT/счётчик/ANT BMS — каждый опрос, EnBMS ~1 с, CE308 ~2 с),
+инверторы ~10 с, МАП/MPPT/счётчик/BMS26 — каждый опрос),
 **PostgreSQL — вся история, ЕДИНАЯ гранулярность 1 запись / 5 минут** для всех
-рядов (инверторы, МАП/MPPT, DDS238, CE308, ANT BMS, EnBMS).
+рядов (инверторы, МАП/MPPT, DDS238, BMS26, DTS017M).
 
 Распределение ролей:
 
 - **Поток данных**: логгер → poller → Redis (каждое показание). Фоновый процесс
   `runAccumulator` (`accumulator.go`, для инверторов/МАП/счётчика) и отдельные
-  аккумуляторы (`ce308_accumulator.go`, `bms_accumulator.go`, `bms26_store.go`)
+  аккумуляторы (`accumulator.go`, `bms_accumulator.go`, `bms26_store.go`)
   по завершении каждого 5-минутного промежутка усредняют накопленные в Redis
   снимки и пишут **одну** точку в PG. Прямой записи сырых снимков в PG из poller нет.
 - **Redis хранит только последние 2 календарных суток**: окно «сегодня» + «вчера»,
   от 00:00 вчерашнего дня (`recentCutoff(now)`). Старые точки удаляет фоновый
   процесс `runRedisCleanup` → `redisStore.PurgeOld`. HASH `current` не трогается.
 - **PostgreSQL хранит всю историю** усреднёнными 5-минутными точками
-  (`*_averages` — марочные deye/sofar и обособленные `dds238_averages_r`/`map_averages_r`/`kes_averages_r`/`dts017m_averages_r`/`ce308_averages_r`/`bms26_averages_r`); старше двух суток — только здесь
+  (`*_averages` — марочные deye/sofar и обособленные `dds238_averages_r`/`map_averages_r`/`kes_averages_r`/`dts017m_averages_r`/`bms26_averages_r`); старше двух суток — только здесь
   и никогда не удаляются.
 
 ## Redis (`redis_store.go`)
@@ -32,7 +32,7 @@
 Ключи (сетевые инверторы **обособлены по марке**; ключ устройства — **серийный
 номер инвертора** `inverter_sn`, IP — информационное поле «откуда получено»):
 
-- **`sunreceiver:<kind>:current`** (HASH: `deye|sofar|dds238|map|kes|bms26|dts017m|ce308`)
+- **`sunreceiver:<kind>:current`** (HASH: `deye|sofar|dds238|map|kes|bms26|dts017m`)
   — последнее состояние: поле = логический ключ устройства, значение = JSON снимка.
   Читает дашборд (`/api/current`, `/api/animation`). Не чистится.
 - **Временные ряды — RedisTimeSeries** (модуль присутствует в Redis 8): серия на пару
@@ -54,7 +54,7 @@ series-API — общий helper `seamWindows` (`dashboard.go`): PG `[start, cut
 RT `[cutoff, end]` (без дубля точки на cutoff и без разрыва).
 
 **Восстановление при пустом Redis**: `restoreRedisFromPG` при старте восстанавливает
-ряды (инверторы по марке, МАП/счётчик/КЭС/DTS017M/CE308/BMS26) через те же `Save*`
+ряды (инверторы по марке, МАП/счётчик/КЭС/DTS017M/BMS26) через те же `Save*`
 (теперь пишут в RT-серии). Сбой одного запроса не прерывает остальные; при неполной
 реставрации ставится маркер `sunreceiver:restore:incomplete` и повтор при следующем старте.
 **Нюанс**: штатный Redis-ряд BMS — сырые показания (`samples=1`), а восстановленный
@@ -62,7 +62,7 @@ RT `[cutoff, end]` (без дубля точки на cutoff и без разр�
 опросов ряд смешанный (маркер — поле `samples`).
 
 **Объём Redis**: с 2026-09-30 ряды хранят КАЖДОЕ показание (окно 2 суток): инверторы
-~10 с, МАП/MPPT/счётчик/ANT BMS — каждый опрос, EnBMS ~1 с, CE308 ~2 с. Для BMS это
+~10 с, МАП/MPPT/счётчик/BMS26 — каждый опрос. Для BMS это
 до ~86 400 точек/сутки на устройство (JSON с массивами ячеек). При росте памяти
 следить за `INFO memory`/размером ключей `sunreceiver:*series*`.
 
@@ -78,10 +78,10 @@ RT `[cutoff, end]` (без дубля точки на cutoff и без разр�
 - Инверторы: **`deye_averages_r`/`sofar_averages_r`** (`serial`, `ts`, `name`,
   `device_sn`, `ip`, 17 метрик), ключ — серийник. `insertAveraged`-ы и читатели — в
   `avg_r.go` (`insertAvgRow`/`selectAvgRows`).
-- DDS238/МАП/КЭС/CE308/DTS017M/BMS26: свои `*_averages_r` (`avgSpecs`), BMS —
+- DDS238/МАП/КЭС/DTS017M/BMS26: свои `*_averages_r` (`avgSpecs`), BMS —
   parent + дети `bms26_averages_r_cells/_temps/_alarm(name, ts, idx, v)`.
 - **Старые jsonb-таблицы** (`deye_averages_r`, `sofar_averages_r`, `dds238_averages_r`,
-  `map_averages_r`, `kes_averages_r`, `ce308_averages_r`, `dts017m_averages_r`,
+  `map_averages_r`, `kes_averages_r`, `dts017m_averages_r`,
   `bms26_averages_r`) — **история до этапа миграции**; в коде не создаются/не пишутся,
   удаляются на этапе 6.
 - Партиции: функция `sunreceiver.ensure_month_partition`, горизонт −1…+2 месяца
@@ -111,21 +111,17 @@ RT `[cutoff, end]` (без дубля точки на cutoff и без разр�
 - `runRedisCleanup(store, stop)` — каждые 15 мин `PurgeOld` (удаление точек старше
   окна 2 календарных суток).
 
-## BMS/CE308: отдельные аккумуляторы и таблицы
+## BMS/CE308: отдельные хранилища
 
-- **BMS (ANT + EnBMS + malina26)** — единое хранилище bms26: текущее в
-  `sunreceiver:bms26:current`, КАЖДОЕ показание в ряд `RedisTimeSeries `sunreceiver:ts:bms26:*``,
-  5-минутные средние в PG `sunreceiver.bms26_averages_r` (name = serial). Пулер
-  malina26 пишет напрямую; старые пулеры ANT (`bms_poller.go`) и EnBMS
-  (`enBms_poller.go`) кормят те же ряды через шимы (`bms26_legacy.go`,
-  `enBms_store.go`). Подробнее — [bms26.md](bms26.md), [enbms.md](enbms.md),
-  [../antbms.md](../antbms.md).
-- **CE308** (`ce308_accumulator.go`): сырой ряд Redis (~2 с), PG
-  `sunreceiver.ce308_averages_r` — усреднение **5 минут** (тот же `avgStep`), см.
-  [ce308.md](ce308.md).
+- **BMS26 (ANT + EnBMS)** — текущее в `sunreceiver:bms26:current`, каждое показание
+  в ряд `RedisTimeSeries `sunreceiver:ts:bms26:*``, 5-минутные средние в PG
+  `sunreceiver.bms26_averages_r` (name = serial). Пишет единый пулер malina26;
+  legacy-пулеры ANT/EnBMS удалены. Подробнее — [bms26.md](bms26.md).
+- **CE308**: единственный режим — итоговая энергия (`sunreceiver:ce308-energy:current`)
+  без ряда/агрегатов, см. [ce308.md](ce308.md).
 
 Повторная запись того же (устройство, промежуток) в PG **заменяется**
-(`InsertCe308Average` и bms26-аккумулятор — ON CONFLICT DO UPDATE), а в Redis-ряду
+(`insertAvgRow` и bms26-аккумулятор — ON CONFLICT DO UPDATE), а в Redis-ряду
 дедуп — по (устройство, секунда).
 
 ## Связанные документы
@@ -133,12 +129,12 @@ RT `[cutoff, end]` (без дубля точки на cutoff и без разр�
 - [Дашборд](dashboard.md) — читатель марочных `deye/sofar:current`/`:series` +
   `invAverages` (обособленные — своими читалками).
 - [dds238-meter.md](../dds238-meter.md) — `dds238_daily_tariffs`.
-- [../antbms.md](../antbms.md) — ключи `sunreceiver:bms26:*`, `bms26_averages_r`.
+- [bms26.md](bms26.md) — ключи `sunreceiver:bms26:*`, `bms26_averages_r`.
 ## История ошибок устройств (`device_errors`)
 
 Таблица `sunreceiver.device_errors(device, kind, code, msg, ts)` — история
 **появления** ошибок/аварий всех типов устройств (инверторы, МАП, MPPT, счётчик,
-CE308, ANT BMS, EnBMS).
+CE308, BMS26).
 
 Общее правило записи: **ошибка заносится только при переходе «не было → есть»**.
 Если ошибка считана в текущем чтении, но уже была в предыдущем — повторно НЕ
@@ -150,6 +146,6 @@ CE308, ANT BMS, EnBMS).
 (история конкретной BMS). Описания кодов локализованы (ru/en/zh), параметры
 дописываются в текст.
 
-Источник ошибок МАП — только «сырые» значения: через Modbus (`method=rs485`)
-либо из Малины через `read_memory.php` (`method=malina`); агрегирующие
-эндпоинты-ошибки не использовать (см. [map-mppt.md](map-mppt.md)).
+Источник ошибок МАП — только «сырые» значения бинарного `MapData`
+(`/api/map/raw`); агрегирующие эндпоинты-ошибки не использовать
+(см. [map-mppt.md](map-mppt.md)).
