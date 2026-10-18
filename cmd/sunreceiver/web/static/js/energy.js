@@ -81,7 +81,7 @@ function energyOpts(unit, minRange){
 			// страховка, если SR_COARSE на устройстве не сработал.
 			// Значения потребления/отдачи в хинтах — целыми: не округляем, а
 			// отбрасываем десятичную дробь (Math.trunc).
-			tooltip:{ enabled:!(SR_COARSE || window.__srTouched), callbacks:{
+			tooltip:{ enabled:!(SR_COARSE || window.__srTouched), backgroundColor:'rgba(255,255,255,1)', titleColor:'#111', bodyColor:'#111', borderColor:'rgba(0,0,0,0.35)', borderWidth:1, callbacks:{
 				label:function(ctx){ var n=Math.trunc(ctx.parsed.y||0); return ctx.dataset.label+': '+n+' kWh'; }
 			} },
 			zoom:{

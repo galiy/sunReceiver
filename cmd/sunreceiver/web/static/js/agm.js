@@ -244,7 +244,7 @@ function agmRender(id, datasets, yTitle, zero){
     animation:{ duration:200 },
     plugins:{
       legend: { display:false },
-      tooltip:{ position:'agmSide', caretPadding:30 },
+      tooltip:{ position:'agmSide', caretPadding:30, backgroundColor:'rgba(255,255,255,1)', titleColor:'#111', bodyColor:'#111', borderColor:'rgba(0,0,0,0.35)', borderWidth:1 },
       zoom:{
         pan:{ enabled:!SR_COARSE, mode:'x', onPanComplete:function(){ agmWindowChanged(id); } },
         zoom:{ wheel:{ enabled:!SR_COARSE, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:!SR_COARSE }, mode:'x', onZoomComplete:function(){ agmWindowChanged(id); } },

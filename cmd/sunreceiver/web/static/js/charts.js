@@ -42,7 +42,28 @@ Chart.register(ChartZoom);
 
 var preserveZoom=false;
 var userZoomed=false; // true — пользователь зумнул/сдвинул (нестандартное окно); false — стандартный вид (правый край догоняет now)
-var hoverPix={};
+// Общий срез курсора для ВСЕХ графиков страницы: хинт рисуется на каждом
+// графике по одному времени. Показывается через HOVER_HINT_DELAY после
+// остановки курсора; при любом движении гасится немедленно.
+var HOVER_HINT_DELAY=300;
+var HOVER_CHART_IDS=['powerChart','totalChart','gridVChart','gridPChart','tempChart'];
+var hoverState={ active:false, t:null, px:null, chartId:null, timer:null, lastPx:null };
+function refreshHoverCharts(){
+	HOVER_CHART_IDS.forEach(function(id){
+		var c=window[id]||Chart.getChart(id);
+		if(c){ try{ c.update('none'); }catch(e){} }
+	});
+}
+function clearHoverHint(){
+	if(hoverState.timer){ clearTimeout(hoverState.timer); hoverState.timer=null; }
+	if(hoverState.active){ hoverState.active=false; refreshHoverCharts(); }
+	hoverState.t=null; hoverState.px=null; hoverState.chartId=null; hoverState.lastPx=null;
+}
+function showHoverHint(){
+	hoverState.timer=null;
+	hoverState.active=true;
+	refreshHoverCharts();
+}
 // hiddenSets[chartId] — метки датасетов, которые пользователь скрыл кликом по
 // легенде. При пересоздании графика (обновление по таймеру) выбор восстанавливается,
 // чтобы отключённые линии не «восставали» сами по себе.
@@ -111,12 +132,12 @@ var TOOLTIP_MAX_GAP=20*60*1000;
 function drawCursorTooltip(chart){
 	try{
 		if(SR_COARSE || window.__srTouched) return; // touch: хинт со значениями отключён
-		var px=hoverPix[chart.canvas.id];
-		if(px===undefined) return;
+		if(!hoverState.active || hoverState.t===null) return;
 		var xScale=chart.scales&&chart.scales.x, yScale=chart.scales&&chart.scales.y;
 		if(!xScale||!yScale) return;
+		var t=hoverState.t;
+		var px=xScale.getPixelForValue(t);
 		if(!isFinite(px)||px<xScale.left||px>xScale.right) return;
-		var t=xScale.getValueForPixel(px);
 		var ctx=chart.ctx; ctx.save();
 		ctx.beginPath(); ctx.moveTo(px,yScale.top); ctx.lineTo(px,yScale.bottom);
 		ctx.strokeStyle='rgba(160,160,160,0.55)'; ctx.lineWidth=1; ctx.stroke();
@@ -157,10 +178,10 @@ function drawCursorTooltip(chart){
 		var bx=px+12, by=yScale.top+4;
 		if(bx+boxW>xScale.right) bx=px-boxW-12;
 		if(bx<xScale.left) bx=xScale.left+2;
-		ctx.fillStyle='rgba(20,20,25,0.88)'; ctx.fillRect(bx,by,boxW,boxH);
-		ctx.strokeStyle='rgba(255,255,255,0.25)'; ctx.lineWidth=1; ctx.strokeRect(bx,by,boxW,boxH);
+		ctx.fillStyle='#ffffff'; ctx.fillRect(bx,by,boxW,boxH);
+		ctx.strokeStyle='rgba(0,0,0,0.35)'; ctx.lineWidth=1; ctx.strokeRect(bx,by,boxW,boxH);
 		var ty=by+(header?lineH+4:8);
-		if(header){ ctx.fillStyle='#e8e8e8'; ctx.font='600 12px sans-serif'; ctx.textBaseline='top'; ctx.fillText(header,bx+11,by+6); }
+		if(header){ ctx.fillStyle='#111111'; ctx.font='600 12px sans-serif'; ctx.textBaseline='top'; ctx.fillText(header,bx+11,by+6); }
 		labels.forEach(function(l){ ctx.textBaseline='top'; ctx.fillStyle=l.color; ctx.font='12px sans-serif'; ctx.fillText(l.txt,bx+11,ty); ty+=lineH; });
 		ctx.restore();
 	}catch(err){ try{ ctx&&ctx.restore(); }catch(e){} }
@@ -278,7 +299,7 @@ function renderChart(id, datasets, opts){
 	window[id]=new Chart(canvas,{ type:'line', data:{datasets:datasets}, options:opts, plugins:[cursorTooltipPlugin] });
 	// Ctrl+выделение отрезка → окно становится полным периодом страницы.
 	srCtrlDragZoom(window[id], srApplySelection);
-	if(!canvas.__srMLBound){ canvas.__srMLBound=true; canvas.addEventListener('mouseleave',function(){ delete hoverPix[id]; try{ window[id]&&window[id].update('none'); }catch(e){} }); }
+	if(!canvas.__srMLBound){ canvas.__srMLBound=true; canvas.addEventListener('mouseleave',function(){ clearHoverHint(); }); }
 	var needUpdate=false;
 	if(preserveZoom && saved.min!==null && saved.max!==null){
 		window[id].options.scales.x.min=saved.min; window[id].options.scales.x.max=saved.max;
@@ -299,9 +320,22 @@ function chartOpts(withLegend,yTitle,extra){
 		// мешали pinch-зуму. __srTouched — страховка, если SR_COARSE не сработал.
 		onHover:function(event, elements, chart){
 			if(SR_COARSE || window.__srTouched) return;
-			if(chart && chart.canvas){
-				if(event && isFinite(event.x)) hoverPix[chart.canvas.id]=event.x;
-				try{ chart.update('none'); }catch(e){}
+			if(!chart || !chart.canvas || !chart.scales || !chart.scales.x) return;
+			if(!event || !isFinite(event.x)){ clearHoverHint(); return; }
+			var xScale=chart.scales.x;
+			if(event.x<xScale.left || event.x>xScale.right){ clearHoverHint(); return; }
+			var t=xScale.getValueForPixel(event.x);
+			if(!isFinite(t)){ clearHoverHint(); return; }
+			var moved=(hoverState.lastPx===null || Math.abs(event.x-hoverState.lastPx)>0.5);
+			hoverState.lastPx=event.x;
+			hoverState.t=t; hoverState.chartId=chart.canvas.id;
+			if(moved){
+				// Любое движение гасит хинты и перезапускает задержку.
+				if(hoverState.active){ hoverState.active=false; refreshHoverCharts(); }
+				if(hoverState.timer) clearTimeout(hoverState.timer);
+				hoverState.timer=setTimeout(showHoverHint, HOVER_HINT_DELAY);
+			}else if(!hoverState.active && !hoverState.timer){
+				hoverState.timer=setTimeout(showHoverHint, HOVER_HINT_DELAY);
 			}
 		},
 		plugins:{

@@ -271,6 +271,24 @@ function syncBmsZoomToOthers(fromChart){
 // Позиция хранится как значение по оси X — поэтому линия рисуется сразу на
 // ВСЕХ графиках страницы, когда курсор находится над одним из них.
 var bmsCursor={ active:false, value:null };
+// Хинты показываются через BMS_HOVER_HINT_DELAY после остановки курсора;
+// при любом движении гасятся немедленно (на всех графиках).
+var BMS_HOVER_HINT_DELAY=300;
+var bmsHoverTimer=null, bmsHoverPx=null;
+function bmsHideHintsNow(){
+  if(bmsCursor.active){ bmsCursor.active=false; bmsSyncTooltips(null); bmsUpdateAllCharts(); }
+}
+function bmsClearHover(){
+  if(bmsHoverTimer){ clearTimeout(bmsHoverTimer); bmsHoverTimer=null; }
+  bmsHoverPx=null;
+  bmsHideHintsNow();
+}
+function bmsShowHint(v){
+  bmsHoverTimer=null;
+  bmsCursor.active=true; bmsCursor.value=v;
+  bmsSyncTooltips(v);
+  bmsUpdateAllCharts();
+}
 function drawBmsCursor(chart){
   try{
     if(SR_COARSE || window.__srTouched) return;
@@ -457,21 +475,31 @@ function bmsRender(id, datasets, yTitle, legend, zero){
     interaction:{ mode:'index', intersect:false },
     onHover:function(event,elements,chart){
       if(SR_COARSE || window.__srTouched) return;
-      if(chart && chart.canvas && chart.scales && chart.scales.x){
-        var v=chart.scales.x.getValueForPixel(event.x);
+      if(chart && chart.canvas && chart.scales && chart.scales.x && event && isFinite(event.x)){
+        var xScale=chart.scales.x;
+        if(event.x<xScale.left || event.x>xScale.right){ bmsClearHover(); return; }
+        var v=xScale.getValueForPixel(event.x);
         if(isFinite(v)){
-          bmsCursor.active=true; bmsCursor.value=v;
-          bmsSyncTooltips(v);
-          bmsUpdateAllCharts(); return;
+          var moved=(bmsHoverPx===null || Math.abs(event.x-bmsHoverPx)>0.5);
+          bmsHoverPx=event.x;
+          if(moved){
+            // Любое движение гасит хинты и перезапускает задержку.
+            if(bmsCursor.active){ bmsCursor.active=false; bmsSyncTooltips(null); bmsUpdateAllCharts(); }
+            if(bmsHoverTimer) clearTimeout(bmsHoverTimer);
+            bmsHoverTimer=setTimeout(function(){ bmsShowHint(v); }, BMS_HOVER_HINT_DELAY);
+          }else if(!bmsCursor.active && !bmsHoverTimer){
+            bmsHoverTimer=setTimeout(function(){ bmsShowHint(v); }, BMS_HOVER_HINT_DELAY);
+          }
+          return;
         }
       }
       // Не удалось определить значение — прячем линию и хинты на всех графиках.
-      if(bmsCursor.active){ bmsCursor.active=false; bmsSyncTooltips(null); bmsUpdateAllCharts(); }
+      bmsClearHover();
     },
     animation:{ duration:200 },
     plugins:{
       legend: { display:false },
-      tooltip:{ position:'bmsSide', caretPadding:30 },
+      tooltip:{ position:'bmsSide', caretPadding:30, backgroundColor:'rgba(255,255,255,1)', titleColor:'#111', bodyColor:'#111', borderColor:'rgba(0,0,0,0.35)', borderWidth:1 },
       zoom:{
         pan:{ enabled:!SR_COARSE, mode:'x', onPanComplete:function(){ bmsWindowChanged(id); } },
         zoom:{ wheel:{ enabled:!SR_COARSE, speed:0.1, modifierKey:'ctrl' }, pinch:{ enabled:!SR_COARSE }, mode:'x', onZoomComplete:function(){ bmsWindowChanged(id); } },
@@ -498,7 +526,7 @@ function bmsRender(id, datasets, yTitle, legend, zero){
   srCtrlDragZoom(BMS_CHARTS[id], function(f,t){ setPeriod(f,t,'custom',null); });
   // Сброс чёрточки курсора и хинтов при уходе мыши с графика (гаснут на всех).
   var bmsCanvasEl=document.getElementById(id);
-  if(!bmsCanvasEl.__srMLBound){ bmsCanvasEl.__srMLBound=true; bmsCanvasEl.addEventListener('mouseleave',function(){ if(bmsCursor.active){ bmsCursor.active=false; bmsSyncTooltips(null); bmsUpdateAllCharts(); } }); }
+  if(!bmsCanvasEl.__srMLBound){ bmsCanvasEl.__srMLBound=true; bmsCanvasEl.addEventListener('mouseleave',function(){ bmsClearHover(); }); }
   // На touch встроенный tooltip Chart.js отключён (показывается по тапу — хинт).
   // __srTouched — страховка, если SR_COARSE на устройстве не сработал.
   if(SR_COARSE || window.__srTouched){ BMS_CHARTS[id].options.plugins.tooltip.enabled=false; }
