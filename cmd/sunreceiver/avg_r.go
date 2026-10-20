@@ -44,12 +44,12 @@ type avgSpec struct {
 }
 
 var avgSpecs = []avgSpec{
-	{"sunreceiver.deye_averages_r", "serial", []string{"name", "device_sn", "ip"}, []string{
+	{"sunreceiver.deye_averages_r", "serial", []string{"name", "device_sn", "ip", "placement"}, []string{
 		"ac_active_power", "ac_reactive_power", "energy_today", "energy_total",
 		"grid_frequency", "l1_current", "l1_voltage", "l2_current", "l2_voltage",
 		"l3_current", "l3_voltage", "pv1_current", "pv1_power", "pv1_voltage",
 		"pv2_current", "pv2_power", "pv2_voltage"}, nil},
-	{"sunreceiver.sofar_averages_r", "serial", []string{"name", "device_sn", "ip"}, []string{
+	{"sunreceiver.sofar_averages_r", "serial", []string{"name", "device_sn", "ip", "placement"}, []string{
 		"ac_active_power", "ac_reactive_power", "energy_today", "energy_total",
 		"grid_frequency", "l1_current", "l1_voltage", "l2_current", "l2_voltage",
 		"l3_current", "l3_voltage", "pv1_current", "pv1_power", "pv1_voltage",
@@ -357,6 +357,8 @@ func (s *pgStore) selectAvgRows(sp *avgSpec, keyFilter string, start, end time.T
 				sn.DeviceSN = v
 			case "ip":
 				sn.IP = v
+			case "placement":
+				sn.Placement = v
 			}
 		}
 		vc := valuesContract{}

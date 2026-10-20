@@ -47,7 +47,7 @@ func TestBuildAnimationKindFromConfig(t *testing.T) {
 		// старый снимок Deye без телега dc_total_power → Kind из конфига "deye".
 		animSnapKind("Deye Off", "10.0.0.1", "Дом", old, map[string]float64{"ac_active_power": 0}, "deye"),
 	}
-	res := buildAnimationResponse(devices, nil, nil, now)
+	res := buildAnimationResponse(devices, nil, now)
 	if len(res.House.Inverters) != 1 {
 		t.Fatalf("want 1 inverter, got %d", len(res.House.Inverters))
 	}
@@ -80,7 +80,7 @@ func TestBuildAnimationResponse(t *testing.T) {
 		animSnapKind("Deye Off", "10.0.0.5", "Дом", old, map[string]float64{"ac_active_power": 500, "dc_total_power": 500}, "deye"),
 	}
 
-	res := buildAnimationResponse(devices, nil, nil, now)
+	res := buildAnimationResponse(devices, nil, now)
 
 	if len(res.House.Inverters) != 3 {
 		t.Fatalf("house inverters: want 3 (2 fresh + 1 stale), got %d (%v)", len(res.House.Inverters), res.House.Inverters)
@@ -141,7 +141,7 @@ func TestBuildAnimationGarageMeter(t *testing.T) {
 	// Свежий DTS017M: 200 Вт.
 	dts := &dts017Snapshot{Name: "DTS017M", Timestamp: now.Format(time.RFC3339),
 		Values: map[string]float64{dts017ActivePower: 200}}
-	resD := buildAnimationResponse(devices, dts, nil, now)
+	resD := buildAnimationResponse(devices, dts, now)
 	if want := 200.0; resD.Garage.GarageMeterPower != want {
 		t.Fatalf("dts017 power: want %v, got %v", want, resD.Garage.GarageMeterPower)
 	}
@@ -150,60 +150,29 @@ func TestBuildAnimationGarageMeter(t *testing.T) {
 		t.Fatalf("dts017 garage power: want %v, got %v", want, resD.Garage.GaragePower)
 	}
 	// Без свежих снимков — мощности гаража не считаем (0).
-	res2 := buildAnimationResponse(devices, nil, nil, now)
+	res2 := buildAnimationResponse(devices, nil, now)
 	if res2.Garage.GarageMeterPower != 0 || res2.Garage.GaragePower != 0 {
 		t.Fatalf("без счётчика: meter=%v garage=%v, want 0/0", res2.Garage.GarageMeterPower, res2.Garage.GaragePower)
 	}
 	// Устаревший снимок DTS017M — тоже не считаем.
 	staleDts := &dts017Snapshot{Name: "DTS017M", Timestamp: now.Add(-time.Hour).Format(time.RFC3339),
 		Values: map[string]float64{dts017ActivePower: 999}}
-	res3 := buildAnimationResponse(devices, staleDts, nil, now)
+	res3 := buildAnimationResponse(devices, staleDts, now)
 	if res3.Garage.GaragePower != 0 {
 		t.Fatalf("stale meters: garage=%v, want 0", res3.Garage.GaragePower)
 	}
 }
 
-// TestBuildAnimationStaleMark проверяет, что «молчащие» (снимок старше окна)
-// устройства помечаются Stale=true и их мощность не влияет на формулу Дома.
-func TestBuildAnimationStaleMark(t *testing.T) {
+// TestBuildAnimationPlacementFromAPI проверяет, что размещение берётся из
+// снимка (поле Placement, заполняется пулером grid из API).
+func TestBuildAnimationPlacementFromAPI(t *testing.T) {
 	now := time.Now()
-	old := now.Add(-time.Hour)
 	devices := []deviceSnapshot{
-		animSnap("Off", "10.0.0.1", "Дом", old, map[string]float64{"ac_active_power": 700, "dc_total_power": 700}),
-		animSnap("МАП", "10.0.0.8", "", old, map[string]float64{"battery_voltage": 52, "grid_power": 100, "battery_power": 0}),
+		animSnap("Garage Left", "10.0.0.70", "Гараж", now, map[string]float64{"ac_active_power": 700}),
 	}
-	// Молчащий инвертор (снимок > 20 мин) в формуле Дома не участвует: его
-	// устаревшая мощность (700 Вт) не «оживляет» дом ночью.
-	res := buildAnimationResponse(devices, nil, nil, now)
-	if len(res.House.Inverters) != 1 || !res.House.Inverters[0].Stale {
-		t.Fatalf("inverter должен быть Stale=true: %v", res.House.Inverters)
-	}
-	// Молчащее устройство: мощности PV/AC считаются нулевыми (не показываются).
-	inv := res.House.Inverters[0]
-	if inv.PV != 0 || inv.AC != 0 {
-		t.Fatalf("stale inverter PV/AC должны быть 0, got pv=%v ac=%v", inv.PV, inv.AC)
-	}
-	// МАП со старым снимком игнорируется — мощность сети 0, P_дом = 0 + 0 − 0 = 0.
-	if res.House.HousePower != 0 {
-		t.Fatalf("house power with stale devices: want 0, got %v", res.House.HousePower)
-	}
-	if res.House.MapGridPower != 0 {
-		t.Fatalf("stale map grid power: want 0, got %v", res.House.MapGridPower)
-	}
-}
-
-// TestBuildAnimationPlacementFromConfig проверяет, что размещение берётся из
-// конфига (placeByIP) даже для устаревшего снимка без поля placement.
-func TestBuildAnimationPlacementFromConfig(t *testing.T) {
-	now := time.Now()
-	// У снимка пустой placement — он был записан старой версией.
-	devices := []deviceSnapshot{
-		animSnap("Stale Left", "10.0.0.70", "", now, map[string]float64{"ac_active_power": 700}),
-	}
-	placeByIP := map[string]string{"10.0.0.70": "Гараж"}
-	res := buildAnimationResponse(devices, nil, placeByIP, now)
-	if len(res.Garage.Inverters) != 1 || res.Garage.Inverters[0].Name != "Stale Left" {
-		t.Fatalf("инвертор из по конфигу должен быть в гараже: house=%v garage=%v",
+	res := buildAnimationResponse(devices, nil, now)
+	if len(res.Garage.Inverters) != 1 || res.Garage.Inverters[0].Name != "Garage Left" {
+		t.Fatalf("инвертор с placement «Гараж» должен быть в гараже: house=%v garage=%v",
 			res.House.Inverters, res.Garage.Inverters)
 	}
 	if len(res.House.Inverters) != 0 {
@@ -223,7 +192,7 @@ func TestBuildAnimationMeterSubstitutionStale(t *testing.T) {
 		animSnap("Счётчик", "10.0.0.9", "", now.Add(-30*time.Second),
 			map[string]float64{"meter_voltage": 230, "meter_active_power": 500}),
 	}
-	res := buildAnimationResponse(devices, nil, nil, now)
+	res := buildAnimationResponse(devices, nil, now)
 	// P_дом = 100 + 300 (МАП, т.к. счётчик старше 20 с) + (−100) = 300.
 	if want := 300.0; res.House.HousePower != want {
 		t.Fatalf("house power: want %v (fallback MAP), got %v", want, res.House.HousePower)
@@ -235,7 +204,7 @@ func TestBuildAnimationMeterSubstitutionStale(t *testing.T) {
 	fresh := append([]deviceSnapshot{}, devices[:2]...)
 	fresh = append(fresh, animSnap("Счётчик", "10.0.0.9", "", now,
 		map[string]float64{"meter_voltage": 230, "meter_active_power": 500}))
-	res2 := buildAnimationResponse(fresh, nil, nil, now)
+	res2 := buildAnimationResponse(fresh, nil, now)
 	if want := 500.0; res2.House.HousePower != want {
 		t.Fatalf("house power: want %v (meter), got %v", want, res2.House.HousePower)
 	}
@@ -256,7 +225,7 @@ func TestHousePowerSeriesMeterSubstitution(t *testing.T) {
 		// Через 60 с — счётчика рядом нет (ближайший в 60 с > 20 с) → fallback на МАП.
 		animSnap("МАП t1", "10.0.0.8", "", t0.Add(time.Minute), map[string]float64{"battery_voltage": 52, "grid_power": 300, "battery_power": -100}),
 	}
-	house, _ := housePowerSeries(snaps, nil)
+	house, _ := housePowerSeries(snaps)
 	if len(house) != 2 {
 		t.Fatalf("house series: want 2 points, got %d (%v)", len(house), house)
 	}
@@ -308,7 +277,7 @@ func TestBuildAnimationTemperatures(t *testing.T) {
 		}, "sofar"),
 	}
 
-	res := buildAnimationResponse(devices, nil, nil, now)
+	res := buildAnimationResponse(devices, nil, now)
 
 	// Панель над МАП: Тор и Транзисторы.
 	if len(res.House.MapTemps) != 2 {

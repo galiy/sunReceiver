@@ -102,6 +102,12 @@ func snapKey(sn deviceSnapshot) string {
 // saveInvSnapshot пишет снимок инвертора: current HASH (последнее состояние) +
 // точки в RedisTimeSeries (по тегам, серия на (марка,серийник,тег)).
 func (s *redisStore) saveInvSnapshot(b invBrand, snap deviceSnapshot, ts time.Time) error {
+	return s.saveInvSnapshotState(b, snap, ts, true)
+}
+
+// saveInvSnapshotState пишет снимок инвертора в current всегда, а в
+// RedisTimeSeries — только если writeHistory (для grid: last_seen продвинулся).
+func (s *redisStore) saveInvSnapshotState(b invBrand, snap deviceSnapshot, ts time.Time, writeHistory bool) error {
 	key := snap.InverterSN
 	if key == "" {
 		return fmt.Errorf("inv %s: пустой серийник инвертора (ip=%s)", b.name, snap.IP)
@@ -112,11 +118,20 @@ func (s *redisStore) saveInvSnapshot(b invBrand, snap deviceSnapshot, ts time.Ti
 	}
 	pipe := s.rdb.TxPipeline()
 	pipe.HSet(s.ctx, b.curKey, key, raw)
-	s.tsAddValueContract(pipe, b.name, key, snap.Name, snap.IP, snap.DeviceSN, ts, snap.Values)
+	if writeHistory {
+		s.tsAddValueContract(pipe, b.name, key, snap.Name, snap.IP, snap.DeviceSN, snap.Placement, ts, snap.Values)
+	}
 	if _, err := pipe.Exec(s.ctx); err != nil {
 		return fmt.Errorf("save inv %s %s: %w", b.name, key, err)
 	}
 	return nil
+}
+
+// invKeyKnown — есть ли серийник в current марки (для диагностики «новый ключ
+// истории» после перехода на API).
+func (s *redisStore) invKeyKnown(b invBrand, serial string) bool {
+	n, err := s.rdb.HExists(s.ctx, b.curKey, serial).Result()
+	return err == nil && n
 }
 
 // invCurrent возвращает текущие снимки инверторов марки (HASH current).
@@ -177,9 +192,9 @@ func (s *redisStore) queryInvSeries(b invBrand, start, end time.Time) ([]deviceS
 
 // insertInvAveragedExec пишет одну 5-минутную точку инвертора марки в
 // партиционированную колоночную таблицу <марка>_averages_r. Идемпотентно по (serial, ts).
-func insertInvAveragedExec(q pgExecer, ctx context.Context, b invBrand, serial, ip, name string, ts time.Time, deviceSN string, vc valuesContract) error {
+func insertInvAveragedExec(q pgExecer, ctx context.Context, b invBrand, serial, ip, name, placement string, ts time.Time, deviceSN string, vc valuesContract) error {
 	return insertAvgRow(q, ctx, b.spec(), serial, ts,
-		map[string]string{"name": name, "device_sn": deviceSN, "ip": ip}, vc)
+		map[string]string{"name": name, "device_sn": deviceSN, "ip": ip, "placement": placement}, vc)
 }
 
 // invAverages возвращает 5-минутные точки инверторов марки за [start, end].

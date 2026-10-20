@@ -1,7 +1,8 @@
 # sunReceiver
 
-Go-приложение, которое опрашивает solar-инверторы через их WiFi-даталоггеры
-(Solarman LSW-3/LSE, порт 8899, TCP) и сохраняет распарсенные данные в Redis
+Go-приложение, которое получает данные сетевых инверторов через HTTP-API
+«Малина26», опрашивает МАП/КЭС/BMS через тот же API и счётчики напрямую, сохраняя
+данные в Redis
 (с persistence RDB+AOF). При полностью пустом Redis данные восстанавливаются из
 PostgreSQL. Включает веб-дашборд текущих параметров.
 
@@ -18,8 +19,8 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 | Раздел | Где |
 |---|---|
 | Краткое описание всех модулей + навигация | [`docs/README.md`](docs/README.md) |
-| Клиент Solarman V5 (`internal/solarman/`) | [`docs/modules/solarman-client.md`](docs/modules/solarman-client.md) |
-| Poller инверторов (`main.go`) | [`docs/modules/inverter-poller.md`](docs/modules/inverter-poller.md) |
+| Сетевые инверторы (API malina26, `grid_poller.go`) | [`docs/modules/inverter-poller.md`](docs/modules/inverter-poller.md) |
+| Клиент Solarman V5 (`internal/solarman/`, только счётчики/диагностика) | [`docs/modules/solarman-client.md`](docs/modules/solarman-client.md) |
 | Хранение (Redis/PG/аккумулятор) | [`docs/modules/storage.md`](docs/modules/storage.md) |
 | Веб-дашборд (`dashboard.go`) | [`docs/modules/dashboard.md`](docs/modules/dashboard.md) |
 | МАП + MPPT | [`docs/modules/map-mppt.md`](docs/modules/map-mppt.md) |
@@ -51,13 +52,13 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 `instructions`; файл в `.gitignore`). Публично — только протоколы/маппинги в
 [`docs/research/`](docs/research/).
 
-Список опрашиваемых инверторов задаётся в **`sunReceiver.json` рядом с исполняемым
-файлом** (`os.Executable()`; при `go run ./cmd/sunreceiver` — fallback в CWD). Структура: раздел
-**`invertors`** — список инверторов `[{"ip", "name", "type": "deye"|"sofar",
-"logger_sn": uint32, "disabled": bool}]`; `name` — логическое имя (обязательно);
-**`disabled` — ОБЯЗАТЕЛЬНОЕ поле** (`false` = опрашивается, `true` = временно
-отключён — устройство в конфиге, но не опрашивается, при старте логируется; отсутствие
-поля = ошибка загрузки конфига). Раздел **`map`** (МАП Титанатор + КЭС/MPPT + BMS26)
+**Настроек сетевых инверторов в конфиге нет.** Они опрашиваются только через
+API «Малина26»: список `GET /api/grid/status`, снимок
+`GET /api/grid/device?serial=`, период 5 с. Имя, размещение, тип и серийник
+приходят из API; ключ хранения — серийник. Транспорт (host/port/password) берётся
+из раздела `map`; `map.disabled=true` отключает и сетевые инверторы.
+
+Раздел **`map`** (МАП Титанатор + КЭС/MPPT + BMS26)
 имеет поля **`disabled`** (ОБЯЗАТЕЛЬНОЕ; `true` отключает все пулеры раздела),
 **`host`**, **`port`** (80/443), **`password`**, **`serial`** (серийник «своего» МАП,
 число строкой) и необязательный **`fallback_serial`** (резервный серийник: опрос при
@@ -120,10 +121,10 @@ DDS238 (реализовано в `mercury.go`, отдаётся в `/api/curren
 (**`disabled` — ОБЯЗАТЕЛЬНОЕ** поле: `false` — модуль включён, `true` — модуля нет, лампы не
 управляются; `ip` обязателен при `disabled=false`), полностью описан в
 [`docs/relay_sr-201(2light).md`](docs/relay_sr-201(2light).md). **Периоды опроса
-устройств задаются обязательным разделом `poll` (в СЕКУНДАХ)**: `{"inverter",
-"map", "meter"}` — все поля обязательны и > 0
+устройств задаются обязательным разделом `poll` (в СЕКУНДАХ)**: `{"map",
+"meter"}` — все поля обязательны и > 0
 (отсутствие/ноль = ошибка загрузки конфига); значения по умолчанию в sample:
-inverter 10, map 1, meter 1. Период **DTS017M** задаётся НЕ здесь, а полем `poll_interval`
+map 1, meter 1. Период сетевых инверторов фиксирован (5 с, из API). Период **DTS017M** задаётся НЕ здесь, а полем `poll_interval`
 в разделе `dts017m`. Период CE308 фиксирован (30 мин). **В Redis пишется КАЖДОЕ
 снятое показание** (окно 2 календарных суток), **в PG все ряды усредняются до 1 записи
 за 5 минут** (инверторы, МАП/MPPT, DDS238, BMS26, DTS017M).
@@ -141,11 +142,12 @@ inverter 10, map 1, meter 1. Период **DTS017M** задаётся НЕ зд
 усреднённые точки) → дашборд (чтение)**. Опрос — независимые горутины. Дашборд только
 читает `current` (Redis HASH) / `series` (RedisTimeSeries, ключи `sunreceiver:ts:*`) и `averages` (PG).
 
-- **`internal/solarman/`** — клиент Solarman V5. Полное описание —
-  [`docs/modules/solarman-client.md`](docs/modules/solarman-client.md).
-- **`main.go`** — poller инверторов (Deye/Sofar) в независимых циклах `runInverterPoll`
-  (раз в 10 с), маппинг регистров в `values`, серийные номера, чистое завершение.
-  Полное описание — [`docs/modules/inverter-poller.md`](docs/modules/inverter-poller.md).
+- **`internal/solarman/`** — клиент Solarman V5; после перехода на API используется
+  только счётчиками (`CRC16Modbus`) и диагностикой `cmd/probe`.
+- **`grid_poller.go`** — опрос сетевых инверторов через API «Малина26»
+  (`/api/grid/status` + `/api/grid/device`), 5 с, параллельный забор, маппинг в
+  `values`, размещение/имя из API. Полное описание —
+  [`docs/modules/inverter-poller.md`](docs/modules/inverter-poller.md).
 - **Хранение** — `redis_store.go`, `pg_store.go`, `accumulator.go`, `bms_accumulator.go`,
   фоновые аккумулятор/очистка, реставрация Redis из PG (`restoreRedisFromPG`).
   Полное описание — [`docs/modules/storage.md`](docs/modules/storage.md).
@@ -218,8 +220,8 @@ inverter 10, map 1, meter 1. Период **DTS017M** задаётся НЕ зд
   SSH-доступ, команды деплоя и топология — **приватные**, см.
   `.kilo/AGENTS-private.md`.
 - Локальная разработка/тест — `go run ./cmd/sunreceiver` (fallback конфигов в CWD). Локальный
-  пулер работает от конфига **`sunReceiver.json`** рядом с бинарником (все разделы:
-  invertors, map, mppt, db, meter — в одном файле; файл приватный, в git не попадает).
+  пулер работает от конфига **`sunReceiver.json`** рядом с бинарником (разделы
+  map, db, meter и др. — в одном файле; файл приватный, в git не попадает).
 - **НЕ запускать инстансы sunReceiver на машине разработки без
   явного разрешения пользователя**: локальный конфиг `sunReceiver.json` указывает
   `db.redis`/`db.pg` на прод-сервер, поэтому `go run ./cmd/sunreceiver` на ней опрашивает реальное
@@ -244,6 +246,10 @@ inverter 10, map 1, meter 1. Период **DTS017M** задаётся НЕ зд
 Продукт собирается на Mac, бинарник передаётся на прод-сервер, сервис перезапускается.
 Точные адрес/команды **sshpass/scp/ssh** (с флагами `PreferredAuthentications=password`)
 и порядок сборки под Linux — в `.kilo/AGENTS-private.md`.
+
+**Порядок выката после удаления `invertors`/`poll.inverter`:** сначала обновить
+прод-`sunReceiver.json` (иначе жёсткая валидация не даст стартовать), затем
+бинарник.
 
 **При перезапуске после правок кода**: собрать linux-бинарник, scp поверх
 `/opt/sunreceiver/sunReceiver`, `systemctl restart sunreceiver.service`.

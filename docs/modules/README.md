@@ -5,8 +5,8 @@
 
 | Модуль | Файл | Описание |
 |---|---|---|
-| Клиент Solarman V5 | [solarman-client.md](solarman-client.md) | пакет `internal/solarman/` |
-| Poller инверторов | [inverter-poller.md](inverter-poller.md) | `main.go` |
+| Клиент Solarman V5 (счётчики/диагностика) | [solarman-client.md](solarman-client.md) | пакет `internal/solarman/` |
+| Сетевые инверторы (API «Малина26») | [inverter-poller.md](inverter-poller.md) | `grid_poller.go` |
 | Хранение | [storage.md](storage.md) | Redis + PG + аккумулятор |
 | Веб-дашборд | [dashboard.md](dashboard.md) | `dashboard.go`, `cmd/sunreceiver/web/` (templates/static, `go:embed`) |
 | МАП + MPPT (API «Малина26») | [map-mppt.md](map-mppt.md) | `malina26.go` |

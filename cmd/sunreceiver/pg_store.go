@@ -100,13 +100,15 @@ func (s *pgStore) ensureSchema() error {
 	if _, err := s.pool.Exec(s.ctx, `
 CREATE TABLE IF NOT EXISTS sunreceiver.device_errors (
 	device text        NOT NULL,
+	name   text        NOT NULL DEFAULT '',
 	kind   text        NOT NULL DEFAULT '',
 	code   text        NOT NULL DEFAULT '',
 	msg    text        NOT NULL DEFAULT '',
 	ts     timestamptz NOT NULL DEFAULT now(),
 	PRIMARY KEY (device, kind, code, ts)
 );
-CREATE INDEX IF NOT EXISTS device_errors_ts_idx ON sunreceiver.device_errors (ts);`); err != nil {
+CREATE INDEX IF NOT EXISTS device_errors_ts_idx ON sunreceiver.device_errors (ts);
+ALTER TABLE sunreceiver.device_errors ADD COLUMN IF NOT EXISTS name text NOT NULL DEFAULT '';`); err != nil {
 		return fmt.Errorf("pg device_errors schema: %w", err)
 	}
 	// Горизонт помесячных партиций *_r (текущий + следующий месяц); далее
@@ -198,6 +200,7 @@ func (s *pgStore) averagesAll(start, end time.Time) ([]deviceSnapshot, error) {
 // DeviceErrorRow — одна запись истории ошибок устройства.
 type DeviceErrorRow struct {
 	Device string    `json:"device"`
+	Name   string    `json:"name,omitempty"`
 	Kind   string    `json:"kind"`
 	Code   string    `json:"code"`
 	Msg    string    `json:"msg"`
@@ -209,10 +212,16 @@ type DeviceErrorRow struct {
 // "bms"), code — код/категория, msg — текст. Вызывается только на переходе
 // «ошибки не было → появилась»; PK (device,kind,code,ts) страхует от повторов.
 func (s *pgStore) InsertDeviceError(device, kind, code, msg string, ts time.Time) error {
+	return s.InsertDeviceErrorNamed(device, "", kind, code, msg, ts)
+}
+
+// InsertDeviceErrorNamed — как InsertDeviceError, но с именем устройства
+// (для сетевых инверторов: device=серийник, name=имя из API).
+func (s *pgStore) InsertDeviceErrorNamed(device, name, kind, code, msg string, ts time.Time) error {
 	_, err := s.pool.Exec(s.ctx, `
-INSERT INTO sunreceiver.device_errors (device, kind, code, msg, ts)
-VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT (device, kind, code, ts) DO NOTHING`, device, kind, code, msg, ts.UTC())
+INSERT INTO sunreceiver.device_errors (device, name, kind, code, msg, ts)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (device, kind, code, ts) DO NOTHING`, device, name, kind, code, msg, ts.UTC())
 	if err != nil {
 		return fmt.Errorf("pg insert device error %s: %w", device, err)
 	}
@@ -231,7 +240,7 @@ func deviceErrorsWhere(from, to time.Time, kind, device string) (string, []any) 
 	}
 	if device != "" {
 		args = append(args, device)
-		q += fmt.Sprintf(" AND device = $%d", len(args))
+		q += fmt.Sprintf(" AND (device = $%d OR name = $%d)", len(args), len(args))
 	}
 	return q, args
 }
@@ -248,7 +257,7 @@ func (s *pgStore) DeviceErrors(from, to time.Time, kind, device string, limit, o
 		offset = 0
 	}
 	args = append(args, limit, offset)
-	q := fmt.Sprintf(`SELECT device, kind, code, msg, ts FROM sunreceiver.device_errors%s ORDER BY ts DESC LIMIT $%d OFFSET $%d`,
+	q := fmt.Sprintf(`SELECT device, name, kind, code, msg, ts FROM sunreceiver.device_errors%s ORDER BY ts DESC LIMIT $%d OFFSET $%d`,
 		where, len(args)-1, len(args))
 	rows, err := s.pool.Query(s.ctx, q, args...)
 	if err != nil {
@@ -258,7 +267,7 @@ func (s *pgStore) DeviceErrors(from, to time.Time, kind, device string, limit, o
 	var out []DeviceErrorRow
 	for rows.Next() {
 		var r DeviceErrorRow
-		if err := rows.Scan(&r.Device, &r.Kind, &r.Code, &r.Msg, &r.TS); err != nil {
+		if err := rows.Scan(&r.Device, &r.Name, &r.Kind, &r.Code, &r.Msg, &r.TS); err != nil {
 			return nil, fmt.Errorf("pg scan device error: %w", err)
 		}
 		out = append(out, r)

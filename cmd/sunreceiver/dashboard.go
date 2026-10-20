@@ -103,22 +103,6 @@ type dashboardHandler struct {
 	flags dashFlags
 	relay *relayController
 
-	// placements — упорядоченный список размещений сетевых инверторов (Deye/Sofar)
-	// из sunReceiver.json (см. placementOrder). Определяет число и порядок пар плашек
-	// «Суммарная активная / PV» в рамке «Мощности инверторов»: одна пара на каждое
-	// размещение. MPPT-контроллеры (КЭС) в этот список не входят.
-	placements []string
-
-	// placeByIP — размещение инвертора по IP из конфига (надёжный источник).
-	// У устаревшего снимка поле placement может отсутствовать (записано старой
-	// версией до его появления), поэтому группировку анимации строим по конфигу.
-	placeByIP map[string]string
-
-	// invNameByIP — имя сетевого инвертора (Deye/Sofar) по IP из конфига. В
-	// device_errors инверторы хранятся с device = IP; на дашборде (страница ошибок)
-	// показываем имя, а фильтр по имени транслируем в IP.
-	invNameByIP map[string]string
-
 	// single-flight loadRange: одновременные запросы за один и тот же период
 	// (например, /api/series и /api/agm/series с общим [from,to]) схлопываются в
 	// один read из Redis/PG. Результаты между запросами не кэшируются — запись
@@ -311,6 +295,7 @@ type animInverter struct {
 
 // deviceSeries — временной ряд ac_active_power одного инвертора.
 type deviceSeries struct {
+	Serial string        `json:"serial,omitempty"`
 	Name   string        `json:"name"`
 	IP     string        `json:"ip"`
 	Color  string        `json:"color"`
@@ -428,53 +413,20 @@ func isMeterDevice(v valuesContract) bool {
 // выводились после сетевых инверторов.
 func isMPPTKey(ip string) bool { return isKesKey(ip) }
 
-// placementTotals группирует свежие снимки сетевых инверторов (Deye/Sofar) по
-// размещениям (field placement) и считает суммарные активную и PV-мощности.
-// Устройства МАП, MPPT-контроллеры (КЭС) и электросчётчик исключаются — они не
-// участвуют в рамке «Мощности инверторов». Возвращает список размещений В ПОРЯДКЕ,
-// заданном конфигом (order из placementOrder) — каждое размещение присутствует в
-// результате всегда (ноль, если ни один его инвертор не дал свежих данных, напр.
-// ночью), плюс размещения из старых снимков, найденные в данных, но отсутствующие
-// в конфиге (дописываются в конец, дубли исключаются). Плюс общая активная и
-// PV-мощность (сумма по всем размещениям).
-func placementTotals(devices []deviceSnapshot, order []string, staleCutoff time.Time) ([]placementPower, float64, float64) {
-	inOrder := make(map[string]bool, len(order))
-	placeOrder := make([]string, 0, len(order))
-	for _, p := range order {
-		placeOrder = append(placeOrder, p)
-		inOrder[p] = true
-	}
-	// configured — размещения из конфига: они отображаются всегда (с норлём при
-	// отсутствии свежих данных), тогда как «чужие» размещения из старых снимков —
-	// только при наличии данных.
-	configured := make(map[string]bool, len(order))
-	for _, p := range order {
-		configured[p] = true
-	}
-	placePower := map[string]*placementPower{}
-	getPlace := func(name string) *placementPower {
-		if name == "" {
-			name = "Дом"
-		}
-		pp, ok := placePower[name]
-		if !ok {
-			pp = &placementPower{Name: name}
-			placePower[name] = pp
-			if !inOrder[name] {
-				inOrder[name] = true
-				placeOrder = append(placeOrder, name)
-			}
-		}
-		return pp
+// placementTotals группирует свежие снимки сетевых инверторов по размещениям.
+// Плашки выводятся только для «Дом» и «Гараж» (фиксированный порядок); прочие
+// размещения в плашки не попадают. Общие total/totalPV считаются по ВСЕМ
+// инверторам, включая прочие размещения.
+func placementTotals(devices []deviceSnapshot, staleCutoff time.Time) ([]placementPower, float64, float64) {
+	agg := map[string]*placementPower{
+		gridPlacementHouse: {Name: gridPlacementHouse},
+		gridPlacementGar:   {Name: gridPlacementGar},
 	}
 	var total, totalPV float64
 	for _, d := range devices {
-		// Мощности МАП (батарея/сеть), MPPT-контроллеров (КЭС) и электросчётчика в
-		// сумме по инверторам не участвуют: они отображаются на своих плашках/графиках.
 		if isMAPDevice(d.Values) || isMPPTKey(d.IP) || isMeterDevice(d.Values) {
 			continue
 		}
-		// Молчащий (оффлайн) инвертор в текущую сумму не входит.
 		if ts, err := time.Parse(time.RFC3339, d.Timestamp); err != nil || !ts.After(staleCutoff) {
 			continue
 		}
@@ -488,33 +440,45 @@ func placementTotals(devices []deviceSnapshot, order []string, staleCutoff time.
 		if v, ok := snapFloat(d.Values, "pv2_power"); ok {
 			pv += v
 		}
-		pp := getPlace(d.Placement)
-		pp.Power += p
-		pp.PV += pv
 		total += p
 		totalPV += pv
-	}
-	placements := make([]placementPower, 0, len(placeOrder))
-	for _, name := range placeOrder {
-		pp, ok := placePower[name]
-		if !ok {
-			// Размещение из конфига без свежих данных (все инверторы оффлайн) — плашка
-			// выводится с нулями («—»). «Чужие» размещения без данных пропускаем.
-			if !configured[name] {
-				continue
-			}
-			placements = append(placements, placementPower{Name: name})
-			continue
+		if pl := gridPlacement(d.Placement); pl == gridPlacementHouse || pl == gridPlacementGar {
+			agg[pl].Power += p
+			agg[pl].PV += pv
 		}
-		placements = append(placements, placementPower{
+	}
+	out := make([]placementPower, 0, 2)
+	for _, name := range []string{gridPlacementHouse, gridPlacementGar} {
+		pp := agg[name]
+		out = append(out, placementPower{
 			Name:  pp.Name,
 			Power: math.Round(pp.Power*10) / 10,
 			PV:    math.Round(pp.PV*10) / 10,
 		})
 	}
-	return placements,
-		math.Round(total*10) / 10,
-		math.Round(totalPV*10) / 10
+	return out, math.Round(total*10) / 10, math.Round(totalPV*10) / 10
+}
+
+// fillPlacements заполняет пустое Placement у исторических точек текущим
+// размещением того же серийника (после перехода на API placement появился в
+// рядах не сразу). Нужен для формул Дома по старой истории.
+func fillPlacements(snaps []deviceSnapshot) {
+	bySerial := map[string]string{}
+	for _, sn := range snaps {
+		if sn.InverterSN != "" && sn.Placement != "" {
+			bySerial[sn.InverterSN] = sn.Placement
+		}
+	}
+	if len(bySerial) == 0 {
+		return
+	}
+	for i := range snaps {
+		if snaps[i].Placement == "" && snaps[i].InverterSN != "" {
+			if p, ok := bySerial[snaps[i].InverterSN]; ok {
+				snaps[i].Placement = p
+			}
+		}
+	}
 }
 
 func (h *dashboardHandler) charts(w http.ResponseWriter, r *http.Request) {
@@ -729,15 +693,6 @@ func (h *dashboardHandler) apiErrors(w http.ResponseWriter, r *http.Request) {
 	}
 	kind := r.URL.Query().Get("kind")
 	device := r.URL.Query().Get("device")
-	// Фильтр по имени инвертора транслируем в IP: в PG device_errors инверторы
-	// пишутся с device = IP (см. runInverterPoll), а пользователь ищет по имени.
-	if device != "" {
-		if _, isIP := h.invNameByIP[device]; !isIP {
-			if ip, ok := inverterIPByName(h.invNameByIP, device); ok {
-				device = ip
-			}
-		}
-	}
 	// Пагинация: limit/offset — числа; нечисловые/выходящие за границы значения
 	// заменяются безопасными (SQL-инъекция невозможна: параметры передаются через $n).
 	limit := 100
@@ -769,16 +724,6 @@ func (h *dashboardHandler) apiErrors(w http.ResponseWriter, r *http.Request) {
 			log.Printf("dashboard: errors count: %v", err)
 		}
 	}
-	// Наружу показываем имя инвертора вместо IP (в PG device_errors — IP).
-	if len(h.invNameByIP) > 0 {
-		for i := range rows {
-			if rows[i].Kind == "inverter" {
-				if n, ok := h.invNameByIP[rows[i].Device]; ok {
-					rows[i].Device = n
-				}
-			}
-		}
-	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -791,16 +736,6 @@ func (h *dashboardHandler) apiErrors(w http.ResponseWriter, r *http.Request) {
 		"total":  total,
 		"errors": rows,
 	})
-}
-
-// inverterIPByName возвращает IP инвертора по его имени (обратный invNameByIP).
-func inverterIPByName(m map[string]string, name string) (string, bool) {
-	for ip, n := range m {
-		if n == name {
-			return ip, true
-		}
-	}
-	return "", false
 }
 
 // errorsPage — отдельная страница истории ошибок всех устройств.
@@ -1081,10 +1016,8 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sort.SliceStable(devices, func(i, j int) bool {
-		// MPPT-контроллеры — всегда последними; остальные — в порядке конфигурации
-		// (поле order снимка = позиция устройства в sunReceiver.json: инверторы в
-		// порядке invertors, затем МАП). При равных order (напр. старые снимки без order)
-		// — стабильно по имени.
+		// MPPT-контроллеры — всегда последними; сетевые инверторы имеют Order=0 и
+		// сортируются по имени, МАП (9000) — после них. При равных order — по имени.
 		mi, mj := isMPPTKey(devices[i].IP), isMPPTKey(devices[j].IP)
 		if mi != mj {
 			return !mi
@@ -1097,7 +1030,6 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	})
 	var total float64
 	var totalPV float64
-	var placements []placementPower
 	// Напряжение/ток/мощность сети и батареи МАП — из снимков устройства МАП (батарея/сеть).
 	var gridV, gridP, batV, batI, batP float64
 	// Устройство считаем «живым», если снимок не старше 20 минут (то же окно
@@ -1105,11 +1037,11 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	// не входит, а его устаревшее значение (напр. 9 Вт заката) не выставляется
 	// как текущая мощность.
 	staleCutoff := time.Now().Add(-inverterStaleWindow)
-	// Суммарные показатели по размещениям инверторов (группа «Мощности инверторов»):
-	// одна пара плашек «активная + PV» на каждое размещение, имя/порядок — из
-	// placementOrder (sunReceiver.json). MPPT-контроллеры (КЭС), счётчик и МАП в
-	// суммы не входят (см. placementTotals).
-	placements, total, totalPV = placementTotals(devices, h.placements, staleCutoff)
+	// Суммарные показатели по размещениям инверторов («Мощности инверторов»):
+	// плашки только «Дом» и «Гараж» в фиксированном порядке; источник размещения —
+	// API. MPPT-контроллеры (КЭС), счётчик и МАП в суммы не входят.
+	fillPlacements(devices)
+	placements, total, totalPV := placementTotals(devices, staleCutoff)
 	for _, d := range devices {
 		if !isMAPDevice(d.Values) {
 			continue
@@ -1143,7 +1075,7 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 	//   P_дома = Σac(инверторы Дома) + P(сеть) + battery_power
 	// P(сеть) — активная мощность счётчика DDS238, если его снимок не старше
 	// meterGridMaxAge; иначе grid_power МАП (счётчик — общий ввод дома, точнее).
-	// Инверторы Дома — свежие снимки размещения «Дом» (с учётом placeByIP), кроме
+	// Инверторы Дома — свежие снимки размещения «Дом», кроме
 	// МАП, счётчика и MPPT-контроллеров (КЭС). Молчащие инверторы не входят.
 	var houseAC float64
 	var meterGridP float64
@@ -1163,14 +1095,7 @@ func (h *dashboardHandler) apiCurrent(w http.ResponseWriter, r *http.Request) {
 		if ts, err := time.Parse(time.RFC3339, d.Timestamp); err != nil || !ts.After(staleCutoff) {
 			continue
 		}
-		pl := d.Placement
-		if m, ok := h.placeByIP[d.IP]; ok {
-			pl = m
-		}
-		if pl == "" {
-			pl = "Дом"
-		}
-		if pl != "Дом" {
+		if gridPlacement(d.Placement) != gridPlacementHouse {
 			continue
 		}
 		if v, ok := snapFloat(d.Values, "ac_active_power"); ok {
@@ -1346,7 +1271,8 @@ func (h *dashboardHandler) apiAnimation(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	res := buildAnimationResponse(devices, dts017, h.placeByIP, now)
+	fillPlacements(devices)
+	res := buildAnimationResponse(devices, dts017, now)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(res)
@@ -1361,7 +1287,7 @@ func (h *dashboardHandler) apiAnimation(w http.ResponseWriter, r *http.Request) 
 // Устройства со снимком
 // старше окна (20 мин) помечаются Stale — клиент показывает их мощность нулём
 // (ночью инверторы/КЭС не отдают данные).
-func buildAnimationResponse(devices []deviceSnapshot, dts017 *dts017Snapshot, placeByIP map[string]string, now time.Time) animationResponse {
+func buildAnimationResponse(devices []deviceSnapshot, dts017 *dts017Snapshot, now time.Time) animationResponse {
 	// Сортируем как apiCurrent: MPPT — последними, остальные по Order.
 	sort.SliceStable(devices, func(i, j int) bool {
 		mi, mj := isMPPTKey(devices[i].IP), isMPPTKey(devices[j].IP)
@@ -1454,20 +1380,13 @@ func buildAnimationResponse(devices []deviceSnapshot, dts017 *dts017Snapshot, pl
 		if inv.Stale { // молчащее устройство: мощности считаем нулевыми
 			inv.PV, inv.AC = 0, 0
 		}
-		// Размещение: приоритет у конфига (у устаревшего снимка placement может
-		// отсутствовать); пустое → «Дом».
-		pl := d.Placement
-		if m, ok := placeByIP[d.IP]; ok {
-			pl = m
-		}
-		if pl == "" {
-			pl = "Дом"
-		}
-		switch pl {
-		case "Гараж":
+		switch gridPlacement(d.Placement) {
+		case gridPlacementGar:
 			garage.Inverters = append(garage.Inverters, inv)
-		default: // «Дом» (в т.ч. пустое)
+		case gridPlacementHouse:
 			house.Inverters = append(house.Inverters, inv)
+		default:
+			// Прочие размещения в схемах анимации не участвуют.
 		}
 	}
 
@@ -1554,7 +1473,7 @@ func freshGarageMeterPower(dts017 *dts017Snapshot, now time.Time) (float64, bool
 }
 
 // inverterKind определяет марку сетевого инвертора по снимку: поле Kind задаётся
-// пулером из конфига (invTarget.Kind) и содержит "deye"/"sofar"/"kes". Для
+// пулером (grid_poller/malina26) и содержит "deye"/"sofar"/"kes". Для
 // старых снимков без Kind — эвристика по тегам: наличие dc_total_power (тег только
 // у Deye) → deye, иначе sofar. Используется для выбора спрайта на странице анимации.
 func inverterKind(v valuesContract, kind string) string {
@@ -1782,14 +1701,17 @@ func groupInverterSeries(snaps []deviceSnapshot) []deviceSeries {
 		key := snapKey(sn)
 		ds, ok := byKey[key]
 		if !ok {
-			ds = &deviceSeries{IP: sn.IP, Name: sn.Name}
+			ds = &deviceSeries{Serial: key, IP: sn.IP, Name: sn.Name}
 			byKey[key] = ds
 		}
 		if ds.Name == "" {
 			ds.Name = sn.Name
 		}
 		if ds.IP == "" {
-			ds.IP = sn.IP // ip — информационное (для истории PG может прийти из любой точки)
+			ds.IP = sn.IP // ip — информационное (для grid пустой: источник — API)
+		}
+		if ds.Serial == "" {
+			ds.Serial = key
 		}
 		ds.Points = append(ds.Points, seriesPoint{T: sn.Timestamp, V: v})
 	}
@@ -1853,6 +1775,10 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Исторические точки до появления placement в рядах получают текущее
+	// размещение по серийнику — иначе формула Дома для старой истории считала бы
+	// все инверторы «Домом».
+	fillPlacements(snaps)
 	res := seriesResponse{
 		GeneratedAt: now.Format(time.RFC3339),
 		From:        from.Format(time.RFC3339),
@@ -1874,10 +1800,10 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	res.MapCons = sumSeries(res.MapGridPower, res.MapBatPower)
 
 	// Ряд «Мощность дома» — по формуле анимации Дома: Σac инверторов Дома (по
-	// размещению из конфига, пустое → «Дом») + grid_power + battery_power. Знаки
+	// размещению из API) + grid_power + battery_power. Знаки
 	// как в контракте (как на странице анимации Дома). Второй возвращаемый ряд —
 	// только Σac инверторов Дома (вклад Дома в формулу, отдельная линия).
-	res.HousePower, res.HouseInverterPower = housePowerSeries(snaps, h.placeByIP)
+	res.HousePower, res.HouseInverterPower = housePowerSeries(snaps)
 
 	// Ряды электросчётчика DDS238: напряжение и активная мощность для наложения
 	// на графики напряжений и мощностей (белые линии счётчика). Маркер устройства —
@@ -2042,13 +1968,13 @@ func sumSeries(a, b []seriesPoint) []seriesPoint {
 // в sumActive: инверторы опрашиваются параллельно и присылают снимки с разным
 // сдвигом, поэтому складывается последнее известное значение каждого инвертора
 // Дома на этот момент, с окном актуальности inverterStaleWindow). Размещение
-// берётся из конфига (placeByIP), пустое → «Дом», MPPT-контроллеры (КЭС) и
+// берётся из снимка (placement из API, пустое → «Дом»), MPPT-контроллеры и
 // счётчик в сумму не входят (как в buildAnimationResponse).
 //
 // Возвращает два ряда на общей сетке МАП: house (полная мощность Дома) и ac
 // (суммарная активная мощность инверторов Дома — отдельная линия на графике
 // «Мощности», чтобы был виден вклад Дома в формулу).
-func housePowerSeries(snaps []deviceSnapshot, placeByIP map[string]string) (house, ac []seriesPoint) {
+func housePowerSeries(snaps []deviceSnapshot) (house, ac []seriesPoint) {
 	const staleWindow = inverterStaleWindow
 	type invRec struct {
 		ts  time.Time
@@ -2066,14 +1992,7 @@ func housePowerSeries(snaps []deviceSnapshot, placeByIP map[string]string) (hous
 		if !ok {
 			continue
 		}
-		pl := sn.Placement
-		if m, ok := placeByIP[sn.IP]; ok {
-			pl = m
-		}
-		if pl == "" {
-			pl = "Дом"
-		}
-		if pl != "Дом" {
+		if gridPlacement(sn.Placement) != gridPlacementHouse {
 			continue
 		}
 		ts, err := time.Parse(time.RFC3339, sn.Timestamp)
@@ -3500,8 +3419,8 @@ func writeJSONResponse(w http.ResponseWriter, v any) {
 // serveDashboard — HTTP-сервер веб-дашборда. При закрытии stop аккуратно
 // завершает сервер (http.Server.Shutdown, бюджет 5 с), чтобы main мог закрыть
 // пулы Redis/PG после завершения всех фоновых горутин (bgWg).
-func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayController, stop context.Context, flags dashFlags, placements []string, placeByIP map[string]string, invNameByIP map[string]string, authUser, authPass string) {
-	h := &dashboardHandler{store: store, pg: pg, flags: flags, relay: relay, placements: placements, placeByIP: placeByIP, invNameByIP: invNameByIP}
+func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayController, stop context.Context, flags dashFlags, authUser, authPass string) {
+	h := &dashboardHandler{store: store, pg: pg, flags: flags, relay: relay}
 	// Внутренние страницы (индекс/графики) открыты; данные и управление —
 	// в `/api/*`, защищаются HTTP Basic (если заданы учётные данные).
 	pages := map[string]http.HandlerFunc{

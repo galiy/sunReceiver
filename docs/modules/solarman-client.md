@@ -1,5 +1,9 @@
 # Модуль `internal/solarman/` — клиент протокола Solarman V5
 
+> **С 2026-10-20 прямой опрос сетевых инверторов удалён**: данные приходят через
+> API «Малина26» (`grid_poller.go`). Пакет используется только счётчиками
+> (`CRC16Modbus`) и диагностикой `cmd/probe`.
+
 Пакет-клиент WiFi-даталоггеров (Solarman LSW-3/LSE, TCP 8899). Работает поверх
 протокола, описанного в [research/solarman-v5.md](../research/solarman-v5.md)
 (формат кадра, datafield Sofar/Deye, коды ошибок, CRC).

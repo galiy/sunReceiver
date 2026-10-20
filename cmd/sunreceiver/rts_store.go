@@ -89,11 +89,11 @@ func tsLabelArgs(pairs [][2]string) []any {
 // tsEnsure создаёт серию с метками (идемпотентно). Возвращает ключ. Пустые метки
 // не добавляются. Метки НЕ «замораживаются»: при изменении (name/ip/device_sn)
 // обновляются через TS.ALTER. При сбое TS.CREATE — негативный бэкофф (не спамим).
-func (s *redisStore) tsEnsure(kind, device, name, ip, deviceSN, tag string) string {
+func (s *redisStore) tsEnsure(kind, device, name, ip, deviceSN, placement, tag string) string {
 	key := tsKey(kind, device, tag)
-	sig := strings.Join([]string{kind, device, name, ip, deviceSN, tag}, "\x1f")
+	sig := strings.Join([]string{kind, device, name, ip, deviceSN, placement, tag}, "\x1f")
 	pairs := [][2]string{{"kind", kind}, {"device", device}, {"tag", tag},
-		{"name", name}, {"ip", ip}, {"device_sn", deviceSN}}
+		{"name", name}, {"ip", ip}, {"device_sn", deviceSN}, {"placement", placement}}
 
 	s.tsMu.Lock()
 	cur, created := s.tsCreated[key]
@@ -149,7 +149,7 @@ func (s *redisStore) tsEnsure(kind, device, name, ip, deviceSN, tag string) stri
 }
 
 // tsAdd кладёт точку в серию (pipeline). Создаёт серию при необходимости.
-func (s *redisStore) tsAdd(pipe redis.Pipeliner, kind, device, name, ip, deviceSN, tag string, ts time.Time, v float64) {
+func (s *redisStore) tsAdd(pipe redis.Pipeliner, kind, device, name, ip, deviceSN, placement, tag string, ts time.Time, v float64) {
 	if math.IsNaN(v) || math.IsInf(v, 0) {
 		return
 	}
@@ -162,16 +162,16 @@ func (s *redisStore) tsAdd(pipe redis.Pipeliner, kind, device, name, ip, deviceS
 	if skip {
 		return
 	}
-	key = s.tsEnsure(kind, device, name, ip, deviceSN, tag)
+	key = s.tsEnsure(kind, device, name, ip, deviceSN, placement, tag)
 	pipe.Do(s.ctx, "TS.ADD", key, ts.UnixMilli(), strconv.FormatFloat(v, 'g', -1, 64),
 		"ON_DUPLICATE", "LAST")
 }
 
 // tsAddValueContract пишет все числовые теги контракта.
-func (s *redisStore) tsAddValueContract(pipe redis.Pipeliner, kind, device, name, ip, deviceSN string, ts time.Time, vc valuesContract) {
+func (s *redisStore) tsAddValueContract(pipe redis.Pipeliner, kind, device, name, ip, deviceSN, placement string, ts time.Time, vc valuesContract) {
 	for tag := range vc {
 		if v, ok := vcFloat(vc, tag); ok {
-			s.tsAdd(pipe, kind, device, name, ip, deviceSN, tag, ts, v)
+			s.tsAdd(pipe, kind, device, name, ip, deviceSN, placement, tag, ts, v)
 		}
 	}
 }
@@ -332,12 +332,13 @@ func tsGroupSnapshots(series []tsSeries) []deviceSnapshot {
 		ip := tsLabelUnescape(ser.Labels["ip"])
 		kind := ser.Labels["kind"]
 		deviceSN := tsLabelUnescape(ser.Labels["device_sn"])
+		placement := tsLabelUnescape(ser.Labels["placement"])
 		tag := tsLabelUnescape(ser.Labels["tag"])
 		for _, p := range ser.Points {
 			k := dk{dev, p.TS}
 			sn := byKey[k]
 			if sn == nil {
-				sn = &deviceSnapshot{Name: name, IP: ip, Kind: kind, DeviceSN: deviceSN, Timestamp: time.UnixMilli(p.TS).Format(time.RFC3339), Values: valuesContract{}}
+				sn = &deviceSnapshot{Name: name, IP: ip, Kind: kind, DeviceSN: deviceSN, Placement: placement, Timestamp: time.UnixMilli(p.TS).Format(time.RFC3339), Values: valuesContract{}}
 				byKey[k] = sn
 			}
 			if sn.Name == "" {
@@ -351,6 +352,9 @@ func tsGroupSnapshots(series []tsSeries) []deviceSnapshot {
 			}
 			if sn.DeviceSN == "" {
 				sn.DeviceSN = deviceSN
+			}
+			if sn.Placement == "" {
+				sn.Placement = placement
 			}
 			if sn.InverterSN == "" && (kind == deyeBrand.name || kind == sofarBrand.name) {
 				sn.InverterSN = dev

@@ -61,6 +61,9 @@ const (
 
 	// Порядок МАП на дашборде (инверторы — 0..N, MPPT — mpptOrderBase+slot).
 	malina26MapOrder = 9000
+
+	// gridPollInterval — фиксированный период опроса сетевых инверторов через API.
+	gridPollInterval = 5 * time.Second
 )
 
 // malina26Source — клиент API «Малина26»: токен, найденный МАП (id+gen) и КЭС.
@@ -92,13 +95,14 @@ type malina26Source struct {
 var malina26 *malina26Source
 
 // loadMalina26 собирает источник из плоского раздела map. Возвращает nil, если
-// раздел отключён или неполный (тогда опрос не запускается).
+// раздел отключён или неполный. serial «своего» МАП нужен только для опроса
+// МАП/КЭС; сетевые инверторы (grid) работают и при пустом serial.
 func loadMalina26(sec *mapSection) *malina26Source {
 	if sec == nil || (sec.Disabled != nil && *sec.Disabled) {
 		return nil
 	}
-	if sec.Host == "" || sec.Password == "" || strings.TrimSpace(sec.Serial) == "" {
-		log.Printf("map: раздел неполный (нужны host, password, serial) — опрос не запускается")
+	if sec.Host == "" || sec.Password == "" {
+		log.Printf("map: раздел неполный (нужны host, password) — опрос не запускается")
 		return nil
 	}
 	port := sec.Port

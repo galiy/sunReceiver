@@ -50,7 +50,7 @@ func (s *redisStore) SaveDts017Current(snap dts017Snapshot) error {
 func (s *redisStore) SaveDts017Series(snap dts017Snapshot, ts time.Time) error {
 	pipe := s.rdb.TxPipeline()
 	for tag, v := range snap.Values {
-		s.tsAdd(pipe, "dts017m", snap.Name, snap.Name, "", "", tag, ts, v)
+		s.tsAdd(pipe, "dts017m", snap.Name, snap.Name, "", "", "", tag, ts, v)
 	}
 	if _, err := pipe.Exec(s.ctx); err != nil {
 		return fmt.Errorf("save dts017 series %s: %w", snap.Name, err)

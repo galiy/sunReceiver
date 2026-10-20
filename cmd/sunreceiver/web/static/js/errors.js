@@ -44,7 +44,8 @@ async function loadErrors(resetOffset){
       if(!desc) desc=x.msg||x.code;
       if(x.msg && x.msg!==desc) desc=desc+' · '+x.msg;
       if(desc===x.code) desc='—'; // не дублировать «Код»
-      h+='<tr><td>'+esc(fmtTs(x.ts))+'</td><td>'+esc(KIND_LABEL[x.kind]||x.kind)+'</td><td>'+esc(x.device)+'</td><td>'+esc(x.code)+'</td><td>'+esc(desc)+'</td></tr>';
+      var dev=(x.name&&x.name!==x.device)?x.name+' ('+x.device+')':(x.name||x.device);
+      h+='<tr><td>'+esc(fmtTs(x.ts))+'</td><td>'+esc(KIND_LABEL[x.kind]||x.kind)+'</td><td>'+esc(dev)+'</td><td>'+esc(x.code)+'</td><td>'+esc(desc)+'</td></tr>';
     }
     h+='</tbody></table>';
     body.innerHTML=h;

@@ -54,7 +54,7 @@ func (s *redisStore) saveMapSnapshot(snap deviceSnapshot, ts time.Time) error {
 	}
 	pipe := s.rdb.TxPipeline()
 	pipe.HSet(s.ctx, redisMapCurrentKey, mapDevKey, b)
-	s.tsAddValueContract(pipe, "map", mapDevKey, snap.Name, "", snap.DeviceSN, ts, snap.Values)
+	s.tsAddValueContract(pipe, "map", mapDevKey, snap.Name, "", snap.DeviceSN, "", ts, snap.Values)
 	if _, err := pipe.Exec(s.ctx); err != nil {
 		return fmt.Errorf("save map: %w", err)
 	}

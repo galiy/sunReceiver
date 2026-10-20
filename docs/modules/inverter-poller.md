@@ -1,83 +1,69 @@
-# Модуль poller инверторов (`main.go`)
+# Сетевые инверторы через API «Малина26»
 
-`main.go` — точка входа и poller Deye/Sofar-инверторов. Каждый инвертор опрашивается
-в своём независимом цикле `runInverterPoll` (раз в 10 с), так что завис/таймаутил
-одно устройство — остальные продолжают без влияния; снимок пишется в Redis сразу по
-готовности с фактическим временем.
+Модуль `grid_poller.go`. Сетевые инверторы Deye/Sofar больше **не опрашиваются
+напрямую** (Solarman V5 из sunReceiver удалён). Единственный источник — HTTP-API
+«Малина26». Настроек инверторов в `sunReceiver.json` нет: имя, размещение, тип и
+серийник приходят из API.
 
-## Цели и конфиг
+## Источники
 
-Список целей читается из **`sunReceiver.json` рядом с бинарником**
-(`os.Executable()`; при `go run ./cmd/sunreceiver` — fallback в CWD) через `loadConfig` в
-`targets []invTarget` {IP, Name, LoggerSN, Kind}:
+- `GET /api/grid/status` — список инверторов:
+  `id, gen, serial, addr, kind, status, last_seen, name, placement`.
+- `GET /api/grid/device?serial=<serial>` — снимок: `serial, name, placement,
+  type, kind, gen, status, inverter_status, last_seen, energy_today,
+  energy_total, fields[1..24], alarm_words, alarms`.
+  Значения в `fields` уже приведены к физическим единицам (В, А, Вт, вар, Гц,
+  °C, кВт·ч) — повторный масштаб не применяется.
+- Транспорт (host/port/password) — из раздела `map`; `map.disabled=true`
+  отключает и сетевые инверторы. `map.serial` для grid не требуется.
 
-- раздел `invertors` → `type` "deye"→`kindDeyeString`, "sofar"→`kindSofar`
-  (поле `disabled` обязательно; `true` — пропускается);
-- блок `map` → МАП/КЭС через API «Малина26» (КЭС в конфиг НЕ задаётся,
-  появляется динамически, см. [map-mppt.md](map-mppt.md)).
+## Опрос
 
-Название — «логическое имя» инвертора (обязательное поле, напр. `Deye Left`,
-`Sofar-2.5`, `Bineos Right`; для КЭС/MPPT генерируется как `MPPT-<serial>`). Опрос:
-Deye — реальный SN даталоггера (`ReadRegistersDeye`); Sofar — тоже
-`ReadRegistersDeye` с 15-байтным datafield и реальным SN (12-байтный
-`ReadRegisters`/`BuildReadFrame` Sofar LSW-3 отвечает только heartbeat с кодом 0x05).
+- Период — фиксированные 5 с (константа `gridPollInterval`).
+- Каждый цикл: список, затем параллельный забор снимков (до 6 воркеров) с
+  дедлайном цикла; не успевшие устройства пропускают цикл.
+- Устройства с пустым `serial` или `last_seen=0` пропускаются.
+- Время точки — `last_seen` из API. В историю точка пишется только при
+  продвижении `last_seen`; current обновляется каждый цикл. Офлайн-инвертор
+  становится stale (окно `inverterStaleWindow`).
 
-## Маппинг регистров
+## Маппинг в `values`
 
-- Sofar — `mapSofarRegisters` (0x0000–0x0027), фильтрация сбойных блоков
-  `probableSofarBlock`. Полный маппинг — [research/sofar-registers.md](../research/sofar-registers.md).
-- Deye string — `deyeRegMap`/`mapDeyeRegisters` (у каждого сенсора `Tag` — имя
-  контракта в values). Полный маппинг — [research/deye-registers.md](../research/deye-registers.md).
+Поля `fields[]` сопоставляются по `name_key` (срез префикса `stats.f.grid.`):
 
-## Универсальный контракт `values`
+| Поле API | Тег `values` |
+|---|---|
+| `pv1_voltage/current/power`, `pv2_*` | одноимённые |
+| `ac_active_power`, `ac_reactive_power`, `grid_frequency` | одноимённые |
+| `l1/l2/l3_voltage`, `l1/l2/l3_current` | одноимённые |
+| `temperature_1` / `temperature_2` | Deye: `temperature_igbt` / `temperature_radiator`; Sofar: `temperature_module` / `temperature_inner` |
+| `energy_today`, `energy_total` (top-level) | одноимённые (кВт·ч) |
 
-`DeviceResult`/`deviceSnapshot` содержат `values` — **универсальный контракт**
-(`valuesContract`, только общие теги `commonContractTags`), см.
-[universal-contract.md](../universal-contract.md):
+`inverter_status` и `alarm_w0..w5` в `values` **не попадают**. `pv_power` для
+анимации = `pv1_power + pv2_power`.
 
-- округление до 1 знака — `round1`/`needsRounding`;
-- сериализация в фиксированном порядке — `valuesContract.MarshalJSON`;
-- маппинг Sofar — `mapSofarRegisters` (`putSofarSimple`/`putSofarU32`), фильтр
-  сбойных блоков — `probableSofarBlock` (физические пороги + мин. размер ≥20
-  регистров);
-- маппинг Deye — `mapDeyeRegisters`.
+## Идентичность и хранение
 
-## Маппинг МАП/MPPT
+- Ключ — серийник инвертора (`serial` API = аппаратный `inverter_sn`),
+  нормализуется `normalizeInverterSN` (срез хвостовых `V<цифры>` у Sofar).
+- Redis: `sunreceiver:deye:current` / `sunreceiver:sofar:current`,
+  `sunreceiver:ts:<kind>:<serial>:<tag>` (метки `kind/device/tag/name/ip/
+  device_sn/placement`).
+- PG: `deye_averages_r` / `sofar_averages_r`, PK `(serial, ts)`, мета
+  `name/device_sn/ip/placement`.
+- Старые ряды продолжаются без переименования; для исторических точек без
+  `placement` при чтении подставляется текущее размещение по серийнику.
 
-`decodeMalina26Map`/`decodeMalina26KES` — значения МАП/MPPT в тот же контракт,
-см. [map-mppt.md](map-mppt.md).
+## Ошибки
 
-## Серийные номера в снимке
+Аварии берутся из `alarms[]` (резерв — непустые `alarm_words[]`) и пишутся в
+`sunreceiver.device_errors` только появлением: `device=serial`, `name` — имя,
+`kind=inverter`, `code` — код аварии API.
 
-- `device_sn` — SN даталоггера, **десятичный**, из поля кадра `DeviceSN`.
-- `inverter_sn` — SN самого инвертора: для Deye — ASCII-строка в регистрах
-  **0x0003–0x0007**; для Sofar — ASCII-строка HW-диапазона func **04 0x2000–0x200D**
-  (может быть строкой, не числом). Сборка — `asciiFromRegisters`, обрезка суффикса
-  версий — `trimSofarVersions`. При выключенном инверторе регистры SN читаются
-  нулями (`asciiFromRegisters` → ""), поэтому `runInverterPoll` до сохранения
-  снимка **донасывает** отсутствующие `inverter_sn`/`device_sn` из предыдущего
-  снимка (`redisStore.CurrentOne` — аппаратный номер постоянен).
+## Дашборд
 
-## Чистое завершение
-
-По сигналу main закрывает `stopBG`, ждёт завершения ВСЕХ фоновых горутин
-(`bgWg.Wait()` — инверторы, аккумулятор, чистка, МАП/MPPT, BMS, счётчик,
-реставрация, дашборд через `http.Server.Shutdown`, бюджет 5 с) и только потом
-defer'ы закрывают пулы Redis/PG — записи при остановке не гоняются с `pool close`.
-
-## Настройки (из `sunReceiver.json`)
-
-Флагов CLI нет. Всё берётся из конфига: адреса БД — раздел `db`
-(`redis`, `pg`; пустой `pg` выключает PG), `pg_restore_window` (по умолч. `720h`;
-`restoreRedisFromPG` всё равно обрезает окно до `recentCutoff`), порт дашборда —
-обязательное `dashboard_port`.
-
-## Связанные документы
-
-- [Клиент Solarman V5](solarman-client.md) — пакет `internal/solarman/`.
-- [research/solarman-v5.md](../research/solarman-v5.md) — протокол и поведение живых
-  логгеров.
-- [research/sofar-registers.md](../research/sofar-registers.md),
-  [research/deye-registers.md](../research/deye-registers.md) — маппинг регистров.
-- [universal-contract.md](../universal-contract.md) — контракт `values`.
-- [МАП/MPPT](map-mppt.md), [BMS26](bms26.md) — прочие типы целей.
+- «Дом» и «Гараж» — в схемах анимации, формуле `house_power`/ряде
+  `house_inverter_power` и плашках «Мощности инверторов».
+- Прочие размещения — только в «Сумме», «Активной мощности по инверторам» и
+  «Температурах».
+- Порядок — по имени; длина/раскладка шины — автоматически.

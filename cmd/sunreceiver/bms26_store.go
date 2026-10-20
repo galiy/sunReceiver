@@ -61,15 +61,15 @@ func (s *redisStore) SaveBms26Series(sn bms26Snapshot, ts time.Time) error {
 		name = sn.Serial
 	}
 	pipe := s.rdb.TxPipeline()
-	s.tsAddValueContract(pipe, "bms26", sn.Serial, name, "", "", ts, bms26ScalarVC(sn))
+	s.tsAddValueContract(pipe, "bms26", sn.Serial, name, "", "", "", ts, bms26ScalarVC(sn))
 	for i, v := range sn.CellsV {
-		s.tsAdd(pipe, "bms26", sn.Serial, name, "", "", fmt.Sprintf("cell_%d", i+1), ts, v)
+		s.tsAdd(pipe, "bms26", sn.Serial, name, "", "", "", fmt.Sprintf("cell_%d", i+1), ts, v)
 	}
 	for i, v := range sn.TemperaturesC {
-		s.tsAdd(pipe, "bms26", sn.Serial, name, "", "", fmt.Sprintf("temp_%d", i+1), ts, v)
+		s.tsAdd(pipe, "bms26", sn.Serial, name, "", "", "", fmt.Sprintf("temp_%d", i+1), ts, v)
 	}
 	for i, v := range sn.AlarmBytes {
-		s.tsAdd(pipe, "bms26", sn.Serial, name, "", "", fmt.Sprintf("alarm_%d", i+1), ts, float64(v))
+		s.tsAdd(pipe, "bms26", sn.Serial, name, "", "", "", fmt.Sprintf("alarm_%d", i+1), ts, float64(v))
 	}
 	if _, err := pipe.Exec(s.ctx); err != nil {
 		return fmt.Errorf("save bms26 series %s: %w", sn.Serial, err)

@@ -169,8 +169,8 @@ func insertAverageBucket(pg *pgStore, start time.Time, snaps []deviceSnapshot) {
 		byKey[k] = append(byKey[k], sn)
 	}
 	type row struct {
-		key, kind, ip, name, deviceSN string
-		vc                            valuesContract
+		key, kind, ip, name, deviceSN, placement string
+		vc                                       valuesContract
 	}
 	rows := make([]row, 0, len(byKey))
 	for _, group := range byKey {
@@ -180,7 +180,7 @@ func insertAverageBucket(pg *pgStore, start time.Time, snaps []deviceSnapshot) {
 		}
 		// В маршрутизацию/запись идёт ГОЛЫЙ ключ устройства (snapKey), а составной
 		// accBucketKeyOf (marka+snapKey) — только ключ группировки выше.
-		rows = append(rows, row{key: snapKey(group[0]), kind: group[0].Kind, ip: group[0].IP, name: group[0].Name, deviceSN: group[0].DeviceSN, vc: vc})
+		rows = append(rows, row{key: snapKey(group[0]), kind: group[0].Kind, ip: group[0].IP, name: group[0].Name, deviceSN: group[0].DeviceSN, placement: group[0].Placement, vc: vc})
 	}
 	if len(rows) == 0 {
 		return
@@ -189,7 +189,7 @@ func insertAverageBucket(pg *pgStore, start time.Time, snaps []deviceSnapshot) {
 		return pg.withTx(func(q pgExecer) error {
 			for _, r := range rows {
 				if b := invBrandByKind(r.kind); b != nil {
-					if err := insertInvAveragedExec(q, pg.ctx, *b, r.key, r.ip, r.name, start, r.deviceSN, r.vc); err != nil {
+					if err := insertInvAveragedExec(q, pg.ctx, *b, r.key, r.ip, r.name, r.placement, start, r.deviceSN, r.vc); err != nil {
 						return err
 					}
 					continue

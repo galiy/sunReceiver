@@ -78,7 +78,6 @@ func distinctVals(out []seriesPoint) []float64 {
 func TestPlacementTotals(t *testing.T) {
 	now := time.Now()
 	old := now.Add(-time.Hour)
-	order := []string{"Дом", "Гараж", "Склад"} // «Склад» — размещение без свежих устройств
 	device := func(name, ip, placement string, ts time.Time, power, pv float64) deviceSnapshot {
 		return deviceSnapshot{
 			Timestamp: ts.Format(time.RFC3339),
@@ -100,11 +99,11 @@ func TestPlacementTotals(t *testing.T) {
 		// Оффлайн-инвертор (старый снимок) — не входит.
 		device("Deye Off", "10.0.0.4", "Дом", old, 500, 500),
 	}
-	got, total, totalPV := placementTotals(devices, order, now.Add(-20*time.Minute))
-	if len(got) != 3 {
-		t.Fatalf("want 3 placements, got %v", got)
+	got, total, totalPV := placementTotals(devices, now.Add(-20*time.Minute))
+	if len(got) != 2 {
+		t.Fatalf("want 2 placements, got %v", got)
 	}
-	if got[0].Name != "Дом" || got[1].Name != "Гараж" || got[2].Name != "Склад" {
+	if got[0].Name != "Дом" || got[1].Name != "Гараж" {
 		t.Fatalf("placement order wrong: %v", got)
 	}
 	if got[0].Power != 107 || got[0].PV != 118 {
@@ -112,9 +111,6 @@ func TestPlacementTotals(t *testing.T) {
 	}
 	if got[1].Power != 50 || got[1].PV != 60 {
 		t.Fatalf("Гараж totals wrong: %v", got[1])
-	}
-	if got[2].Power != 0 || got[2].PV != 0 {
-		t.Fatalf("Склад (без свежих данных) должен быть с нулями: %v", got[2])
 	}
 	if total != 157 || totalPV != 178 {
 		t.Fatalf("overall totals wrong: %v / %v", total, totalPV)
@@ -129,38 +125,29 @@ func vals(out []seriesPoint) []float64 {
 	return vs
 }
 
-// TestPlacementOrder проверяет порядок размещений для рамки «Мощности инверторов»:
-// только сетевые инверторы (Deye/Sofar), по первому появлению в конфиге, пустое
-// размещение приводится к «Дом», а MPPT (КЭС) и МАП в список не попадают.
-func TestPlacementOrder(t *testing.T) {
-	targets := []invTarget{
-		{Name: "Sofar A", Kind: kindSofar, Placement: "Гараж"},
-		{Name: "MAP", Kind: kindMAP},
-		{Name: "MPPT 0", Kind: kindMPPT, IP: "mppt-0"},
-		{Name: "Deye B", Kind: kindDeyeString, Placement: "Гараж"},
-		{Name: "Sofar C", Kind: kindSofar, Placement: ""}, // пусто → «Дом»
+// TestPlacementTotalsFixed проверяет плашки «Мощности инверторов»: только
+// «Дом» и «Гараж» в фиксированном порядке; прочие размещения учитываются в общей
+// сумме, но своих плашек не получают.
+func TestPlacementTotalsFixed(t *testing.T) {
+	now := time.Now()
+	ts := now.Add(-time.Minute).Format(time.RFC3339)
+	devices := []deviceSnapshot{
+		{Name: "A", InverterSN: "1", Kind: "deye", Placement: "Дом", Timestamp: ts,
+			Values: valuesContract{"ac_active_power": 100.0, "pv1_power": 10.0}},
+		{Name: "B", InverterSN: "2", Kind: "deye", Placement: "Гараж", Timestamp: ts,
+			Values: valuesContract{"ac_active_power": 50.0}},
+		{Name: "C", InverterSN: "3", Kind: "sofar", Placement: "Склад", Timestamp: ts,
+			Values: valuesContract{"ac_active_power": 25.0}},
+		{Name: "MAP", Kind: "map", Timestamp: ts, Values: valuesContract{"battery_voltage": 50.0}},
 	}
-	got := placementOrder(targets)
-	want := []string{"Гараж", "Дом"}
-	if len(got) != len(want) {
-		t.Fatalf("placementOrder: want %v, got %v", want, got)
+	plates, total, totalPV := placementTotals(devices, now.Add(-20*time.Minute))
+	if len(plates) != 2 || plates[0].Name != "Дом" || plates[1].Name != "Гараж" {
+		t.Fatalf("plates: want [Дом Гараж], got %+v", plates)
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("placementOrder[%d]: want %q, got %q (full %v)", i, want[i], got[i], got)
-		}
+	if plates[0].Power != 100 || plates[0].PV != 10 || plates[1].Power != 50 || plates[1].PV != 0 {
+		t.Fatalf("plates values: %+v", plates)
 	}
-}
-
-// TestPlacementOrderDefaultHome — все инверторы без размещения сводятся к единственному
-// размещению «Дом».
-func TestPlacementOrderDefaultHome(t *testing.T) {
-	targets := []invTarget{
-		{Name: "A", Kind: kindDeyeString},
-		{Name: "B", Kind: kindSofar},
-	}
-	got := placementOrder(targets)
-	if len(got) != 1 || got[0] != "Дом" {
-		t.Fatalf("placementOrder: want [Дом], got %v", got)
+	if total != 175 || totalPV != 10 {
+		t.Fatalf("totals: want 175/10, got %v/%v", total, totalPV)
 	}
 }

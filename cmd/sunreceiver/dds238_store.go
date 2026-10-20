@@ -51,7 +51,7 @@ func (s *redisStore) SaveDds238Current(snap deviceSnapshot) error {
 // (дедуп по score).
 func (s *redisStore) SaveDds238Series(snap deviceSnapshot, ts time.Time) error {
 	pipe := s.rdb.TxPipeline()
-	s.tsAddValueContract(pipe, "dds238", meterDeviceKey, snap.Name, "", snap.DeviceSN, ts, snap.Values)
+	s.tsAddValueContract(pipe, "dds238", meterDeviceKey, snap.Name, "", snap.DeviceSN, "", ts, snap.Values)
 	if _, err := pipe.Exec(s.ctx); err != nil {
 		return fmt.Errorf("save dds238 series: %w", err)
 	}

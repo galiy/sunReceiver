@@ -12,8 +12,8 @@
 
 # sunReceiver
 
-Go-приложение мониторинга домашней солнечной станции. Опрашивает инверторы
-(Deye, Sofar) через их WiFi-даталоггеры (Solarman V5, TCP 8899), МАП Титанатор
+Go-приложение мониторинга домашней солнечной станции. Получает данные сетевых
+инверторов (Deye, Sofar) через HTTP-API «Малина26», опрашивает МАП Титанатор
 (батарея/сеть), MPPT-контроллеры «КЭС» (веб-API ПАК «Малина» или новый API
 «Малина26») и электросчётчик
 DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), нормализует всё в единый
@@ -28,15 +28,15 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 
 Данные текут: **устройство → poller → Redis (сразу) → аккумулятор → PG (5-мин
 усреднённые точки) → дашборд (чтение)**. Опрос ведут независимые горутины
-(инверторы — раз в 10 с; МАП/КЭС/BMS — раз в 1 с). Дашборд только читает
+(сетевые инверторы — раз в 5 с; МАП/КЭС/BMS — раз в 1 с). Дашборд только читает
 марочные `current`/`series` (Redis) и `*_averages` (PG).
 
 ## Модули системы
 
 | Модуль | Что делает | Подробное описание |
 |---|---|---|
-| **internal/solarman/** | Клиент протокола Solarman V5: сборка кадра (Sofar/Deye), разбор ответа, CRC/checksum, чтение регистров, коды ошибок логгера | [modules/solarman-client.md](modules/solarman-client.md) |
-| **Poller инверторов** (`main.go`) | Опрос Deye/Sofar раз в 10 с в независимых циклах, маппинг регистров в `values` (Sofar/Deye), серийные номера, чистое завершение | [modules/inverter-poller.md](modules/inverter-poller.md) |
+| **internal/solarman/** | Клиент Solarman V5; после перехода на API используется только счётчиками (`CRC16Modbus`) и диагностикой `cmd/probe` | [modules/solarman-client.md](modules/solarman-client.md) |
+| **Сетевые инверторы** (`grid_poller.go`) | Опрос через API «Малина26» (`/api/grid/status` + `/api/grid/device?serial=`) раз в 5 с, маппинг в `values`, имя/размещение/серийник из API | [modules/inverter-poller.md](modules/inverter-poller.md) |
 | **Хранение** (`redis_store.go`, `pg_store.go`, `accumulator.go`, `bms26_store.go`, `bms_accumulator.go`) | Redis (2 суток, live) + PG (5-мин средние, вечно), фоновые аккумуляторы/очистка, реставрация Redis из PG при пустом старте | [modules/storage.md](modules/storage.md) |
 | **Веб-дашборд** (`dashboard.go`, `cmd/sunreceiver/web/`, `go:embed`) | HTML + JSON API (`/`, `/charts`, `/energy`, `/bms/<name>`) поверх Redis/PG, зум/панорама, offline-индикация, mobile-раскладка; шаблоны/статика (`cmd/sunreceiver/web/templates`, `cmd/sunreceiver/web/static/js`) встроены в бинарник | [modules/dashboard.md](modules/dashboard.md) |
 | **МАП + MPPT** (`malina26.go`) | МАП (батарея/сеть) и MPPT-контроллеры (КЭС) через API «Малина26» (`/api/map/raw`, `/api/kes/raw`; динамический состав); резервный серийник МАП | [modules/map-mppt.md](modules/map-mppt.md) |
@@ -55,15 +55,15 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 
 | Устройство | Протокол | Период | Данные |
 |---|---|---|---|
-| Инверторы Deye / Sofar | Solarman V5 (TCP 8899) | 10 с | PV, AC, энергия, частота, фазы, температуры |
+| Инверторы Deye / Sofar | API «Малина26» (HTTP) | 5 с | PV, AC, энергия, частота, фазы, температуры |
 | МАП Титанатор | API «Малина26» (HTTP) | 1 с | напряжение/мощность сети и батареи |
 | MPPT-контроллеры «КЭС» | API «Малина26» (HTTP) | 1 с | PV панели, заряд АКБ, выработка за сутки |
 | Счётчик DDS238 | Modbus TCP или Modbus RTU через прозрачный шлюз (502) | 1 с | мгновенные значения + посуточные тарифы «День/Ночь» |
 | Счётчик DTS017M | Modbus RTU через прозрачный шлюз (502, unit 1, fn 03/04) | 1 с | напряжения/токи/мощности/энергии + посуточные тарифы «День/Ночь» |
 | Счётчик Энергомера CE308 | BLE (Энергомера/IEC 61107) | 30 мин / кнопка | итоговая накопленная энергия |
 
-- **Инверторы** — раздел `invertors` конфига, нормализуются в контракт `values`
-  (у каждого флаг `disabled`, обязательное поле).
+- **Инверторы** — только API «Малина26»: настроек в конфиге нет; имя, размещение,
+  тип и серийник приходят из API, нормализуются в контракт `values`.
 - **МАП** — раздел `map` (HTTP-API «Малина26»): `host/port/password/serial` и
   необязательный `fallback_serial`. Верхнеуровневый `map.disabled` (обязательное)
   отключает ВСЕ пулеры раздела (МАП, КЭС, BMS26).
@@ -109,7 +109,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 
 Один файл **`sunReceiver.json`** рядом с бинарником (`os.Executable()`; при
 `go run ./cmd/sunreceiver` — fallback в CWD). Разделы: `dashboard_port` (обязательное) и
-необязательные `dashboard_user`/`dashboard_password`, `invertors`, `map`,
+необязательные `dashboard_user`/`dashboard_password`, `map`,
 `db`, `meter`, `dts017m`, `ce308`, `notify`, `relay`, `mercury`.
 Файл приватный (пароли — в открытом виде, в `.gitignore`); публичный шаблон
 структуры — [`sunReceiver.sample.json`](../sunReceiver.sample.json) (обновлять при
@@ -120,7 +120,6 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 |---|---|
 | `dashboard_port` | порт веб-дашборда (обязательное) |
 | `dashboard_user` / `dashboard_password` | HTTP Basic для `/api/*` (необязательные; если не заданы — API без авторизации) |
-| `invertors[]` | `ip`, `name`, `type` (`deye`/`sofar`), `logger_sn`, `disabled` (обязательное), `placement` (необязательное — размещение для формул «Дом/Гараж») |
 | `map` | `disabled` (обязательное: `true` — все пулеры МАП/КЭС/BMS26 отключены), `host`, `port` (80/443), `password`, `serial`, `fallback_serial` (необязательный резервный серийник) |
 | `db` | `redis` (host:port), `pg` (DSN с паролем), `pg_restore_window` (необязательный duration окна реставрации Redis из PG; пусто/нет — 30 суток) |
 | `meter` | `disabled` (обязательное: `true` — пулеры отключены, плашки/кнопка «Электроэнергия» скрыты), `name`, `ip`, `port`, `unit`, `first_reg` (должен быть `0`), `register_count` (`0` → 27; иначе ≥ 18) |
@@ -179,7 +178,8 @@ make clean                       # rm -rf dist
 `sunreceiver.service`; PostgreSQL 16 и Redis тоже там. Адрес и деплой — приватные,
 см. `AGENTS.md` (или `.kilo/AGENTS-private.md`). Деплой: собрать Linux-бинарник
 (`CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o sunReceiver-linux .`), scp на
-сервер, `systemctl restart sunreceiver.service`. Сервис работает от
+сервер, `systemctl restart sunreceiver.service`. При переходе на API malina26
+сначала обновить прод-конфиг (убрать `invertors` и `poll.inverter`), затем бинарник. Сервис работает от
 непривилегированного пользователя `sunreceiver` (nologin) с hardening-юнитом
 (`ProtectSystem=strict`, `NoNewPrivileges`, `PrivateTmp`, пустой
 `CapabilityBoundingSet` и др.): демон не пишет в ФС, поэтому root не требуется.
@@ -188,8 +188,8 @@ make clean                       # rm -rf dist
 
 **Описание модулей** — [`modules/`](modules/README.md):
 
-- [`modules/solarman-client.md`](modules/solarman-client.md) — клиент Solarman V5.
-- [`modules/inverter-poller.md`](modules/inverter-poller.md) — poller инверторов.
+- [`modules/solarman-client.md`](modules/solarman-client.md) — клиент Solarman V5 (счётчики/диагностика).
+- [`modules/inverter-poller.md`](modules/inverter-poller.md) — сетевые инверторы через API malina26.
 - [`modules/storage.md`](modules/storage.md) — Redis + PG + аккумулятор.
 - [`modules/dashboard.md`](modules/dashboard.md) — веб-дашборд.
 - [`modules/map-mppt.md`](modules/map-mppt.md) — МАП + MPPT.

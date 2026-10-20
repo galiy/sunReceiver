@@ -46,7 +46,7 @@ func (s *redisStore) saveKesSnapshot(snap deviceSnapshot, ts time.Time) error {
 	}
 	pipe := s.rdb.TxPipeline()
 	pipe.HSet(s.ctx, redisKesCurrentKey, key, b)
-	s.tsAddValueContract(pipe, "kes", key, snap.Name, "", snap.DeviceSN, ts, snap.Values)
+	s.tsAddValueContract(pipe, "kes", key, snap.Name, "", snap.DeviceSN, "", ts, snap.Values)
 	if _, err := pipe.Exec(s.ctx); err != nil {
 		return fmt.Errorf("save kes %s: %w", key, err)
 	}

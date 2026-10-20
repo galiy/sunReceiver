@@ -30,32 +30,16 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/galiy/sunReceiver/internal/solarman"
 )
 
 // Периоды опроса устройств (секунды в конфиге, раздел "poll"). Значения по
 // умолчанию; переопределяются из sunReceiver.json при загрузке (см. applyPollConfig).
 var (
-	pollPeriod        = 10 * time.Second // инверторы (Deye/Sofar)
-	mapPollInterval   = time.Second      // МАП + MPPT
-	meterPollInterval = time.Second      // счётчик DDS238
+	mapPollInterval   = time.Second // МАП + MPPT
+	meterPollInterval = time.Second // счётчик DDS238
 )
 
 const (
-	port = "8899"
-	// inverterModbusErrPersist — сколько «неверный Modbus-адрес» (ErrCode 0x05)
-	// должен держаться непрерывно, прежде чем попасть в историю ошибок (антишум).
-	inverterModbusErrPersist = 10 * time.Minute
-	timeout                  = 15 * time.Second
-	// defaultIdleWindow — «тишина» между байтами ответа (Deye): паузы < 4 с.
-	defaultIdleWindow = 4 * time.Second
-	// sofarIdleWindow — Sofar LSW-3 шлёт куски с паузами до ~6.5 с — окно шире.
-	sofarIdleWindow = 8 * time.Second
-	// maxExchangeTotal — общий лимит приёма ОДНОГО ответа Solarman: живые ответы
-	// идут до ~30 с (Sofar pacing), Deye ~8 с; «зомби»-логгер без лимита держал
-	// бы Exchange часами.
-	maxExchangeTotal = 60 * time.Second
 	// mpptEmptyTolerance — сколько подряд идущих ПУСТЫХ успешных ответов КЭС
 	// (API «Малина26») терпим ДО прунинга состава MPPT из current.
 	// Одиночная/короткая пустота (перезапуск, транзиентный сбой) не должна
@@ -74,7 +58,7 @@ const (
 
 // mpptOrderBase — базовый порядок для MPPT-контроллеров (динамических, из API
 // «Малина26»): они всегда размещаются на дашборде последними, после всех
-// статических устройств из конфига (инверторы + МАП). Order = mpptOrderBase + slot.
+// статических устройств (МАП). Order = mpptOrderBase + slot.
 const mpptOrderBase = 10000
 
 // String — короткое имя типа для логов.
@@ -109,9 +93,8 @@ func invKindName(k targetKind) string {
 	}
 }
 
-// invTarget — целевой инвертор. LoggerSN — серийный номер даталоггера,
-// обязателен для Deye (иначе логгер отвечает кодом 0x06 "serial number not match").
-// Name — логическое имя из sunReceiver.json (например, "Deye Left").
+// invTarget — внутренняя цель пулера МАП/КЭС (сетевые инверторы больше не
+// описываются этим типом: они опрашиваются через grid_poller.go).
 // Slot — для kindMAP: -1 (агрегат); для kindMPPT: индекс контроллера (слот) в ответе API.
 type invTarget struct {
 	IP       string
@@ -121,39 +104,21 @@ type invTarget struct {
 	Slot     int
 	UID      string // для kindMPPT: UID контроллера из API «Малина26» (стабильный идентификатор)
 	Order    int    // порядок устройства на дашборде (индекс в конфиге; MPPT — всегда последними)
-	// Placement — размещение инвертора (группа на дашборде «Мощности инверторов»),
-	// из поля placement sunReceiver.json; пустое значение приводится к «Дом».
-	// У MPPT-контроллеров (КЭС) не используется — они в рамке не участвуют.
+	// Placement — размещение (для grid заполняется из API в снимке; у МАП/КЭС пусто).
 	Placement string
-	// InverterSN — кэш серийного номера инвертора (для Deye/Sofar) на время жизни
-	// пулера: серийник постоянен, благодаря этому HW-диапазон не перечитывается с
-	// 3 ретраями на каждый опрос (см. runInverterPoll). Для остальных марок не используется.
+	// InverterSN — серийник (для grid — из API; для МАП/КЭС не используется).
 	InverterSN string
-}
-
-// configInverter — запись инвертора (Deye/Sofar) в sunReceiver.json разделе "invertors".
-// Disabled — ОБЯЗАТЕЛЬНОЕ поле (отсутствие = ошибка конфига): false = опрашивается,
-// true = временно отключён (устройство в конфиге, но не опрашивается). Placement —
-// размещение инвертора (необязательное; по умолчанию «Дом»): инверторы одной группы
-// суммируются на дашборде в отдельной рамке «Мощности инверторов» (пара плашек
-// «активная + PV» на каждое размещение).
-type configInverter struct {
-	IP        string `json:"ip"`
-	Name      string `json:"name"`
-	Type      string `json:"type"`
-	LoggerSN  uint32 `json:"logger_sn"`
-	Placement string `json:"placement,omitempty"`
-	Disabled  *bool  `json:"disabled"`
 }
 
 // mapSection — раздел "map" sunReceiver.json (HTTP-API «Малина26»): токен по
 // паролю + бинарные контракты МАП (`/api/map/raw`) и КЭС (`/api/kes/raw`).
-// host — IP или имя; port — 80/443; serial — серийник МАП (число строкой), по нему
+// host — IP или имя; port — 80/443; serial — серийник МАП (число строкой; для grid
+// не требуется), по нему
 // ищем «свой» МАП в `/api/map/devices`; fallback_serial — необязательный резервный
 // серийник (опрос при недоступности основного, идентичность остаётся основной).
 //
 // Disabled — ОБЯЗАТЕЛЬНОЕ поле (отсутствие = ошибка конфига): true отключает ВСЕ
-// пулеры раздела map (МАП, КЭС, BMS26); на пулеры сетевых инверторов не влияет.
+// пулеры раздела map (МАП, КЭС, BMS26) и опрос сетевых инверторов через тот же API.
 type mapSection struct {
 	Disabled       *bool  `json:"disabled"`
 	Host           string `json:"host"`
@@ -193,13 +158,11 @@ type meterSection struct {
 // pollSection — периоды опроса устройств в СЕКУНДАХ (обязательный раздел "poll").
 // Все поля обязательны и должны быть > 0 (отсутствие = ошибка загрузки конфига).
 type pollSection struct {
-	Inverter int `json:"inverter"` // инверторы Deye/Sofar
-	Map      int `json:"map"`      // МАП + MPPT
-	Meter    int `json:"meter"`    // счётчик DDS238
+	Map   int `json:"map"`   // МАП + MPPT
+	Meter int `json:"meter"` // счётчик DDS238
 }
 
 type configFile struct {
-	Invertors     []configInverter `json:"invertors"`
 	Poll          *pollSection     `json:"poll"`
 	Map           *mapSection      `json:"map"`
 	DB            *dbConfig        `json:"db"`
@@ -232,7 +195,6 @@ func applyPollConfig(p *pollSection) error {
 		name string
 		val  int
 	}{
-		{"inverter", p.Inverter},
 		{"map", p.Map},
 		{"meter", p.Meter},
 	}
@@ -241,7 +203,6 @@ func applyPollConfig(p *pollSection) error {
 			return fmt.Errorf("обязательное поле poll.%s должно быть > 0 (секунды)", f.name)
 		}
 	}
-	pollPeriod = time.Duration(p.Inverter) * time.Second
 	mapPollInterval = time.Duration(p.Map) * time.Second
 	meterPollInterval = time.Duration(p.Meter) * time.Second
 	return nil
@@ -308,10 +269,13 @@ func rejectLegacyConfigFields(b []byte) error {
 	if hasFold(top, "enBms") {
 		return fmt.Errorf("раздел enBms удалён (единый BMS26 через map)")
 	}
+	if hasFold(top, "invertors") {
+		return fmt.Errorf("раздел invertors удалён (сетевые инверторы опрашиваются через API malina26)")
+	}
 	if err := check(rawFold(top, "map"), "map", "method", "rs485", "malina", "malina26"); err != nil {
 		return err
 	}
-	if err := check(rawFold(top, "poll"), "poll", "ce308", "antbms"); err != nil {
+	if err := check(rawFold(top, "poll"), "poll", "ce308", "antbms", "inverter"); err != nil {
 		return err
 	}
 	if err := check(rawFold(top, "ce308"), "ce308", "final_readings_only"); err != nil {
@@ -332,51 +296,9 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	if err := rejectLegacyConfigFields(b); err != nil {
 		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
 	}
-	targets := make([]invTarget, 0, len(cf.Invertors)+1)
-	nextOrder := 0                // порядок устройства на дашборде = позиция в конфиге (в порядке invertors, затем map)
-	seenIP := map[string]string{} // ip -> имя устройства: запрет дублей (общий клиент/ключ Redis)
-
-	// Инверторы (Deye/Sofar) из invertors; отключённые (disabled=true) пропускаются.
-	for _, t := range cf.Invertors {
-		if t.Disabled == nil {
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: для %s (%s) не задано обязательное поле disabled (false/true)", path, t.Name, t.IP)
-		}
-		if *t.Disabled {
-			log.Printf("config: %s (%s) отключён (disabled=true) — не опрашивается", t.Name, t.IP)
-			continue
-		}
-		var kind targetKind
-		switch t.Type {
-		case "deye":
-			kind = kindDeyeString
-		case "sofar":
-			kind = kindSofar
-		default:
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: неизвестный тип %q для %s", path, t.Type, t.IP)
-		}
-		if t.IP == "" {
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустой ip (type=%s)", path, t.Type)
-		}
-		if t.Name == "" {
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: пустое имя name для %s", path, t.IP)
-		}
-		// Deye/Sofar: без серийного номера логгера (logger_sn=0) логгер отвечает
-		// кодом 0x06 (heartbeat_only) — данные получать невозможно. Ловим при
-		// старте (fatal), а не маскируем вечным heartbeat_only с логами на poll.
-		if (kind == kindDeyeString || kind == kindSofar) && t.LoggerSN == 0 {
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %s (%s): не задан logger_sn — без SN логгера логгер отвечает кодом 0x06 и данные получать невозможно", path, t.Name, t.IP)
-		}
-		if prev, dup := seenIP[t.IP]; dup {
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: дублирующийся ip %s (%s и %s) — опрос одного IP двумя целями недопустим", path, t.IP, prev, t.Name)
-		}
-		seenIP[t.IP] = t.Name
-		placement := t.Placement
-		if placement == "" {
-			placement = "Дом"
-		}
-		targets = append(targets, invTarget{IP: t.IP, Name: t.Name, LoggerSN: t.LoggerSN, Kind: kind, Slot: -1, Order: nextOrder, Placement: placement})
-		nextOrder++
-	}
+	// Сетевые инверторы больше не настраиваются: они опрашиваются через API
+	// malina26 (см. grid_poller.go). targets остаётся для совместимости сигнатуры.
+	var targets []invTarget
 
 	// Раздел "map" — обязательный общий флаг disabled (отключает все пулеры
 	// МАП и КЭС). Параметры раздела валидируются ниже.
@@ -425,11 +347,13 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	// МАП (батарея/сеть), КЭС и BMS26 — раздел "map" (HTTP-API «Малина26»).
 	// Способ единственный; поле method удалено.
 	if cf.Map != nil && !*cf.Map.Disabled {
-		if cf.Map.Host == "" || cf.Map.Password == "" || strings.TrimSpace(cf.Map.Serial) == "" {
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: раздел map требует host, password и serial", path)
+		if cf.Map.Host == "" || cf.Map.Password == "" {
+			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: раздел map требует host и password", path)
 		}
-		if _, err := strconv.ParseUint(strings.TrimSpace(cf.Map.Serial), 10, 64); err != nil {
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: map.serial должен быть числом строкой: %w", path, err)
+		if strings.TrimSpace(cf.Map.Serial) != "" {
+			if _, err := strconv.ParseUint(strings.TrimSpace(cf.Map.Serial), 10, 64); err != nil {
+				return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: map.serial должен быть числом строкой: %w", path, err)
+			}
 		}
 		fs := strings.TrimSpace(cf.Map.FallbackSerial)
 		if fs != "" {
@@ -448,7 +372,7 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	meterActive := cf.Meter != nil && cf.Meter.Disabled != nil && !*cf.Meter.Disabled
 	relayActive := cf.Relay != nil && cf.Relay.Disabled != nil && !*cf.Relay.Disabled
 	mapActive := cf.Map != nil && (cf.Map.Disabled == nil || !*cf.Map.Disabled)
-	if len(targets) == 0 && !mapActive && ce308Cfg == nil && !meterActive && !relayActive && dts017Cfg == nil {
+	if !mapActive && ce308Cfg == nil && !meterActive && !relayActive && dts017Cfg == nil {
 		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: нет ни одного активного устройства", path)
 	}
 	// Периоды опроса устройств (секунды) — обязательный раздел "poll".
@@ -488,56 +412,6 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 		}
 	}
 	return targets, cf.DB, cf.Meter, cf.Map, cf.Relay, ce308Cfg, cf.DashboardPort, nil
-}
-
-// placementOrder возвращает упорядоченный список размещений сетевых инверторов
-// (Deye/Sofar) — по порядку первого появления в targets (т.е. в sunReceiver.json),
-// пустое размещение приводится к «Дом». MPPT-контроллеры (КЭС) и МАП не участвуют:
-// у них нет размещения (КЭС в рамке «Мощности инверторов» не считаются). Список
-// задаёт порядок пар плашек (активная + PV) в рамке и передаётся на дашборд.
-func placementOrder(targets []invTarget) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, t := range targets {
-		if t.Kind != kindDeyeString && t.Kind != kindSofar {
-			continue
-		}
-		p := t.Placement
-		if p == "" {
-			p = "Дом"
-		}
-		if !seen[p] {
-			seen[p] = true
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-// placeByIP возвращает размещение каждого инвертора по IP (из конфига) — надёжный
-// источник для группировки анимации: у устаревшего снимка placement может не быть.
-// Охватывает сетевые инверторы (Deye/Sofar) и МАП/КЭС.
-func placeByIP(targets []invTarget) map[string]string {
-	m := make(map[string]string, len(targets))
-	for _, t := range targets {
-		m[t.IP] = t.Placement
-	}
-	return m
-}
-
-// inverterNameByIP — имя сетевого инвертора (Deye/Sofar) по IP. В PG device_errors
-// инверторы пишутся с device = IP; для дашборда показываем имя вместо адреса.
-func inverterNameByIP(targets []invTarget) map[string]string {
-	m := make(map[string]string)
-	for _, t := range targets {
-		if t.Kind != kindSofar && t.Kind != kindDeyeString {
-			continue
-		}
-		if t.IP != "" && t.Name != "" {
-			m[t.IP] = t.Name
-		}
-	}
-	return m
 }
 
 // dashboardAuthUser/dashboardAuthPass — учётные данные HTTP Basic для `/api/*`
@@ -651,7 +525,7 @@ var version = "dev"
 // ведётся мониторинг уведомлений. Источник МАП — API «Малина26».
 // При отсутствии источника — ("", ""): мониторинг не запускается.
 func mapSourceIdentity() (string, string) {
-	if malina26 != nil {
+	if malina26 != nil && malina26.serial != "" {
 		return mapDevKey, malina26.name
 	}
 	return "", ""
@@ -663,33 +537,6 @@ func mapSourceName() string {
 		return "API «Малина26»"
 	}
 	return "нет источника"
-}
-
-var targets []invTarget
-
-var statusNames = map[uint16]string{
-	0: "standby", 1: "self-checking", 2: "normal", 3: "fault", 4: "permanent",
-}
-
-var faultBits = []struct {
-	Bit  uint16
-	Name string
-}{
-	{1, "grid_over_voltage"}, {2, "grid_under_voltage"}, {4, "grid_over_frequency"},
-	{8, "grid_under_frequency"}, {16, "pv_under_voltage"}, {32, "grid_low_voltage_ride_through"},
-	{256, "pv_over_voltage"}, {512, "pv_current_unbalanced"}, {1024, "pv_input_mode_wrong"},
-	{2048, "gfc_i_fault"}, {4096, "phase_sequence"}, {8192, "boost_over_current"},
-	{16384, "ac_over_current"}, {32768, "grid_current_high"},
-}
-
-var countries = map[uint16]string{
-	0: "Germany", 1: "CEI0-21 Internal", 2: "Australia", 3: "Spain RD1699",
-	4: "Turkey", 5: "Denmark", 6: "Greece", 7: "Netherland", 8: "Belgium",
-	9: "UK-G59", 10: "China", 11: "France", 12: "Poland", 13: "Germany BDEW",
-	14: "Germany VDE0126", 15: "Italy CEI0-16", 16: "UK-G83", 17: "Greece Islands",
-	18: "EU EN50438", 19: "EU EN61727", 20: "Korea", 21: "Sweden",
-	22: "Europe General", 23: "CEI0-21 External", 24: "Cyprus", 25: "India",
-	26: "Philippines", 27: "New Zealand",
 }
 
 // valuesContract — универсальный контракт значений. В файл выводит общие для обеих
@@ -855,28 +702,11 @@ type deviceSnapshot struct {
 	// Placement — размещение инвертора (группа «Мощности инверторов»); у МАП,
 	// MPPT-контроллеров (КЭС) и счётчика не заполняется.
 	Placement string `json:"placement,omitempty"`
-	// Kind — марка/тип устройства из конфига (invTarget.Kind): "deye"|"sofar" для
+	// Kind — марка/тип устройства: "deye"|"sofar" для
 	// сетевых инверторов, "kes" для MPPT-контроллеров (КЭС), "" — МАП/счётчик.
 	// Заполняется пулером; используется страницей анимации для выбора спрайта.
 	Kind   string         `json:"kind,omitempty"`
 	Values valuesContract `json:"values"`
-}
-
-func int16val(v uint16) int {
-	return int(int16(v))
-}
-
-func faultNames(mask uint16) []string {
-	var names []string
-	for _, fb := range faultBits {
-		if mask&fb.Bit != 0 {
-			names = append(names, fb.Name)
-		}
-	}
-	if names == nil {
-		names = []string{"no_error"}
-	}
-	return names
 }
 
 // Универсальный контракт значений (values) — в файл попадают ТОЛЬКО теги, которые
@@ -890,698 +720,6 @@ func faultNames(mask uint16) []string {
 // Температуры (МАП: map_temp_*, Sofar: temperature_module/inner, Deye:
 // temperature_radiator/igbt) выводятся через temperatureTags.
 
-// putSofarSimple пишет 16-битный регистр в контракт: int при ratio==1, иначе float.
-// Регистр трактуется как БЕЗЗНАКОВЫЙ (физические величины неотрицательны:
-// напряжения, токи, мощности, частота, энергия, времена, сопротивления изоляции).
-func putSofarSimple(out valuesContract, regs map[uint16]uint16, addr uint16, key string, ratio float64) {
-	v, ok := regs[addr]
-	if !ok {
-		return
-	}
-	if ratio == 1 {
-		out[key] = int(v)
-	} else {
-		out[key] = float64(v) * ratio
-	}
-}
-
-// putSofarSigned пишет 16-битный регистр ЗНАКОВОГО значения (может быть
-// отрицательным): реактивная мощность (var) и температуры модуля/инвертора.
-func putSofarSigned(out valuesContract, regs map[uint16]uint16, addr uint16, key string, ratio float64) {
-	v, ok := regs[addr]
-	if !ok {
-		return
-	}
-	if ratio == 1 {
-		out[key] = int16val(v)
-	} else {
-		out[key] = float64(int16val(v)) * ratio
-	}
-}
-
-// putSofarU32 пишет 32-битное значение (hi*65536+lo) с ratio.
-func putSofarU32(out valuesContract, regs map[uint16]uint16, hiAddr, loAddr uint16, key string, ratio float64) {
-	hi, ok1 := regs[hiAddr]
-	lo, ok2 := regs[loAddr]
-	if !ok1 || !ok2 {
-		return
-	}
-	val := float64(hi)*65536 + float64(lo)
-	if ratio == 1 {
-		out[key] = val
-	} else {
-		out[key] = val * ratio
-	}
-}
-
-// mapSofarRegisters строит значения универсального контракта из блока 0x0000-0x0027.
-func mapSofarRegisters(regs map[uint16]uint16) valuesContract {
-	out := valuesContract{}
-
-	if v, ok := regs[0x0000]; ok {
-		s, ok := statusNames[v]
-		if !ok {
-			s = fmt.Sprintf("unknown(%d)", v)
-		}
-		out["inverter_status"] = s
-	}
-	for i, name := range []string{"fault_1", "fault_2", "fault_3", "fault_4", "fault_5"} {
-		if v, ok := regs[uint16(0x0001+i)]; ok {
-			out[name] = faultNames(v)
-		}
-	}
-
-	// PV входы (V, A, W)
-	putSofarSimple(out, regs, 0x0006, "pv1_voltage", 0.1)
-	putSofarSimple(out, regs, 0x0007, "pv1_current", 0.01)
-	putSofarSimple(out, regs, 0x0008, "pv2_voltage", 0.1)
-	putSofarSimple(out, regs, 0x0009, "pv2_current", 0.01)
-	putSofarSimple(out, regs, 0x000A, "pv1_power", 10)
-	putSofarSimple(out, regs, 0x000B, "pv2_power", 10)
-
-	// AC выход: активная W, реактивная var, частота Hz
-	putSofarSimple(out, regs, 0x000C, "ac_active_power", 10)
-	putSofarSigned(out, regs, 0x000D, "ac_reactive_power", 10) // ×0.01 kVar → var (может быть <0)
-	putSofarSimple(out, regs, 0x000E, "grid_frequency", 0.01)
-
-	// Фазы L1/L2/L3 (V, A)
-	putSofarSimple(out, regs, 0x000F, "l1_voltage", 0.1)
-	putSofarSimple(out, regs, 0x0010, "l1_current", 0.01)
-	putSofarSimple(out, regs, 0x0011, "l2_voltage", 0.1)
-	putSofarSimple(out, regs, 0x0012, "l2_current", 0.01)
-	putSofarSimple(out, regs, 0x0013, "l3_voltage", 0.1)
-	putSofarSimple(out, regs, 0x0014, "l3_current", 0.01)
-
-	// Энергия (kWh) и время
-	putSofarU32(out, regs, 0x0015, 0x0016, "energy_total", 1) // 32 бит, уже kWh
-	putSofarU32(out, regs, 0x0017, 0x0018, "time_total", 1)   // 32 бит, h
-	putSofarSimple(out, regs, 0x0019, "energy_today", 0.01)   // ×10 Wh → kWh
-	putSofarSimple(out, regs, 0x001A, "time_today", 1)        // min
-
-	// Температуры (C), шина
-	putSofarSigned(out, regs, 0x001B, "temperature_module", 1)
-	putSofarSigned(out, regs, 0x001C, "temperature_inner", 1)
-	putSofarSimple(out, regs, 0x001D, "bus_voltage", 0.1)
-
-	// Диагностика Sofar
-	putSofarSimple(out, regs, 0x001E, "pv1_sample_cpu_voltage", 0.1)
-	putSofarSimple(out, regs, 0x001F, "pv1_sample_cpu_current", 0.01)
-	putSofarSimple(out, regs, 0x0020, "countdown_time", 1)
-	putSofarSimple(out, regs, 0x0021, "alert", 1)
-	putSofarSimple(out, regs, 0x0022, "input_mode", 1)
-	putSofarSimple(out, regs, 0x0023, "comm_board_msg", 1)
-	putSofarSimple(out, regs, 0x0024, "insulation_pv1_to_ground", 1)
-	putSofarSimple(out, regs, 0x0025, "insulation_pv2_to_ground", 1)
-	putSofarSimple(out, regs, 0x0026, "insulation_pv_minus_to_ground", 1)
-
-	if v, ok := regs[0x0027]; ok {
-		c, ok := countries[v]
-		if !ok {
-			c = fmt.Sprintf("unknown(%d)", v)
-		}
-		out["country"] = c
-	}
-	return out
-}
-
-// probableSofarBlock возвращает true, если блок регистров выглядит как настоящий
-// полный блок LSW-3 (0x0000-0x0027), а не сбойный кадр: логгер иногда отдаёт PDU
-// с валидным CRC, но мусором (повторяющееся слово вместо регистров, частота ~220 Гц,
-// пустая энергия), что даёт абсурдные пики мощности вроде ac_active_power = 220680 W.
-// Валидных полных блоков 20-40 регистров; «дубль» 16 регистров (0x0010-0x001F) и
-// Placeholder тоже не подходят. Физические пороги консервативные (с запасом от
-// реальных значений инвертора 2.5 kVA), чтобы не отсечь аномальные, но реальные данные.
-func probableSofarBlock(r map[uint16]uint16) bool {
-	if len(r) < 20 {
-		return false
-	}
-
-	// Частота сети: 0 или 40..80 Гц (raw ×0.01 → 4000..8000). ~220 Гц (22000) — мусор.
-	if v, ok := r[0x000E]; ok {
-		if hz := int16(v); hz != 0 && (hz < 4000 || hz > 8000) {
-			return false
-		}
-	}
-
-	// Напряжения фаз L1/L2/L3 (raw ×0.1): физически 0..270 В.
-	for _, addr := range []uint16{0x000F, 0x0011, 0x0013} {
-		if v, ok := r[addr]; ok {
-			if volts := float64(int16(v)) * 0.1; volts < -300 || volts > 300 {
-				return false
-			}
-		}
-	}
-
-	// PV1/PV2 напряжение (raw ×0.1): физически 0..450 В.
-	for _, addr := range []uint16{0x0006, 0x0008} {
-		if v, ok := r[addr]; ok {
-			if volts := float64(int16(v)) * 0.1; volts < -450 || volts > 450 {
-				return false
-			}
-		}
-	}
-
-	// Активная и реактивная мощность (raw ×10): для 2.5 kVA инвертора
-	// |W| не бывает > 10 кВт. Пик 220680 Вт (raw 22068) — отсекаем.
-	for _, addr := range []uint16{0x000C, 0x000D} {
-		if v, ok := r[addr]; ok {
-			if w := int64(int16(v)) * 10; w > 10000 || w < -10000 {
-				return false
-			}
-		}
-	}
-
-	return true
-}
-
-// deyeAlertState — последнее залогированное значение Alert-регистров Deye по IP
-// (для лога изменений и троттлинга heartbeat).
-var (
-	deyeAlertMu   sync.Mutex
-	deyeAlertLast = map[string]string{}
-)
-
-// deyeRawAlertLog — сырой лог Alert-регистров Deye (`deye alert ...`).
-// ОТКЛЮЧЁН: карта откалибрована по снятым логам (2026-10-01…05 — единственная
-// ненулевая аварийная область: рег. 0x69=0x0004 при status(0x3B)=4; 0x229-0x22E
-// всегда нули). Для повторной калибровки поставить true.
-const deyeRawAlertLog = false
-
-// logDeyeRawAlert пишет СЫРЫЕ Alert-регистры Deye (0x65–0x6A, 6×16 бит) в журнал
-// с временем снятия — для калибровки карты аварий. По нормам апстрима Alert
-// находится именно здесь (single-phase hybrid), для string-модели официальной
-// карты нет. Логируем при изменении и не реже 10 минут.
-func logDeyeRawAlert(ip string, status int, hexA, hexB, warns string) {
-	key := hexA + "|" + hexB + "|" + warns + "|" + fmt.Sprint(status)
-	deyeAlertMu.Lock()
-	defer deyeAlertMu.Unlock()
-	now := time.Now()
-	if last, ok := deyeAlertLast[ip]; ok && last == key && now.Sub(lastDeyeAlertLog[ip]) < 10*time.Minute {
-		return
-	}
-	deyeAlertLast[ip] = key
-	lastDeyeAlertLog[ip] = now
-	extra := ""
-	if warns != "" {
-		extra = " warns=[ " + warns + " ]"
-	}
-	log.Printf("deye alert %s: status(0x3B)=%d regs 0x65-0x6A=0x%s regs 0x229-0x22E=0x%s%s",
-		ip, status, hexA, hexB, extra)
-}
-
-// deyeRegsHex собирает hex-строку из count регистров, начиная с addr, из карты.
-// Если регистры не читались — пустая строка.
-func deyeRegsHex(regs map[uint16]uint16, addr, count uint16) string {
-	var b strings.Builder
-	for i := uint16(0); i < count; i++ {
-		v, ok := regs[addr+i]
-		if !ok {
-			return ""
-		}
-		fmt.Fprintf(&b, "%04x", v)
-	}
-	return b.String()
-}
-
-var lastDeyeAlertLog = map[string]time.Time{}
-
-// deyeSensor — маппинг регистра Deye string/grid-tie инвертора
-// (из kbialek/deye-inverter-mqtt, диапазоны 0x3C-0x74 и 0xC6-0xD2).
-// Name — имя для raw_registers; Tag — имя универсального контракта для values.
-type deyeSensor struct {
-	Name   string
-	Tag    string
-	Ratio  float64
-	Unit   string
-	Signed bool
-	Offset float64
-	Double bool // 32-бит (2 регистра), low word first
-}
-
-// 0x58 AC reactive power Deye — ×0.01 kvar (как у Sofar ×0.01 kVar), в var → ratio 10.
-var deyeRegMap = map[uint16]deyeSensor{
-	0x3C: {"production_today", "energy_today", 0.1, "kWh", false, 0, false},
-	0x3E: {"uptime", "uptime", 1, "min", false, 0, false},
-	0x3F: {"total_production", "energy_total", 0.1, "kWh", false, 0, true},
-	0x46: {"grid_l12_voltage", "grid_l12_voltage", 0.1, "V", false, 0, false},
-	0x47: {"grid_l23_voltage", "grid_l23_voltage", 0.1, "V", false, 0, false},
-	0x48: {"grid_l31_voltage", "grid_l31_voltage", 0.1, "V", false, 0, false},
-	0x49: {"l1_voltage", "l1_voltage", 0.1, "V", false, 0, false},
-	0x4A: {"l2_voltage", "l2_voltage", 0.1, "V", false, 0, false},
-	0x4B: {"l3_voltage", "l3_voltage", 0.1, "V", false, 0, false},
-	0x4C: {"l1_current", "l1_current", 0.1, "A", false, 0, false},
-	0x4D: {"l2_current", "l2_current", 0.1, "A", false, 0, false},
-	0x4E: {"l3_current", "l3_current", 0.1, "A", false, 0, false},
-	0x4F: {"ac_frequency", "grid_frequency", 0.01, "Hz", false, 0, false},
-	0x52: {"dc_total_power", "dc_total_power", 0.1, "W", false, 0, false},
-	0x54: {"ac_apparent_power", "ac_apparent_power", 0.1, "W", false, 0, false},
-	0x56: {"ac_active_power", "ac_active_power", 0.1, "W", false, 0, true},
-	// 0x58 AC reactive power: ×0.1 var (raw 365 → 36.5 var, физически правдоподобно;
-	// ×10 давал 3650 var — абсурд при P≈404W). Единицы совпадают с Sofar (var).
-	0x58: {"ac_reactive_power", "ac_reactive_power", 0.1, "var", true, 0, false},
-	0x5A: {"radiator_temperature", "temperature_radiator", 0.1, "C", false, -100, false},
-	0x5B: {"igbt_temperature", "temperature_igbt", 0.1, "C", false, -100, false},
-	0x6D: {"pv1_voltage", "pv1_voltage", 0.1, "V", false, 0, false},
-	0x6E: {"pv1_current", "pv1_current", 0.1, "A", false, 0, false},
-	0x6F: {"pv2_voltage", "pv2_voltage", 0.1, "V", false, 0, false},
-	0x70: {"pv2_current", "pv2_current", 0.1, "A", false, 0, false},
-	0x71: {"pv3_voltage", "pv3_voltage", 0.1, "V", false, 0, false},
-	0x72: {"pv3_current", "pv3_current", 0.1, "A", false, 0, false},
-	0x73: {"pv4_voltage", "pv4_voltage", 0.1, "V", false, 0, false},
-	0x74: {"pv4_current", "pv4_current", 0.1, "A", false, 0, false},
-	0xC6: {"load_power", "load_power", 1, "W", true, 0, true},
-	0xC8: {"daily_load_consumption", "energy_load_today", 0.01, "kWh", false, 0, false},
-	0xC9: {"total_load_consumption", "energy_load_total", 0.1, "kWh", false, 0, true},
-	// 0xCB "Grid power" Deye НЕ маппится: тег grid_power зарезервирован контрактом
-	// за устройством МАП (kindMAP) — плашки/график МАП строятся по нему. Маппинг
-	// сюда из Deye-регистра давал бы ложные нули в ряду мощности сети МАП.
-	0xCD: {"daily_energy_sold", "energy_sold_today", 0.01, "kWh", false, 0, false},
-	0xCE: {"total_energy_sold", "energy_sold_total", 0.1, "kWh", false, 0, true},
-	0xD0: {"daily_energy_bought", "energy_bought_today", 0.01, "kWh", false, 0, false},
-	0xD1: {"total_energy_bought", "energy_bought_total", 0.1, "kWh", false, 0, true},
-}
-
-// deyeFaultNames — карта fault-кодов Deye (F1..F64) по номеру. Источник:
-// FAULT_TABLE проекта pbix/HA-solark-PV (Sol-Ark/Deye, те же регистры): 64-битная
-// карта R103–R106 = 0x67–0x6A (wordorder LSW-first), бит N-1 = F(N). Проверено на
-// живом событии: пропадание сети даёт бит 0x69.2 → F35 AC_NoUtility.
-var deyeFaultNames = map[int]string{
-	1:  "F1: инвертирование DC (параллельный блок выключен)",
-	8:  "F8: неисправность реле GFDI (защита от утечки)",
-	13: "F13: смена режима сети/батареи",
-	14: "F14: перегрузка по току DC",
-	15: "F15: перегрузка по току AC (ПО)",
-	16: "F16: неисправность GFCI",
-	18: "F18: перегрузка по току AC (аппаратная)",
-	20: "F20: перегрузка по току DC (аппаратная)",
-	22: "F22: аварийный останов (EmergStop)",
-	23: "F23: GFCI/утечка — импульсная перегрузка",
-	24: "F24: нарушение изоляции DC (PV)",
-	25: "F25: обратная связь DC (нет АКБ при Activate Battery)",
-	26: "F26: разбаланс DC-шины",
-	29: "F29: ошибка CAN в параллельной системе",
-	30: "F30: неисправность главного контактора AC",
-	31: "F31: сбой плавного пуска",
-	34: "F34: перегрузка AC",
-	35: "F35: нет сети (AC_NoUtility)",
-	37: "F37: программная перегрузка DC",
-	39: "F39: аппаратная перегрузка DC",
-	40: "F40: перегрузка АКБ по току",
-	41: "F41: останов параллельной системы",
-	45: "F45: AC: низкое/высокое напряжение сети",
-	46: "F46: неисправность АКБ/резервной системы",
-	47: "F47: повышение частоты сети",
-	48: "F48: понижение частоты сети",
-	55: "F55: высокое напряжение DC/PV",
-	56: "F56: низкое напряжение DC (АКБ разряжена)",
-	58: "F58: ошибка связи с BMS",
-	60: "F60: генератор: напряжение/частота вне допуска",
-	61: "F61: ручное выключение (параллельный ведомый)",
-	63: "F63: дуговая защита (AFCI)",
-	64: "F64: перегрев радиатора",
-}
-
-// deyeWarnNames — карта предупреждений Deye W1..W32 (источник: страница Inversol
-// «Deye error codes W1–W32 F1–F64»). Регистры предупреждений — 0x65/0x66
-// (32 бита, LSW-first), бит N-1 = W(N).
-var deyeWarnNames = map[int]string{
-	1:  "W1: напряжение сети у порога",
-	2:  "W2: неисправность вентилятора",
-	3:  "W3: неправильная фазировка сети",
-	4:  "W4: ошибка связи со счётчиком",
-	5:  "W5: ошибка обновления прошивки",
-	6:  "W6: напряжение PV у предела",
-	7:  "W7: ток PV у предела",
-	8:  "W8: напряжение DC-шины у предела",
-	9:  "W9: ток AC у порога",
-	10: "W10: высокая внутренняя температура",
-	11: "W11: высокая температура радиатора",
-	12: "W12: общее аппаратное предупреждение",
-	13: "W13: несовпадение версии прошивки",
-	14: "W14: частота сети у предела",
-	15: "W15: высокое сопротивление сети",
-	16: "W16: небаланс напряжений фаз",
-	17: "W17: небаланс токов фаз",
-	18: "W18: ограничение мощности (derating)",
-	19: "W19: активно управление реактивной мощностью",
-	20: "W20: активно ограничение экспорта",
-	21: "W21: активен режим нулевого экспорта",
-	22: "W22: активно управление DRM",
-	23: "W23: инвертор управляется удалённо",
-	24: "W24: предупреждение синхронизации параллельной системы",
-	25: "W25: ограничение мощности параллельной системы",
-	26: "W26: напряжение АКБ у предела",
-	27: "W27: температура АКБ у предела",
-	28: "W28: аномальные данные BMS",
-	29: "W29: задержка шины связи",
-	30: "W30: высокая нагрузка системы",
-	31: "W31: предупреждение связи с АКБ",
-	32: "W32: предупреждение",
-}
-
-// decodeDeyeWarnings декодирует предупреждения Deye из регистров 0x65/0x66
-// (младшее слово — 0x65), бит N-1 = W(N). Предупреждения — не аварии, в историю
-// ошибок не пишутся (только в сырой лог). Решение (2026-10-06): W1–W32 остаются
-// информационными и показываются ТОЛЬКО в сыром логе (deyeRawAlertLog); запись в
-// device_errors не делается (много рутинных W — шум и ложная тревожность).
-func decodeDeyeWarnings(regs map[uint16]uint16) []string {
-	bitmap := uint32(regs[0x65]) | uint32(regs[0x66])<<16
-	if bitmap == 0 {
-		return nil
-	}
-	var out []string
-	for bit := 0; bit < 32; bit++ {
-		if bitmap&(1<<uint(bit)) == 0 {
-			continue
-		}
-		n := bit + 1
-		if name, ok := deyeWarnNames[n]; ok {
-			out = append(out, name)
-		} else {
-			out = append(out, fmt.Sprintf("W%d: предупреждение", n))
-		}
-	}
-	return out
-}
-
-// decodeDeyeFaults декодирует аварии Deye из сырых регистров: 64-битная карта
-// R103–R106 = 0x67–0x6A (первый регистр — младшее слово), бит N-1 = F(N).
-// Возвращает человекочитаемые активные коды (появлений). Пусто — аварий нет.
-func decodeDeyeFaults(regs map[uint16]uint16) []string {
-	get := func(a uint16) uint64 { return uint64(regs[a]) }
-	bitmap := get(0x67) | get(0x68)<<16 | get(0x69)<<32 | get(0x6A)<<48
-	if bitmap == 0 {
-		return nil
-	}
-	var out []string
-	for bit := 0; bit < 64; bit++ {
-		if bitmap&(1<<uint(bit)) == 0 {
-			continue
-		}
-		n := bit + 1
-		if name, ok := deyeFaultNames[n]; ok {
-			out = append(out, name)
-		} else {
-			out = append(out, fmt.Sprintf("F%d: авария (нет описания)", n))
-		}
-	}
-	return out
-}
-
-// mapDeyeRegisters строит значения универсального контракта Deye string-инвертора
-// из набора регистров (по абсолютному адресу). Пишет по Tag (контрактное имя).
-func mapDeyeRegisters(regs map[uint16]uint16) valuesContract {
-	out := valuesContract{}
-	for addr, def := range deyeRegMap {
-		if !def.Double {
-			v, ok := regs[addr]
-			if !ok {
-				continue
-			}
-			iv := int(int16(v))
-			if def.Signed {
-				out[def.Tag] = float64(iv)*def.Ratio + def.Offset
-			} else {
-				out[def.Tag] = float64(v)*def.Ratio + def.Offset
-			}
-			continue
-		}
-		// 32-бит, low word first (addr = low, addr+1 = high)
-		lo, ok1 := regs[addr]
-		hi, ok2 := regs[addr+1]
-		if !ok1 || !ok2 {
-			continue
-		}
-		val := uint32(hi)<<16 | uint32(lo)
-		if def.Signed {
-			out[def.Tag] = float64(int32(val))*def.Ratio + def.Offset
-		} else {
-			out[def.Tag] = float64(val)*def.Ratio + def.Offset
-		}
-	}
-	// Мощность PV-входов: Deye string отдаёт только V и I на каждый вход
-	// (0x6D/0x6E — PV1, 0x6F/0x70 — PV2); мощность считаем как P = V * I (W).
-	if v1, ok := out["pv1_voltage"]; ok {
-		if i1, ok := out["pv1_current"]; ok {
-			out["pv1_power"] = v1.(float64) * i1.(float64)
-		}
-	}
-	if v2, ok := out["pv2_voltage"]; ok {
-		if i2, ok := out["pv2_current"]; ok {
-			out["pv2_power"] = v2.(float64) * i2.(float64)
-		}
-	}
-	return out
-}
-
-// clients — кэш объектов solarman.Client по ip (конфиг + счётчик порядкового
-// номера кадра). Сам TCP-сокет НЕ переиспользуется: Client.Exchange открывает
-// свежее соединение на каждый запрос и закрывает его после чтения ответа
-// (логгеры отвечают медленно и могут оставлять «висящее» соединение).
-// Опрос одного инвертора всегда идёт из одной горутины, поэтому счётчик кадра
-// не гоняется между опросами.
-var (
-	clientsMu    sync.Mutex
-	clientsByKey = map[string]*solarman.Client{}
-)
-
-func clientFor(ip string, sn uint32) *solarman.Client {
-	key := ip + ":" + port
-	clientsMu.Lock()
-	defer clientsMu.Unlock()
-	if c, ok := clientsByKey[key]; ok {
-		return c
-	}
-	c := &solarman.Client{
-		Address:    key,
-		DeviceSN:   sn,
-		IdleWindow: defaultIdleWindow,
-		Timeout:    timeout,
-		MaxTotal:   maxExchangeTotal,
-	}
-	clientsByKey[key] = c
-	return c
-}
-
-// asciiFromRegisters собирает ASCII-строку из регистров (2 байта/регистр,
-// старший байт первый — как в строках SN-областей Deye и Sofar). Не-печатные
-// байты (напр. регистр длины 0x2000 у Sofar) пропускаются.
-func asciiFromRegisters(vals []uint16) string {
-	var b strings.Builder
-	for _, v := range vals {
-		hi := byte(v >> 8)
-		lo := byte(v & 0xFF)
-		if hi >= 0x20 && hi <= 0x7E {
-			b.WriteByte(hi)
-		}
-		if lo >= 0x20 && lo <= 0x7E {
-			b.WriteByte(lo)
-		}
-	}
-	if b.Len() == 0 {
-		return ""
-	}
-	return b.String()
-}
-
-// (Суффикс версий Sofar обрабатывается normalizeInverterSN — одна реализация.)
-
-// trimSofarVersions отрезает от HW-строки Sofar хвост-версии — единая реализация
-// с нормализацией серийника на выходе пулера (`normalizeInverterSN`), чтобы правило
-// обрезки жило в одном месте.
-func trimSofarVersions(s string) string { return normalizeInverterSN(sofarBrand.name, s) }
-
-func pollDevice(ctx context.Context, t invTarget) DeviceResult {
-	res := DeviceResult{OK: true}
-	client := clientFor(t.IP, t.LoggerSN)
-	// Sofar LSW-3 шлёт кадры с паузами до ~6.5 с (pacing) — окно тишины шире.
-	if t.Kind == kindSofar {
-		client.IdleWindow = sofarIdleWindow
-	}
-
-	var frames []solarman.Frame
-
-	switch t.Kind {
-	case kindDeyeString:
-		result := map[uint16]uint16{}
-		// Читаем ТОЛЬКО диапазон 0x3C–0x74 (ядро контракта). Второй диапазон
-		// 0xC6–0xD2 (energy_load/sold/bought) не входит в commonContractTags и
-		// отбрасывался MarshalJSON — чтение лишь замедляло опрос.
-		// 0x3B — Running Status (0=standby,1=self-check,2=normal,3=FAULT): включаем
-		// в блок для калибровки аварий (сопоставление Alert-битов со статусом FAULT).
-		const deyeStart, deyeCount uint16 = 0x3B, 0x3A
-		pdus, fr, err := client.ReadRegistersDeye(ctx, deyeStart, deyeCount, 1)
-		if err != nil {
-			// Сеть/логгер недоступны: это offline, а не «heartbeat без данных»
-			// (раньше res.OK оставался true и устройство выглядело онлайн).
-			res.OK = false
-			return res
-		}
-		frames = append(frames, fr...)
-		for _, p := range pdus {
-			if p.CRC != p.CRCCalc {
-				continue
-			}
-			for k := 0; k < len(p.Values); k++ {
-				result[deyeStart+uint16(k)] = p.Values[k]
-			}
-		}
-		if len(result) > 0 {
-			// Alert-кандидаты: 1-фазный hybrid (0x65-0x6A) и 3-фазный (0x229-0x22E).
-			// Значения логируем сырыми для калибровки (имена битов неизвестны).
-			// Дополнительное чтение 0x229-0x22E нужно ТОЛЬКО для сырого лога
-			// (калибровка аварийных битов). При выключенном логе не делаем лишнюю
-			// Modbus-транзакцию на каждом опросе каждого Deye.
-			if deyeRawAlertLog {
-				alertB := ""
-				if pdus2, _, err2 := client.ReadRegistersDeye(ctx, 0x0229, 0x0006, 1); err2 == nil {
-					m2 := map[uint16]uint16{}
-					for _, p := range pdus2 {
-						if p.CRC != p.CRCCalc {
-							continue
-						}
-						for k := 0; k < len(p.Values); k++ {
-							m2[0x0229+uint16(k)] = p.Values[k]
-						}
-					}
-					alertB = deyeRegsHex(m2, 0x0229, 6)
-				}
-				logDeyeRawAlert(t.IP, int(result[0x3B]), deyeRegsHex(result, 0x65, 6), alertB,
-					strings.Join(decodeDeyeWarnings(result), ", "))
-			}
-			res.Faults = decodeDeyeFaults(result)
-			res.Values = mapDeyeRegisters(result)
-			// Ядро (ac_active_power, рег. 0x56/0x57) обязано быть: без него values после
-			// фильтра commonContractTags пуст, а снимок со свежим timestamp показывает
-			// инвертор «онлайн, но пустой» (не offline).
-			if _, ok := res.Values["ac_active_power"]; ok {
-				res.HasData = true
-			}
-		}
-		// Серийный номер инвертора Deye — ASCII-строка в регистрах 0x0003-0x0007
-		// (10 цифр; проверено на живых инверторах, напр. "##########").
-		// Если серийник уже известен (кэш в runInverterPoll) — не читаем заново:
-		// он постоянен, а чтение с 3 ретраями лишнее на каждый опрос.
-		if t.InverterSN != "" {
-			res.InverterSN = t.InverterSN
-		} else {
-			for attempt := 1; attempt <= 3 && res.InverterSN == ""; attempt++ {
-				if ctx.Err() != nil {
-					return res
-				}
-				pdus, _, err := client.ReadRegistersDeye(ctx, 0x0003, 0x0005, 1)
-				if err != nil {
-					log.Printf("%s: serial func03 read err (attempt %d): %v", t.IP, attempt, err)
-					continue
-				}
-				for _, p := range pdus {
-					if p.CRC != p.CRCCalc {
-						continue
-					}
-					if sn := asciiFromRegisters(p.Values); sn != "" {
-						res.InverterSN = sn
-						break
-					}
-				}
-			}
-		}
-
-	case kindSofar:
-		// Sofar LSW-3/.76 отвечает данными ТОЛЬКО на кадр с 15-байтным datafield
-		// (как Deye) и реальным SN логгера, а не на 12-байтный BuildReadFrame
-		// (на него отдаёт только heartbeat с кодом 0x05). Проверено 2026-09-07:
-		// на live .76 кадр 15b+SN даёт полный блок 0x0000-0x0027 (40 reg, func 03).
-		pdus, fr, err := client.ReadRegistersDeye(ctx, 0x0000, 0x0028, 1)
-		if err != nil {
-			res.OK = false
-			return res
-		}
-		frames = fr
-		// Может прийти как полный блок (bytecount 80), так и «дубль» (16 reg)
-		// и сбойные кадры — берём самую большую валидную PDU, которая выглядит
-		// как НАСТОЯЩИЙ полный блок (см. probableSofarBlock).
-		var bestResult map[uint16]uint16
-		bestLen := 0
-		for i := range pdus {
-			p := pdus[i]
-			if p.CRC != p.CRCCalc {
-				continue
-			}
-			result := make(map[uint16]uint16, len(p.Values))
-			for k := 0; k < len(p.Values); k++ {
-				result[uint16(k)] = p.Values[k]
-			}
-			if !probableSofarBlock(result) {
-				continue
-			}
-			if len(p.Values) > bestLen {
-				bestLen = len(p.Values)
-				bestResult = result
-			}
-		}
-		result := bestResult
-		if len(result) > 0 {
-			res.HasData = true
-			res.Values = mapSofarRegisters(result)
-			res.Faults = decodeSofarFaults(result)
-		}
-		// Серийный номер инвертора Sofar — ASCII-строка HW-диапазона 0x2000-0x200D
-		// (func 04; первые 2 байта = длина строки, затем ASCII на 2 байта/регистр).
-		// Может быть НЕ числом (строка), напр. .76 = "SA3ES127LC1055V480V100V480".
-		// Если серийник уже известен (кэш в runInverterPoll) — не читаем заново:
-		// он постоянен, а чтение недоступного HW-диапазона с 3 ретраями занимает
-		// до ~3 мин и на каждый опрос ломает цикл.
-		if t.InverterSN != "" {
-			res.InverterSN = t.InverterSN
-		} else {
-			for attempt := 1; attempt <= 3 && res.InverterSN == ""; attempt++ {
-				if ctx.Err() != nil {
-					return res
-				}
-				hwpdus, _, herr := client.ReadRegistersDeyeFn(ctx, 0x2000, 0x000E, 1, 0x04)
-				if herr != nil {
-					log.Printf("%s: serial func04 read err (attempt %d): %v", t.IP, attempt, herr)
-					continue
-				}
-				for _, p := range hwpdus {
-					if p.CRC != p.CRCCalc {
-						continue
-					}
-					// p.Values[0] = 0x2000 — регистр ДЛИНЫ строки; явно пропускаем
-					// (при длине ≥0x20 его lo-байт печатный и «подмешивался» в начало SN).
-					if sn := asciiFromRegisters(p.Values[1:]); sn != "" {
-						res.InverterSN = trimSofarVersions(sn)
-						break
-					}
-				}
-			}
-		}
-
-	default:
-		log.Printf("%s: неизвестный kind %s — опрос пропущен", t.IP, t.Kind)
-	}
-
-	for _, f := range frames {
-		// Код ошибки heartbeat (0x05 адрес устройства, 0x06 SN логгера и т.п.) —
-		// в проде эти коды раньше глушились (логгировались только в probe), что
-		// маскировало неверный SN/адрес вечным heartbeat_only. Выносим код в
-		// DeviceResult: runInverterPoll логирует его редуцированно (с дедупликацией).
-		if code, ok := solarman.DeyeErrorCode(f); ok && code != 0 {
-			res.ErrCode = code
-		}
-		if f.DeviceSN != 0 {
-			res.DeviceSN = strconv.FormatUint(uint64(f.DeviceSN), 10)
-			break
-		}
-	}
-
-	return res
-}
-
-// runMapPoll — отдельный 1-секундный цикл опроса МАП (kindMAP) и
-// MPPT-контроллеров через API «Малина26» и записи в Redis каждого снятого
-// показания (Score = секунда снятия; см. saveMapSnapshot). MPPT не
-// регистрируются в конфиге вовсе (см. pollAndSaveMap).
 func runMapPoll(store *redisStore, pg *pgStore, stop context.Context) {
 	ticker := time.NewTicker(mapPollInterval)
 	defer ticker.Stop()
@@ -1699,8 +837,9 @@ func pollAndSaveMap(ctx context.Context, store *redisStore, pg *pgStore, now tim
 	var wg sync.WaitGroup
 	activeMPPT := map[string]struct{}{}
 	pruneMPPT := false // MPPT-состав чистим из current только по решению state.shouldPrune
-	// МАП через API «Малина26»: цель kindMAP с ключом "map".
-	if malina26 != nil {
+	// МАП через API «Малина26»: цель kindMAP с ключом "map". Без serial
+	// «своего» МАП этот пулер не запускается (сетевые инверторы при этом работают).
+	if malina26 != nil && malina26.serial != "" {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -1764,7 +903,7 @@ func main() {
 	var ce308Cfg *ce308Config
 	var dashPort int
 	var err error
-	targets, dbCfg, meterSec, mapSec, relaySec, ce308Cfg, dashPort, err = loadConfig(cfgPath)
+	_, dbCfg, meterSec, mapSec, relaySec, ce308Cfg, dashPort, err = loadConfig(cfgPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1775,7 +914,7 @@ func main() {
 	restoreWindow := defaultPGRestoreWindow(dbCfg)
 	dashboardAddr := defaultDashboardAddr(dashPort)
 
-	log.Printf("poller started: version=%s config=%s targets=%v period=%s", version, cfgPath, targets, pollPeriod)
+	log.Printf("poller started: version=%s config=%s", version, cfgPath)
 
 	// HTTP-API «Малина26» — МАП, КЭС и BMS26 (токен + бинарные контракты).
 	malina26 = loadMalina26(mapSec)
@@ -1966,6 +1105,13 @@ func main() {
 			defer bgWg.Done()
 			runMapPoll(store, pg, stopCtx)
 		}()
+		// Сетевые инверторы через тот же API: list /api/grid/status + снимок
+		// /api/grid/device?serial=, период 5 с (см. grid_poller.go).
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			runGridPoll(store, pg, malina26, stopCtx)
+		}()
 		// Отдельный пулер ОШИБОК МАП (не чаще 1/30 с): сырые ячейки через
 		// malina26.mapErrCells, запись появления в PG device_errors.
 		if pg != nil {
@@ -2080,26 +1226,13 @@ func main() {
 	bgWg.Add(1)
 	go func() {
 		defer bgWg.Done()
-		serveDashboard(dashboardAddr, store, pg, relayCtl, stopCtx, dash, placementOrder(targets), placeByIP(targets), inverterNameByIP(targets), dashboardAuthUser, dashboardAuthPass)
+		serveDashboard(dashboardAddr, store, pg, relayCtl, stopCtx, dash, dashboardAuthUser, dashboardAuthPass)
 	}()
 
 	// Windows-сборка сворачивается в трей (меню «Закрыть»); на POSIX (Linux)
 	// останавливается по SIGINT/SIGTERM. Единая точка — канал quit.
 	quit := make(chan struct{}, 1)
 	runTray(quit)
-
-	// Каждый инвертор (Deye/Sofar) опрашивается в СВОЁМ независимом цикле с
-	// периодом pollPeriod (10 с). Завис/таймаутит один текущий опрос одного
-	// инвертора — остальные продолжают опрашиваться и сохранять снимки строго
-	// раз в 10 секунд, влияния друг на друга нет вовсе. Снятие делается по
-	// отмене stopCtx.
-	for _, t := range targets {
-		bgWg.Add(1)
-		go func(t invTarget) {
-			defer bgWg.Done()
-			runInverterPoll(store, pg, t, stopCtx)
-		}(t)
-	}
 
 	<-waitForQuit(quit)
 	log.Println("shutting down")
@@ -2115,152 +1248,6 @@ func main() {
 	storeCancel()
 }
 
-// runInverterPoll — непрерывный цикл опроса ОДНОГО инвертора (Deye/Sofar) с
-// периодом pollPeriod. Каждая итерация:
-//   - ждёт тик time.Ticker(pollPeriod); тики коалесцируются (не накапливаются),
-//     поэтому если pollDevice длиннее pollPeriod, фактический период =
-//     ceil(pollDur/pollPeriod)*pollPeriod (для Sofar с pacing ~90-100 с, а не 10 с);
-//   - опрашивает инвертор (pollDevice) и, если данные получены, пишет снимок в
-//     Redis СРАЗУ, с фактическим временем получения.
-//
-// Так как у каждого инвертора свой таймер и своя горутина, зависший/таймаутящий
-// инвертор никак не влияет на периодичность и запись других. Клиент solarman на
-// этот IP используется только из этой горутины (инвариант «один IP — один
-// опрос», см. clientsByKey). Останавливается по отмене ctx (stop): незавершённый
-// опрос (pollDevice) прерывается сразу, а не до конца таймаута медленного логгера.
-func runInverterPoll(store *redisStore, pg *pgStore, t invTarget, stop context.Context) {
-	ticker := time.NewTicker(pollPeriod)
-	defer ticker.Stop()
-	var lastErrCode byte
-	var lastErrAt time.Time
-	lastErrCodeLog := ""            // история ошибок: код, записанный в прошлом чтении (пусто — ошибки не было)
-	lastFaults := map[string]bool{} // активные аварии устройства (из регистров), для истории
-	// Подавление шума «неверный Modbus-адрес» (ErrCode 0x05): пишем в историю только
-	// если держится непрерывно ≥ inverterModbusErrPersist без восстановления.
-	var modbusErrSince time.Time
-	var modbusErrLogged bool
-	for {
-		select {
-		case <-ticker.C:
-			if stop.Err() != nil {
-				return
-			}
-			t0 := time.Now()
-			res := pollDevice(stop, t)
-			// Стоп пришёл посреди опроса (ctx отменён, соединения логгеров
-			// закрыты): не сохраняем частичный/устаревший снимок при остановке.
-			if stop.Err() != nil {
-				return
-			}
-			now := time.Now() // фактическое время получения данных этого инвертора
-			if res.ErrCode != 0 {
-				// Код ошибки heartbeat — редуцированно: при смене кода или не чаще
-				// 1 раза в минуту на устройство, чтобы не спамить лог на каждые 10 с.
-				if res.ErrCode != lastErrCode || now.Sub(lastErrAt) > time.Minute {
-					log.Printf("%s: heartbeat код ошибки 0x%02X (%s)", t.IP, res.ErrCode, deyeErrCodeName(res.ErrCode))
-					lastErrCode = res.ErrCode
-					lastErrAt = now
-				}
-			} else {
-				lastErrCode = 0
-			}
-			log.Printf("%s: %s (%s)", t.IP, describeResult(res), now.Sub(t0).Round(time.Millisecond))
-			if !res.OK || !res.HasData {
-				// heartbeat_only / no data / ошибка — снимок не сохраняем
-				code, desc := "no_data", "нет данных"
-				if res.ErrCode != 0 {
-					code = fmt.Sprintf("0x%02X", res.ErrCode)
-					desc = deyeErrCodeName(res.ErrCode)
-				}
-				// Правило истории: пишем только если этой ошибки НЕ было в прошлом
-				// чтении (сравнение по коду), дубли на каждом чтении не создаются.
-				// «Нет данных» (no_data) — не авария устройства, в историю не пишем.
-				// «Неверный Modbus-адрес» (0x05) — шум: пишем только при удержании
-				// ≥10 мин без восстановления.
-				if res.ErrCode == 0x05 {
-					if modbusErrSince.IsZero() {
-						modbusErrSince = now
-					}
-					if pg != nil && !modbusErrLogged && now.Sub(modbusErrSince) >= inverterModbusErrPersist {
-						if e := pg.InsertDeviceError(t.IP, "inverter", code, desc, now); e != nil {
-							log.Printf("error pg %s: %v", t.IP, e)
-						}
-						modbusErrLogged = true
-					}
-				} else if pg != nil && code != lastErrCodeLog && code != "no_data" {
-					if e := pg.InsertDeviceError(t.IP, "inverter", code, desc, now); e != nil {
-						log.Printf("error pg %s: %v", t.IP, e)
-					}
-				}
-				lastErrCodeLog = code
-				continue
-			}
-			lastErrCodeLog = ""
-			modbusErrSince = time.Time{}
-			modbusErrLogged = false
-			// Аварии устройства (Sofar fault-регистры и т.п.): пишем только появление.
-			if pg != nil {
-				cur := map[string]bool{}
-				for _, f := range res.Faults {
-					cur[f] = true
-				}
-				for f := range cur {
-					if !lastFaults[f] {
-						if e := pg.InsertDeviceError(t.IP, "inverter", f, f, now); e != nil {
-							log.Printf("error pg %s: %v", t.IP, e)
-						}
-					}
-				}
-				lastFaults = cur
-			}
-			// Нормализуем аппаратный серийник (Sofar иногда отдаёт хвостовой
-			// суффикс версии) — иначе один аппарат распадается на два ключа.
-			res.InverterSN = normalizeInverterSN(invKindName(t.Kind), res.InverterSN)
-			// Аппаратные серийные номера постоянны: если в этом цикле не удалось их
-			// прочитать (инвертор выключился на закате, регистры/диапазон HW не
-			// отдались), берём из предыдущего снимка — иначе номер «пропадает» в
-			// таблице у оффлайн-инвертора.
-			liveInverterSN := res.InverterSN // прочитан ли серийник ЖИВЬЁМ в этом цикле
-			if res.InverterSN == "" || res.DeviceSN == "" {
-				if b := invBrandByKind(invKindName(t.Kind)); b != nil {
-					if prev, err := store.invSnapshotByIP(*b, t.IP); err == nil {
-						if res.InverterSN == "" {
-							res.InverterSN = normalizeInverterSN(b.name, prev.InverterSN)
-						}
-						if res.DeviceSN == "" {
-							res.DeviceSN = prev.DeviceSN
-						}
-					}
-				}
-			}
-			// Кэшируем серийник инвертора на время жизни пулера ТОЛЬКО если он прочитан
-			// живьём: значение из fallback (прошлый снимок) кэшировать нельзя — при
-			// замене железа на том же IP старый серийник «залипнет» и склеит устройства.
-			if liveInverterSN != "" {
-				t.InverterSN = liveInverterSN
-			}
-			snap := deviceSnapshot{
-				Name:       t.Name,
-				IP:         t.IP,
-				Timestamp:  now.Format(time.RFC3339),
-				DeviceSN:   res.DeviceSN,
-				InverterSN: res.InverterSN,
-				Order:      t.Order,
-				Placement:  t.Placement,
-				Kind:       invKindName(t.Kind),
-				Values:     res.Values,
-			}
-			if err := store.SaveSnapshot(snap, now); err != nil {
-				log.Printf("redis save %s: %v", t.IP, err)
-				continue
-			}
-			log.Printf("saved %s: %s", t.Name, t.IP)
-		case <-stop.Done():
-			return
-		}
-	}
-}
-
 func describeResult(res DeviceResult) string {
 	if !res.OK {
 		return "error"
@@ -2273,35 +1260,6 @@ func describeResult(res DeviceResult) string {
 
 // deyeErrCodeName — человекочитаемое имя кода ошибки heartbeat Deye/Sofar
 // (см. DeyeErrorCode в internal/solarman/frame.go).
-// sofarFaultBits — битовая маска аварий Sofar (регистры 0x0001–0x0005, func 03).
-var sofarFaultBits = []struct {
-	bit uint16
-	id  string
-}{
-	{1, "ID01 Grid OV"}, {2, "ID02 Grid UV"}, {4, "ID03 Grid OF"}, {8, "ID04 Grid UF"},
-	{16, "ID05 PV UV"}, {32, "ID06 LVRT"}, {256, "ID09 PV OV"}, {512, "ID10 PV current unbalanced"},
-	{1024, "ID11"}, {2048, "ID12 GFCI"}, {4096, "ID13 phase sequence"}, {8192, "ID14 boost OC"},
-	{16384, "ID15 AC OC"}, {32768, "ID16 grid current high"},
-}
-
-// decodeSofarFaults декодирует аварии Sofar из сырых регистров (0x0001–0x0005).
-// Возвращает список ID активных аварий; сырые регистры в телеметрию не попадают.
-func decodeSofarFaults(regs map[uint16]uint16) []string {
-	var out []string
-	for off := uint16(0x0001); off <= 0x0005; off++ {
-		v := regs[off]
-		if v == 0 {
-			continue
-		}
-		for _, fb := range sofarFaultBits {
-			if v&fb.bit != 0 {
-				out = append(out, fb.id)
-			}
-		}
-	}
-	return out
-}
-
 func deyeErrCodeName(code byte) string {
 	switch code {
 	case 0x05:
