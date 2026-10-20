@@ -117,6 +117,50 @@ func TestPlacementTotals(t *testing.T) {
 	}
 }
 
+// TestSumActiveByPlacement проверяет суммы по размещениям для графика
+// «Суммарная активная мощность»: только инверторы, порядок Дом/Гараж/прочие,
+// пустое размещение трактуется как «Дом», МАП/MPPT/счётчик исключены.
+func TestSumActiveByPlacement(t *testing.T) {
+	ts := time.Date(2026, 10, 20, 10, 0, 0, 0, time.Local).Format(time.RFC3339)
+	dev := func(ip, placement string, v float64) deviceSnapshot {
+		return deviceSnapshot{Name: ip, IP: ip, Placement: placement, Timestamp: ts,
+			Values: valuesContract{"ac_active_power": v}}
+	}
+	snaps := []deviceSnapshot{
+		dev("10.0.0.1", "Дом", 100),
+		dev("10.0.0.2", "", 50), // пустое размещение → «Дом»
+		dev("10.0.0.3", "Гараж", 30),
+		dev("10.0.0.4", "Склад", 20),
+		{Name: "MPPT", IP: "mppt-0", Placement: "Дом", Timestamp: ts,
+			Values: valuesContract{"ac_active_power": 999}},
+		{Name: "MAP", IP: "10.0.0.8", Timestamp: ts,
+			Values: valuesContract{"battery_voltage": 52.0}},
+		{Name: "Meter", IP: "10.0.0.9", Timestamp: ts,
+			Values: valuesContract{"meter_voltage": 230.0}},
+	}
+
+	got := sumActiveByPlacement(snaps)
+	if len(got) != 3 {
+		t.Fatalf("want 3 placements, got %+v", got)
+	}
+	want := []struct {
+		name string
+		v    float64
+	}{{"Дом", 150}, {"Гараж", 30}, {"Склад", 20}}
+	for i, w := range want {
+		if got[i].Name != w.name {
+			t.Fatalf("placement %d: want %q, got %q", i, w.name, got[i].Name)
+		}
+		if len(got[i].Points) != 1 || got[i].Points[0].V != w.v {
+			t.Fatalf("%s points: want %v, got %+v", w.name, w.v, got[i].Points)
+		}
+	}
+	// Общая сумма не меняется: 100+50+30+20 (MPPT/МАП/счётчик не в счёте).
+	if total := sumActive(snaps); len(total) != 1 || total[0].V != 200 {
+		t.Fatalf("total: want 200, got %+v", total)
+	}
+}
+
 func vals(out []seriesPoint) []float64 {
 	var vs []float64
 	for _, pp := range out {

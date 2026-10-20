@@ -89,6 +89,7 @@ function applyHidden(id, chart){
 // видимостью датасетов (работает с captureHidden/applyHidden).
 function lgKit(canvasId, chipsId){
 	var canvas=document.getElementById(canvasId), row=document.getElementById(chipsId);
+	if(!row) return { build:function(){} }; // старая разметка/кэш без контейнера чипов
 	function swatch(ds){ return ds.borderColor || ds.backgroundColor || '#888'; }
 	function sync(chart){
 		var chips=row.querySelectorAll('.lg-chip:not(.lg-all)');
@@ -294,6 +295,11 @@ function renderChart(id, datasets, opts){
 	// обратно» на полный период.
 	if(preserveZoom && saved.min!==null && saved.max!==null){
 		opts.scales.x.min=saved.min; opts.scales.x.max=saved.max;
+	}else{
+		// Окно оси — весь выбранный период, а не разброс точек: иначе
+		// «Сегодня» подстраивалось под данные инверторов (с 07:00).
+		var win=axisWindow();
+		opts.scales.x.min=win.min; opts.scales.x.max=win.max;
 	}
 	canvas.getContext('2d');
 	window[id]=new Chart(canvas,{ type:'line', data:{datasets:datasets}, options:opts, plugins:[cursorTooltipPlugin] });
@@ -421,6 +427,16 @@ function catchUp24hRange(){
 	if(f) f.value=toInputDateTime(selRange.from);
 	if(t) t.value=toInputDateTime(selRange.to);
 }
+// axisWindow — окно оси X равно выбранному периоду, а не участку, где есть
+// данные: иначе «Сегодня» начиналось бы с момента пробуждения инверторов
+// (07:00), хотя МАП и счётчик пишут круглосуточно. Правый край не уходит
+// в будущее, левый — ровно начало периода.
+function axisWindow(){
+	var from=selRange.from.getTime();
+	var to=Math.min(selRange.to.getTime(), Date.now());
+	if(!(from < to)) to=from+60000;
+	return {min:from, max:to};
+}
 // loadAll загружает данные ОДНИМ запросом /api/series и строит по ним все
 // графики страницы: ряды одни и те же (from/to общие), поэтому отдельные fetch
 // на каждый график лишь дублировали чтение Redis/PG.
@@ -440,6 +456,7 @@ async function loadAll(){
 	document.getElementById('gridVChartRange').textContent=range;
 	document.getElementById('gridPChartRange').textContent=range;
 	document.getElementById('tempChartRange').textContent=range;
+	lastXWindow={}; // новый набор данных — старые ключи окон не нужны
 	buildTotalChart(data);
 	buildChart(data);
 	buildGridVChart(data);
@@ -447,12 +464,23 @@ async function loadAll(){
 	buildTempChart(data);
 }
 
-// Суммарный график
+// Палитра линий суммарной мощности по размещениям (общая сумма — отдельным цветом).
+var placementPalette=['#e8590c','#2b8a3e','#ae3ec9','#1098ad','#f08c00','#c2255c'];
+
+// Суммарный график: общая сумма инверторов + суммы по каждому размещению
+// («Дом», «Гараж», прочие — приходят с бэкенда в placement_power).
 function buildTotalChart(data){
-	var pts=(data.total||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; });
-	var datasets=[{ label:'Сумма', data:pts, borderColor:'#428bca', backgroundColor:'#428bca',
+	function pts(arr){ return (arr||[]).map(function(p){ return {x:new Date(p.t), y:p.v}; }); }
+	var datasets=[{ label:tr('Сумма'), data:pts(data.total), borderColor:'#428bca', backgroundColor:'#428bca',
 		pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false }];
-	renderChart('totalChart', datasets, chartOpts(false,'W'));
+	var pp=data.placement_power||[];
+	for(var i=0;i<pp.length;i++){
+		var col=placementPalette[i%placementPalette.length];
+		datasets.push({ label:tr(pp[i].name), data:pts(pp[i].points), borderColor:col, backgroundColor:col,
+			pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false });
+	}
+	renderChart('totalChart', datasets, chartOpts(true,'W'));
+	lgKit('totalChart','totalChartLg').build(window.totalChart);
 	return window.totalChart;
 }
 // Активная мощность по инверторам

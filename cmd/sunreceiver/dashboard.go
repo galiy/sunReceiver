@@ -334,6 +334,9 @@ type seriesResponse struct {
 	// усредняются, см. accumulatorSkipTags), поэтому за период старше окна
 	// удержания Redis ряды пусты.
 	Temps []deviceSeries `json:"temps,omitempty"`
+	// PlacementPower — суммарная активная мощность инверторов по размещениям
+	// («Дом», «Гараж», прочие) для графика «Суммарная активная мощность».
+	PlacementPower []placementSeries `json:"placement_power,omitempty"`
 }
 
 // meterDailyResponse отвечает на GET /api/tariffs: посуточные тарифные величины
@@ -388,6 +391,13 @@ type placementPower struct {
 	Name  string  `json:"name"`
 	Power float64 `json:"power"`
 	PV    float64 `json:"pv"`
+}
+
+// placementSeries — временной ряд суммарной активной мощности инверторов
+// одного размещения (для графика «Суммарная активная мощность»).
+type placementSeries struct {
+	Name   string        `json:"name"`
+	Points []seriesPoint `json:"points"`
 }
 
 // isMAPDevice возвращает true, если снимок принадлежит устройству МАП (kindMAP,
@@ -1791,6 +1801,10 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	// не совпадают точно; окно в 60 с сглаживает расхождение и даёт чистый итог.
 	res.Total = sumActive(snaps)
 
+	// Те же суммы, но раздельно по размещениям инверторов — дополнительные
+	// линии на графике «Суммарная активная мощность».
+	res.PlacementPower = sumActiveByPlacement(snaps)
+
 	// Ряды МАП (батарея/сеть) — метрики устройства KindMAP (единственное, отдающее
 	// эти теги): напряжение/мощность сети и батареи для графиков дашборда.
 	res.MapGridVoltage = singleMetricSeries(snaps, "grid_voltage")
@@ -1837,6 +1851,9 @@ func (h *dashboardHandler) apiSeries(w http.ResponseWriter, r *http.Request) {
 	// [from, to] делится на равные периоды и точки в пределах периода схлопываются
 	// в одну усреднённую (см. downsampleSeries). Применяется ко всем рядам ответа.
 	res.Total = downsampleSeries(res.Total, from, to)
+	for i := range res.PlacementPower {
+		res.PlacementPower[i].Points = downsampleSeries(res.PlacementPower[i].Points, from, to)
+	}
 	for i := range res.Series {
 		res.Series[i].Points = downsampleSeries(res.Series[i].Points, from, to)
 	}
@@ -1930,6 +1947,52 @@ func sumActive(snaps []deviceSnapshot) []seriesPoint {
 		}
 	}
 	return out
+}
+
+// sumActiveByPlacement — суммарная активная мощность инверторов по размещениям:
+// каждое размещение — отдельный ряд с той же логикой актуальности, что и общий
+// total (замолчавшие устройства выпадают из суммы). Порядок: «Дом», «Гараж»,
+// затем прочие по алфавиту. Пустые ряды не отдаются.
+func sumActiveByPlacement(snaps []deviceSnapshot) []placementSeries {
+	groups := map[string][]deviceSnapshot{}
+	for _, sn := range snaps {
+		if isMAPDevice(sn.Values) || isMPPTKey(sn.IP) || isMeterDevice(sn.Values) {
+			continue
+		}
+		pl := gridPlacement(sn.Placement)
+		groups[pl] = append(groups[pl], sn)
+	}
+	names := make([]string, 0, len(groups))
+	for name := range groups {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		ri, rj := placementRank(names[i]), placementRank(names[j])
+		if ri != rj {
+			return ri < rj
+		}
+		return names[i] < names[j]
+	})
+	out := make([]placementSeries, 0, len(names))
+	for _, name := range names {
+		pts := sumActive(groups[name])
+		if len(pts) == 0 {
+			continue
+		}
+		out = append(out, placementSeries{Name: name, Points: pts})
+	}
+	return out
+}
+
+// placementRank задаёт порядок размещений на графике: Дом, Гараж, прочие.
+func placementRank(name string) int {
+	switch name {
+	case gridPlacementHouse:
+		return 0
+	case gridPlacementGar:
+		return 1
+	}
+	return 2
 }
 
 // sumSeries складывает два временных ряда поэлементно по совпадающей временной
