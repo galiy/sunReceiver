@@ -8,7 +8,9 @@
 ## Источники
 
 - `GET /api/grid/status` — список инверторов:
-  `id, gen, serial, addr, kind, status, last_seen, name, placement`.
+  `id, gen, serial, addr, kind, status, last_seen, name, placement, logger_sn`.
+  `logger_sn` — настроенный серийный номер логгера (uint32, decimal); не ключ
+  хранения.
 - `GET /api/grid/device?serial=<serial>` — снимок: `serial, name, placement,
   type, kind, gen, status, inverter_status, last_seen, energy_today,
   energy_total, fields[1..24], alarm_words, alarms`.
@@ -48,7 +50,10 @@
   нормализуется `normalizeInverterSN` (срез хвостовых `V<цифры>` у Sofar).
 - Redis: `sunreceiver:deye:current` / `sunreceiver:sofar:current`,
   `sunreceiver:ts:<kind>:<serial>:<tag>` (метки `kind/device/tag/name/ip/
-  device_sn/placement`).
+  device_sn/placement`). Ключ хранения — `serial`; `inverter_sn` — поле
+  снимка из `serial`; `device_sn` — настроенный SN логгера из API (decimal).
+  При `logger_sn = 0` (нет конфига или shm от старой конфигурации)
+  `device_sn` пуст.
 - PG: `deye_averages_r` / `sofar_averages_r`, PK `(serial, ts)`, мета
   `name/device_sn/ip/placement`.
 - Старые ряды продолжаются без переименования; для исторических точек без

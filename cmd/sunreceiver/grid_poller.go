@@ -55,6 +55,7 @@ type gridStatusItem struct {
 	LastSeen  int64  `json:"last_seen"`
 	Name      string `json:"name"`
 	Placement string `json:"placement"`
+	LoggerSN  uint32 `json:"logger_sn"`
 }
 
 type gridStatusResponse struct {
@@ -283,9 +284,14 @@ func gridSnapshot(item gridStatusItem, doc gridDeviceDoc, brand string) deviceSn
 		last = doc.LastSeen
 	}
 	ts := time.Unix(last, 0)
+	deviceSN := ""
+	if item.LoggerSN != 0 {
+		deviceSN = strconv.FormatUint(uint64(item.LoggerSN), 10)
+	}
 	return deviceSnapshot{
 		Name:       name,
 		Timestamp:  ts.Format(time.RFC3339),
+		DeviceSN:   deviceSN,
 		InverterSN: serial,
 		Placement:  placement,
 		Kind:       brand,

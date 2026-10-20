@@ -71,11 +71,14 @@ func TestGridValuesUnitsAndTags(t *testing.T) {
 }
 
 func TestGridSnapshotIdentity(t *testing.T) {
-	item := gridStatusItem{Serial: "SN1V480", Name: "Deye Left", Placement: "", LastSeen: 100, Kind: 0}
+	item := gridStatusItem{Serial: "SN1V480", Name: "Deye Left", Placement: "", LastSeen: 100, Kind: 0, LoggerSN: 1234567890}
 	doc := gridDeviceDoc{Type: "deye", Placement: "Гараж", LastSeen: 200}
 	sn := gridSnapshot(item, doc, "deye")
 	if sn.InverterSN != "SN1V480" {
 		t.Fatalf("deye serial changed: %q", sn.InverterSN)
+	}
+	if sn.DeviceSN != "1234567890" {
+		t.Fatalf("logger SN: %q", sn.DeviceSN)
 	}
 	if sn.Name != "Deye Left" || sn.Placement != "Гараж" || sn.Kind != "deye" {
 		t.Fatalf("snapshot: %+v", sn)
@@ -88,6 +91,9 @@ func TestGridSnapshotIdentity(t *testing.T) {
 	item = gridStatusItem{Serial: "SOF123V480", Kind: 1, LastSeen: 1}
 	doc = gridDeviceDoc{Type: "sofar", Placement: ""}
 	sn = gridSnapshot(item, doc, "sofar")
+	if sn.DeviceSN != "" {
+		t.Fatalf("пустой logger_sn должен давать пустой device_sn: %q", sn.DeviceSN)
+	}
 	if sn.InverterSN != "SOF123" {
 		t.Fatalf("sofar serial normalization: %q", sn.InverterSN)
 	}
@@ -116,9 +122,8 @@ func TestGridAPIParsing(t *testing.T) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		json.NewEncoder(w).Encode(gridStatusResponse{Updated: 1, Inverters: []gridStatusItem{
-			{ID: 0, Serial: "S1", Name: "Deye Left", Placement: "Дом", Kind: 0, LastSeen: 100},
-		}})
+		// Литеральный JSON: опечатка в теге logger_sn не должна проходить.
+		w.Write([]byte(`{"updated":1,"inverters":[{"id":0,"serial":"S1","name":"Deye Left","placement":"Дом","kind":0,"last_seen":100,"logger_sn":1234567890}]}`))
 	})
 	mux.HandleFunc("/api/grid/device", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("serial") != "S1" {
@@ -135,7 +140,7 @@ func TestGridAPIParsing(t *testing.T) {
 	defer srv.Close()
 	src := &malina26Source{baseURL: srv.URL, client: srv.Client(), token: "test"}
 	items, err := src.gridStatus(context.Background())
-	if err != nil || len(items) != 1 || items[0].Serial != "S1" {
+	if err != nil || len(items) != 1 || items[0].Serial != "S1" || items[0].LoggerSN != 1234567890 {
 		t.Fatalf("gridStatus: %v %v", items, err)
 	}
 	doc, err := src.gridDevice(context.Background(), "S1")
