@@ -206,12 +206,12 @@ func tsTagFilter(tags []string) string {
 // bucketMs=0 или agg="" — без агрегации (сырьё).
 func (s *redisStore) tsMRangeAgg(from, to time.Time, agg string, bucketMs int64, filters ...string) ([]tsSeries, error) {
 	args := []any{"TS.MRANGE", from.UnixMilli(), to.UnixMilli(), "WITHLABELS"}
+	if bucketMs > 0 && agg != "" {
+		args = append(args, "AGGREGATION", agg, bucketMs, "ALIGN", 0)
+	}
 	args = append(args, "FILTER")
 	for _, f := range filters {
 		args = append(args, f)
-	}
-	if bucketMs > 0 && agg != "" {
-		args = append(args, "AGGREGATION", agg, bucketMs, "ALIGN", 0)
 	}
 	res, err := s.rdb.Do(s.ctx, args...).Result()
 	if err != nil {
