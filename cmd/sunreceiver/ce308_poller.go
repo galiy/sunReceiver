@@ -58,6 +58,8 @@ func runCe308FinalReadings(store *redisStore, pg *pgStore, cfg *ce308Config, ctx
 	if cfg == nil {
 		return
 	}
+	// Явный BLE-адаптер (ce308.hci): hciN или BD_ADDR. Пусто — авто-детект.
+	ce308SetAdapterID(cfg.HCI)
 	trig := make(chan struct{}, 1)
 	setCE308TriggerChan(trig)
 	defer setCE308TriggerChan(nil)

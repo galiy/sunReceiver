@@ -33,7 +33,8 @@
     "disabled": false,
     "name": "CE308 #000000000",
     "mac": "AA:BB:CC:DD:EE:FF",
-    "pin": "CHANGE_ME_PIN"
+    "pin": "CHANGE_ME_PIN",
+    "hci": "AA:BB:CC:DD:EE:FF"
   },
   "dts017m": {
     "disabled": false,

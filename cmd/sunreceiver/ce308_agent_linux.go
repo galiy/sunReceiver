@@ -42,11 +42,42 @@ const ce308DiscoveryTimeout = 8 * time.Second
 // tinygo жёстко использует DefaultAdapter = hci0, но USB-адаптер может после
 // реинициализации получить другой номер (hci1, hci2, …), и тогда tinygo не
 // находит устройство. Здесь детектируем реально существующий контроллер.
+//
+// Если задан явный адаптер (ce308AdapterIDForced — из конфига ce308.hci),
+// используется ТОЛЬКО он; иначе — первый существующий hci0..hci9.
 func ce308AdapterID() (string, error) {
 	ce308AdMu.Lock()
 	defer ce308AdMu.Unlock()
 	if ce308AdapterIDCached != "" {
 		return ce308AdapterIDCached, nil
+	}
+	if ce308AdapterIDForced != "" {
+		id, err := ce308ResolveAdapter(ce308AdapterIDForced)
+		if err != nil {
+			return "", err
+		}
+		ce308AdapterIDCached = id
+		return id, nil
+	}
+	id, err := ce308FirstAdapter(hciAdapterPathFmt)
+	if err != nil {
+		return "", err
+	}
+	ce308AdapterIDCached = id
+	return id, nil
+}
+
+// hciAdapterPathFmt — формат D-Bus-пути контроллера BlueZ по индексу.
+const hciAdapterPathFmt = "/org/bluez/hci%d"
+
+// ce308ResolveAdapter приводит явную настройку адаптера (ce308.hci) к id
+// контроллера BlueZ вида "hciN". Настройка задаётся БД_ADDR адаптера
+// ("AA:BB:CC:DD:EE:FF") — стабильный признак (в отличие от плавающего
+// hci-индекса). Возвращает ошибку, если такой адаптер в BlueZ отсутствует.
+func ce308ResolveAdapter(spec string) (string, error) {
+	spec = strings.ToLower(strings.TrimSpace(spec))
+	if spec == "" {
+		return "", fmt.Errorf("пустая настройка BLE-адаптера")
 	}
 	bus, err := dbus.SystemBus()
 	if err != nil {
@@ -55,10 +86,28 @@ func ce308AdapterID() (string, error) {
 	for i := 0; i < 10; i++ {
 		id := fmt.Sprintf("hci%d", i)
 		var addr string
-		e := bus.Object("org.bluez", dbus.ObjectPath("/org/bluez/"+id)).
+		e := bus.Object("org.bluez", dbus.ObjectPath(fmt.Sprintf(hciAdapterPathFmt, i))).
+			Call("org.freedesktop.DBus.Properties.Get", 0, "org.bluez.Adapter1", "Address").Store(&addr)
+		if e == nil && strings.EqualFold(addr, spec) {
+			return id, nil
+		}
+	}
+	return "", fmt.Errorf("BLE-адаптер с BD_ADDR %s не найден", spec)
+}
+
+// ce308FirstAdapter возвращает id первого существующего инициализированного
+// контроллера hci0..hci9.
+func ce308FirstAdapter(pathFmt string) (string, error) {
+	bus, err := dbus.SystemBus()
+	if err != nil {
+		return "", fmt.Errorf("system bus: %w", err)
+	}
+	for i := 0; i < 10; i++ {
+		id := fmt.Sprintf("hci%d", i)
+		var addr string
+		e := bus.Object("org.bluez", dbus.ObjectPath(fmt.Sprintf(pathFmt, i))).
 			Call("org.freedesktop.DBus.Properties.Get", 0, "org.bluez.Adapter1", "Address").Store(&addr)
 		if e == nil && addr != "" && addr != "00:00:00:00:00:00" {
-			ce308AdapterIDCached = id
 			return id, nil
 		}
 	}
@@ -129,6 +178,26 @@ func ce308AdapterIDReset() {
 	ce308AdMu.Unlock()
 }
 
+// ce308SetAdapterID задаёт явный BLE-адаптер (из конфига ce308.hci) и сбрасывает
+// кэш, чтобы следующий ce308AdapterID использовал именно его. Пусто — вернуть
+// авто-детект первого существующего контроллера.
+func ce308SetAdapterID(id string) {
+	ce308AdMu.Lock()
+	ce308AdapterIDForced = strings.ToLower(strings.TrimSpace(id))
+	ce308AdapterIDCached = ""
+	ce308AdMu.Unlock()
+}
+
+// ce308AdapterForced возвращает явно заданный адаптер (ce308.hci, BD_ADDR) или "".
+// Используется, чтобы отличить конфигурационную ошибку (заданного адаптера нет)
+// от транзиентного сбоя авто-детекта: при непустом форсе недоступность адаптера —
+// фатальна для подключения (нельзя молча падать на hci0).
+func ce308AdapterForced() string {
+	ce308AdMu.Lock()
+	defer ce308AdMu.Unlock()
+	return ce308AdapterIDForced
+}
+
 // Счётчик Энергомера при первом спаривании запрашивает passkey (BLE-PIN) через
 // BlueZ-агента. tinygo.org/x/bluetooth сам агента не регистрирует, поэтому
 // регистрируем свой org.bluez.Agent1 (capability KeyboardDisplay), который
@@ -139,6 +208,9 @@ var (
 	ce308RegPin string
 	// ce308AdapterIDCached — кэш id контроллера (сбрасывать редко: переинициализация).
 	ce308AdapterIDCached string
+	// ce308AdapterIDForced — явный BLE-адаптер из конфига ce308.hci (hciN или
+	// BD_ADDR). Пусто — авто-детект первого существующего контроллера.
+	ce308AdapterIDForced string
 	ce308AdMu            sync.Mutex
 )
 

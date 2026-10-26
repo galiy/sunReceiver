@@ -43,6 +43,12 @@ type ce308Section struct {
 	MAC string `json:"mac"`
 	// PIN — BLE-PIN (код доступа радиоинтерфейса, 6 цифр) для спаривания.
 	PIN string `json:"pin"`
+	// HCI — BLE-адаптер для опроса счётчика, задаётся BD_ADDR адаптера
+	// ("AA:BB:CC:DD:EE:FF") — стабильный признак (hci-индекс плавает).
+	// Пусто — авто-детект первого существующего контроллера (hci0..hci9).
+	// Нужно, когда опрос ведётся через конкретный (напр. проброшенный по
+	// usbip) адаптер, а не локальный.
+	HCI string `json:"hci"`
 	// Disabled — ОБЯЗАТЕЛЬНОЕ поле: false — счётчик опрашивается; true — отключён.
 	Disabled *bool `json:"disabled"`
 }
@@ -52,6 +58,7 @@ type ce308Config struct {
 	Name string
 	MAC  string
 	PIN  string
+	HCI  string
 }
 
 // ce308EnergySnapshot — разовый снимок накопленной электроэнергии по разрезам
@@ -215,7 +222,7 @@ func ce308ConfigFromSection(s *ce308Section) (*ce308Config, error) {
 	if name == "" {
 		name = "CE308 " + s.MAC
 	}
-	return &ce308Config{Name: name, MAC: s.MAC, PIN: s.PIN}, nil
+	return &ce308Config{Name: name, MAC: s.MAC, PIN: s.PIN, HCI: strings.TrimSpace(s.HCI)}, nil
 }
 
 // describeCE308Config — строка-описание конфига для лога.
