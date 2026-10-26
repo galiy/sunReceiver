@@ -112,3 +112,4 @@ h1 { font-size:22px; margin:0 0 4px; }
 .spoiler-body { display:none; padding:0 16px 16px; }
 .spoiler.open > .spoiler-body { display:block; }
 .spoiler-body .anim-scheme { margin-bottom:0; }
+.bms-warn { font-size:11px; font-weight:600; color:#a86500; background:#fff3cd; border:1px solid #ffe08a; border-radius:8px; padding:2px 8px; margin-top:-4px; }

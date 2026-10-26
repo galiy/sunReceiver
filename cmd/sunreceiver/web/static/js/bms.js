@@ -143,6 +143,27 @@ function applyBmsKind(){
   var tn=document.getElementById('bmsTnote'); if(tn) tn.style.display='';
 }
 
+// updateSourceWarn показывает плашку устаревания источника (stale по last_seen)
+// и конфликта serial. Тексты переводятся i18n.js по подстрокам словаря.
+function sourceAgeSec(d){
+  var ls=Number(d.source_last_seen)||0;
+  if(!(ls>0)) return 0;
+  return Math.max(0, Math.floor(Date.now()/1000-ls));
+}
+function updateSourceWarn(d){
+  var box=document.getElementById('bmsSourceWarn'); if(!box) return;
+  var msgs=[];
+  if(d.stale){
+    msgs.push('Данные источника устарели (последнее обновление '+sourceAgeSec(d)+' с назад). Показания могут не отражать текущее состояние.');
+  }
+  if(Number(d.dup_serial)>1){
+    msgs.push('Конфликт serial: '+Number(d.dup_serial)+' устройств с одинаковым serial — данные смешаны в общий ряд.');
+  }
+  if(!msgs.length){ box.textContent=''; box.style.display='none'; return; }
+  box.textContent=msgs.join(' ');
+  box.style.display='';
+}
+
 async function load(){
   if(window.srRefresh && !window.srRefresh.isEnabled()) return;
   if(!NAME){ document.getElementById('bmsTitle').textContent='BMS не выбрана'; return; }
@@ -151,6 +172,7 @@ async function load(){
     if(r.status===404){
       document.getElementById('bmsTitle').textContent='BMS не найдена';
       document.getElementById('bmsSub').textContent='Устройство отсутствует в Redis (опрос отключён или батарея отключена)';
+      updateSourceWarn({});
       return;
     }
     if(!r.ok) return;
@@ -158,7 +180,8 @@ async function load(){
     applyBmsKind();
     document.title=d.deviceName+' — SunReceiver';
     document.getElementById('bmsTitle').textContent=d.deviceName;
-    document.getElementById('bmsSub').textContent=(d.model||'BMS')+' · актуально: '+(d.time||'—');
+    document.getElementById('bmsSub').textContent=(d.model||'BMS')+' · '+(d.stale?'устарело':'актуально')+': '+(d.time||'—');
+    updateSourceWarn(d);
     renderKPIs(d); renderCells(d); renderTemps(d); renderMos(d); renderAlarms(d);
     document.getElementById('bmsFoot').textContent=(d.model||'BMS')+' · '+d.deviceName+' · обновляется каждую секунду';
   }catch(e){}

@@ -89,3 +89,6 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#e
 .alarm-group { margin-bottom: 10px; }
 .alarm-group-h { font-weight: 600; font-size: 13px; color: #374151; margin-bottom: 2px; }
 .alarm-group .alarm-list { margin-top: 2px; }
+
+/* Индикация свежести/конфликта источника BMS (stale / дубль serial). */
+.bms-source-warn { margin:0 0 16px; padding:10px 14px; border:1px solid #e0a800; border-radius:8px; background:#fff8e1; color:#7a5a00; font-size:13px; line-height:1.4; }

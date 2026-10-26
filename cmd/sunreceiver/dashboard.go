@@ -552,6 +552,19 @@ func (h *dashboardHandler) apiBMS(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// apiBMSHealth отдаёт счётчики пулера BMS (R6): число устройств, дубли serial,
+// stale-снимки и накопленные ошибки (404, decode, HTTP/сеть). Метрики читаются по
+// запросу; на стабильном состоянии лог не растёт.
+func (h *dashboardHandler) apiBMSHealth(w http.ResponseWriter, r *http.Request) {
+	v := bms26Metrics.view()
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"generated_at": time.Now().Format(time.RFC3339),
+		"stats":        v,
+	})
+}
+
 // apiBMSOne отдаёт актуальное состояние BMS по ключу bmsKey
 // (/api/bms/<name>) для страницы деталей (обновление раз в секунду). name в URL —
 // ключ устройства (Key/serial или deviceName, см. bmsKey); отображаемое имя
@@ -3501,6 +3514,7 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayCon
 		"/dts017m/tariffs": h.apiDts017Tariffs,
 		"/animation":       h.apiAnimation,
 		"/bms":             h.apiBMS,
+		"/bms/health":      h.apiBMSHealth,
 		"/bms/":            h.apiBMSOne,
 		"/agm":             h.apiAGMCurrent,
 		"/agm/series":      h.apiAGMSeries,

@@ -593,12 +593,16 @@ async function tickBMS(){
       var isAGM=(d.kind==='agm');
       var href=isAGM? '/agm' : '/bms/'+encodeURIComponent(d.key||d.deviceName);
       var title=isAGM? 'Свинцово-кислотный АКБ (AGM) — графики тока и мощности' : (esc(d.model||'BMS')+': '+esc(d.deviceName));
+      var tags=[];
+      if(d.stale) tags.push('устарело');
+      if(Number(d.dup_serial)>1) tags.push('дубль serial');
       h+='<a class="bms-btn" href="'+href+'" title="'+title+'">'
         +'<div class="bms-batt">'
         +'<div class="bms-batt-fill" style="width:'+Math.max(4,soc)+'%;background:'+bmsSocColor(soc)+'"></div>'
         +'<span class="bms-batt-soc">'+soc+'%</span>'
         +'</div>'
         +'<div class="bms-name">'+esc(d.deviceName)+'</div>'
+        +(tags.length?'<div class="bms-warn">'+tags.join(' · ')+'</div>':'')
         +'</a>';
     }
     el.innerHTML=h;

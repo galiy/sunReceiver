@@ -23,9 +23,27 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"sort"
+	"sync"
 	"time"
 
 	"github.com/galiy/sunReceiver/internal/bmscontract"
+)
+
+// Порог устаревания источника: возраст last_seen из /api/bms/devices больше
+// этого значения → снимок помечается stale (не выдаётся в UI как актуальный).
+// 10 с при периоде опроса 1 с — запас на сетевую/планировочную дрожь.
+const bms26StaleAfter = 10 * time.Second
+
+const (
+	// bms26WarnCooldown — минимальный интервал между однотипными предупреждениями
+	// (дубли serial, 404/потеря слота, stale, ошибки HTTP/декодирования). Лог не
+	// должен расти с частотой опроса (1 Гц).
+	bms26WarnCooldown = 60 * time.Second
+	// Backoff при 5xx/сети/таймаутах: 1, 2, 4, … до 30 с; сбрасывается первым
+	// успешным ответом. Отдельно для списка устройств и для каждого raw-слота.
+	bms26BackoffBase = time.Second
+	bms26BackoffMax  = 30 * time.Second
 )
 
 // Пулер BMS через новый HTTP-API ПАК «Малина26» (BMS-Receiver). ANT BMS и EnBMS
@@ -79,10 +97,24 @@ type bms26Device struct {
 // Имена полей совместимы с прежним ANT-снимком (cells_v, current_a, soc, …),
 // чтобы страница BMS/графики переиспользовались на новом ключе.
 type bms26Snapshot struct {
-	Serial        string    `json:"serial"`
-	Base          string    `json:"base"`
-	BmsType       string    `json:"bms_type"`
-	Timestamp     string    `json:"timestamp"`
+	Serial    string `json:"serial"`
+	Base      string `json:"base"`
+	BmsType   string `json:"bms_type"`
+	Timestamp string `json:"timestamp"`
+	// SourceIDs — все id записей /api/bms/devices с этим serial (при дубле — их
+	// несколько); SourceID — id устройства, из которого получен ЭТОТ снимок.
+	// В current при дубле попадает снимок с минимальным SourceID (R1), а в
+	// series/агрегат — все устройства (принятый риск смешения общего ряда).
+	SourceIDs []int `json:"source_ids,omitempty"`
+	SourceID  int   `json:"source_id,omitempty"`
+	// SourceLastSeen — last_seen источника (unix seconds) на момент снимка;
+	// НЕ путать с Timestamp (время опроса sunReceiver).
+	SourceLastSeen int64 `json:"source_last_seen,omitempty"`
+	// Stale — возраст источника (now - last_seen) больше bms26StaleAfter.
+	// Stale-снимок остаётся в current для индикации, но не пишется в ряд/средние.
+	Stale bool `json:"stale,omitempty"`
+	// DupCount — сколько устройств из списка делят этот serial (>1 — конфликт).
+	DupCount      int       `json:"dup_serial_count,omitempty"`
 	DeviceName    string    `json:"deviceName"`
 	CellCount     int       `json:"cell_count"`
 	TempCount     int       `json:"temp_count"`
@@ -213,6 +245,314 @@ func (s *bms26Source) fetchBmsRaw(ctx context.Context, id int, gen uint64) ([]by
 	return b, nil
 }
 
+// bms26API — минимальный контракт источника BMS для пулера (тестируемость).
+// *bms26Source реализует его; тесты подставляют фейк без HTTP.
+type bms26API interface {
+	fetchBmsDevices(ctx context.Context) ([]bms26Device, error)
+	fetchBmsRaw(ctx context.Context, id int, gen uint64) ([]byte, error)
+}
+
+// bms26Stats — счётчики наблюдаемости (R6). devices/dupSerial/stale — состояние
+// последнего опроса; notFound/decodeErr/httpErr — накопленные события.
+type bms26Stats struct {
+	mu        sync.Mutex
+	devices   int
+	dupSerial int
+	stale     int
+	notFound  int64
+	decodeErr int64
+	httpErr   int64
+	lastPoll  time.Time
+}
+
+type bms26StatsView struct {
+	Devices    int    `json:"devices"`
+	DupSerial  int    `json:"dup_serial"`
+	Stale      int    `json:"stale"`
+	NotFound   int64  `json:"404"`
+	DecodeErr  int64  `json:"decode_err"`
+	HTTPErr    int64  `json:"http_err"`
+	LastPoll   string `json:"last_poll,omitempty"`
+	StaleAfter int    `json:"stale_after_sec"`
+}
+
+// bms26Metrics — метрики единственного боевого пулера; читаются /api/bms/health.
+var bms26Metrics = &bms26Stats{}
+
+func (s *bms26Stats) setPoll(devices, dup, stale int, now time.Time) {
+	s.mu.Lock()
+	s.devices, s.dupSerial, s.stale = devices, dup, stale
+	s.lastPoll = now
+	s.mu.Unlock()
+}
+
+func (s *bms26Stats) incNotFound() {
+	s.mu.Lock()
+	s.notFound++
+	s.mu.Unlock()
+}
+
+func (s *bms26Stats) incDecodeErr() {
+	s.mu.Lock()
+	s.decodeErr++
+	s.mu.Unlock()
+}
+
+func (s *bms26Stats) incHTTPErr() {
+	s.mu.Lock()
+	s.httpErr++
+	s.mu.Unlock()
+}
+
+func (s *bms26Stats) view() bms26StatsView {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := bms26StatsView{
+		Devices: s.devices, DupSerial: s.dupSerial, Stale: s.stale,
+		NotFound: s.notFound, DecodeErr: s.decodeErr, HTTPErr: s.httpErr,
+		StaleAfter: int(bms26StaleAfter / time.Second),
+	}
+	if !s.lastPoll.IsZero() {
+		v.LastPoll = s.lastPoll.Format(time.RFC3339)
+	}
+	return v
+}
+
+// bms26WarnLimiter — предупреждения с дедупликацией по ключу и cooldown.
+// Лог не растёт на стабильном состоянии: повтор в пределах cooldown подавляется.
+type bms26WarnLimiter struct {
+	mu       sync.Mutex
+	cooldown time.Duration
+	now      func() time.Time
+	sink     func(string)
+	last     map[string]time.Time
+}
+
+func newBms26WarnLimiter(now func() time.Time) *bms26WarnLimiter {
+	if now == nil {
+		now = time.Now
+	}
+	return &bms26WarnLimiter{
+		cooldown: bms26WarnCooldown,
+		now:      now,
+		sink:     func(msg string) { log.Print(msg) },
+		last:     map[string]time.Time{},
+	}
+}
+
+// warn пишет сообщение, если по ключу не было предупреждения дольше cooldown.
+func (w *bms26WarnLimiter) warn(key, msg string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	now := w.now()
+	if t, ok := w.last[key]; ok && now.Sub(t) < w.cooldown {
+		return false
+	}
+	w.last[key] = now
+	w.sink(msg)
+	return true
+}
+
+// bms26DevFail — состояние backoff отдельного raw-слота.
+type bms26DevFail struct {
+	until   time.Time
+	backoff time.Duration
+}
+
+// bms26Poller — состояние опроса: источник, часы, счётчики, backoff и limiter.
+type bms26Poller struct {
+	api        bms26API
+	now        func() time.Time
+	staleAfter time.Duration
+	stats      *bms26Stats
+	limiter    *bms26WarnLimiter
+
+	listFail    int
+	listRetryAt time.Time
+	listBackoff time.Duration
+	devFail     map[int]*bms26DevFail
+}
+
+func newBms26Poller(api bms26API, stats *bms26Stats) *bms26Poller {
+	if stats == nil {
+		stats = &bms26Stats{}
+	}
+	now := time.Now
+	return &bms26Poller{
+		api:        api,
+		now:        now,
+		staleAfter: bms26StaleAfter,
+		stats:      stats,
+		limiter:    newBms26WarnLimiter(now),
+		devFail:    map[int]*bms26DevFail{},
+	}
+}
+
+func bms26NextBackoff(cur time.Duration) time.Duration {
+	if cur <= 0 {
+		return bms26BackoffBase
+	}
+	cur *= 2
+	if cur > bms26BackoffMax {
+		return bms26BackoffMax
+	}
+	return cur
+}
+
+// poll опрашивает список и все слоты. Возвращает снимки (включая stale);
+// при ошибке списка или активном backoff — nil. 404/битый payload — пропуск
+// слота без спама; 5xx/сеть/таймаут — backoff и счётчик http_err.
+func (p *bms26Poller) poll(ctx context.Context) []bms26Snapshot {
+	if ctx.Err() != nil {
+		return nil
+	}
+	now := p.now()
+	if !p.listRetryAt.IsZero() && now.Before(p.listRetryAt) {
+		return nil // активен backoff после ошибки списка
+	}
+	devs, err := p.api.fetchBmsDevices(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		p.stats.incHTTPErr()
+		p.listFail++
+		p.listBackoff = bms26NextBackoff(p.listBackoff)
+		p.listRetryAt = now.Add(p.listBackoff)
+		p.limiter.warn("list", fmt.Sprintf("bms26: список устройств: %v (backoff %v)", err, p.listBackoff))
+		return nil
+	}
+	p.listFail = 0
+	p.listBackoff = 0
+	p.listRetryAt = time.Time{}
+
+	idsBySerial := bms26SerialIDs(devs)
+	dupExtra := 0
+	for serial, ids := range idsBySerial {
+		if len(ids) > 1 {
+			dupExtra += len(ids) - 1
+			p.limiter.warn("dup:"+serial, fmt.Sprintf(
+				"bms26: дубль serial %q: id=%v — current выбирает id=%d (детерминированно), series/средние смешиваются (принятый риск)",
+				serial, ids, ids[0]))
+		}
+	}
+
+	out := make([]bms26Snapshot, 0, len(devs))
+	staleN := 0
+	for _, d := range devs {
+		if f := p.devFail[d.ID]; f != nil && now.Before(f.until) {
+			continue // активен backoff этого слота
+		}
+		raw, err := p.api.fetchBmsRaw(ctx, d.ID, d.Gen)
+		if err != nil {
+			if ctx.Err() != nil {
+				return out
+			}
+			p.stats.incHTTPErr()
+			f := p.devFail[d.ID]
+			if f == nil {
+				f = &bms26DevFail{}
+				p.devFail[d.ID] = f
+			}
+			f.backoff = bms26NextBackoff(f.backoff)
+			f.until = now.Add(f.backoff)
+			p.limiter.warn(fmt.Sprintf("raw:%d", d.ID), fmt.Sprintf(
+				"bms26 id=%d serial=%q: raw: %v (backoff %v)", d.ID, d.Serial, err, f.backoff))
+			continue
+		}
+		delete(p.devFail, d.ID)
+		if raw == nil {
+			// 404/gen mismatch — слот потерян; список перечитается на следующем цикле.
+			p.stats.incNotFound()
+			p.limiter.warn(fmt.Sprintf("404:%d", d.ID), fmt.Sprintf(
+				"bms26 id=%d serial=%q: слот потерян (404/gen mismatch) — пропуск", d.ID, d.Serial))
+			continue
+		}
+		if len(raw) != bmscontract.Size {
+			p.stats.incDecodeErr()
+			p.limiter.warn(fmt.Sprintf("decode:%d", d.ID), fmt.Sprintf(
+				"bms26 id=%d serial=%q: битый payload (len=%d, ожидается %d) — пропуск",
+				d.ID, d.Serial, len(raw), bmscontract.Size))
+			continue
+		}
+		sn, ok := decodeBms26Contract(raw)
+		if !ok {
+			p.stats.incDecodeErr()
+			p.limiter.warn(fmt.Sprintf("decode:%d", d.ID), fmt.Sprintf(
+				"bms26 id=%d serial=%q: ошибка Decode — пропуск", d.ID, d.Serial))
+			continue
+		}
+		sn.Serial = d.Serial
+		sn.Base = d.Base
+		sn.BmsType = d.BmsType
+		sn.DeviceName = d.Serial
+		sn.SourceIDs = append([]int(nil), idsBySerial[d.Serial]...)
+		sn.SourceID = d.ID
+		sn.DupCount = len(idsBySerial[d.Serial])
+		sn.Timestamp = now.Format(time.RFC3339)
+		sn.SourceLastSeen = d.LastSeen
+		if d.LastSeen > 0 {
+			age := now.Unix() - d.LastSeen
+			if age > int64(p.staleAfter/time.Second) {
+				sn.Stale = true
+			}
+		}
+		if sn.Stale {
+			staleN++
+			p.limiter.warn("stale:"+sn.Serial, fmt.Sprintf(
+				"bms26 serial=%q: данные источника устарели (last_seen=%s, возраст %s) — снимок помечен stale",
+				sn.Serial, time.Unix(d.LastSeen, 0).Format(time.RFC3339), time.Duration(now.Unix()-d.LastSeen)*time.Second))
+		}
+		finalizeBms26(&sn)
+		out = append(out, sn)
+	}
+	p.stats.setPoll(len(devs), dupExtra, staleN, now)
+	return out
+}
+
+// bms26SerialIDs возвращает serial → отсортированные id устройств списка.
+// Одинаковый serial у нескольких устройств — конфликт (R1): все id видны в
+// снимке (SourceIDs), current выбирает минимальный.
+func bms26SerialIDs(devs []bms26Device) map[string][]int {
+	m := make(map[string][]int, len(devs))
+	for _, d := range devs {
+		if d.Serial != "" {
+			m[d.Serial] = append(m[d.Serial], d.ID)
+		}
+	}
+	for serial := range m {
+		sort.Ints(m[serial])
+	}
+	return m
+}
+
+// bms26SelectCurrent детерминированно выбирает по одному снимку на serial для
+// Redis current: минимальный id источника (R1). Остальные снимки не теряются —
+// они уже записаны в series/средние, конфликт виден в логе и DupCount.
+func bms26SelectCurrent(snaps []bms26Snapshot) map[string]bms26Snapshot {
+	out := make(map[string]bms26Snapshot, len(snaps))
+	for _, sn := range snaps {
+		if sn.Serial == "" {
+			continue
+		}
+		prev, ok := out[sn.Serial]
+		if !ok || bms26FirstSourceID(sn) < bms26FirstSourceID(prev) {
+			out[sn.Serial] = sn
+		}
+	}
+	return out
+}
+
+func bms26FirstSourceID(sn bms26Snapshot) int {
+	if sn.SourceID != 0 {
+		return sn.SourceID
+	}
+	if len(sn.SourceIDs) > 0 {
+		return sn.SourceIDs[0]
+	}
+	return math.MaxInt
+}
+
 // runBms26Poll — отдельный цикл опроса BMS (malina26). Пишет текущий снимок в Redis
 // (HASH sunreceiver:bms26:current, поле = serial), каждое снятое показание — в
 // ряд RedisTimeSeries (sunreceiver:ts:bms26:*), а 5-минутные средние — в PG
@@ -220,10 +560,11 @@ func (s *bms26Source) fetchBmsRaw(ctx context.Context, id int, gen uint64) ([]by
 func runBms26Poll(store *redisStore, pg *pgStore, ctx context.Context) {
 	acc := newBms26Accumulator()
 	lastAlarms := map[string]map[string]bool{} // serial -> активные тревоги (для истории)
+	poller := newBms26Poller(bms26, bms26Metrics)
 	ticker := time.NewTicker(bms26.pollInterval)
 	defer ticker.Stop()
-	log.Printf("bms26: опрос через %s (период %v, Redis current %s, PG %v)",
-		bms26.http.baseURL, bms26.pollInterval, redisBms26CurrentKey, pg != nil)
+	log.Printf("bms26: опрос через %s (период %v, Redis current %s, PG %v, stale >%v)",
+		bms26.http.baseURL, bms26.pollInterval, redisBms26CurrentKey, pg != nil, bms26StaleAfter)
 	for {
 		select {
 		case <-ticker.C:
@@ -231,16 +572,26 @@ func runBms26Poll(store *redisStore, pg *pgStore, ctx context.Context) {
 			// только потом принимаем новые: иначе acc.add() на границе бакета
 			// заменяет предыдущий бакет новым до его финализации, и точка теряется.
 			saveBms26ClosedBuckets(pg, acc.closed(time.Now()))
-			snaps := pollBms26Once(ctx)
+			snaps := poller.poll(ctx)
 			if len(snaps) > 0 {
-				cur := make(map[string]string, len(snaps))
-				now := time.Now()
-				for _, sn := range snaps {
+				now := poller.now()
+				// current — детерминированно по одному снимку на serial (дубли R1).
+				curSnaps := bms26SelectCurrent(snaps)
+				cur := make(map[string]string, len(curSnaps))
+				for serial, sn := range curSnaps {
 					b, err := json.Marshal(sn)
 					if err != nil {
 						continue
 					}
-					cur[sn.Serial] = string(b)
+					cur[serial] = string(b)
+				}
+				for _, sn := range snaps {
+					// Stale-снимок не выдаём в историю как новое измерение: значение
+					// старое, новая метка времени исказила бы график. current хранит
+					// его с флагом stale для индикации.
+					if sn.Stale {
+						continue
+					}
 					if err := store.SaveBms26Series(sn, now); err != nil {
 						log.Printf("bms26 redis series %s: %v", sn.Serial, err)
 					}
@@ -275,41 +626,6 @@ func runBms26Poll(store *redisStore, pg *pgStore, ctx context.Context) {
 	}
 }
 
-// pollBms26Once опрашивает все BMS последовательно и возвращает снимки. При ошибке
-// списка — nil. Слот, потерянный в 404, пропускается (следующий цикл повторит).
-func pollBms26Once(ctx context.Context) []bms26Snapshot {
-	devs, err := bms26.fetchBmsDevices(ctx)
-	if err != nil {
-		log.Printf("bms26: %v", err)
-		return nil
-	}
-	out := make([]bms26Snapshot, 0, len(devs))
-	now := time.Now()
-	for _, d := range devs {
-		raw, err := bms26.fetchBmsRaw(ctx, d.ID, d.Gen)
-		if err != nil {
-			log.Printf("bms26 id=%d: %v", d.ID, err)
-			continue
-		}
-		if raw == nil {
-			continue // слот потерян
-		}
-		sn, ok := decodeBms26Contract(raw)
-		if !ok {
-			log.Printf("bms26 id=%d: битый payload (len=%d)", d.ID, len(raw))
-			continue
-		}
-		sn.Serial = d.Serial
-		sn.Base = d.Base
-		sn.BmsType = d.BmsType
-		sn.DeviceName = d.Serial
-		sn.Timestamp = now.Format(time.RFC3339)
-		finalizeBms26(&sn)
-		out = append(out, sn)
-	}
-	return out
-}
-
 // bms26ModeName — канонический код режима (bms-reader.md §1) → текст.
 func bms26ModeName(code int) string {
 	switch code {
@@ -335,39 +651,42 @@ func bms26ModeName(code int) string {
 // discharge_mos, b2 balancer (bmscontract).
 func bmsDeviceFromBms26(sn bms26Snapshot) bmsDevice {
 	d := bmsDevice{
-		Kind:          "bms26",
-		DeviceName:    sn.Serial,
-		Key:           sn.Serial,
-		CellCount:     sn.CellCount,
-		CellsV:        sn.CellsV,
-		TotalV:        sn.TotalV,
-		PortV:         sn.PortV,
-		CurrentA:      sn.CurrentA,
-		Soc:           int(math.Round(sn.Soc)),
-		CapacityAh:    sn.CapacityAh,
-		RemainingAh:   sn.RemainingAh,
-		TemperaturesC: sn.TemperaturesC,
-		PowerW:        sn.PowerW,
-		ChargeMos:     boolBit(sn.Flags, 0),
-		DischargeMos:  boolBit(sn.Flags, 1),
-		Balancer:      boolBit(sn.Flags, 2),
-		MaxCellIdx:    sn.MaxCellIdx,
-		MaxCellV:      sn.MaxCellV,
-		MinCellIdx:    sn.MinCellIdx,
-		MinCellV:      sn.MinCellV,
-		AvgCellV:      sn.AvgCellV,
-		Soh:           sn.Soh,
-		Cycles:        sn.Cycles,
-		RatedAh:       sn.RatedAh,
-		BalanceMask:   sn.BalanceMask,
-		CellWarnMask:  sn.CellWarnMask,
-		CellProtMask:  sn.CellProtMask,
-		TempWarnMask:  sn.TempWarnMask,
-		TempProtMask:  sn.TempProtMask,
-		Model:         sn.BmsType,
-		Mode:          bms26ModeName(sn.Mode),
-		Alarms:        sn.Alarms,
-		Protections:   sn.Protections,
+		Kind:           "bms26",
+		DeviceName:     sn.Serial,
+		Key:            sn.Serial,
+		SourceLastSeen: sn.SourceLastSeen,
+		Stale:          sn.Stale,
+		DupSerial:      sn.DupCount,
+		CellCount:      sn.CellCount,
+		CellsV:         sn.CellsV,
+		TotalV:         sn.TotalV,
+		PortV:          sn.PortV,
+		CurrentA:       sn.CurrentA,
+		Soc:            int(math.Round(sn.Soc)),
+		CapacityAh:     sn.CapacityAh,
+		RemainingAh:    sn.RemainingAh,
+		TemperaturesC:  sn.TemperaturesC,
+		PowerW:         sn.PowerW,
+		ChargeMos:      boolBit(sn.Flags, 0),
+		DischargeMos:   boolBit(sn.Flags, 1),
+		Balancer:       boolBit(sn.Flags, 2),
+		MaxCellIdx:     sn.MaxCellIdx,
+		MaxCellV:       sn.MaxCellV,
+		MinCellIdx:     sn.MinCellIdx,
+		MinCellV:       sn.MinCellV,
+		AvgCellV:       sn.AvgCellV,
+		Soh:            sn.Soh,
+		Cycles:         sn.Cycles,
+		RatedAh:        sn.RatedAh,
+		BalanceMask:    sn.BalanceMask,
+		CellWarnMask:   sn.CellWarnMask,
+		CellProtMask:   sn.CellProtMask,
+		TempWarnMask:   sn.TempWarnMask,
+		TempProtMask:   sn.TempProtMask,
+		Model:          sn.BmsType,
+		Mode:           bms26ModeName(sn.Mode),
+		Alarms:         sn.Alarms,
+		Protections:    sn.Protections,
 	}
 	if ts, err := time.Parse(time.RFC3339, sn.Timestamp); err == nil {
 		d.Timestamp = ts.Unix()

@@ -27,6 +27,10 @@ HTTP-сервер — адрес из обязательного поля `dashb
   снимки/точки BMS26 приводятся к форме `bmsDevice`/`bmsSeriesPoint` с полем
   `kind="bms26"`; на странице `/bms/<name>` фронт по
   `kind` скрывает блок мощностных ключей и правит подписи.
+  Для устойчивости к источнику `bmsDevice` дополнен необязательными полями
+  `source_last_seen`, `stale`, `dup_serial` (индикаторы на странице BMS и
+  батарейках главной); `/api/bms/health` отдаёт счётчики пулера
+  (`devices`, `dup_serial`, `stale`, `404`, `decode_err`, `http_err`).
 - `/agm` (страница) и `/api/agm/series?from=&to=` — свинцово-кислотный (AGM) АКБ.
   Отдельного датчика нет: ток и мощность считаются на бэкенде как **МАП
   (`battery_power`/`battery_voltage`) минус сумма трёх BMS** (ANT×2 + EnBMS);
