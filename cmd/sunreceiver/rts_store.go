@@ -177,16 +177,11 @@ func (s *redisStore) tsAddValueContract(pipe redis.Pipeliner, kind, device, name
 }
 
 // tsMRange выполняет TS.MRANGE from..to WITHLABELS FILTER <filters...> и парсит ответ.
+// tsMRange — чтение сырья (без серверной агрегации) за [from,to] по фильтрам.
+// Реализация — общая с tsMRangeAgg: агрегация отключена (bucketMs=0), чтобы всё
+// чтение TS.MRANGE шло через один метод (единая логика/ошибки/парсер).
 func (s *redisStore) tsMRange(from, to time.Time, filters ...string) ([]tsSeries, error) {
-	args := []any{"TS.MRANGE", from.UnixMilli(), to.UnixMilli(), "WITHLABELS", "FILTER"}
-	for _, f := range filters {
-		args = append(args, f)
-	}
-	res, err := s.rdb.Do(s.ctx, args...).Result()
-	if err != nil {
-		return nil, fmt.Errorf("TS.MRANGE: %w", err)
-	}
-	return parseTSMRange(res), nil
+	return s.tsMRangeAgg(from, to, "", 0, filters...)
 }
 
 // tsRange выполняет TS.RANGE по одному ключу.
@@ -211,12 +206,12 @@ func tsTagFilter(tags []string) string {
 // bucketMs=0 или agg="" — без агрегации (сырьё).
 func (s *redisStore) tsMRangeAgg(from, to time.Time, agg string, bucketMs int64, filters ...string) ([]tsSeries, error) {
 	args := []any{"TS.MRANGE", from.UnixMilli(), to.UnixMilli(), "WITHLABELS"}
-	if bucketMs > 0 && agg != "" {
-		args = append(args, "AGGREGATION", agg, bucketMs, "ALIGN", 0)
-	}
 	args = append(args, "FILTER")
 	for _, f := range filters {
 		args = append(args, f)
+	}
+	if bucketMs > 0 && agg != "" {
+		args = append(args, "AGGREGATION", agg, bucketMs, "ALIGN", 0)
 	}
 	res, err := s.rdb.Do(s.ctx, args...).Result()
 	if err != nil {

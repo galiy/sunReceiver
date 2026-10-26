@@ -91,3 +91,21 @@ func (s *redisStore) QueryDts017Series(start, end time.Time) ([]dts017Snapshot, 
 	}
 	return out, nil
 }
+
+// QueryDts017SeriesAgg — как QueryDts017Series, но с серверной агрегацией avg
+// (bucketMs; 0 — сырьё) для графиков. Единая с остальными рядами агрегация.
+func (s *redisStore) QueryDts017SeriesAgg(start, end time.Time, bucketMs int64) ([]dts017Snapshot, error) {
+	if start.After(end) {
+		return nil, errors.New("dts017 series agg: start after end")
+	}
+	series, err := s.tsMRangeAgg(start, end, "avg", bucketMs, "kind=dts017m")
+	if err != nil {
+		return nil, err
+	}
+	snaps := tsGroupSnapshots(series)
+	out := make([]dts017Snapshot, 0, len(snaps))
+	for _, sn := range snaps {
+		out = append(out, dts017Snapshot{Name: sn.Name, Timestamp: sn.Timestamp, Values: vcToFloatMap(sn.Values)})
+	}
+	return out, nil
+}

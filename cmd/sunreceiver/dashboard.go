@@ -3445,7 +3445,7 @@ func (h *dashboardHandler) dts017SeriesRange(from, to time.Time, now time.Time) 
 		}
 	}
 	if rOK {
-		recent, err := h.store.QueryDts017Series(rStart, rEnd)
+		recent, err := h.store.QueryDts017SeriesAgg(rStart, rEnd, rtBucket(rEnd.Sub(rStart)))
 		if err != nil {
 			return nil, err
 		}
