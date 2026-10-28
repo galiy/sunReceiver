@@ -113,6 +113,12 @@ func TestGridAlarmCodes(t *testing.T) {
 	if len(got) != 1 || got[0] != "alarm_w1:0x0002" {
 		t.Fatalf("alarm words fallback: %v", got)
 	}
+	// Варианты F35 канонизируются в один код.
+	doc = gridDeviceDoc{Alarms: []gridDeviceAlarm{{Code: "F35: нет сети (AC_NoUtility)"}, {Code: "F35"}, {Code: "f35"}}}
+	got = gridAlarmCodes(doc)
+	if len(got) != 1 || got[0] != "F35" {
+		t.Fatalf("F35 canonicalization: %v", got)
+	}
 }
 
 func TestGridAPIParsing(t *testing.T) {
@@ -146,5 +152,18 @@ func TestGridAPIParsing(t *testing.T) {
 	doc, err := src.gridDevice(context.Background(), "S1")
 	if err != nil || doc.Type != "deye" || len(doc.Fields) != 1 {
 		t.Fatalf("gridDevice: %+v %v", doc, err)
+	}
+}
+
+func TestGridNoUtilityCode(t *testing.T) {
+	for _, c := range []string{"F35", "f35", "F35: нет сети (AC_NoUtility)", "F35 нет сети"} {
+		if !gridNoUtilityCode(c) {
+			t.Errorf("gridNoUtilityCode(%q)=false", c)
+		}
+	}
+	for _, c := range []string{"F36", "F350", "", "W35"} {
+		if gridNoUtilityCode(c) {
+			t.Errorf("gridNoUtilityCode(%q)=true", c)
+		}
 	}
 }

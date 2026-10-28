@@ -228,6 +228,21 @@ ON CONFLICT (device, kind, code, ts) DO NOTHING`, device, name, kind, code, msg,
 	return nil
 }
 
+// DeviceErrorSince сообщает, была ли уже запись (device,kind,code) начиная с since.
+// Используется для временной дедупликации предупреждений BMS (Warn).
+func (s *pgStore) DeviceErrorSince(device, kind, code string, since time.Time) (bool, error) {
+	var ok bool
+	err := s.pool.QueryRow(s.ctx, `
+SELECT EXISTS(
+  SELECT 1 FROM sunreceiver.device_errors
+  WHERE device = $1 AND kind = $2 AND code = $3 AND ts >= $4
+)`, device, kind, code, since.UTC()).Scan(&ok)
+	if err != nil {
+		return false, fmt.Errorf("pg check device error %s: %w", device, err)
+	}
+	return ok, nil
+}
+
 // deviceErrorsWhere строит WHERE-условие и аргументы для device_errors.
 // Все значения передаются как параметры ($n) — защита от SQL-инъекций; строки
 // фильтров никогда не подставляются в SQL.

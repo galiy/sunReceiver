@@ -735,33 +735,74 @@ func runMapPoll(store *redisStore, pg *pgStore, stop context.Context) {
 	}
 }
 
+// mapNoDataLogAfter — сколько непрерывно должна отсутствовать телеметрия МАП/MPPT,
+// прежде чем «нет данных» попадёт в историю ошибок. Кратковременные срывы API/шины
+// (единицы секунд) — не ошибка устройства и не должны засорять device_errors.
+const mapNoDataLogAfter = 5 * time.Minute
+
+// mapErrDevState — состояние одного устройства МАП/MPPT.
+type mapErrDevState struct {
+	realActive   bool      // активна реальная ошибка чтения (код ErrCode)
+	realCode     string    // последний записанный код реальной ошибки
+	failingSince time.Time // начало непрерывного отсутствия данных
+	noDataLogged bool      // «нет данных» уже записано в этом эпизоде
+}
+
 // mapErrState — потокобезопасное состояние «активна ли app-ошибка» по устройствам
 // МАП/MPPT. saveWindowSnapshot вызывается параллельно из нескольких горутин
 // (МАП/МАП-API/MPPT), поэтому доступ к карте сериализуется мьютексом: без него
 // одновременная запись в map приводит к «fatal error: concurrent map writes».
 type mapErrState struct {
 	mu sync.Mutex
-	m  map[string]bool
+	m  map[string]*mapErrDevState
 }
 
-func newMapErrState() *mapErrState { return &mapErrState{m: map[string]bool{}} }
+func newMapErrState() *mapErrState { return &mapErrState{m: map[string]*mapErrDevState{}} }
 
-// markIfAbsent помечает устройство как «с ошибкой» и возвращает true только при
-// переходе «без ошибки → с ошибкой» (для истории ошибок пишется лишь появление).
-func (e *mapErrState) markIfAbsent(key string) bool {
+// failure сообщает, нужно ли записать сбой чтения в историю ошибок:
+//   - реальный код ошибки (code != "no_data") — один раз на появление/смену кода;
+//   - «нет данных» — один раз, только если телеметрии нет непрерывно дольше delay.
+func (e *mapErrState) failure(key, code string, now time.Time, delay time.Duration) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.m[key] {
-		return false
+	st := e.m[key]
+	if st == nil {
+		st = &mapErrDevState{}
+		e.m[key] = st
 	}
-	e.m[key] = true
-	return true
+	if code == "no_data" {
+		// Эпизод отсутствия данных не прерывается сменой кода ошибки: таймер
+		// сбрасывается только успешным опросом (clear).
+		if st.failingSince.IsZero() {
+			st.failingSince = now
+		}
+		return !st.noDataLogged && now.Sub(st.failingSince) >= delay
+	}
+	return !(st.realActive && st.realCode == code)
+}
+
+// markLogged фиксирует успешную запись события в PG. Вызывать только после
+// успешного INSERT: иначе при сбое PG событие потеряется до восстановления.
+func (e *mapErrState) markLogged(key, code string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	st := e.m[key]
+	if st == nil {
+		st = &mapErrDevState{}
+		e.m[key] = st
+	}
+	if code == "no_data" {
+		st.noDataLogged = true
+		return
+	}
+	st.realActive = true
+	st.realCode = code
 }
 
 // clear снимает отметку ошибки устройства (успешный опрос).
 func (e *mapErrState) clear(key string) {
 	e.mu.Lock()
-	e.m[key] = false
+	delete(e.m, key)
 	e.mu.Unlock()
 }
 
@@ -782,18 +823,20 @@ func saveWindowSnapshot(store *redisStore, pg *pgStore, t invTarget, res DeviceR
 	key := devKey(t)
 	if !res.OK || !res.HasData {
 		log.Printf("%s: %s %s", t.IP, t.Kind, describeResult(res))
-		if pg != nil && errState != nil && errState.markIfAbsent(key) {
-			kind := "map"
-			if t.Kind == kindMPPT {
-				kind = "mppt"
-			}
-			code, desc := "no_data", "нет данных"
-			if res.ErrCode != 0 {
-				code = fmt.Sprintf("0x%02X", res.ErrCode)
-				desc = deyeErrCodeName(res.ErrCode)
-			}
+		kind := "map"
+		if t.Kind == kindMPPT {
+			kind = "mppt"
+		}
+		code, desc := "no_data", "нет данных"
+		if res.ErrCode != 0 {
+			code = fmt.Sprintf("0x%02X", res.ErrCode)
+			desc = deyeErrCodeName(res.ErrCode)
+		}
+		if pg != nil && errState != nil && errState.failure(key, code, now, mapNoDataLogAfter) {
 			if e := pg.InsertDeviceError(key, kind, code, desc, now); e != nil {
 				log.Printf("error pg %s: %v", key, e)
+			} else {
+				errState.markLogged(key, code)
 			}
 		}
 		return

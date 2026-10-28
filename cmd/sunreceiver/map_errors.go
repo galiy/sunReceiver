@@ -104,7 +104,8 @@ var mapErrCells = []mapErrCell{
 		{2, "3ф: выход за окно синхронизации"},
 		{4, "Ошибка I2C BMS"},
 		{8, "Ошибка I2C MPPT"},
-		{0x10, "Устаревшее ПО MPPT (<4.0)"},
+		// 0x10 «Устаревшее ПО MPPT (<4.0)» — информационный флаг версии, не
+		// авария: в историю ошибок не пишем.
 		{0x20, "Ошибка синхронизации параллельных МАП"},
 		{0x40, "Ведомый МАП без сети"},
 	}},
@@ -162,14 +163,19 @@ func runMapErrorPoll(pg *pgStore, ctx context.Context) {
 			cur[a] = true
 		}
 		now := time.Now()
+		next := make(map[string]bool, len(cur))
 		for a := range cur {
-			if !last[a] {
-				if e := pg.InsertDeviceError("map", "map", a, a, now); e != nil {
-					log.Printf("map errors pg: %v", e)
-				}
+			if last[a] {
+				next[a] = true
+				continue
 			}
+			if e := pg.InsertDeviceError("map", "map", a, a, now); e != nil {
+				log.Printf("map errors pg: %v", e)
+				continue // повторим запись на следующем тике
+			}
+			next[a] = true
 		}
-		last = cur
+		last = next
 	}
 	poll()
 	ticker := time.NewTicker(mapErrPollInterval)

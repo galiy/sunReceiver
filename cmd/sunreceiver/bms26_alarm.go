@@ -29,15 +29,16 @@ import (
 //       биты 0..3   — код charge_mos (0..15)
 //       биты 4..7   — код discharge_mos (0..15)
 //       биты 8..11  — код balancer (0..10)
-//       биты 12..27 — system log (u16, бит k → alarm bit 12+k)
+//       биты 12..27 — system log (статус, в тревоги не включается)
 //   - EnBMS-RS485 (docs/bms/enbms-rs485.md §«Раскладка alarm»):
 //       биты 0..63   — ячейки, 16×4 (HVwarn, OVprot, LVwarn, UVprot)
 //       биты 64..95  — температуры, 8×4 (тот же порядок)
 //       биты 96..99  — одиночные warn (env, power, chargecurrent, customer)
 //       биты 100..146— Ext_Bit Byte0..5 (Byte5 — биты 0..6)
 //
-// Значения «нет тревоги» — 0 (для кодов MOS AntBMS норма = 0/1). Тексты — как у
-// прежних BMS-страниц (переиспользуем те же функции/таблицы).
+// Нормальные коды MOS AntBMS: charge 0/1/4/15, discharge 0/1/11/15,
+// balancer 0/1/2/4. Остальные коды считаются авариями. Тексты — как у прежних
+// BMS-страниц (переиспользуем те же функции/таблицы).
 
 // alarmBit — установлен ли бит bit в 19-байтном alarm.
 func alarmBit(a []int, bit int) bool {
@@ -92,7 +93,7 @@ func decodeBms26Alarms(sn bms26Snapshot) (alarms, protections []string) {
 	}
 }
 
-// decodeAntBms26Alarms — коды MOS (4 бита) + system log (16 бит) AntBMS.
+// decodeAntBms26Alarms — коды MOS (4 бита) AntBMS; system log не разбирается.
 func decodeAntBms26Alarms(a []int) []string {
 	charge := map[int]string{
 		2: "Overvoltage protection", 3: "Over current protection", 5: "Total overpressure",
@@ -113,25 +114,21 @@ func decodeAntBms26Alarms(a []int) []string {
 		}
 		return fmt.Sprintf("code %d", code)
 	}
-	if c := alarmNibble(a, 0); c >= 2 {
+	// Нормальные состояния MOS, которые не являются аварией:
+	// charge 0/1 (off/open), 4 (battery full), 15 (manually closed);
+	// discharge 0/1, 11 (charge on), 15; balancer 0/1/2/4 — штатные режимы
+	// балансировки. Незнакомые коды (в т.ч. 3 и 10 — перегрев) не теряем.
+	if c := alarmNibble(a, 0); c >= 2 && c != 4 && c != 15 {
 		out = append(out, "Charge: "+pick(c, charge))
 	}
-	if c := alarmNibble(a, 4); c >= 2 {
+	if c := alarmNibble(a, 4); c >= 2 && c != 11 && c != 15 {
 		out = append(out, "Discharge: "+pick(c, disch))
 	}
-	if c := alarmNibble(a, 8); c >= 2 {
+	if c := alarmNibble(a, 8); c >= 2 && c != 2 && c != 4 {
 		out = append(out, "Balance: "+pick(c, bal))
 	}
-	sys := 0
-	for k := 0; k < 16; k++ {
-		if alarmBit(a, 12+k) {
-			sys |= 1 << uint(k)
-		}
-	}
-	if sys != 0 {
-		out = append(out, fmt.Sprintf("System log: status=%d battery=%d order=%d chg/dis=%d",
-			sys&0x1F, (sys>>5)&0x1F, (sys>>10)&0x1F, (sys>>15)&1))
-	}
+	// System log (биты 12..27) — статусное слово (status/battery#/order/chg-dis),
+	// а не код неисправности; в тревоги/историю ошибок не включаем.
 	return out
 }
 

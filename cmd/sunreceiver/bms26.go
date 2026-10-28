@@ -35,6 +35,11 @@ import (
 // 10 с при периоде опроса 1 с — запас на сетевую/планировочную дрожь.
 const bms26StaleAfter = 10 * time.Second
 
+// bmsWarnDedupWindow — окно дедупликации предупреждений (Warn) BMS: если такой же
+// Warn уже записан недавно, повтор не пишем. Warn (в отличие от Protect) может
+// кратко пропадать и появляться при заряде, поэтому одного state-дедупа мало.
+const bmsWarnDedupWindow = 10 * time.Minute
+
 const (
 	// bms26WarnCooldown — минимальный интервал между однотипными предупреждениями
 	// (дубли serial, 404/потеря слота, stale, ошибки HTTP/декодирования). Лог не
@@ -585,6 +590,11 @@ func runBms26Poll(store *redisStore, pg *pgStore, ctx context.Context) {
 					}
 					cur[serial] = string(b)
 				}
+				// История ошибок: аварии объединяются по serial за ОДИН опрос, а не
+				// перезаписываются снимком последнего источника (при дублях R1 это
+				// давало повторную запись активной тревоги).
+				pollAlarms := map[string]map[string]bool{}
+				pollWarn := map[string]map[string]bool{}
 				for _, sn := range snaps {
 					// Stale-снимок не выдаём в историю как новое измерение: значение
 					// старое, новая метка времени исказила бы график. current хранит
@@ -596,24 +606,47 @@ func runBms26Poll(store *redisStore, pg *pgStore, ctx context.Context) {
 						log.Printf("bms26 redis series %s: %v", sn.Serial, err)
 					}
 					acc.add(sn, now)
-					// История ошибок: пишем только ПОЯВЛЕНИЕ новой тревоги/защиты.
-					if pg != nil {
-						curAlarms := map[string]bool{}
-						for _, al := range sn.Alarms {
-							curAlarms[al] = true
-						}
-						for _, pr := range sn.Protections {
-							curAlarms[pr] = true
-						}
-						prev := lastAlarms[sn.Serial]
+					if pg == nil {
+						continue
+					}
+					if pollAlarms[sn.Serial] == nil {
+						pollAlarms[sn.Serial] = map[string]bool{}
+						pollWarn[sn.Serial] = map[string]bool{}
+					}
+					for _, al := range sn.Alarms {
+						pollAlarms[sn.Serial][al] = true
+						pollWarn[sn.Serial][al] = true
+					}
+					for _, pr := range sn.Protections {
+						pollAlarms[sn.Serial][pr] = true
+						delete(pollWarn[sn.Serial], pr)
+					}
+				}
+				if pg != nil {
+					for serial, curAlarms := range pollAlarms {
+						prev := lastAlarms[serial]
+						next := make(map[string]bool, len(curAlarms))
 						for al := range curAlarms {
-							if prev == nil || !prev[al] {
-								if err := pg.InsertDeviceError(sn.Serial, "bms", al, al, now); err != nil {
-									log.Printf("bms26 error pg %s: %v", sn.Serial, err)
+							if prev != nil && prev[al] {
+								next[al] = true
+								continue
+							}
+							if pollWarn[serial][al] {
+								exists, err := pg.DeviceErrorSince(serial, "bms", al, now.Add(-bmsWarnDedupWindow))
+								if err != nil {
+									log.Printf("bms26 error pg check %s: %v", serial, err)
+								} else if exists {
+									next[al] = true // уже записан в окне дедупа
+									continue
 								}
 							}
+							if err := pg.InsertDeviceError(serial, "bms", al, al, now); err != nil {
+								log.Printf("bms26 error pg %s: %v", serial, err)
+								continue // повторим запись на следующем опросе
+							}
+							next[al] = true
 						}
-						lastAlarms[sn.Serial] = curAlarms
+						lastAlarms[serial] = next
 					}
 				}
 				if err := store.SaveBms26Current(cur); err != nil {

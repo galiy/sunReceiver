@@ -233,6 +233,13 @@ func gridValues(doc gridDeviceDoc, brand string) valuesContract {
 	return vc
 }
 
+// gridNoUtilityCode — код «нет сети» (F35 AC_NoUtility). Это штатное состояние,
+// но оператор просит фиксировать его переходы: появление и восстановление.
+func gridNoUtilityCode(code string) bool {
+	c := strings.ToUpper(strings.TrimSpace(code))
+	return c == "F35" || strings.HasPrefix(c, "F35:") || strings.HasPrefix(c, "F35 ")
+}
+
 // gridAlarmCodes возвращает стабильные коды активных аварий: первично alarms[],
 // резерв — непустые alarm_words. Собственной расшифровки не заводим.
 func gridAlarmCodes(doc gridDeviceDoc) []string {
@@ -240,6 +247,11 @@ func gridAlarmCodes(doc gridDeviceDoc) []string {
 	seen := map[string]bool{}
 	add := func(code string) {
 		code = strings.TrimSpace(code)
+		// F35 может приходить в разных текстовых вариантах — канонизируем, иначе
+		// смена варианта между опросами выглядит как новая авария.
+		if gridNoUtilityCode(code) {
+			code = "F35"
+		}
 		if code == "" || seen[code] {
 			return
 		}
@@ -403,23 +415,45 @@ func runGridPoll(store *redisStore, pg *pgStore, src *malina26Source, stop conte
 				lastSeen[snap.InverterSN] = last
 			}
 			// Ошибки/аварии: только появление, ключ (serial, kind, code).
+			// F35 — переходы состояния: одно появление и одно восстановление.
+			// ts берём момент обнаружения перехода, а не last_seen API (он может
+			// «замерзнуть» и схлопнуть разные события по PK).
+			evtTS := time.Now()
 			codes := gridAlarmCodes(r.doc)
 			cur := make(map[string]bool, len(codes))
 			for _, c := range codes {
 				cur[c] = true
 			}
 			prev := lastAlarms[snap.InverterSN]
-			if pg != nil {
+			next := make(map[string]bool, len(cur))
+			if pg == nil {
+				next = cur
+			} else {
 				for _, code := range codes {
 					if prev != nil && prev[code] {
+						next[code] = true
 						continue
 					}
-					if e := pg.InsertDeviceErrorNamed(snap.InverterSN, snap.Name, "inverter", code, code, ts); e != nil {
+					msg := code
+					if code == "F35" {
+						msg = "F35: нет сети (AC_NoUtility)"
+					}
+					if e := pg.InsertDeviceErrorNamed(snap.InverterSN, snap.Name, "inverter", code, msg, evtTS); e != nil {
+						// Не помечаем активным: на следующем цикле повторим запись.
 						log.Printf("error pg grid %s: %v", snap.InverterSN, e)
+						continue
+					}
+					next[code] = true
+				}
+				// «Сеть восстановлена» — отдельная запись ровно один раз на переход.
+				if prev["F35"] && !cur["F35"] {
+					if e := pg.InsertDeviceErrorNamed(snap.InverterSN, snap.Name, "inverter", "F35_clear", "F35: сеть восстановлена", evtTS); e != nil {
+						log.Printf("error pg grid %s: %v", snap.InverterSN, e)
+						next["F35"] = true // повторим восстановление на следующем цикле
 					}
 				}
 			}
-			lastAlarms[snap.InverterSN] = cur
+			lastAlarms[snap.InverterSN] = next
 		}
 		// Чистим состояние исчезнувших из списка устройств (без утечки карт).
 		for k := range lastSeen {
@@ -427,11 +461,9 @@ func runGridPoll(store *redisStore, pg *pgStore, src *malina26Source, stop conte
 				delete(lastSeen, k)
 			}
 		}
-		for k := range lastAlarms {
-			if !active[k] {
-				delete(lastAlarms, k)
-			}
-		}
+		// lastAlarms НЕ чистим по отсутствию в текущем ответе: кратковременный сбой
+		// API/сети не должен превращать продолжающуюся аварию в новую запись.
+		// Состояние ограничено числом известных устройств.
 		for k := range newKeyWarned {
 			if !active[k] {
 				delete(newKeyWarned, k)

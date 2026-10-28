@@ -18,12 +18,26 @@ func TestDecodeBms26AlarmsAnt(t *testing.T) {
 	if len(out) != 1 || out[0] != "Charge: Overvoltage protection" {
 		t.Fatalf("ant alarms=%v", out)
 	}
-	// system log: бит 0 → status=1
+	// system log — статусное слово, а не авария.
 	a2 := make([]int, 19)
 	setBits(a2, 12, 16, 1)
-	out2 := decodeAntBms26Alarms(a2)
-	if len(out2) != 1 {
-		t.Fatalf("ant syslog alarms=%v", out2)
+	if out2 := decodeAntBms26Alarms(a2); len(out2) != 0 {
+		t.Fatalf("ant syslog не должен быть аварией: %v", out2)
+	}
+}
+
+func TestDecodeBms26AlarmsAntNormalStates(t *testing.T) {
+	a := make([]int, 19)
+	setBits(a, 0, 4, 4)  // charge: battery full — норма
+	setBits(a, 4, 4, 11) // discharge: charge on — норма
+	setBits(a, 8, 4, 2)  // balancer: charge differential pressure balance — норма
+	if out := decodeAntBms26Alarms(a); len(out) != 0 {
+		t.Fatalf("нормальные состояния не должны быть авариями: %v", out)
+	}
+	a = make([]int, 19)
+	setBits(a, 8, 4, 3) // balancer: over temperature — авария
+	if out := decodeAntBms26Alarms(a); len(out) != 1 || out[0] != "Balance: Balance overtemperature" {
+		t.Fatalf("перегрев балансира: %v", out)
 	}
 }
 

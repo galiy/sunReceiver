@@ -560,6 +560,13 @@
     'Конфликт serial':'序列号冲突',
     'устройств с одинаковым serial — данные смешаны в общий ряд.':'个设备使用相同序列号——数据已混入同一序列。'
   });
+  // История ошибок: переходы состояния «нет сети» инвертора.
+  Object.assign(DICT.en,{
+    'F35: сеть восстановлена':'F35: grid restored'
+  });
+  Object.assign(DICT.zh,{
+    'F35: сеть восстановлена':'F35：电网已恢复'
+  });
   function init(){ buildSwitcher(); apply(); startObserver(); setInterval(translateCharts,3000); }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',init); else init();
 })();
