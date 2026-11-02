@@ -95,11 +95,11 @@ func dts017BcdEncode(t time.Time) []uint16 {
 	}
 }
 
-// checkAndSyncDts017Time читает время счётчика и, если оно расходится с now более
-// чем на dts017TimeTol, записывает теперь текущее локальное время. Возвращает
+// checkAndSyncDts017Time читает время счётчика и, если оно расходится с локальным
+// более чем на dts017TimeTol, записывает текущее локальное время. Возвращает
 // показанное счётчиком время, факт коррекции и ошибку.
-func checkAndSyncDts017Time(ctx context.Context, client *meterClient, now time.Time) (meterTime time.Time, corrected bool, err error) {
-	regs, err := client.ReadHoldingRegisters(ctx, dts017RegTime, dts017TimeCount)
+func checkAndSyncDts017Time(ctx context.Context, client *meterClient) (meterTime time.Time, corrected bool, err error) {
+	regs, err := readDts017Block(ctx, client, dts017RegTime, dts017TimeCount)
 	if err != nil {
 		return time.Time{}, false, fmt.Errorf("чтение времени: %w", err)
 	}
@@ -107,6 +107,9 @@ func checkAndSyncDts017Time(ctx context.Context, client *meterClient, now time.T
 	if !ok {
 		return time.Time{}, false, fmt.Errorf("некорректный BCD времени: %04X %04X %04X", regs[0], regs[1], regs[2])
 	}
+	// Локальное время — сразу после успешного чтения: повтор мог занять секунды,
+	// иначе коррекция сдвинула бы счётчик назад.
+	now := time.Now()
 	diff := now.Sub(mt)
 	if diff < 0 {
 		diff = -diff

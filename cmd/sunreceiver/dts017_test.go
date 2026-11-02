@@ -17,8 +17,14 @@
 package main
 
 import (
+	"context"
+	"encoding/binary"
+	"net"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/galiy/sunReceiver/internal/solarman"
 )
 
 // putLong пишет 32-битное значение (старшее слово первым) в срез регистров.
@@ -174,4 +180,121 @@ func TestDts017FromSection(t *testing.T) {
 	if _, err := dts017FromSection(&dts017Section{Disabled: &fa}); err == nil {
 		t.Errorf("incomplete: expected error")
 	}
+}
+
+// TestPollDts017RetriesOnce: первый ответ задерживается дольше таймаута, TCP не
+// рвётся, повтор того же блока на том же соединении успешен.
+func TestPollDts017RetriesOnce(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	var conns int32
+	var delayed int32
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		atomic.AddInt32(&conns, 1)
+		defer conn.Close()
+		for {
+			req := make([]byte, 8)
+			if _, err := readFullForTest(conn, req); err != nil {
+				return
+			}
+			start := uint16(req[2])<<8 | uint16(req[3])
+			count := uint16(req[4])<<8 | uint16(req[5])
+			// Первый запрос телеметрии задерживаем дольше клиентского таймаута.
+			if start == dts017RegTelemetry && atomic.CompareAndSwapInt32(&delayed, 0, 1) {
+				time.Sleep(300 * time.Millisecond)
+			}
+			resp := []byte{req[0], req[1], byte(2 * count)}
+			for i := uint16(0); i < count; i++ {
+				resp = binary.BigEndian.AppendUint16(resp, 0)
+			}
+			crc := solarman.CRC16Modbus(resp)
+			resp = append(resp, byte(crc), byte(crc>>8))
+			if _, err := conn.Write(resp); err != nil {
+				return
+			}
+		}
+	}()
+
+	c := newMeterClient(ln.Addr().String(), 1, true)
+	c.Func = 0x04
+	c.IOTimeout = 100 * time.Millisecond
+	c.KeepConnOnTimeout = true
+	vals, _, err := pollDts017(context.Background(), c)
+	if err != nil {
+		t.Fatalf("pollDts017: %v", err)
+	}
+	if len(vals) == 0 {
+		t.Fatal("пустые values")
+	}
+	if n := atomic.LoadInt32(&conns); n != 1 {
+		t.Fatalf("соединений=%d, ожидали 1 (TCP не должен рваться)", n)
+	}
+}
+
+// TestPollDts017SkipsStaleFrame: на повтор счётчик отвечает дважды (на исходный
+// и на повторный запрос). Второй (лишний) кадр телеметрии остаётся в сокете и
+// не должен ломать чтение следующего блока энергий — он пропускается по
+// несовпадению bytecount/CRC.
+func TestPollDts017SkipsStaleFrame(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	var conns, teleReqs int32
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		atomic.AddInt32(&conns, 1)
+		defer conn.Close()
+		for {
+			req := make([]byte, 8)
+			if _, err := readFullForTest(conn, req); err != nil {
+				return
+			}
+			start := uint16(req[2])<<8 | uint16(req[3])
+			count := uint16(req[4])<<8 | uint16(req[5])
+			if start == dts017RegTelemetry {
+				if atomic.AddInt32(&teleReqs, 1) == 1 {
+					continue // первый запрос «теряется»
+				}
+				writeDtsFrame(conn, req[0], req[1], count)
+				continue
+			}
+			// На запрос энергий сначала приходит запоздавший кадр телеметрии
+			// (уже после drain), затем настоящий ответ.
+			writeDtsFrame(conn, req[0], req[1], dts017TelemetryCount)
+			writeDtsFrame(conn, req[0], req[1], count)
+		}
+	}()
+
+	c := newMeterClient(ln.Addr().String(), 1, true)
+	c.Func = 0x04
+	c.IOTimeout = 100 * time.Millisecond
+	c.KeepConnOnTimeout = true
+	if _, _, err := pollDts017(context.Background(), c); err != nil {
+		t.Fatalf("pollDts017: %v", err)
+	}
+	if n := atomic.LoadInt32(&conns); n != 1 {
+		t.Fatalf("соединений=%d, ожидали 1", n)
+	}
+}
+
+func writeDtsFrame(conn net.Conn, unit, fn byte, count uint16) {
+	resp := []byte{unit, fn, byte(2 * count)}
+	for i := uint16(0); i < count; i++ {
+		resp = binary.BigEndian.AppendUint16(resp, 0)
+	}
+	crc := solarman.CRC16Modbus(resp)
+	resp = append(resp, byte(crc), byte(crc>>8))
+	conn.Write(resp)
 }

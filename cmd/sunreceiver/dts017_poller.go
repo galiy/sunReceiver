@@ -23,20 +23,50 @@ import (
 	"time"
 )
 
-// pollDts017 читает телеметрию (0x0000, 29 рег.) и блок энергий (0x001D, 52 рег.)
-// счётчика DTS017M и возвращает снимок values и накопительные показания Import/Export.
-// При ошибке — ok=false.
-func pollDts017(ctx context.Context, c *meterClient) (map[string]float64, dts017Readings, bool) {
-	tele, err := c.ReadHoldingRegisters(ctx, dts017RegTelemetry, dts017TelemetryCount)
-	if err != nil {
-		return nil, dts017Readings{}, false
+// dts017RetryDelay — пауза перед повтором неудачного обмена. На границе минуты
+// счётчик может «замолчать» на несколько секунд; один быстрый повтор часто
+// успевает после паузы и не должен превращаться в запись «опрос не удался».
+const dts017RetryDelay = 500 * time.Millisecond
+
+// dts017FailLogAfter — сколько подряд неудачных опросов (с учётом повтора) должно
+// пройти, прежде чем писать «опрос не удался». Одиночные минутные паузы не шумят.
+const dts017FailLogAfter = 3
+
+// dts017FailLogInterval — как часто повторять лог, если отказ длится дальше.
+const dts017FailLogInterval = 10 * time.Minute
+
+// readDts017Block читает один блок с одним повтором при таймауте. Соединение
+// при таймауте без полученных байтов не закрывается (KeepConnOnTimeout): повтор
+// идёт по тому же TCP. Если счётчик успел ответить на первый запрос, ответ будет
+// вычитан как ответ на повтор — это тот же блок и те же регистры.
+func readDts017Block(ctx context.Context, c *meterClient, start, count uint16) ([]uint16, error) {
+	regs, err := c.ReadHoldingRegisters(ctx, start, count)
+	if err == nil || !isMeterTimeout(err) {
+		return regs, err
 	}
-	energy, err := c.ReadHoldingRegisters(ctx, dts017RegEnergy, dts017EnergyCount)
+	timer := time.NewTimer(dts017RetryDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-timer.C:
+	}
+	return c.ReadHoldingRegisters(ctx, start, count)
+}
+
+// pollDts017 — один цикл: телеметрия (0x0000, 29 рег.) + энергии (0x001D, 52 рег.),
+// каждый блок с повтором при таймауте.
+func pollDts017(ctx context.Context, c *meterClient) (map[string]float64, dts017Readings, error) {
+	tele, err := readDts017Block(ctx, c, dts017RegTelemetry, dts017TelemetryCount)
 	if err != nil {
-		return nil, dts017Readings{}, false
+		return nil, dts017Readings{}, err
+	}
+	energy, err := readDts017Block(ctx, c, dts017RegEnergy, dts017EnergyCount)
+	if err != nil {
+		return nil, dts017Readings{}, err
 	}
 	vals, r := decodeDts017(tele, energy)
-	return vals, r, true
+	return vals, r, nil
 }
 
 // runDts017Poll — цикл опроса счётчика DTS017M с периодом cfg.PollInterval:
@@ -54,26 +84,32 @@ func runDts017Poll(store *redisStore, pg *pgStore, cfg *dts017Config, ctx contex
 	client := newMeterClient(fmt.Sprintf("%s:%d", cfg.IP, cfg.Port), cfg.Unit, cfg.RTU)
 	// DTS017M документирован под функцию чтения 0x04 (input registers).
 	client.Func = 0x04
+	// На границе минуты счётчик ~4–5 с не отвечает; запрос в это окно теряется.
+	// Ждём ответ 1 с, не рвём TCP и повторяем тот же блок через 500 мс.
+	client.IOTimeout = time.Second
+	client.KeepConnOnTimeout = true
 	var capture *dts017TariffCapture
 	if pg != nil {
 		capture = newDts017TariffCapture(pg)
 	}
 	ticker := time.NewTicker(cfg.PollInterval)
 	defer ticker.Stop()
-	const failLogInterval = 10 * time.Minute
+	failStreak := 0
 	var lastFailLog time.Time
-	var wasFailing bool
 	// lastTimeCheck — время последней проверки часов счётчика (в памяти; при старте
 	// нулевое => стартовая проверка на первом же тике). Раз в dts017TimeCheck
 	// сверяем время счётчика с локальным и при расхождении > dts017TimeTol пишем.
 	var lastTimeCheck time.Time
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		select {
 		case <-ticker.C:
 			now := time.Now()
 			if lastTimeCheck.IsZero() || now.Sub(lastTimeCheck) >= dts017TimeCheck {
 				lastTimeCheck = now
-				mt, corrected, terr := checkAndSyncDts017Time(ctx, client, now)
+				mt, corrected, terr := checkAndSyncDts017Time(ctx, client)
 				switch {
 				case terr != nil:
 					log.Printf("dts017m %s: синхронизация времени: %v", cfg.IP, terr)
@@ -85,19 +121,28 @@ func runDts017Poll(store *redisStore, pg *pgStore, cfg *dts017Config, ctx contex
 						cfg.IP, mt.Format("2006-01-02 15:04:05"))
 				}
 			}
-			vals, readings, ok := pollDts017(ctx, client)
-			if !ok {
-				if !wasFailing || now.Sub(lastFailLog) >= failLogInterval {
-					log.Printf("dts017m %s: опрос не удался", cfg.IP)
-					lastFailLog = now
+			vals, readings, perr := pollDts017(ctx, client)
+			if ctx.Err() != nil {
+				return
+			}
+			if perr != nil {
+				failStreak++
+				logNow := time.Now()
+				if failStreak >= dts017FailLogAfter &&
+					(failStreak == dts017FailLogAfter || logNow.Sub(lastFailLog) >= dts017FailLogInterval) {
+					log.Printf("dts017m %s: опрос не удался (%d подряд): %v", cfg.IP, failStreak, perr)
+					lastFailLog = logNow
 				}
-				wasFailing = true
 				continue
 			}
-			if wasFailing {
-				log.Printf("dts017m %s: опрос восстановлен", cfg.IP)
-				wasFailing = false
+			if failStreak > 0 {
+				if failStreak >= dts017FailLogAfter {
+					log.Printf("dts017m %s: опрос восстановлен (после %d неудачных)", cfg.IP, failStreak)
+				}
+				failStreak = 0
 			}
+			// Время успешного снятия, а не начала тика: повтор мог занять секунды.
+			now = time.Now()
 			snap := dts017Snapshot{
 				Name:      cfg.Name,
 				Timestamp: now.Format(time.RFC3339),

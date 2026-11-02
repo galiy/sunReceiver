@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -45,10 +46,33 @@ type meterClient struct {
 	// Func — код функции чтения (0x03 holding / 0x04 input). 0 = 0x03 по
 	// умолчанию (DDS238). Счётчик DTS017M документирован под 0x04.
 	Func byte
+	// IOTimeout — таймаут одного обмена (0 — 3 с). Для медленных устройств можно
+	// увеличить.
+	IOTimeout time.Duration
+	// KeepConnOnTimeout (только RTU) — не закрывать TCP при таймауте ожидания
+	// ответа, если ни одного байта не получено (запрос потерян/устройство
+	// временно молчит). Соединение переиспользуется следующим запросом;
+	// частично прочитанный кадр по-прежнему требует переподключения.
+	KeepConnOnTimeout bool
 
 	mu   sync.Mutex
 	conn net.Conn
 	txn  uint16
+}
+
+// ioTimeout возвращает таймаут обмена.
+func (c *meterClient) ioTimeout() time.Duration {
+	if c.IOTimeout > 0 {
+		return c.IOTimeout
+	}
+	return 3 * time.Second
+}
+
+// isMeterTimeout сообщает, что ошибка — таймаут ожидания (deadline).
+func isMeterTimeout(err error) bool {
+	type timeout interface{ Timeout() bool }
+	var te timeout
+	return errors.As(err, &te) && te.Timeout()
 }
 
 // fn возвращает код функции чтения: Func, если задан, иначе 0x03.
@@ -91,7 +115,7 @@ func (c *meterClient) nextTxn() uint16 { c.txn++; return c.txn }
 // writeReqLocked отправляет готовый кадр по соединению. При ошибке записи
 // переподнимает соединение один раз и повторяет отправку.
 func (c *meterClient) writeReqLocked(ctx context.Context, req []byte) error {
-	if err := c.conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+	if err := c.conn.SetDeadline(time.Now().Add(c.ioTimeout())); err != nil {
 		return fmt.Errorf("meter set deadline: %w", err)
 	}
 	if _, err := c.conn.Write(req); err != nil {
@@ -100,7 +124,7 @@ func (c *meterClient) writeReqLocked(ctx context.Context, req []byte) error {
 		if derr := c.dial(ctx); derr != nil {
 			return derr
 		}
-		if err := c.conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		if err := c.conn.SetDeadline(time.Now().Add(c.ioTimeout())); err != nil {
 			return fmt.Errorf("meter set deadline: %w", err)
 		}
 		if _, err := c.conn.Write(req); err != nil {
@@ -131,7 +155,7 @@ func (c *meterClient) drainLocked() {
 // (Modbus TCP / Modbus RTU поверх TCP).
 //
 // Уважает ctx только на этапе dial (DialContext): при отмене (стоп сервиса)
-// медленное подключение прерывается. Чтение ограничено 3-сек read-deadline.
+// медленное подключение прерывается. Чтение ограничено ioTimeout().
 func (c *meterClient) ReadHoldingRegisters(ctx context.Context, start, count uint16) ([]uint16, error) {
 	if count == 0 {
 		return nil, fmt.Errorf("meter: пустой count")
@@ -414,39 +438,75 @@ func (c *meterClient) readRTULocked(ctx context.Context, start, count uint16) ([
 		return nil, err
 	}
 
-	// Заголовок ответа: unit, func, bytecount/exception-code.
+	// Заголовок ответа: unit, func, bytecount/exception-code. Если на связи
+	// остался запоздавший ответ на предыдущий запрос другого блока (bytecount
+	// отличается, но кадр валиден по CRC), пропускаем его один раз и читаем
+	// следующий — иначе сохранение TCP после таймаута давало бы ложные сбои.
 	hdr := make([]byte, 3)
-	if _, err := modbusmap.ReadFull(c.conn, hdr); err != nil {
-		c.closeConn()
-		return nil, fmt.Errorf("meter rtu read header: %w", err)
-	}
-	if hdr[0] != c.Unit {
-		c.closeConn()
-		return nil, fmt.Errorf("meter rtu: несовпадение unit id: ожидался %d, получен %d", c.Unit, hdr[0])
-	}
-	if hdr[1]&0x80 != 0 {
-		// Exception: unit, func|0x80, код, CRC(2).
-		tail := make([]byte, 2)
-		if _, err := modbusmap.ReadFull(c.conn, tail); err != nil {
-			c.closeConn()
-			return nil, fmt.Errorf("meter rtu read exception crc: %w", err)
+	for skipped := 0; ; skipped++ {
+		n, err := modbusmap.ReadFull(c.conn, hdr)
+		if err != nil {
+			// Таймаут без единого байта — штатная ситуация для DTS017M (пауза на
+			// границе минуты). Соединение не рвём: следующий запрос переиспользует его.
+			if !(c.KeepConnOnTimeout && n == 0 && isMeterTimeout(err)) {
+				c.closeConn()
+			}
+			return nil, fmt.Errorf("meter rtu read header: %w", err)
 		}
-		frame := append(hdr, tail...)
-		if !meterRTUCRCOK(frame) {
+		if hdr[0] != c.Unit {
 			c.closeConn()
-			return nil, fmt.Errorf("meter rtu: некорректный CRC16 в exception-кадре")
+			return nil, fmt.Errorf("meter rtu: несовпадение unit id: ожидался %d, получен %d", c.Unit, hdr[0])
 		}
-		return nil, fmt.Errorf("meter: modbus exception func=0x%02X code=0x%02X", hdr[1], hdr[2])
-	}
-	if hdr[1] != c.fn() {
-		c.closeConn()
-		return nil, fmt.Errorf("meter rtu: неожиданная функция 0x%02X (ждали 0x%02X)", hdr[1], c.fn())
-	}
-	bc := int(hdr[2])
-	if bc != 2*int(count) {
+		if hdr[1]&0x80 != 0 {
+			// Exception: unit, func|0x80, код, CRC(2).
+			tail := make([]byte, 2)
+			if _, err := modbusmap.ReadFull(c.conn, tail); err != nil {
+				c.closeConn()
+				return nil, fmt.Errorf("meter rtu read exception crc: %w", err)
+			}
+			frame := append(hdr, tail...)
+			if !meterRTUCRCOK(frame) {
+				c.closeConn()
+				return nil, fmt.Errorf("meter rtu: некорректный CRC16 в exception-кадре")
+			}
+			if c.KeepConnOnTimeout {
+				// Нельзя отличить запоздавший exception от ответа на текущий
+				// запрос — рвём соединение, чтобы не оставить чужой кадр в сокете.
+				c.closeConn()
+			}
+			return nil, fmt.Errorf("meter: modbus exception func=0x%02X code=0x%02X", hdr[1], hdr[2])
+		}
+		if hdr[1] != c.fn() {
+			c.closeConn()
+			return nil, fmt.Errorf("meter rtu: неожиданная функция 0x%02X (ждали 0x%02X)", hdr[1], c.fn())
+		}
+		bc := int(hdr[2])
+		if bc == 2*int(count) {
+			break
+		}
+		if skipped == 0 && bc > 0 && bc <= 250 && bc%2 == 0 {
+			stale := make([]byte, bc+2)
+			if _, err := modbusmap.ReadFull(c.conn, stale); err != nil {
+				c.closeConn()
+				return nil, fmt.Errorf("meter rtu read stale frame: %w", err)
+			}
+			frame := append(hdr, stale...)
+			if !meterRTUCRCOK(frame) {
+				c.closeConn()
+				return nil, fmt.Errorf("meter rtu: некорректный CRC16 в устаревшем кадре")
+			}
+			// Продлеваем окно на ответ текущего запроса: устаревший кадр мог
+			// израсходовать почти весь deadline.
+			if err := c.conn.SetReadDeadline(time.Now().Add(c.ioTimeout())); err != nil {
+				c.closeConn()
+				return nil, fmt.Errorf("meter rtu set deadline: %w", err)
+			}
+			continue // кадр дочитан и отброшен, читаем ответ на текущий запрос
+		}
 		c.closeConn()
 		return nil, fmt.Errorf("meter rtu: bytecount=%d, ждали %d", bc, 2*int(count))
 	}
+	bc := int(hdr[2])
 	// Данные + CRC(2).
 	rest := make([]byte, bc+2)
 	if _, err := modbusmap.ReadFull(c.conn, rest); err != nil {
