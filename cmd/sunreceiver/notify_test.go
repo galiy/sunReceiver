@@ -18,8 +18,11 @@ package main
 
 import (
 	"context"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -430,5 +433,137 @@ func TestAlertDetectorShortAlarmNoFalseRecover(t *testing.T) {
 	}
 	if msg, _, ok := d.evaluate(now.Add(60*time.Second), false, build); ok {
 		t.Fatalf("ложное восстановление после удержания: msg=%q", msg)
+	}
+}
+
+// manualDeadlineCtx — контекст, который переводится в DeadlineExceeded по
+// команде теста (детерминированно, без гонки с таймером).
+type manualDeadlineCtx struct {
+	context.Context
+	done chan struct{}
+}
+
+func (c *manualDeadlineCtx) Done() <-chan struct{} { return c.done }
+func (c *manualDeadlineCtx) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+func (c *manualDeadlineCtx) Deadline() (time.Time, bool) { return time.Time{}, false }
+
+// TestPollSubscriberRoundDeadlineIsEmpty — сервер держит long-poll, клиентский
+// ctx завершается дедлайном: это штатный пустой опрос, а не ошибка. Marker не
+// теряется (next=0, вызывающий сохраняет прежний).
+func TestPollSubscriberRoundDeadlineIsEmpty(t *testing.T) {
+	gotMarker := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMarker <- r.URL.Query().Get("marker")
+		<-r.Context().Done() // держим запрос до отмены клиентом
+	}))
+	defer srv.Close()
+	orig := maxAPIBase
+	maxAPIBase = srv.URL
+	defer func() { maxAPIBase = orig }()
+
+	ctx := &manualDeadlineCtx{Context: context.Background(), done: make(chan struct{})}
+	m := &monitorState{client: newMaxClient(&notifySection{Token: "tok"})}
+	type result struct {
+		updates  []maxUpdate
+		next     int64
+		timedOut bool
+		err      error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		updates, next, timedOut, err := m.pollSubscriberRound(ctx, 42, subscriberEvents)
+		resCh <- result{updates, next, timedOut, err}
+	}()
+
+	select {
+	case mk := <-gotMarker:
+		if mk != "42" {
+			t.Fatalf("marker в запросе = %q, want 42", mk)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("запрос не дошёл до хендлера")
+	}
+	close(ctx.done)
+
+	select {
+	case res := <-resCh:
+		if res.err != nil {
+			t.Fatalf("дедлайн не должен быть ошибкой: %v", res.err)
+		}
+		if !res.timedOut {
+			t.Fatal("ожидали timedOut=true")
+		}
+		if len(res.updates) != 0 || res.next != 0 {
+			t.Fatalf("пустой опрос: updates=%v next=%d", res.updates, res.next)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("опрос не завершился после дедлайна")
+	}
+}
+
+// TestPollSubscriberRoundEvents — события и marker обрабатываются как раньше.
+func TestPollSubscriberRoundEvents(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"updates":[{"update_type":"bot_started","chat_id":1,"user":{"user_id":2}}],"marker":43}`))
+	}))
+	defer srv.Close()
+	orig := maxAPIBase
+	maxAPIBase = srv.URL
+	defer func() { maxAPIBase = orig }()
+
+	m := &monitorState{client: newMaxClient(&notifySection{Token: "tok"})}
+	updates, next, timedOut, err := m.pollSubscriberRound(context.Background(), 42, subscriberEvents)
+	if err != nil || timedOut {
+		t.Fatalf("events: err=%v timedOut=%v", err, timedOut)
+	}
+	if len(updates) != 1 || updates[0].UpdateType != "bot_started" || next != 43 {
+		t.Fatalf("events=%v next=%d", updates, next)
+	}
+}
+
+type timeoutNetErr struct{}
+
+func (timeoutNetErr) Error() string   { return "i/o timeout" }
+func (timeoutNetErr) Timeout() bool   { return true }
+func (timeoutNetErr) Temporary() bool { return true }
+
+func TestIsLongPollTimeout(t *testing.T) {
+	if !isLongPollTimeout(context.DeadlineExceeded) {
+		t.Fatal("context.DeadlineExceeded должен считаться long-poll таймаутом")
+	}
+	// http.Client оборачивает дедлайн контекста в *url.Error — errors.Is работает.
+	if !isLongPollTimeout(&url.Error{Op: "Get", URL: "http://x", Err: context.DeadlineExceeded}) {
+		t.Fatal("обёрнутый context deadline должен считаться long-poll таймаутом")
+	}
+	// Транспортный таймаут (dial/DNS/TLS) — реальная ошибка, не пустой опрос.
+	if isLongPollTimeout(timeoutNetErr{}) {
+		t.Fatal("транспортный timeout не должен считаться пустым long-poll")
+	}
+	var _ net.Error = timeoutNetErr{}
+	if isLongPollTimeout(errors.New("http 500")) {
+		t.Fatal("обычная ошибка не должна считаться таймаутом")
+	}
+}
+
+func TestFetchUpdatesHTTPErrorNotTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	orig := maxAPIBase
+	maxAPIBase = srv.URL
+	defer func() { maxAPIBase = orig }()
+
+	m := &monitorState{client: newMaxClient(&notifySection{Token: "tok"})}
+	_, _, err := m.fetchUpdates(context.Background(), 1, subscriberEvents)
+	if err == nil || isLongPollTimeout(err) {
+		t.Fatalf("HTTP 500: err=%v, isTimeout=%v", err, isLongPollTimeout(err))
 	}
 }

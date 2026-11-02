@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -56,6 +57,17 @@ var maxAPIBase = "https://platform-api2.max.ru"
 // Таймаут одного HTTP-запроса к API MAX (короче 5-сек клиента, чтобы цикл
 // монитора не блокировался надолго).
 const maxRequestTimeout = 5 * time.Second
+
+// Long polling /updates: параметр timeout в запросе и клиентские дедлайны.
+// Сервер MAX на холостом ходу может держать запрос дольше указанного timeout,
+// поэтому клиентский context-дедлайн должен быть заведомо больше реального
+// удержания, иначе пустой long-poll выглядит как ошибка (context deadline
+// exceeded). maxUpdatesContextTimeout — дедлайн запроса (его срабатывание =
+// штатный пустой опрос); hcLong.Timeout — транспортный предохранитель выше
+// дедлайна (+15 с); если сработает он, это уже реальная ошибка.
+const maxUpdatesPollTimeout = 25 * time.Second
+const maxUpdatesContextTimeout = 90 * time.Second
+const maxUpdatesHTTPTimeout = maxUpdatesContextTimeout + 15*time.Second
 
 // Пороги/окна мониторинга МАП (по умолчанию, переопределяются в разделе notify).
 const (
@@ -110,7 +122,7 @@ type maxClient struct {
 	userID string
 	chatID string
 	hc     *http.Client // обычный клиент (короткий таймаут) для отправки
-	hcLong *http.Client // клиент для long polling /updates (таймаут 50 с > timeout запроса)
+	hcLong *http.Client // клиент для long polling /updates (дедлайн > удержания сервером)
 }
 
 func newMaxClient(n *notifySection) *maxClient {
@@ -119,7 +131,7 @@ func newMaxClient(n *notifySection) *maxClient {
 		userID: n.UserID,
 		chatID: n.ChatID,
 		hc:     &http.Client{Timeout: maxRequestTimeout},
-		hcLong: &http.Client{Timeout: 50 * time.Second},
+		hcLong: &http.Client{Timeout: maxUpdatesHTTPTimeout},
 	}
 }
 
@@ -655,7 +667,7 @@ func (m *monitorState) fetchUpdates(ctx context.Context, marker int64, types str
 	if types != "" {
 		q.Set("types", types)
 	}
-	q.Set("timeout", "25")
+	q.Set("timeout", strconv.Itoa(int(maxUpdatesPollTimeout/time.Second)))
 	if marker > 0 {
 		q.Set("marker", strconv.FormatInt(marker, 10))
 	}
@@ -686,6 +698,24 @@ func (m *monitorState) fetchUpdates(ctx context.Context, marker int64, types str
 // адресат ещё не зафиксирован).
 const subscriberEvents = "bot_started,bot_added,bot_stopped,bot_removed,dialog_removed,message_created"
 
+// isLongPollTimeout сообщает, что ошибка — срабатывание ИМЕННО нашего
+// context-дедлайна запроса. Для /updates это штатное завершение пустого
+// long-poll, а не сетевая ошибка. Транспортные таймауты (DNS, dial, TLS) сюда
+// НЕ относятся: они должны логироваться как реальные ошибки.
+func isLongPollTimeout(err error) bool {
+	return err != nil && errors.Is(err, context.DeadlineExceeded)
+}
+
+// pollSubscriberRound — один цикл long-poll с трактовкой дедлайна как пустого
+// опроса: timedOut=true, err=nil, next=0 (marker сохраняется вызывающим).
+func (m *monitorState) pollSubscriberRound(ctx context.Context, marker int64, types string) (updates []maxUpdate, next int64, timedOut bool, err error) {
+	updates, next, err = m.fetchUpdates(ctx, marker, types)
+	if err != nil && isLongPollTimeout(err) {
+		return nil, 0, true, nil
+	}
+	return updates, next, false, err
+}
+
 // pollSubscriber — фоновый цикл сопровождения подписки бота:
 //   - адресат не задан → первое подписка-событие (bot_started/bot_added, либо
 //     написанное сообщение) фиксируется как адресат (записывается в конфиг);
@@ -706,10 +736,26 @@ func (m *monitorState) pollSubscriber(stop context.Context) {
 			return
 		default:
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-		updates, next, err := m.fetchUpdates(ctx, marker, subscriberEvents)
+		ctx, cancel := context.WithTimeout(stop, maxUpdatesContextTimeout)
+		updates, next, timedOut, err := m.pollSubscriberRound(ctx, marker, subscriberEvents)
 		cancel()
+		if stop.Err() != nil {
+			return
+		}
+		if timedOut {
+			// Пустой long-poll: сервер держал запрос дольше нашего дедлайна.
+			// Не ошибка, marker не трогаем; короткая пауза и повтор.
+			select {
+			case <-stop.Done():
+				return
+			case <-time.After(time.Second):
+			}
+			continue
+		}
 		if err != nil {
+			if errors.Is(err, context.Canceled) && stop.Err() != nil {
+				return
+			}
 			if time.Since(lastErr) >= 30*time.Second {
 				log.Printf("notify: опрос событий подписчика не удался: %v", err)
 				lastErr = time.Now()
@@ -727,7 +773,7 @@ func (m *monitorState) pollSubscriber(stop context.Context) {
 		for _, up := range updates {
 			m.handleSubscriberEvent(up)
 		}
-		// Длинный опрос ~25с; если событий не было, делаем короткую паузу.
+		// Long-poll; если событий не было, делаем короткую паузу.
 		if len(updates) == 0 {
 			select {
 			case <-stop.Done():
