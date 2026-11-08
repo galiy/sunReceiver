@@ -314,6 +314,101 @@ func TestInputRequiredDedupAndUnblock(t *testing.T) {
 	}
 }
 
+func TestWaitForAnswerPrefixesBrowserPrompt(t *testing.T) {
+	c, srv := newTestDSHClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var env struct {
+			RPCID  string `json:"rpcId"`
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&env)
+		switch env.Method {
+		case "session/wait":
+			writeRemoteResult(t, w, env.RPCID, map[string]any{
+				"reason": "idle",
+				"state":  map[string]any{"cursor": 10},
+			})
+		case "session/events":
+			rec := func(typ string, seq int64, data any) map[string]any {
+				return map[string]any{"type": "event", "event": map[string]any{
+					"type": typ, "seq": seq, "data": data,
+				}}
+			}
+			user := rec("user/message", 1, map[string]any{
+				"content": []any{map[string]any{"type": "text", "text": "Вопрос из браузера?"}},
+				"source":  map[string]any{"kind": "user", "rpcId": "browser-req"},
+			})
+			start := rec("turn/start", 2, map[string]any{"turn": 1})
+			answer := rec("assistant/message", 3, map[string]any{
+				"message": map[string]any{"content": []any{
+					map[string]any{"type": "text", "text": "ответ"},
+				}},
+			})
+			end := rec("turn/end", 4, map[string]any{"reason": map[string]any{"kind": "completed"}})
+			writeRemoteResult(t, w, env.RPCID, map[string]any{
+				"records": []any{user, start, answer, end}, "cursor": 10, "hasMore": false,
+			})
+		default:
+			writeRemoteResult(t, w, env.RPCID, map[string]any{})
+		}
+	}, nil)
+	defer srv.Close()
+
+	b := &bot{dsh: c, dshCfg: &dshConfig{}, dshState: dshState{SessionID: "s1"}}
+	res, err := b.waitForAnswer(context.Background(), "s1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Turns) != 1 || res.Turns[0].User != "Вопрос из браузера?" || res.Turns[0].Text != "ответ" {
+		t.Fatalf("res.Turns = %+v", res.Turns)
+	}
+	if res.Text != "ответ" {
+		t.Fatalf("res.Text = %q", res.Text)
+	}
+}
+
+func TestWaitForAnswerKeepsCompletedTextOnQuestion(t *testing.T) {
+	c, srv := newTestDSHClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var env struct {
+			RPCID  string `json:"rpcId"`
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&env)
+		switch env.Method {
+		case "session/wait":
+			writeRemoteResult(t, w, env.RPCID, map[string]any{
+				"reason": "input-required",
+				"state":  map[string]any{"cursor": 10, "pendingInput": []any{"question"}},
+			})
+		case "session/events":
+			msg := map[string]any{"type": "event", "event": map[string]any{
+				"type": "assistant/message", "seq": 5,
+				"data": map[string]any{"message": map[string]any{"content": []any{
+					map[string]any{"type": "text", "text": "готовый ответ"},
+				}}},
+			}}
+			end := map[string]any{"type": "event", "event": map[string]any{"type": "turn/end", "seq": 6}}
+			writeRemoteResult(t, w, env.RPCID, map[string]any{
+				"records": []any{msg, end}, "cursor": 10, "hasMore": false,
+			})
+		default: // cancel и прочее
+			writeRemoteResult(t, w, env.RPCID, map[string]any{})
+		}
+	}, nil)
+	defer srv.Close()
+
+	b := &bot{dsh: c, dshCfg: &dshConfig{}, dshState: dshState{SessionID: "s1"}}
+	res, err := b.waitForAnswer(context.Background(), "s1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Text, "готовый ответ") {
+		t.Fatalf("завершённый текст потерян при вопросе: text=%q", res.Text)
+	}
+	if res.Question == "" {
+		t.Fatal("ожидали вопрос")
+	}
+}
+
 func TestDSHConnectErrorHidesToken(t *testing.T) {
 	c := newDSHClient("http://127.0.0.1:1", "unit")
 	c.tokenFetcher = func(context.Context) (string, error) { return "secret-token-value", nil }

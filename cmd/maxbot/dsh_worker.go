@@ -37,9 +37,10 @@ var (
 
 // dshWaitResult — итог ожидания хода агента.
 type dshWaitResult struct {
-	Text          string // видимый ответ (может быть частичным при замене)
-	Question      string // вопрос агента (input-required)
-	ReplaceReason string // непусто — нужно заменить сессию
+	Text          string       // видимый ответ (может быть частичным при замене)
+	Turns         []turnResult // завершённые ходы (запрос+ответ) для отдельной доставки
+	Question      string       // вопрос агента (input-required)
+	ReplaceReason string       // непусто — нужно заменить сессию
 }
 
 // dshEnabled — включён ли прокси-чат с harness.
@@ -59,6 +60,31 @@ func (b *bot) dshSnapshot() dshState {
 	b.dshMu.Lock()
 	defer b.dshMu.Unlock()
 	return copyDSHState(b.dshState)
+}
+
+func (b *bot) loadPendingTurn() pendingTurn {
+	st := b.dshSnapshot()
+	return pendingTurn{
+		Answer:       st.PendingSchedText,
+		User:         st.PendingSchedUser,
+		External:     st.PendingSchedExternal,
+		NextUser:     st.PendingSchedNextUser,
+		NextExternal: st.PendingSchedNextExt,
+		Active:       st.PendingSchedActive,
+		Progress:     st.PendingSchedProgress,
+	}
+}
+
+func (b *bot) savePendingTurn(ctx context.Context, pt pendingTurn) {
+	b.dshSet(ctx, func(s *dshState) {
+		s.PendingSchedText = pt.Answer
+		s.PendingSchedUser = pt.User
+		s.PendingSchedExternal = pt.External
+		s.PendingSchedNextUser = pt.NextUser
+		s.PendingSchedNextExt = pt.NextExternal
+		s.PendingSchedActive = pt.Active
+		s.PendingSchedProgress = pt.Progress
+	})
 }
 
 // dshSet меняет состояние под dshMu, а сохраняет его в Redis без удержания
@@ -277,7 +303,17 @@ func (b *bot) processDSHItem(ctx context.Context, item dshQueueItem) error {
 		b.notifyOperator(ctx, "Не удалось открыть сессию агента: "+err.Error())
 		return err
 	}
-	b.dshSet(ctx, func(st *dshState) { st.AwaitingInput = false; st.InputSeq = 0; st.PendingSchedText = "" })
+	b.dshSet(ctx, func(st *dshState) {
+		st.AwaitingInput = false
+		st.InputSeq = 0
+		st.PendingSchedText = ""
+		st.PendingSchedUser = ""
+		st.PendingSchedExternal = false
+		st.PendingSchedNextUser = ""
+		st.PendingSchedNextExt = false
+		st.PendingSchedActive = false
+		st.PendingSchedProgress = false
+	})
 	if b.dshCancelEpoch.Load() != epoch {
 		return nil
 	}
@@ -304,6 +340,8 @@ func (b *bot) processDSHItem(ctx context.Context, item dshQueueItem) error {
 		if errors.Is(err, errDSHCancelled) || errors.Is(err, context.Canceled) {
 			return nil
 		}
+		// Уже завершённые ходы из этой порции не теряем.
+		b.deliverWaitResult(ctx, res)
 		b.dshSet(ctx, func(st *dshState) { st.LastError = err.Error() })
 		b.notifyOperator(ctx, "Ожидание ответа агента прервано: "+err.Error())
 		return err
@@ -311,12 +349,7 @@ func (b *bot) processDSHItem(ctx context.Context, item dshQueueItem) error {
 	if b.dshCancelEpoch.Load() != epoch {
 		return nil
 	}
-	if res.Text != "" {
-		if err := b.sendAnswerText(ctx, res.Text); err != nil {
-			log.Printf("maxbot: отправка ответа агента: %v", err)
-		}
-		b.touchAPI(ctx)
-	}
+	b.deliverWaitResult(ctx, res)
 	// Отмена во время доставки ответа гасит пост-обработку (вопрос/замену).
 	if b.dshCancelEpoch.Load() != epoch {
 		return nil
@@ -433,6 +466,12 @@ func (b *bot) createDSHSessionLocked(ctx context.Context, provider, model, effor
 		st.AwaitingInput = false
 		st.InputSeq = 0
 		st.PendingSchedText = ""
+		st.PendingSchedUser = ""
+		st.PendingSchedExternal = false
+		st.PendingSchedNextUser = ""
+		st.PendingSchedNextExt = false
+		st.PendingSchedActive = false
+		st.PendingSchedProgress = false
 	})
 	log.Printf("maxbot: dsh-сессия %s, модель %s/%s (effort %q)", sessionID, provider, model, applyEffort)
 	return sessionID, nil
@@ -490,8 +529,10 @@ func (b *bot) replaceDSHSessionLocked(ctx context.Context, reason string, epoch 
 		_ = b.dsh.cancel(ctx, newID)
 		return nil
 	}
+	recoveryID := newUUID()
+	b.addOwnReqID(ctx, recoveryID)
 	if err := b.retryDSH(ctx, func() error {
-		return b.dsh.prompt(ctx, newID, newUUID(), []promptPart{{Type: "text", Text: recovery}})
+		return b.dsh.prompt(ctx, newID, recoveryID, []promptPart{{Type: "text", Text: recovery}})
 	}); err != nil {
 		log.Printf("maxbot: запрос восстановления контекста: %v", err)
 		return nil
@@ -532,34 +573,70 @@ func (b *bot) waitDiscard(ctx context.Context, sessionID string, epoch int64) {
 
 // ---- ожидание ответа ----
 
+func pendingTurnZero(pt pendingTurn) bool {
+	return pt.Answer == "" && pt.User == "" && !pt.External && pt.NextUser == "" && !pt.NextExternal && !pt.Active
+}
+
+// processTurnEvents разбирает очередную порцию событий, накапливая атрибуцию
+// user-сообщений (turn/start) и сохраняя pending в Redis.
+func (b *bot) processTurnEvents(ctx context.Context, events []sessionEvent, since int64) ([]turnResult, int64) {
+	pt := b.loadPendingTurn()
+	delivered, out, lastEnd := finalAssistantTextEvents(events, since, pt, b.isOwnReqID)
+	b.savePendingTurn(ctx, out)
+	if lastEnd > 0 {
+		b.dshSet(ctx, func(s *dshState) {
+			if lastEnd > s.LastAnswerSeq {
+				s.LastAnswerSeq = lastEnd
+			}
+		})
+	}
+	return delivered, lastEnd
+}
+
 // waitForAnswer крутит session/wait, шлёт heartbeat и анализирует события.
 // waitForAnswer вызывается только из processDSHItem, который держит dshPumpMu.
 func (b *bot) waitForAnswer(ctx context.Context, sessionID string, epoch int64) (dshWaitResult, error) {
 	var res dshWaitResult
+	var collected []turnResult
 	lastBeat := time.Now()
 	for {
 		if ctx.Err() != nil {
+			res.Turns = collected
+			res.Text = joinTurnAnswers(collected)
 			return res, ctx.Err()
 		}
 		if b.dshCancelEpoch.Load() != epoch {
+			res.Turns = collected
+			res.Text = joinTurnAnswers(collected)
 			return res, errDSHCancelled
 		}
 		st := b.dshSnapshot()
 		wv, err := b.dsh.wait(ctx, sessionID, st.LastAnswerSeq, 30000)
 		if err != nil {
+			res.Turns = collected
+			res.Text = joinTurnAnswers(collected)
 			return res, err
 		}
 		if b.dshCancelEpoch.Load() != epoch {
+			res.Turns = collected
+			res.Text = joinTurnAnswers(collected)
 			return res, errDSHCancelled
 		}
 		b.touchAPI(ctx)
 
-		events, _ := b.fetchNewEvents(ctx, sessionID, wv.State.Cursor)
+		events, complete := b.fetchNewEvents(ctx, sessionID, wv.State.Cursor)
+		if complete {
+			delivered, _ := b.processTurnEvents(ctx, events, st.LastAnswerSeq)
+			collected = append(collected, delivered...)
+		}
 		ti := analyzeEvents(events)
 		cycle, cycleLen := b.addToolFingerprints(ctx, ti.ToolCalls)
 		if ti.ContextOverflow || ti.MaxTokens || cycle {
-			res.Text = assistantText(wv.Output.Records)
-			b.dshSet(ctx, func(s *dshState) { s.LastAnswerSeq = wv.State.Cursor })
+			res.Turns = collected
+			res.Text = joinTurnAnswers(collected)
+			if res.Text == "" {
+				res.Text = assistantText(wv.Output.Records)
+			}
 			switch {
 			case ti.ContextOverflow:
 				res.ReplaceReason = "переполнение контекста"
@@ -571,15 +648,40 @@ func (b *bot) waitForAnswer(ctx context.Context, sessionID string, epoch int64) 
 			return res, nil
 		}
 		if ti.Question != "" && (wv.Reason == "input-required" || hasPendingQuestion(wv.State.PendingInput)) {
+			res.Turns = collected
+			res.Text = joinTurnAnswers(collected)
 			res.Question = b.handleInputRequired(ctx, sessionID, ti.Question, wv.State.Cursor, epoch)
 			return res, nil
 		}
 		switch wv.Reason {
 		case "idle":
-			res.Text = assistantText(wv.Output.Records)
-			b.dshSet(ctx, func(s *dshState) { s.LastAnswerSeq = wv.State.Cursor })
+			// Последняя порция могла быть неполной — пробуем ещё раз.
+			if !complete {
+				if ev2, ok := b.fetchNewEvents(ctx, sessionID, wv.State.Cursor); ok {
+					events = ev2
+					delivered, _ := b.processTurnEvents(ctx, events, st.LastAnswerSeq)
+					collected = append(collected, delivered...)
+					complete = true
+				}
+			}
+			res.Turns = collected
+			res.Text = joinTurnAnswers(collected)
+			if res.Text == "" {
+				pt := b.loadPendingTurn()
+				if !complete && (!pendingTurnZero(pt) || len(events) > 0) {
+					return res, fmt.Errorf("dsh: не удалось прочитать события сессии")
+				}
+				if len(events) == 0 && pendingTurnZero(pt) {
+					// События недоступны/пусты — доставляем записи wait.
+					res.Text = assistantText(wv.Output.Records)
+					b.dshSet(ctx, func(s *dshState) { s.LastAnswerSeq = wv.State.Cursor })
+					b.savePendingTurn(ctx, pendingTurn{})
+				}
+			}
 			return res, nil
 		case "input-required":
+			res.Turns = collected
+			res.Text = joinTurnAnswers(collected)
 			res.Question = b.handleInputRequired(ctx, sessionID, "", wv.State.Cursor, epoch)
 			return res, nil
 		}
@@ -623,8 +725,41 @@ func (b *bot) handleInputRequired(ctx context.Context, sessionID, question strin
 		s.LastAnswerSeq = cursor
 		// Хвост отменённого хода не должен «прилипнуть» к следующему результату.
 		s.PendingSchedText = ""
+		s.PendingSchedUser = ""
+		s.PendingSchedExternal = false
+		s.PendingSchedNextUser = ""
+		s.PendingSchedNextExt = false
+		s.PendingSchedActive = false
+		s.PendingSchedProgress = false
 	})
 	return question + "\n\n" + note
+}
+
+// addOwnReqID запоминает requestId промпта, отправленного maxbot, чтобы watcher
+// не приписывал к ответу сообщение «Вы писали:» для собственных запросов.
+func (b *bot) addOwnReqID(ctx context.Context, id string) {
+	if id == "" {
+		return
+	}
+	b.dshSet(ctx, func(st *dshState) {
+		st.OwnReqIDs = append(st.OwnReqIDs, id)
+		if len(st.OwnReqIDs) > 50 {
+			st.OwnReqIDs = append([]string(nil), st.OwnReqIDs[len(st.OwnReqIDs)-50:]...)
+		}
+	})
+}
+
+func (b *bot) isOwnReqID(id string) bool {
+	if id == "" {
+		return false
+	}
+	st := b.dshSnapshot()
+	for _, v := range st.OwnReqIDs {
+		if v == id {
+			return true
+		}
+	}
+	return false
 }
 
 // unblockAwaitingInput гасит зависший вопрос перед новым промптом оператора:
@@ -645,6 +780,12 @@ func (b *bot) unblockAwaitingInput(ctx context.Context) error {
 		s.AwaitingInput = false
 		s.InputSeq = 0
 		s.PendingSchedText = ""
+		s.PendingSchedUser = ""
+		s.PendingSchedExternal = false
+		s.PendingSchedNextUser = ""
+		s.PendingSchedNextExt = false
+		s.PendingSchedActive = false
+		s.PendingSchedProgress = false
 	})
 	return nil
 }
@@ -877,8 +1018,22 @@ func (b *bot) pollScheduled(ctx context.Context, epoch int64, lastBeat *time.Tim
 		return ""
 	}
 
-	delivered, tail, lastEnd := finalAssistantTextEvents(events, st.LastAnswerSeq, st.PendingSchedText)
-	text := delivered
+	pt := pendingTurn{
+		Answer:       st.PendingSchedText,
+		User:         st.PendingSchedUser,
+		External:     st.PendingSchedExternal,
+		NextUser:     st.PendingSchedNextUser,
+		NextExternal: st.PendingSchedNextExt,
+		Active:       st.PendingSchedActive,
+		Progress:     st.PendingSchedProgress,
+	}
+	delivered, pt, lastEnd := finalAssistantTextEvents(events, st.LastAnswerSeq, pt, b.isOwnReqID)
+	hasUser := false
+	for _, d := range delivered {
+		if d.User != "" {
+			hasUser = true
+		}
+	}
 	// Курсор двигаем до отправки (как воркер): при падении/рестарте уже
 	// доставленное не дублируется. Двигаем только до последнего turn/end, чтобы
 	// не потерять текст незавершённого хвоста.
@@ -886,13 +1041,20 @@ func (b *bot) pollScheduled(ctx context.Context, epoch int64, lastBeat *time.Tim
 		if lastEnd > 0 && lastEnd > s.LastAnswerSeq {
 			s.LastAnswerSeq = lastEnd
 		}
-		s.PendingSchedText = tail
+		s.PendingSchedText = pt.Answer
+		s.PendingSchedUser = pt.User
+		s.PendingSchedExternal = pt.External
+		s.PendingSchedNextUser = pt.NextUser
+		s.PendingSchedNextExt = pt.NextExternal
+		s.PendingSchedActive = pt.Active
+		s.PendingSchedProgress = pt.Progress
 	})
-	if text != "" {
+	if len(delivered) > 0 {
 		if b.dshCancelEpoch.Load() != epoch {
 			return ""
 		}
-		if err := b.sendAnswerText(ctx, text); err != nil {
+		log.Printf("maxbot: watcher delivery turns=%d with_user=%v", len(delivered), hasUser)
+		if err := b.sendTurnResults(ctx, delivered); err != nil {
 			log.Printf("maxbot: отправка отложенного ответа: %v", err)
 		}
 		b.touchAPI(ctx)
@@ -940,6 +1102,7 @@ func (b *bot) handleDSHMessage(ctx context.Context, up maxUpdate) {
 		Epoch:       b.dshCancelEpoch.Load(),
 		TS:          time.Now().UnixMilli(),
 	}
+	b.addOwnReqID(ctx, item.RequestID)
 	if err := pushDSHQueue(ctx, b.rdb, item); err != nil {
 		log.Printf("maxbot: постановка dsh-запроса в очередь: %v", err)
 		return
@@ -985,6 +1148,13 @@ func (b *bot) handleDSHCommand(ctx context.Context, cmd string, up maxUpdate) {
 		_ = clearDSHQueue(ctx, b.rdb)
 		b.dshSet(ctx, func(s *dshState) {
 			s.PendingSchedText = ""
+			s.PendingSchedUser = ""
+			s.PendingSchedExternal = false
+			s.PendingSchedNextUser = ""
+			s.PendingSchedNextExt = false
+			s.PendingSchedActive = false
+			s.PendingSchedProgress = false
+			s.PendingSchedProgress = false
 			s.AwaitingInput = false
 			s.InputSeq = 0
 		})
@@ -1007,6 +1177,7 @@ func (b *bot) handleDSHCommand(ctx context.Context, cmd string, up maxUpdate) {
 			return
 		}
 		item := dshQueueItem{Kind: "continue", RequestID: newUUID(), Epoch: b.dshCancelEpoch.Load(), TS: time.Now().UnixMilli()}
+		b.addOwnReqID(ctx, item.RequestID)
 		if err := pushDSHQueue(ctx, b.rdb, item); err != nil {
 			b.respond(userID, chatID, "Не удалось поставить продолжение в очередь: "+err.Error())
 			return
@@ -1268,6 +1439,59 @@ func (b *bot) answerCallback(ctx context.Context, cb *maxCallback, text string) 
 }
 
 // ---- отправка ----
+
+// turnEcho формирует сообщение «Вы писали: …» с учётом лимита MAX (4000).
+func turnEcho(user string) string {
+	s := "Вы писали:\n" + user
+	r := []rune(s)
+	if len(r) > 4000 {
+		s = string(r[:3999]) + "…"
+	}
+	return s
+}
+
+// sendTurnResults отправляет завершённые ходы: запрос оператора — отдельным
+// сообщением «Вы писали:», ответ — следующим. Ошибка одного сообщения не
+// блокирует остальные.
+func (b *bot) sendTurnResults(ctx context.Context, turns []turnResult) error {
+	for _, t := range turns {
+		if t.User != "" {
+			if err := b.sendMarkdown(ctx, turnEcho(t.User)); err != nil {
+				log.Printf("maxbot: отправка «Вы писали»: %v", err)
+			}
+		}
+		if t.Text != "" {
+			if err := b.sendAnswerText(ctx, t.Text); err != nil {
+				log.Printf("maxbot: отправка ответа агента: %v", err)
+			}
+		}
+	}
+	return nil
+}
+
+func (b *bot) deliverWaitResult(ctx context.Context, res dshWaitResult) {
+	if len(res.Turns) > 0 {
+		withUser := false
+		for _, t := range res.Turns {
+			if t.User != "" {
+				withUser = true
+			}
+		}
+		log.Printf("maxbot: worker delivery turns=%d with_user=%v", len(res.Turns), withUser)
+		if err := b.sendTurnResults(ctx, res.Turns); err != nil {
+			log.Printf("maxbot: отправка ответа агента: %v", err)
+		}
+		b.touchAPI(ctx)
+		return
+	}
+	if res.Text != "" {
+		log.Printf("maxbot: worker delivery fallback len=%d", len([]rune(res.Text)))
+		if err := b.sendAnswerText(ctx, res.Text); err != nil {
+			log.Printf("maxbot: отправка ответа агента: %v", err)
+		}
+		b.touchAPI(ctx)
+	}
+}
 
 // sendAnswerText отправляет ответ: текст (Markdown с fallback) или файл > 4000.
 func (b *bot) sendAnswerText(ctx context.Context, text string) error {

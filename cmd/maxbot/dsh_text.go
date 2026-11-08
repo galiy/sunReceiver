@@ -247,34 +247,151 @@ func assistantTextEvents(events []sessionEvent, since int64) string {
 	return assistantText(records)
 }
 
-// finalAssistantTextEvents разбирает видимый текст ходов после since:
-// delivered — финальные ответы завершённых ходов (последний assistant/message
-// перед turn/end), tail — текст незавершённого хвоста, lastEnd — seq последнего
-// turn/end (0, если завершённых ходов нет).
-func finalAssistantTextEvents(events []sessionEvent, since int64, pending string) (delivered, tail string, lastEnd int64) {
+// parseUserMessage разбирает user/message: kind (user/schedule/time-context),
+// rpcId и текст.
+func parseUserMessage(ev sessionEvent) (kind, rpcID, text string) {
+	var d struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+		Source struct {
+			Kind  string `json:"kind"`
+			RPCID string `json:"rpcId"`
+		} `json:"source"`
+	}
+	if json.Unmarshal(ev.Data, &d) != nil {
+		return "", "", ""
+	}
 	var parts []string
-	// pending — текст незавершённого хвоста с прошлого опроса. Если до
-	// ближайшего turn/end не придёт новый assistant/message, именно он станет
-	// финальным текстом завершившегося хода.
-	current := pending
+	for _, c := range d.Content {
+		if c.Type == "text" && strings.TrimSpace(c.Text) != "" {
+			parts = append(parts, strings.TrimRight(c.Text, " \t\r\n"))
+		}
+	}
+	return d.Source.Kind, d.Source.RPCID, strings.Join(parts, "\n")
+}
+
+// pendingTurn — состояние незавершённого хода для watcher/worker.
+type pendingTurn struct {
+	Answer       string // последний видимый assistant-текст
+	User         string // user-сообщения текущего/следующего хода
+	External     bool   // текущий ход запущен не maxbot
+	NextUser     string // user-сообщения, пришедшие во время активного хода
+	NextExternal bool   // следующий ход запущен не maxbot
+	Active       bool   // ход активен (между turn/start и turn/end)
+	Progress     bool   // в активном ходе уже была работа (assistant/step/tool)
+}
+
+func joinUsers(users []string) string { return strings.Join(users, "\n\n") }
+
+// turnResult — один завершённый ход: запрос оператора (если он внешний) и
+// финальный ответ. Доставляются двумя отдельными сообщениями MAX.
+type turnResult struct {
+	User string
+	Text string
+}
+
+func joinTurnAnswers(trs []turnResult) string {
+	var parts []string
+	for _, t := range trs {
+		if t.Text != "" {
+			parts = append(parts, t.Text)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// finalAssistantTextEvents разбирает видимый текст завершённых ходов после
+// since. delivered — финальные ответы (последний assistant/message перед
+// turn/end), в turnResult.User только для браузерных ходов
+// (source.kind=user и rpcId не принадлежит maxbot). user/message во время
+// активного хода буферизуются для следующего хода (учёт turn/start). isOwn
+// сообщает, что rpcId отправлен maxbot.
+func finalAssistantTextEvents(events []sessionEvent, since int64, p pendingTurn, isOwn func(string) bool) (delivered []turnResult, out pendingTurn, lastEnd int64) {
+	var turnUsers []string
+	if p.User != "" {
+		turnUsers = append(turnUsers, p.User)
+	}
+	var nextUsers []string
+	if p.NextUser != "" {
+		nextUsers = append(nextUsers, p.NextUser)
+	}
+	turnExternal := p.External
+	nextExternal := p.NextExternal
+	turnActive := p.Active
+	progress := p.Progress
+	current := p.Answer
+
 	for _, ev := range events {
 		if ev.Seq <= since {
 			continue
 		}
 		switch ev.Type {
+		case "user/message":
+			kind, rpcID, text := parseUserMessage(ev)
+			if kind != "user" {
+				continue // schedule/time-context — префикс не нужен
+			}
+			if turnActive && progress {
+				if text != "" {
+					nextUsers = append(nextUsers, text)
+				}
+				if rpcID == "" || !isOwn(rpcID) {
+					nextExternal = true
+				}
+			} else {
+				if text != "" {
+					turnUsers = append(turnUsers, text)
+				}
+				if rpcID == "" || !isOwn(rpcID) {
+					turnExternal = true
+				}
+			}
+		case "turn/start":
+			turnActive = true
+			progress = false
+		case "step/start", "tool/call":
+			if turnActive {
+				progress = true
+			}
 		case "assistant/message":
+			if turnActive {
+				progress = true
+			}
 			if t := assistantEventText(ev); t != "" {
 				current = t
 			}
 		case "turn/end":
 			if current != "" {
-				parts = append(parts, current)
-				current = ""
+				res := turnResult{Text: current}
+				if turnExternal && len(turnUsers) > 0 {
+					res.User = joinUsers(turnUsers)
+				}
+				delivered = append(delivered, res)
 			}
+			// Ход завершён: сообщения, пришедшие во время него, относятся к
+			// следующему ходу.
+			turnUsers = nextUsers
+			nextUsers = nil
+			turnExternal = nextExternal
+			nextExternal = false
+			turnActive = false
+			progress = false
+			current = ""
 			lastEnd = ev.Seq
 		}
 	}
-	return strings.Join(parts, "\n\n"), current, lastEnd
+	out = pendingTurn{
+		Answer:       current,
+		User:         joinUsers(turnUsers),
+		External:     turnExternal,
+		NextUser:     joinUsers(nextUsers),
+		NextExternal: nextExternal,
+		Active:       turnActive,
+		Progress:     progress,
+	}
+	return delivered, out, lastEnd
 }
 
 // turnInfo описывает интересные для замены сессии факты из новых событий.

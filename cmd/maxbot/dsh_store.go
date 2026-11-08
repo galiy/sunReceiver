@@ -36,20 +36,27 @@ const (
 
 // dshState — сохраняемое в Redis состояние диалога с harness.
 type dshState struct {
-	SessionID        string
-	Provider         string
-	Model            string
-	Effort           string
-	ModelSelectedAt  int64 // unix ms
-	ModelLastAPIAt   int64 // unix ms, обновляется на каждом запросе
-	LastEventSeq     int64
-	LastAnswerSeq    int64
-	LastError        string
-	ToolSeq          []string
-	RecentAnswers    []string
-	AwaitingInput    bool
-	InputSeq         int64  // курсор обработанного input-required (дедуп вопросов)
-	PendingSchedText string // хвост assistant-текста без turn/end
+	SessionID            string
+	Provider             string
+	Model                string
+	Effort               string
+	ModelSelectedAt      int64 // unix ms
+	ModelLastAPIAt       int64 // unix ms, обновляется на каждом запросе
+	LastEventSeq         int64
+	LastAnswerSeq        int64
+	LastError            string
+	ToolSeq              []string
+	RecentAnswers        []string
+	AwaitingInput        bool
+	InputSeq             int64    // курсор обработанного input-required (дедуп вопросов)
+	PendingSchedText     string   // хвост assistant-текста без turn/end
+	PendingSchedUser     string   // user-сообщения текущего/следующего хода
+	PendingSchedExternal bool     // текущий ход запущен не maxbot
+	PendingSchedNextUser string   // user-сообщения, пришедшие во время активного хода
+	PendingSchedNextExt  bool     // следующий ход запущен не maxbot
+	PendingSchedActive   bool     // ход активен (между turn/start и turn/end)
+	PendingSchedProgress bool     // в активном ходе уже началась работа
+	OwnReqIDs            []string // requestId промптов, отправленных maxbot
 }
 
 // dshQueueItem — элемент очереди промптов.
@@ -81,6 +88,15 @@ func loadDSHState(ctx context.Context, rdb *redis.Client) (dshState, error) {
 	st.AwaitingInput = m["awaiting_input"] == "1"
 	st.InputSeq = parseInt64(m["input_seq"])
 	st.PendingSchedText = m["pending_sched_text"]
+	st.PendingSchedUser = m["pending_sched_user"]
+	st.PendingSchedExternal = m["pending_sched_external"] == "1"
+	st.PendingSchedNextUser = m["pending_sched_next_user"]
+	st.PendingSchedNextExt = m["pending_sched_next_external"] == "1"
+	st.PendingSchedActive = m["pending_sched_active"] == "1"
+	st.PendingSchedProgress = m["pending_sched_progress"] == "1"
+	if v := m["own_req_ids"]; v != "" {
+		_ = json.Unmarshal([]byte(v), &st.OwnReqIDs)
+	}
 	if v := m["tool_seq"]; v != "" {
 		_ = json.Unmarshal([]byte(v), &st.ToolSeq)
 	}
@@ -93,26 +109,41 @@ func loadDSHState(ctx context.Context, rdb *redis.Client) (dshState, error) {
 func saveDSHState(ctx context.Context, rdb *redis.Client, st *dshState) error {
 	toolSeq, _ := json.Marshal(st.ToolSeq)
 	answers, _ := json.Marshal(st.RecentAnswers)
+	ownIDs, _ := json.Marshal(st.OwnReqIDs)
 	awaiting := "0"
 	if st.AwaitingInput {
 		awaiting = "1"
 	}
 	return rdb.HSet(ctx, dshStateKey, map[string]any{
-		"session_id":         st.SessionID,
-		"provider":           st.Provider,
-		"model":              st.Model,
-		"effort":             st.Effort,
-		"model_selected_at":  strconv.FormatInt(st.ModelSelectedAt, 10),
-		"model_last_api_at":  strconv.FormatInt(st.ModelLastAPIAt, 10),
-		"last_event_seq":     strconv.FormatInt(st.LastEventSeq, 10),
-		"last_answer_seq":    strconv.FormatInt(st.LastAnswerSeq, 10),
-		"last_error":         st.LastError,
-		"tool_seq":           string(toolSeq),
-		"recent_answers":     string(answers),
-		"awaiting_input":     awaiting,
-		"input_seq":          strconv.FormatInt(st.InputSeq, 10),
-		"pending_sched_text": st.PendingSchedText,
+		"session_id":                  st.SessionID,
+		"provider":                    st.Provider,
+		"model":                       st.Model,
+		"effort":                      st.Effort,
+		"model_selected_at":           strconv.FormatInt(st.ModelSelectedAt, 10),
+		"model_last_api_at":           strconv.FormatInt(st.ModelLastAPIAt, 10),
+		"last_event_seq":              strconv.FormatInt(st.LastEventSeq, 10),
+		"last_answer_seq":             strconv.FormatInt(st.LastAnswerSeq, 10),
+		"last_error":                  st.LastError,
+		"tool_seq":                    string(toolSeq),
+		"recent_answers":              string(answers),
+		"awaiting_input":              awaiting,
+		"input_seq":                   strconv.FormatInt(st.InputSeq, 10),
+		"pending_sched_text":          st.PendingSchedText,
+		"pending_sched_user":          st.PendingSchedUser,
+		"pending_sched_external":      boolStr(st.PendingSchedExternal),
+		"pending_sched_next_user":     st.PendingSchedNextUser,
+		"pending_sched_next_external": boolStr(st.PendingSchedNextExt),
+		"pending_sched_active":        boolStr(st.PendingSchedActive),
+		"pending_sched_progress":      boolStr(st.PendingSchedProgress),
+		"own_req_ids":                 string(ownIDs),
 	}).Err()
+}
+
+func boolStr(v bool) string {
+	if v {
+		return "1"
+	}
+	return "0"
 }
 
 func parseInt64(s string) int64 {

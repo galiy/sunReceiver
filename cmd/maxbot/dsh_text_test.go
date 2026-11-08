@@ -18,6 +18,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -172,6 +173,16 @@ func TestAssistantTextSkipsReasoning(t *testing.T) {
 	}
 }
 
+func TestTurnEcho(t *testing.T) {
+	if got := turnEcho("вопрос"); got != "Вы писали:\nвопрос" {
+		t.Fatalf("turnEcho = %q", got)
+	}
+	long := turnEcho(strings.Repeat("я", 5000))
+	if n := len([]rune(long)); n != 4000 || !strings.HasSuffix(long, "…") {
+		t.Fatalf("длинное эхо: %d символов, хвост %q", n, long[len(long)-5:])
+	}
+}
+
 func TestDSHCommand(t *testing.T) {
 	cases := map[string]string{
 		"/menu":        "/menu",
@@ -214,27 +225,95 @@ func TestFinalAssistantTextEvents(t *testing.T) {
 		data := `{"message":{"content":[{"type":"text","text":"` + text + `"}]}}`
 		return sessionEvent{Type: "assistant/message", Seq: seq, Data: json.RawMessage(data)}
 	}
+	user := func(seq int64, kind, rpc, text string) sessionEvent {
+		data := fmt.Sprintf(`{"content":[{"type":"text","text":%q}],"source":{"kind":%q,"rpcId":%q}}`, text, kind, rpc)
+		return sessionEvent{Type: "user/message", Seq: seq, Data: json.RawMessage(data)}
+	}
 	end := func(seq int64) sessionEvent { return sessionEvent{Type: "turn/end", Seq: seq} }
+	startEv := func(seq int64) sessionEvent { return sessionEvent{Type: "turn/start", Seq: seq} }
+	notOwn := func(string) bool { return false }
+	check := func(got []turnResult, want ...[2]string) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Fatalf("ходов %d, want %d: %+v", len(got), len(want), got)
+		}
+		for i := range want {
+			if got[i].User != want[i][0] || got[i].Text != want[i][1] {
+				t.Fatalf("ход %d = %+v, want user=%q text=%q", i, got[i], want[i][0], want[i][1])
+			}
+		}
+	}
+
 	events := []sessionEvent{
 		msg(1, "промежуточно"), msg(2, "ответ 1"), end(3),
 		msg(4, "снова проверяю"), msg(5, "ответ 2"), end(6),
 	}
-	if got, tail, lastEnd := finalAssistantTextEvents(events, 0, ""); got != "ответ 1\n\nответ 2" || tail != "" || lastEnd != 6 {
-		t.Fatalf("finalAssistantTextEvents = (%q,%q,%d)", got, tail, lastEnd)
+	got, out, lastEnd := finalAssistantTextEvents(events, 0, pendingTurn{}, notOwn)
+	check(got, [2]string{"", "ответ 1"}, [2]string{"", "ответ 2"})
+	if out.Answer != "" || lastEnd != 6 {
+		t.Fatalf("без user: (%+v,%d)", out, lastEnd)
 	}
-	if got, tail, lastEnd := finalAssistantTextEvents(events, 5, ""); got != "" || tail != "" || lastEnd != 6 {
-		t.Fatalf("после seq=5: (%q,%q,%d)", got, tail, lastEnd)
+
+	ext := []sessionEvent{
+		user(1, "user", "browser-req", "Какие процессы?"),
+		msg(2, "собираю"), msg(3, "готово"), end(4),
 	}
-	// Незавершённый хвост не доставляется, но сохраняется как tail.
-	events2 := []sessionEvent{msg(10, "ещё проверяю")}
-	if got, tail, lastEnd := finalAssistantTextEvents(events2, 0, ""); got != "" || tail != "ещё проверяю" || lastEnd != 0 {
-		t.Fatalf("незавершённый ход: (%q,%q,%d)", got, tail, lastEnd)
+	got, _, _ = finalAssistantTextEvents(ext, 0, pendingTurn{}, notOwn)
+	check(got, [2]string{"Какие процессы?", "готово"})
+
+	own := func(id string) bool { return id == "maxbot-req" }
+	got, _, _ = finalAssistantTextEvents([]sessionEvent{
+		user(1, "user", "maxbot-req", "мой запрос"), msg(2, "ответ"), end(3),
+	}, 0, pendingTurn{}, own)
+	check(got, [2]string{"", "ответ"})
+
+	got, _, _ = finalAssistantTextEvents([]sessionEvent{
+		user(1, "schedule", "", "[SCHEDULE REMINDER BATCH]"), msg(2, "ответ"), end(3),
+	}, 0, pendingTurn{}, notOwn)
+	check(got, [2]string{"", "ответ"})
+
+	// user/message во время уже начавшегося хода относится к следующему ходу.
+	got, _, _ = finalAssistantTextEvents([]sessionEvent{
+		user(1, "user", "q1", "Вопрос A"), startEv(2),
+		msg(3, "прогресс A"), user(4, "user", "q2", "Вопрос B"),
+		msg(5, "ответ A"), end(6),
+		msg(7, "ответ B"), end(8),
+	}, 0, pendingTurn{}, notOwn)
+	check(got, [2]string{"Вопрос A", "ответ A"}, [2]string{"Вопрос B", "ответ B"})
+
+	// Ход, разбитый на два вызова (turn/start и user во время хода — в первом,
+	// завершение — во втором).
+	first := []sessionEvent{
+		user(1, "user", "q1", "Вопрос A"), startEv(2),
+		msg(3, "прогресс A"), user(4, "user", "q2", "Вопрос B"),
 	}
-	// Сохранённый хвост склеивается с завершением, даже если в том же окне
-	// есть ещё один завершённый ход.
-	events3 := []sessionEvent{end(11), msg(12, "ответ 2"), end(13)}
-	if got, tail, lastEnd := finalAssistantTextEvents(events3, 0, "ответ 1"); got != "ответ 1\n\nответ 2" || tail != "" || lastEnd != 13 {
-		t.Fatalf("pending + два хода: (%q,%q,%d)", got, tail, lastEnd)
+	got, out, _ = finalAssistantTextEvents(first, 0, pendingTurn{}, notOwn)
+	if len(got) != 0 || out.User != "Вопрос A" || out.NextUser != "Вопрос B" || !out.Active || !out.Progress {
+		t.Fatalf("первый чанк: (%+v,%+v)", got, out)
+	}
+	second := []sessionEvent{msg(5, "ответ A"), end(6), msg(7, "ответ B"), end(8)}
+	got, _, _ = finalAssistantTextEvents(second, 4, out, notOwn)
+	check(got, [2]string{"Вопрос A", "ответ A"}, [2]string{"Вопрос B", "ответ B"})
+
+	// Реальный порядок harness: turn/start ДО user/message, работа ещё не начата.
+	got, _, _ = finalAssistantTextEvents([]sessionEvent{
+		startEv(20), user(21, "user", "q3", "Вопрос C"),
+		msg(22, "ответ C"), end(23),
+	}, 0, pendingTurn{}, notOwn)
+	check(got, [2]string{"Вопрос C", "ответ C"})
+
+	// Незавершённый хвост не доставляется, но сохраняется.
+	got, out, lastEnd = finalAssistantTextEvents([]sessionEvent{msg(10, "ещё проверяю")}, 0, pendingTurn{}, notOwn)
+	if len(got) != 0 || out.Answer != "ещё проверяю" || lastEnd != 0 {
+		t.Fatalf("незавершённый ход: (%+v,%+v,%d)", got, out, lastEnd)
+	}
+	// Pending-хвост пользователя склеивается с завершением.
+	got, _, lastEnd = finalAssistantTextEvents(
+		[]sessionEvent{end(11), msg(12, "ответ 2"), end(13)},
+		0, pendingTurn{Answer: "ответ 1", User: "Вопрос", External: true}, notOwn)
+	check(got, [2]string{"Вопрос", "ответ 1"}, [2]string{"", "ответ 2"})
+	if lastEnd != 13 {
+		t.Fatalf("lastEnd = %d", lastEnd)
 	}
 }
 
