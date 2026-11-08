@@ -28,6 +28,8 @@ import (
 	"fmt"
 	"log"
 	"os/signal"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -47,6 +49,19 @@ type bot struct {
 	// lastSendErrAt — время последней залогированной ошибки отправки (защита от
 	// лог-спама при стойком отказе MAX; доступен только из основного цикла).
 	lastSendErrAt time.Time
+
+	// dsh — прокси-чат с DeepSeek Harness (nil — раздел dsh не включён).
+	dsh    *dshClient
+	dshCfg *dshConfig
+
+	dshMu          sync.Mutex // состояние
+	dshSaveMu      sync.Mutex // сериализация записи состояния в Redis
+	dshStateVer    uint64
+	dshSessionMu   sync.Mutex // создание/смена сессии и модели
+	dshPumpMu      sync.Mutex // сериализация ожидания ответа и фонового watcher
+	dshState       dshState
+	dshCancelEpoch atomic.Int64
+	dshBusy        atomic.Bool
 }
 
 // main — точка входа: конфиг (флаг -config, по умолчанию maxbot.json рядом с
@@ -97,6 +112,15 @@ func main() {
 	}
 	if !b.client.hasRecipient() {
 		log.Printf("maxbot: адресат не задан — ожидаю первого подписчика бота (bot_started/bot_added); накопленные события отправятся после его регистрации")
+	}
+	if cfg.DSH != nil && !cfg.DSH.Disabled {
+		b.dsh = newDSHClient(cfg.DSH.BaseURL, cfg.DSH.TokenUnit)
+		b.dshCfg = cfg.DSH
+		go b.runDSH(ctx)
+		go b.runDSHScheduled(ctx)
+		go b.registerBotCommands(ctx)
+	} else {
+		log.Printf("maxbot: dsh-чат выключен (раздел dsh отсутствует или disabled=true)")
 	}
 	go b.runSubscriber(ctx)
 

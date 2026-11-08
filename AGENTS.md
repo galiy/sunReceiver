@@ -30,6 +30,7 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 | Счётчик энергосбыта «Меркурий» (прогноз) | [`docs/meter_mercury.md`](docs/meter_mercury.md) |
 | BMS через malina26 (ANT+EnBMS, единый тип) | [`docs/modules/bms26.md`](docs/modules/bms26.md) |
 | Уведомления в MAX | [`docs/modules/notify.md`](docs/modules/notify.md) |
+| Чат с DeepSeek Harness (maxbot, раздел `dsh`) | [`docs/modules/dsh-bot.md`](docs/modules/dsh-bot.md) |
 | Сетевое реле SR-201 (лампы-индикаторы) | [`docs/relay_sr-201(2light).md`](docs/relay_sr-201(2light).md) |
 | Windows-трей и логирование (`tray_*.go`, `logfile_*.go`) | [`docs/modules/tray-logging.md`](docs/modules/tray-logging.md) |
 | Протокол Solarman V5 (реверс) | [`docs/research/solarman-v5.md`](docs/research/solarman-v5.md) |
@@ -116,7 +117,8 @@ DDS238 (реализовано в `mercury.go`, отдаётся в `/api/curren
 настраиваются — они в приложении **maxbot**). Сформированные события пишутся в
 Redis Stream `sunreceiver:notify:events`; отдельное приложение **`cmd/maxbot`**
 (прод — `/opt/maxbot`, свой `maxbot.json` `{token, user_id, chat_id, disabled,
-redis, consumer, allowed_user_ids}`) читает этот Stream, отправляет в MAX через
+redis, consumer, allowed_user_ids, dsh}`; раздел `dsh` — чат с DeepSeek Harness,
+см. [`docs/modules/dsh-bot.md`](docs/modules/dsh-bot.md)) читает этот Stream, отправляет в MAX через
 Bot API и после успешной отправки подтверждает запись (XACK). Авто-регистрация
 первого подписчика (по `bot_started`/`bot_added`/`message_created`) — только из
 белого списка `allowed_user_ids` — и дописывание адресата в `maxbot.json` — тоже в
@@ -198,6 +200,14 @@ map 1, meter 1. Период сетевых инверторов фиксиро�
   maxbot читает Stream, отправляет в MAX через Bot API и после успеха
   подтверждает (XACK). Работают только когда включён опрос МАП. Полное описание —
   [`docs/modules/notify.md`](docs/modules/notify.md).
+- **Чат с DeepSeek Harness** — тот же `cmd/maxbot`, раздел `dsh` в
+  `maxbot.json`: прокси-чат оператора с агентом harness (`127.0.0.1:3080`),
+  launch token из journald, очередь в Redis, постоянная сессия, меню моделей
+  (TTL 2 ч простоя), heartbeat, замена сессии по ошибкам/циклам/повторам,
+  `/cancel`, `/new`, `/continue`, вложения, доставка результатов отложенных
+  задач агента (`schedule_create`). Требования к юниту: группа
+  `systemd-journal` и запись в `/opt/dsh-bot`. Полное описание —
+  [`docs/modules/dsh-bot.md`](docs/modules/dsh-bot.md).
 - **Сетевое реле SR-201 (лампы-индикаторы)** — `relay_control.go`:
   контроллер (`relayController` + `runRelayControl`), поддерживающий состояние
   ламп по UDP (мигание `blink_hz`, повтор steady через `keepalive`), и два

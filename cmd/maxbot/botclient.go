@@ -24,10 +24,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -56,6 +59,11 @@ type maxClient struct {
 	chatID string
 	hc     *http.Client // обычный клиент (короткий таймаут) для отправки
 	hcLong *http.Client // клиент для long polling /updates
+	hcFile *http.Client // клиент для загрузки/скачивания файлов
+
+	// sendMu сериализует отправки в MAX и выдерживает лимит 2 сообщения/сек.
+	sendMu   sync.Mutex
+	lastSend time.Time
 }
 
 func newMaxClient(token, userID, chatID string) *maxClient {
@@ -65,6 +73,7 @@ func newMaxClient(token, userID, chatID string) *maxClient {
 		chatID: chatID,
 		hc:     &http.Client{Timeout: maxRequestTimeout},
 		hcLong: &http.Client{Timeout: maxUpdatesHTTPTimeout},
+		hcFile: &http.Client{Timeout: 120 * time.Second},
 	}
 }
 
@@ -97,6 +106,25 @@ func (m *maxClient) send(ctx context.Context, text string) error {
 
 // sendTo отправляет текстовое сообщение конкретному получателю (user_id или chat_id).
 func (m *maxClient) sendTo(ctx context.Context, userID, chatID, text string) error {
+	return m.sendRich(ctx, userID, chatID, text, "", nil)
+}
+
+// maxOutAttachment — исходящее вложение MAX.
+type maxOutAttachment struct {
+	Type    string `json:"type"`
+	Payload any    `json:"payload"`
+}
+
+// maxButton — кнопка inline-клавиатуры MAX.
+type maxButton struct {
+	Type    string `json:"type"`
+	Text    string `json:"text"`
+	Payload string `json:"payload,omitempty"`
+}
+
+// sendRich отправляет сообщение с необязательным форматированием и вложениями.
+// Отправки сериализуются и выдерживают лимит MAX (2 сообщения/сек в диалог).
+func (m *maxClient) sendRich(ctx context.Context, userID, chatID, text, format string, attachments []maxOutAttachment) error {
 	u := maxAPIBase + "/messages"
 	q := url.Values{}
 	if userID != "" {
@@ -106,10 +134,32 @@ func (m *maxClient) sendTo(ctx context.Context, userID, chatID, text string) err
 	} else {
 		return fmt.Errorf("max send: адресат не задан (user_id/chat_id)") // нет получателя
 	}
-	body, err := json.Marshal(map[string]any{"text": text})
+	msg := map[string]any{}
+	if text != "" {
+		msg["text"] = text
+	}
+	if format != "" {
+		msg["format"] = format
+	}
+	if len(attachments) > 0 {
+		msg["attachments"] = attachments
+	}
+	body, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
+
+	m.sendMu.Lock()
+	defer m.sendMu.Unlock()
+	if wait := 550*time.Millisecond - time.Since(m.lastSend); wait > 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+	m.lastSend = time.Now()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u+"?"+q.Encode(), bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -125,7 +175,7 @@ func (m *maxClient) sendTo(ctx context.Context, userID, chatID, text string) err
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return fmt.Errorf("max send: http %d: %s", resp.StatusCode, string(b))
 	}
-	// Успех — 200. Дополнительно проверяем теле, чтобы не подтвердить запись при
+	// Успех — 200. Дополнительно проверяем тело, чтобы не подтвердить запись при
 	// ошибке в теле успешного ответа (например, ok:false / поле error).
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	var probe map[string]any
@@ -140,7 +190,219 @@ func (m *maxClient) sendTo(ctx context.Context, userID, chatID, text string) err
 	return nil
 }
 
+// sameOrigin — совпадают ли схема+хост+порт двух URL.
+func sameOrigin(a, b string) bool {
+	ua, err := url.Parse(a)
+	if err != nil {
+		return false
+	}
+	ub, err := url.Parse(b)
+	if err != nil {
+		return false
+	}
+	return ua.Scheme == ub.Scheme && ua.Host == ub.Host
+}
+
+// maxBotCommand — команда бота для подсказок в MAX.
+type maxBotCommand struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// setCommands регистрирует команды бота (PATCH /me/commands).
+func (m *maxClient) setCommands(ctx context.Context, cmds []maxBotCommand) error {
+	body, err := json.Marshal(map[string]any{"commands": cmds})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, maxAPIBase+"/me/commands", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", m.token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := m.hc.Do(req)
+	if err != nil {
+		return fmt.Errorf("max commands: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("max commands: http %d: %s", resp.StatusCode, string(b))
+	}
+	return nil
+}
+
+// answerCallback отвечает на нажатие inline-кнопки (POST /answers).
+func (m *maxClient) answerCallback(ctx context.Context, callbackID, text string) error {
+	if callbackID == "" {
+		return nil
+	}
+	body, err := json.Marshal(map[string]any{"message": map[string]any{"text": text}})
+	if err != nil {
+		return err
+	}
+	u := maxAPIBase + "/answers?callback_id=" + url.QueryEscape(callbackID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", m.token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := m.hc.Do(req)
+	if err != nil {
+		return fmt.Errorf("max answers: %w", err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("max answers: http %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// uploadFile загружает файл в MAX и возвращает токен вложения.
+func (m *maxClient) uploadFile(ctx context.Context, filename string, data []byte) (string, error) {
+	// 1) Получаем URL загрузки и токен.
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, maxAPIBase+"/uploads?type=file", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", m.token)
+	resp, err := m.hcFile.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("max uploads: %w", err)
+	}
+	rawUp, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("max uploads: http %d: %s", resp.StatusCode, truncate(string(rawUp), 300))
+	}
+	var up struct {
+		URL   string `json:"url"`
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(rawUp, &up); err != nil {
+		return "", fmt.Errorf("max uploads: разбор ответа: %w", err)
+	}
+	if up.URL == "" {
+		return "", fmt.Errorf("max uploads: пустой url загрузки")
+	}
+
+	// 2) Отправляем файл multipart-ом (поле data).
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="data"; filename="%s"`, filename))
+	h.Set("Content-Type", "application/octet-stream")
+	part, err := mw.CreatePart(h)
+	if err != nil {
+		return "", err
+	}
+	if _, err := part.Write(data); err != nil {
+		return "", err
+	}
+	if err := mw.Close(); err != nil {
+		return "", err
+	}
+	upReq, err := http.NewRequestWithContext(ctx, http.MethodPost, up.URL, &buf)
+	if err != nil {
+		return "", err
+	}
+	// Токен отправляем только на тот же origin, что и API MAX: URL загрузки
+	// может указывать на CDN/хранилище, куда токен бота уходить не должен.
+	if sameOrigin(up.URL, maxAPIBase) {
+		upReq.Header.Set("Authorization", m.token)
+	}
+	upReq.Header.Set("Content-Type", mw.FormDataContentType())
+	upResp, err := m.hcFile.Do(upReq)
+	if err != nil {
+		return "", fmt.Errorf("max upload: %w", err)
+	}
+	raw, _ := io.ReadAll(io.LimitReader(upResp.Body, 1<<20))
+	upResp.Body.Close()
+	if upResp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("max upload: http %d: %s", upResp.StatusCode, truncate(string(raw), 300))
+	}
+	var uploaded struct {
+		Token  string `json:"token"`
+		Retval string `json:"retval"`
+	}
+	if json.Unmarshal(raw, &uploaded) == nil && uploaded.Token != "" {
+		return uploaded.Token, nil
+	}
+	if up.Token != "" {
+		return up.Token, nil
+	}
+	return "", fmt.Errorf("max upload: сервер не вернул token")
+}
+
+// sendFile загружает файл и отправляет его сообщением с подписью. Ошибка
+// attachment.not.ready обрабатывается повтором с нарастающей паузой.
+func (m *maxClient) sendFile(ctx context.Context, filename string, data []byte, caption string) error {
+	token, err := m.uploadFile(ctx, filename, data)
+	if err != nil {
+		return err
+	}
+	att := []maxOutAttachment{{Type: "file", Payload: map[string]string{"token": token}}}
+	var lastErr error
+	for attempt := 0; attempt < 4; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(1<<attempt) * time.Second):
+			}
+		}
+		u, c := m.recipient()
+		lastErr = m.sendRich(ctx, u, c, caption, "", att)
+		if lastErr == nil {
+			return nil
+		}
+		if !strings.Contains(lastErr.Error(), "attachment.not.ready") &&
+			!strings.Contains(lastErr.Error(), "not.processed") {
+			return lastErr
+		}
+	}
+	return lastErr
+}
+
 // ---- авто-регистрация адресата (первый подписчик бота) ----
+
+// maxAttachment — вложение входящего сообщения MAX.
+type maxAttachment struct {
+	Type    string `json:"type"`
+	Payload struct {
+		URL      string `json:"url"`
+		Token    string `json:"token"`
+		Filename string `json:"filename"`
+		Size     int64  `json:"size"`
+	} `json:"payload"`
+}
+
+// maxMessage — сообщение во входящем обновлении (message_created).
+type maxMessage struct {
+	Sender struct {
+		UserID int64 `json:"user_id"`
+		IsBot  bool  `json:"is_bot"`
+	} `json:"sender"`
+	Recipient struct {
+		ChatID int64 `json:"chat_id"`
+	} `json:"recipient"`
+	Body struct {
+		Text        string          `json:"text"`
+		Attachments []maxAttachment `json:"attachments"`
+	} `json:"body"`
+}
+
+// maxCallback — нажатие inline-кнопки (message_callback).
+type maxCallback struct {
+	CallbackID string `json:"callback_id"`
+	Payload    string `json:"payload"`
+	User       struct {
+		UserID int64 `json:"user_id"`
+	} `json:"user"`
+}
 
 // maxUpdate — одно событие из GET /updates (объект Update в API MAX).
 type maxUpdate struct {
@@ -151,6 +413,8 @@ type maxUpdate struct {
 		FirstName string `json:"first_name"`
 		LastName  string `json:"last_name"`
 	} `json:"user"`
+	Message  *maxMessage  `json:"message"`
+	Callback *maxCallback `json:"callback"`
 }
 
 // maxUpdatesResponse — тело ответа GET /updates.
@@ -194,7 +458,7 @@ func (m *maxClient) fetchUpdates(ctx context.Context, marker int64, types string
 }
 
 // subscriberEvents — события, которые отслеживаются для регистрации/отписки бота.
-const subscriberEvents = "bot_started,bot_added,bot_stopped,bot_removed,dialog_removed,message_created"
+const subscriberEvents = "bot_started,bot_added,bot_stopped,bot_removed,dialog_removed,message_created,message_callback"
 
 // isLongPollTimeout сообщает, что ошибка — срабатывание ИМЕННО нашего
 // context-дедлайна запроса. Для /updates это штатное завершение пустого
@@ -220,7 +484,7 @@ func (m *maxClient) pollSubscriberRound(ctx context.Context, marker int64, types
 //     bot_removed/dialog_removed от текущего адресата) очищает адресат в конфиге
 //     и возвращает в режим ожидания подписчика.
 func (b *bot) runSubscriber(stop context.Context) {
-	var marker int64
+	marker := loadMaxMarker(stop, b.rdb)
 	var lastErr time.Time
 	for {
 		select {
@@ -263,8 +527,10 @@ func (b *bot) runSubscriber(stop context.Context) {
 			marker = next
 		}
 		for _, up := range updates {
-			b.handleSubscriberEvent(up)
+			b.handleUpdate(stop, up)
 		}
+		// Marker сохраняем после обработки пачки: при сбое сообщения не теряются.
+		saveMaxMarker(stop, b.rdb, marker)
 		if len(updates) == 0 {
 			select {
 			case <-stop.Done():
@@ -275,8 +541,14 @@ func (b *bot) runSubscriber(stop context.Context) {
 	}
 }
 
-// handleSubscriberEvent обрабатывает одно событие подписки/отписки.
+// handleSubscriberEvent обрабатывает одно событие подписки/отписки (совместимая
+// обёртка для тестов).
 func (b *bot) handleSubscriberEvent(up maxUpdate) {
+	b.handleUpdate(context.Background(), up)
+}
+
+// handleUpdate обрабатывает одно событие из /updates.
+func (b *bot) handleUpdate(ctx context.Context, up maxUpdate) {
 	// 0 — отсутствующий id; FormatInt дал бы строку "0" и сломал бы проверки
 	// «адресат задан»/выбор user_id vs chat_id.
 	userID, chatID := "", ""
@@ -286,7 +558,32 @@ func (b *bot) handleSubscriberEvent(up maxUpdate) {
 	if up.ChatID != 0 {
 		chatID = strconv.FormatInt(up.ChatID, 10)
 	}
+	if up.Message != nil {
+		if up.Message.Sender.UserID != 0 {
+			userID = strconv.FormatInt(up.Message.Sender.UserID, 10)
+		}
+		if chatID == "" && up.Message.Recipient.ChatID != 0 {
+			chatID = strconv.FormatInt(up.Message.Recipient.ChatID, 10)
+		}
+	}
 	switch up.UpdateType {
+	case "message_callback":
+		if up.Callback == nil {
+			return
+		}
+		uid := ""
+		if up.Callback.User.UserID != 0 {
+			uid = strconv.FormatInt(up.Callback.User.UserID, 10)
+		}
+		if !b.isAllowed(uid) {
+			b.respond(uid, chatID, b.deniedMsg())
+			return
+		}
+		if b.client.hasRecipient() && !b.isOurSubscriber(uid, chatID) {
+			b.respond(uid, chatID, b.rejectedMsg())
+			return
+		}
+		b.handleDSHCallback(ctx, up.Callback)
 	case "bot_started", "bot_added":
 		if !b.isAllowed(userID) {
 			// Аккаунт вне белого списка — отказ, адресат не трогаем.
@@ -306,6 +603,9 @@ func (b *bot) handleSubscriberEvent(up maxUpdate) {
 			b.clearRecipient()
 		}
 	case "message_created":
+		if up.Message != nil && up.Message.Sender.IsBot {
+			return // не отвечаем ботам: исключает цикл «ответ → ответ»
+		}
 		if !b.isAllowed(userID) {
 			b.respond(userID, chatID, b.deniedMsg())
 			return
@@ -313,11 +613,11 @@ func (b *bot) handleSubscriberEvent(up maxUpdate) {
 		if !b.client.hasRecipient() && (userID != "" || chatID != "") {
 			b.registerRecipient(userID, chatID)
 			b.respond(userID, chatID, b.registeredMsg())
+		} else if b.client.hasRecipient() && !b.isOurSubscriber(userID, chatID) {
+			b.respond(userID, chatID, b.rejectedMsg())
 			return
 		}
-		if b.client.hasRecipient() && !b.isOurSubscriber(userID, chatID) {
-			b.respond(userID, chatID, b.rejectedMsg())
-		}
+		b.handleDSHMessage(ctx, up)
 	}
 }
 
@@ -419,8 +719,11 @@ func (b *bot) writeConfig(cfg *config) error {
 		return err
 	}
 	tmp := b.cfgPath + ".tmp"
-	if err := os.WriteFile(tmp, out, 0o644); err != nil {
+	if err := os.WriteFile(tmp, out, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, b.cfgPath)
+	if err := os.Rename(tmp, b.cfgPath); err != nil {
+		return err
+	}
+	return os.Chmod(b.cfgPath, 0o600)
 }

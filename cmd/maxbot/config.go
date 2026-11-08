@@ -19,6 +19,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 )
 
@@ -42,6 +43,69 @@ type config struct {
 	// аккаунтов вне списка отклоняются, адресат не меняется. Если список пуст —
 	// регистрация запрещена для всех (адресат задаётся только явно в конфиге).
 	AllowedUserIDs []string `json:"allowed_user_ids"`
+
+	// DSH — чат с DeepSeek Harness (dsh) на этом же хосте. nil — раздел не
+	// задан, чат выключен (уведомления работают как раньше).
+	DSH *dshConfig `json:"dsh"`
+}
+
+// dshConfig — настройки прокси-чата с DeepSeek Harness.
+type dshConfig struct {
+	// Disabled — true: чат с harness выключен (уведомления продолжают работать).
+	Disabled bool `json:"disabled"`
+	// BaseURL — HTTP-адрес harness (обычно http://127.0.0.1:3080).
+	BaseURL string `json:"base_url"`
+	// Workspace — рабочая область агента (cwd сессии).
+	Workspace string `json:"workspace"`
+	// IncomingDir — каталог для файлов, полученных из MAX.
+	IncomingDir string `json:"incoming_dir"`
+	// Provider/DefaultModel/Effort — модель по умолчанию.
+	Provider     string `json:"provider"`
+	DefaultModel string `json:"default_model"`
+	Effort       string `json:"effort"`
+	// ModelTTLHours — окно выбранной модели (сбрасывается после простоя).
+	ModelTTLHours int `json:"model_ttl_hours"`
+	// HeartbeatSec — период сообщения «Агент работает».
+	HeartbeatSec int `json:"heartbeat_sec"`
+	// RetryAttempts — число попыток при транспортных ошибках.
+	RetryAttempts int `json:"retry_attempts"`
+	// TokenUnit — systemd-юнит harness для чтения launch token из journald.
+	TokenUnit string `json:"token_unit"`
+}
+
+// applyDefaults заполняет необязательные поля dsh-раздела.
+func (d *dshConfig) applyDefaults() {
+	if d.BaseURL == "" {
+		d.BaseURL = "http://127.0.0.1:3080"
+	}
+	if d.Workspace == "" {
+		d.Workspace = "/opt/dsh-bot"
+	}
+	if d.IncomingDir == "" {
+		d.IncomingDir = d.Workspace + "/incoming"
+	}
+	if d.Provider == "" {
+		d.Provider = "wbllm"
+	}
+	if d.DefaultModel == "" {
+		d.DefaultModel = "coder-medium"
+	}
+	if d.Effort == "" {
+		d.Effort = "low"
+	}
+	if d.ModelTTLHours <= 0 {
+		d.ModelTTLHours = 2
+	}
+	if d.HeartbeatSec <= 0 || d.HeartbeatSec > 180 {
+		// Требование: «Агент работает» не реже раза в 3 минуты.
+		d.HeartbeatSec = 180
+	}
+	if d.RetryAttempts <= 0 {
+		d.RetryAttempts = 3
+	}
+	if d.TokenUnit == "" {
+		d.TokenUnit = "deepseek-harness"
+	}
 }
 
 // loadConfig читает и валидирует maxbot.json.
@@ -62,6 +126,15 @@ func loadConfig(path string) (*config, error) {
 	}
 	if c.Consumer == "" {
 		c.Consumer = "maxbot"
+	}
+	if c.DSH != nil {
+		c.DSH.applyDefaults()
+		if !c.DSH.Disabled {
+			u, err := url.Parse(c.DSH.BaseURL)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				return nil, fmt.Errorf("config %s: dsh.base_url должен быть http(s)://host[:port]", path)
+			}
+		}
 	}
 	return &c, nil
 }

@@ -5,5 +5,18 @@
   "disabled": false,
   "redis": "127.0.0.1:6379",
   "consumer": "maxbot",
-  "allowed_user_ids": ["CHANGE_ME_USER_ID"]
+  "allowed_user_ids": ["CHANGE_ME_USER_ID"],
+  "dsh": {
+    "disabled": false,
+    "base_url": "http://127.0.0.1:3080",
+    "workspace": "/opt/dsh-bot",
+    "incoming_dir": "/opt/dsh-bot/incoming",
+    "provider": "wbllm",
+    "default_model": "coder-medium",
+    "effort": "low",
+    "model_ttl_hours": 2,
+    "heartbeat_sec": 180,
+    "retry_attempts": 3,
+    "token_unit": "deepseek-harness"
+  }
 }

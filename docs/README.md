@@ -47,6 +47,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 | **Проброс Bluetooth (usbip)** (вне кода, ОТКЛЮЧЕНО 2026-09-24) | Историческая схема: проброс BLE-контроллера MediaTek с `.9` на `.253` через usbip; на `.253` теперь физический USB-адаптер | [ce308-bluetooth/README.md](ce308-bluetooth/README.md) |
 | **BMS malina26** (`bms26*.go`) | Единый пулер BMS (ANT+EnBMS) через HTTP-API «Малина26»: `/api/bms/devices` + `/api/bms/raw` (бинарный контракт 107 Б, копия `internal/bmscontract`); Redis `sunreceiver:bms26:*` + PG `bms26_averages_r` | [modules/bms26.md](modules/bms26.md) |
 | **Уведомления в MAX** (`notify.go`) | Отправка событий мониторинга МАП (недоступен / нет напряжения сети) в мессенджер MAX через Bot API, с гистерезисом и дедупликацией | [modules/notify.md](modules/notify.md) |
+| **Чат с DeepSeek Harness** (`cmd/maxbot`, раздел `dsh`) | Прокси-чат оператора с агентом harness (`127.0.0.1:3080`): очередь, постоянная сессия, выбор модели (TTL 2 ч), heartbeat, замена сессии, отмена/продолжение, вложения | [modules/dsh-bot.md](modules/dsh-bot.md) |
 | **Сетевое реле SR-201** (`relay_control.go`) | Управление двойным реле по UDP (белая/красная лампы): поддержка состояния (вкл/выкл/мигание 2 Гц) + автоиндикаторы (отдача в сеть, наличие напряжения сети) | [relay_sr-201(2light).md](relay_sr-201(2light).md) |
 | **Windows-трей и логирование** (`tray_*.go`, `logfile_*.go`) | Сворачивание в системный трей (`fyne.io/systray`) и запись лога в `sunReceiver.log` рядом с exe; на POSIX `runTray`/`setupLogging` — no-op | [modules/tray-logging.md](modules/tray-logging.md) |
 | **Универсальный контракт `values`** | Набор общих тегов с одинаковыми именами/единицами для всех марок (PV, AC, фазы, энергия, МАП) | [universal-contract.md](universal-contract.md) |
@@ -195,6 +196,7 @@ make clean                       # rm -rf dist
 - [`modules/map-mppt.md`](modules/map-mppt.md) — МАП + MPPT.
 - [`modules/ce308.md`](modules/ce308.md) — счётчик Энергомера CE308 (BLE).
 - [`modules/notify.md`](modules/notify.md) — уведомления в мессенджер MAX.
+- [`modules/dsh-bot.md`](modules/dsh-bot.md) — чат с DeepSeek Harness через maxbot.
 - [`modules/tray-logging.md`](modules/tray-logging.md) — системный трей и логирование
   (Windows / POSIX).
 - [`ce308-bluetooth/README.md`](ce308-bluetooth/README.md) — **историческое**
