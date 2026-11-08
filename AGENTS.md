@@ -116,10 +116,11 @@ DDS238 (реализовано в `mercury.go`, отдаётся в `/api/curren
 настраиваются — они в приложении **maxbot**). Сформированные события пишутся в
 Redis Stream `sunreceiver:notify:events`; отдельное приложение **`cmd/maxbot`**
 (прод — `/opt/maxbot`, свой `maxbot.json` `{token, user_id, chat_id, disabled,
-redis, consumer}`) читает этот Stream, отправляет в MAX через Bot API и после
-успешной отправки подтверждает запись (XACK). Авто-регистрация первого
-подписчика (по `bot_started`/`bot_added`/`message_created`) и дописывание адресата
-в `maxbot.json` — тоже в maxbot. Полное описание —
+redis, consumer, allowed_user_ids}`) читает этот Stream, отправляет в MAX через
+Bot API и после успешной отправки подтверждает запись (XACK). Авто-регистрация
+первого подписчика (по `bot_started`/`bot_added`/`message_created`) — только из
+белого списка `allowed_user_ids` — и дописывание адресата в `maxbot.json` — тоже в
+maxbot. Полное описание —
 [`docs/modules/notify.md`](docs/modules/notify.md)). Сетевое реле SR-201 (лампы-индикаторы) — раздел
 **`relay`** `{"disabled", "ip", "udp_port", "blink_hz", "keepalive", "lamps", "meter_stale_sec",
 "map_stale_sec", "meter_power_tag", "meter_voltage_tag", "map_grid_tag", "voltage_present_min"}`

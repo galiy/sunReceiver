@@ -4,5 +4,6 @@
   "chat_id": "",
   "disabled": false,
   "redis": "127.0.0.1:6379",
-  "consumer": "maxbot"
+  "consumer": "maxbot",
+  "allowed_user_ids": ["CHANGE_ME_USER_ID"]
 }

@@ -36,8 +36,12 @@ type config struct {
 	// откуда читается Stream уведомлений.
 	Redis string `json:"redis"`
 	// Consumer — имя консьюмера в consumer group Stream (по умолчанию "maxbot").
-	// Фиксированное имя позволяет при рестарте дочитать незавершённые (pending).
 	Consumer string `json:"consumer"`
+	// AllowedUserIDs — белый список user_id (строки), которым разрешено стать
+	// адресатом (регистрация первого подписчика). События подписки/сообщения от
+	// аккаунтов вне списка отклоняются, адресат не меняется. Если список пуст —
+	// регистрация запрещена для всех (адресат задаётся только явно в конфиге).
+	AllowedUserIDs []string `json:"allowed_user_ids"`
 }
 
 // loadConfig читает и валидирует maxbot.json.

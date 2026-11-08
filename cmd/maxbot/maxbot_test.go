@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -122,7 +123,7 @@ func TestSubscriberLifecycle(t *testing.T) {
 	}
 
 	b := &bot{
-		cfg:     &config{Token: "tok", Redis: "x"},
+		cfg:     &config{Token: "tok", Redis: "x", AllowedUserIDs: []string{"111222333", "123456789"}},
 		cfgPath: cfgPath,
 		client:  newMaxClient("tok", "", ""),
 	}
@@ -142,8 +143,12 @@ func TestSubscriberLifecycle(t *testing.T) {
 	}
 	// Адресат записан в конфиг.
 	bb, _ := os.ReadFile(cfgPath)
-	if !strings.Contains(string(bb), firstUser) || !strings.Contains(string(bb), firstChat) {
-		t.Fatalf("адресат должен быть записан в конфиг:\n%s", bb)
+	var cf config
+	if err := json.Unmarshal(bb, &cf); err != nil {
+		t.Fatalf("parse конфига: %v", err)
+	}
+	if cf.UserID != firstUser || cf.ChatID != firstChat {
+		t.Fatalf("адресат должен быть записан в конфиг, got %q/%q:\n%s", cf.UserID, cf.ChatID, bb)
 	}
 
 	// 2) Второй подписчик — отказ, адресат не перезаписывается.
@@ -169,8 +174,12 @@ func TestSubscriberLifecycle(t *testing.T) {
 		t.Fatalf("после отписки адресат должен быть очищен")
 	}
 	bb, _ = os.ReadFile(cfgPath)
-	if strings.Contains(string(bb), firstUser) || strings.Contains(string(bb), firstChat) {
-		t.Fatalf("после отписки адресат должен быть удалён из конфига:\n%s", bb)
+	var cf2 config
+	if err := json.Unmarshal(bb, &cf2); err != nil {
+		t.Fatalf("parse конфига: %v", err)
+	}
+	if cf2.UserID != "" || cf2.ChatID != "" {
+		t.Fatalf("после отписки адресат должен быть удалён из конфига, got %q/%q:\n%s", cf2.UserID, cf2.ChatID, bb)
 	}
 }
 
@@ -303,5 +312,87 @@ func TestFetchUpdatesHTTPErrorNotTimeout(t *testing.T) {
 	_, _, err := c.fetchUpdates(context.Background(), 1, subscriberEvents)
 	if err == nil || isLongPollTimeout(err) {
 		t.Fatalf("HTTP 500: err=%v, isTimeout=%v", err, isLongPollTimeout(err))
+	}
+}
+
+// TestAllowedUserIDsDenied — аккаунт вне белого списка отклоняется на подписке и
+// при сообщении; адресат не регистрируется и не меняется.
+func TestAllowedUserIDsDenied(t *testing.T) {
+	var responses []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/messages") {
+			body := make([]byte, 4096)
+			n, _ := r.Body.Read(body)
+			responses = append(responses, string(body[:n]))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"message":{"body":{"mid":"mid.1"}}}`))
+	}))
+	defer srv.Close()
+	orig := maxAPIBase
+	maxAPIBase = srv.URL
+	defer func() { maxAPIBase = orig }()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "maxbot.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"token":"tok","redis":"x"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Белый список: только user_id 555.
+	b := &bot{
+		cfg:     &config{Token: "tok", Redis: "x", AllowedUserIDs: []string{"555"}},
+		cfgPath: cfgPath,
+		client:  newMaxClient("tok", "", ""),
+	}
+	b.client.setRecipient("555", "") // адресат уже привязан к разрешённому
+
+	// Чужой (777) — отказ, адресат не меняется.
+	b.handleSubscriberEvent(maxUpdate{UpdateType: "bot_started", ChatID: 777, User: struct {
+		UserID    int64  `json:"user_id"`
+		FirstName string `json:"first_name"`
+		LastName  string `json:"last_name"`
+	}{UserID: 777}})
+	if u, _ := b.client.recipient(); u != "555" {
+		t.Fatalf("адресат не должен перезаписаться: %q", u)
+	}
+	if len(responses) != 1 || !strings.Contains(responses[0], "Доступ запрещён") {
+		t.Fatalf("чужому должен быть отказ, got %d: %v", len(responses), responses)
+	}
+}
+
+// TestAllowedUserIDsRegisterAllowed — аккаунт из белого списка регистрируется,
+// даже когда адресат ещё не задан (нормальный первый подписчик).
+func TestAllowedUserIDsRegisterAllowed(t *testing.T) {
+	var responses []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/messages") {
+			body := make([]byte, 4096)
+			n, _ := r.Body.Read(body)
+			responses = append(responses, string(body[:n]))
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"message":{"body":{"mid":"mid.1"}}}`))
+	}))
+	defer srv.Close()
+	orig := maxAPIBase
+	maxAPIBase = srv.URL
+	defer func() { maxAPIBase = orig }()
+
+	b := &bot{
+		cfg:     &config{Token: "tok", Redis: "x", AllowedUserIDs: []string{"555"}},
+		cfgPath: filepath.Join(t.TempDir(), "maxbot.json"),
+		client:  newMaxClient("tok", "", ""),
+	}
+	b.handleSubscriberEvent(maxUpdate{UpdateType: "message_created", ChatID: 5, User: struct {
+		UserID    int64  `json:"user_id"`
+		FirstName string `json:"first_name"`
+		LastName  string `json:"last_name"`
+	}{UserID: 555}})
+	if u, _ := b.client.recipient(); u != "555" {
+		t.Fatalf("разрешённый должен зарегистрироваться, recipient=%q", u)
+	}
+	if len(responses) != 1 || !strings.Contains(responses[0], "зарегистрированы") {
+		t.Fatalf("разрешённому приветствие, got %d: %v", len(responses), responses)
 	}
 }

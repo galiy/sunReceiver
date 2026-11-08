@@ -288,6 +288,11 @@ func (b *bot) handleSubscriberEvent(up maxUpdate) {
 	}
 	switch up.UpdateType {
 	case "bot_started", "bot_added":
+		if !b.isAllowed(userID) {
+			// Аккаунт вне белого списка — отказ, адресат не трогаем.
+			b.respond(userID, chatID, b.deniedMsg())
+			return
+		}
 		if !b.client.hasRecipient() && (userID != "" || chatID != "") {
 			b.registerRecipient(userID, chatID)
 			b.respond(userID, chatID, b.registeredMsg())
@@ -301,6 +306,10 @@ func (b *bot) handleSubscriberEvent(up maxUpdate) {
 			b.clearRecipient()
 		}
 	case "message_created":
+		if !b.isAllowed(userID) {
+			b.respond(userID, chatID, b.deniedMsg())
+			return
+		}
 		if !b.client.hasRecipient() && (userID != "" || chatID != "") {
 			b.registerRecipient(userID, chatID)
 			b.respond(userID, chatID, b.registeredMsg())
@@ -312,6 +321,17 @@ func (b *bot) handleSubscriberEvent(up maxUpdate) {
 	}
 }
 
+// isAllowed — входит ли user_id в белый список (allowed_user_ids).
+// Пустой список — регистрация запрещена для всех.
+func (b *bot) isAllowed(userID string) bool {
+	for _, id := range b.cfg.AllowedUserIDs {
+		if id == userID {
+			return true
+		}
+	}
+	return false
+}
+
 // registeredMsg — сообщение первому подписчику.
 func (b *bot) registeredMsg() string {
 	return "Вы зарегистрированы и будете получать сообщения с электростанции ⚡"
@@ -320,6 +340,11 @@ func (b *bot) registeredMsg() string {
 // rejectedMsg — сообщение последующим подписчикам (регистрация невозможна).
 func (b *bot) rejectedMsg() string {
 	return "Регистрация невозможна: подписка на уведомления уже привязана к другому пользователю."
+}
+
+// deniedMsg — сообщение аккаунту вне белого списка (allowed_user_ids).
+func (b *bot) deniedMsg() string {
+	return "Доступ запрещён: ваш аккаунт не в списке разрешённых получателей уведомлений."
 }
 
 // respond отправляет разовое сообщение конкретному получателю (автору события).
