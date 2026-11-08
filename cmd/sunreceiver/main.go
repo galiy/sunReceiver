@@ -399,16 +399,15 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	// требовать авторизацию; иначе API открыт (доступ снаружи закрывает прокси).
 	dashboardAuthUser = cf.DashboardUser
 	dashboardAuthPass = cf.DashboardPassword
-	// Уведомления в MAX (раздел notify): токен обязателен. Адресат (user_id или
-	// chat_id) НЕ обязателен — если он пуст, бот регистрирует первого подписчика
-	// автоматически (bot_started/bot_added) и дописывает его в конфиг.
+	// Уведомления в MAX (раздел notify): здесь только пороги мониторинга МАП и
+	// признак включения. Токен/адресат MAX больше НЕ настраиваются — они переехали
+	// в приложение cmd/maxbot (см. maxbot.json). Отправку в MAX выполняет тот бот:
+	// он читает из Redis Stream, куда sunReceiver пишет готовые события.
 	notifyCfg = cf.Notify
 	if notifyCfg != nil {
 		if notifyCfg.Disabled != nil && *notifyCfg.Disabled {
-			log.Printf("config: notify disabled=true — уведомления в MAX выключены (раздел в конфиге, но без оповещений)")
+			log.Printf("config: notify disabled=true — мониторинг МАП и запись событий в MAX-очередь выключены (раздел в конфиге, но без оповещений)")
 			notifyCfg = nil
-		} else if notifyCfg.Token == "" {
-			return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе notify не задан token", path)
 		}
 	}
 	return targets, cf.DB, cf.Meter, cf.Map, cf.Relay, ce308Cfg, cf.DashboardPort, nil
@@ -1169,7 +1168,8 @@ func main() {
 	}
 	// Уведомления в MAX. Мониторинг МАП выполняется ТОЛЬКО если включён опрос МАП
 	// (есть источник malina26). Если опрос МАП выключен — уведомления не
-	// формируются, даже при настроенном notify.
+	// формируются, даже при настроенном notify. Сформированные события пишутся в
+	// Redis Stream; отправку в MAX выполняет внешний бот (cmd/maxbot).
 	mapIP, mapName := mapSourceIdentity()
 	if notifyCfg != nil && mapIP != "" {
 		bgWg.Add(1)
@@ -1177,7 +1177,7 @@ func main() {
 			defer bgWg.Done()
 			runNotifyMonitor(store, notifyCfg, mapIP, mapName, meterCurrentKey(meterCfg), stopCtx)
 		}()
-		log.Printf("notify: уведомления в MAX включены (МАП %s, источник %s)", mapName, mapSourceName())
+		log.Printf("notify: мониторинг МАП для уведомлений в MAX включены (МАП %s, источник %s, очередь %s)", mapName, mapSourceName(), redisNotifyStreamKey)
 	} else if notifyCfg != nil {
 		log.Printf("notify: опрос МАП выключен или нет источника МАП — уведомления в MAX не формируются")
 	}

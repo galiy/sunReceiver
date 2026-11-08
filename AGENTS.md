@@ -110,11 +110,16 @@ DDS238 (реализовано в `mercury.go`, отдаётся в `/api/curren
 прогноз» в рамке DDS238). Описан в
 [`docs/meter_mercury.md`](docs/meter_mercury.md). BMS (ANT + EnBMS) опрашивается
 единым типом BMS26 через API «Малина26» (раздел `map`), см.
-[`docs/modules/bms26.md`](docs/modules/bms26.md). Уведомления в мессенджер MAX — раздел **`notify`**
-`{"token", "user_id", "chat_id", "disabled", "stable_window_sec", "map_undeclared_sec", "grid_voltage_low"}`
-(токен бота MAX обязателен; адресат `user_id`/`chat_id` — **необязателен**: если
-пуст, бот регистрирует первого подписчика по `bot_started`/`bot_added`/`message_created`
-и дописывает адресат в конфиг, последующие отписки/отказы — см.
+[`docs/modules/bms26.md`](docs/modules/bms26.md). Уведомления в мессенджер MAX: мониторинг МАП и формирование событий — раздел **`notify`**
+`{"disabled", "stable_window_sec", "map_undeclared_sec", "grid_voltage_low"}`
+(только пороги детекции + признак включения; токен/адресат MAX больше НЕ
+настраиваются — они в приложении **maxbot**). Сформированные события пишутся в
+Redis Stream `sunreceiver:notify:events`; отдельное приложение **`cmd/maxbot`**
+(прод — `/opt/maxbot`, свой `maxbot.json` `{token, user_id, chat_id, disabled,
+redis, consumer}`) читает этот Stream, отправляет в MAX через Bot API и после
+успешной отправки подтверждает запись (XACK). Авто-регистрация первого
+подписчика (по `bot_started`/`bot_added`/`message_created`) и дописывание адресата
+в `maxbot.json` — тоже в maxbot. Полное описание —
 [`docs/modules/notify.md`](docs/modules/notify.md)). Сетевое реле SR-201 (лампы-индикаторы) — раздел
 **`relay`** `{"disabled", "ip", "udp_port", "blink_hz", "keepalive", "lamps", "meter_stale_sec",
 "map_stale_sec", "meter_power_tag", "meter_voltage_tag", "map_grid_tag", "voltage_present_min"}`
@@ -185,10 +190,12 @@ map 1, meter 1. Период сетевых инверторов фиксиро�
   `github.com/galiy/malina-26/daemons/lib/bmscontract`). Redis current `sunreceiver:bms26:current`
   + серии RedisTimeSeries `sunreceiver:ts:bms26:*`; PG `bms26_averages_r` (5-мин средние). Полное
   описание — [`docs/modules/bms26.md`](docs/modules/bms26.md).
-- **Уведомления в MAX** — `notify.go` (`maxClient` + трекер состояния МАП
-  `mapTrack` + `runNotifyMonitor`): события мониторинга МАП (недоступен / нет
-  напряжения сети) и восстановление, отправка через Bot API MAX с гистерезисом
-  и дедупликацией. Работают только когда включён опрос МАП. Полное описание —
+- **Уведомления в MAX** — `notify.go` + приложение **`cmd/maxbot`**: детекция
+  событий МАП (недоступен / нет напряжения сети) и восстановление с гистерезисом
+  и дедупликацией остаётся в sunReceiver (`mapTrack` + `runNotifyMonitor`),
+  сформированные события пишутся в Redis Stream `sunreceiver:notify:events`;
+  maxbot читает Stream, отправляет в MAX через Bot API и после успеха
+  подтверждает (XACK). Работают только когда включён опрос МАП. Полное описание —
   [`docs/modules/notify.md`](docs/modules/notify.md).
 - **Сетевое реле SR-201 (лампы-индикаторы)** — `relay_control.go`:
   контроллер (`relayController` + `runRelayControl`), поддерживающий состояние

@@ -64,3 +64,6 @@ __pycache__/
 
 
 
+# конфигурация maxbot (приватный: токен MAX, адресат) — не коммитить
+maxbot.json
+maxbot.json.bak*

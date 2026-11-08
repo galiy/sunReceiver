@@ -5,13 +5,14 @@ BLDFLAGS_WIN   := -H windowsgui -X main.version=$(VERSION)
 
 LINUX_ART := dist/sunReceiver-linux-amd64-$(VERSION)
 WIN_ART   := dist/sunReceiver-windows-amd64-$(VERSION).exe
+MAXBOT_ART := dist/maxbot-linux-amd64-$(VERSION)
 
 # guard на внешние утилиты: zip нужен только релизу (Windows-архив).
 ZIP_CMD := $(shell command -v zip 2>/dev/null)
 
-.PHONY: all linux-x64 win-x64 release clean dist test vet
+.PHONY: all linux-x64 win-x64 maxbot-linux-x64 release clean dist test vet
 
-all: linux-x64 win-x64 vet test
+all: linux-x64 win-x64 maxbot-linux-x64 vet test
 
 dist:
 	mkdir -p dist
@@ -32,11 +33,15 @@ win-x64: dist
 	rm -f $(WIN_ART)
 	$(MAKE) VERSION=$(VERSION) $(WIN_ART)
 
+maxbot-linux-x64: dist
+	rm -f $(MAXBOT_ART)
+	$(MAKE) VERSION=$(VERSION) $(MAXBOT_ART)
+
 # Артефактные цели (пересобираются, только если исходники новее артефакта и
 # артефакт отсутствует/устарел). Здесь НЕТ фантомных зависимостей (dist/vet/test),
 # иначе make всегда считал бы артефакт устаревшим и пересобирал бы его. На эти
 # цели опирается release — чтобы НЕ пересобирать уже собранные бинарники (N38).
-GO_SRC := $(wildcard cmd/sunreceiver/*.go internal/*/*.go) go.mod go.sum \
+GO_SRC := $(wildcard cmd/sunreceiver/*.go cmd/maxbot/*.go internal/*/*.go) go.mod go.sum \
           $(shell find cmd/sunreceiver/web -type f 2>/dev/null)
 
 $(LINUX_ART): $(GO_SRC)
@@ -50,6 +55,12 @@ $(WIN_ART): $(GO_SRC)
 	rm -f $(WIN_ART)
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$(BLDFLAGS_WIN)" -o $(WIN_ART) ./cmd/sunreceiver
 	@echo "OK: $(WIN_ART)"
+
+$(MAXBOT_ART): $(GO_SRC)
+	mkdir -p dist
+	rm -f $(MAXBOT_ART)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "$(BLDFLAGS_LINUX)" -o $(MAXBOT_ART) ./cmd/maxbot
+	@echo "OK: $(MAXBOT_ART)"
 
 # Релиз. N38: использует уже собранные $(LINUX_ART)/$(WIN_ART), а не пересобирает
 # их (зависит от артефактных целей, а не от явных linux-x64/win-x64), кладёт
