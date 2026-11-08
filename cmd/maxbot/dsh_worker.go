@@ -309,8 +309,8 @@ func (b *bot) processDSHItem(ctx context.Context, item dshQueueItem) error {
 		st.PendingSchedText = ""
 		st.PendingSchedUser = ""
 		st.PendingSchedExternal = false
-		st.PendingSchedNextUser = ""
-		st.PendingSchedNextExt = false
+		// PendingSchedNextUser/NextExt не сбрасываем: это запрос,
+		// пришедший во время предыдущего хода, он относится к следующему.
 		st.PendingSchedActive = false
 		st.PendingSchedProgress = false
 	})
@@ -376,7 +376,7 @@ func (b *bot) processDSHItem(ctx context.Context, item dshQueueItem) error {
 		}
 		return nil
 	}
-	b.recordAnswer(ctx, res.Text, epoch)
+	b.recordAnswer(ctx, res.Text, item.Text, epoch)
 	return nil
 }
 
@@ -463,6 +463,7 @@ func (b *bot) createDSHSessionLocked(ctx context.Context, provider, model, effor
 		st.LastAnswerSeq = 0
 		st.ToolSeq = nil
 		st.RecentAnswers = nil
+		st.RecentPrompts = nil
 		st.AwaitingInput = false
 		st.InputSeq = 0
 		st.PendingSchedText = ""
@@ -577,11 +578,65 @@ func pendingTurnZero(pt pendingTurn) bool {
 	return pt.Answer == "" && pt.User == "" && !pt.External && pt.NextUser == "" && !pt.NextExternal && !pt.Active
 }
 
+// userForTurn находит запрос, запустивший ход с endSeq, по истории сессии.
+// Нужен, когда user/message был вычитан в предыдущем опросе и не попал в
+// текущую порцию событий.
+func (b *bot) userForTurn(ctx context.Context, sessionID string, endSeq int64) (string, bool) {
+	if endSeq <= 0 {
+		return "", false
+	}
+	through := endSeq
+	var all []sessionEvent
+	boundary := false
+	var minSeq int64
+	for page := 0; page < 3; page++ {
+		p, err := b.dsh.events(ctx, sessionID, through, 300)
+		if err != nil {
+			log.Printf("maxbot: история хода %d: %v", endSeq, err)
+			return "", false
+		}
+		for _, r := range p.Records {
+			all = append(all, r.Event)
+			if minSeq == 0 || r.Event.Seq < minSeq {
+				minSeq = r.Event.Seq
+			}
+			if r.Event.Type == "turn/end" && r.Event.Seq < endSeq {
+				boundary = true
+			}
+		}
+		if boundary || !p.HasMore || minSeq <= 1 {
+			break
+		}
+		through = minSeq - 1
+	}
+	// Не нашли начало хода (предыдущий turn/end) — не рискуем приписать чужой
+	// запрос: эхо не добавляем.
+	if !boundary && minSeq > 1 {
+		return "", false
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].Seq < all[j].Seq })
+	return turnUserFromEvents(all, endSeq, b.isOwnReqID)
+}
+
+// enrichTurns дополняет ходы запросом из истории, если он не попал в текущую
+// порцию событий.
+func (b *bot) enrichTurns(ctx context.Context, sessionID string, turns []turnResult) {
+	for i := range turns {
+		if turns[i].User != "" || turns[i].EndSeq == 0 {
+			continue
+		}
+		if user, external := b.userForTurn(ctx, sessionID, turns[i].EndSeq); external && user != "" {
+			turns[i].User = user
+		}
+	}
+}
+
 // processTurnEvents разбирает очередную порцию событий, накапливая атрибуцию
 // user-сообщений (turn/start) и сохраняя pending в Redis.
-func (b *bot) processTurnEvents(ctx context.Context, events []sessionEvent, since int64) ([]turnResult, int64) {
+func (b *bot) processTurnEvents(ctx context.Context, sessionID string, events []sessionEvent, since int64) ([]turnResult, int64) {
 	pt := b.loadPendingTurn()
 	delivered, out, lastEnd := finalAssistantTextEvents(events, since, pt, b.isOwnReqID)
+	b.enrichTurns(ctx, sessionID, delivered)
 	b.savePendingTurn(ctx, out)
 	if lastEnd > 0 {
 		b.dshSet(ctx, func(s *dshState) {
@@ -624,10 +679,13 @@ func (b *bot) waitForAnswer(ctx context.Context, sessionID string, epoch int64) 
 		}
 		b.touchAPI(ctx)
 
-		events, complete := b.fetchNewEvents(ctx, sessionID, wv.State.Cursor)
-		if complete {
-			delivered, _ := b.processTurnEvents(ctx, events, st.LastAnswerSeq)
-			collected = append(collected, delivered...)
+		events, _ := b.fetchNewEvents(ctx, sessionID, wv.State.Cursor)
+		dEvents, dComplete := b.fetchEventsSince(ctx, sessionID, st.LastAnswerSeq, wv.State.Cursor)
+		if len(dEvents) > 0 {
+			// Даже при неполном окне доставляем завершённые ходы из суффикса,
+			// чтобы не заклинить на лимите страниц.
+			turns := b.parseDeliveryWindow(ctx, dEvents, st.LastAnswerSeq)
+			collected = append(collected, turns...)
 		}
 		ti := analyzeEvents(events)
 		cycle, cycleLen := b.addToolFingerprints(ctx, ti.ToolCalls)
@@ -655,27 +713,28 @@ func (b *bot) waitForAnswer(ctx context.Context, sessionID string, epoch int64) 
 		}
 		switch wv.Reason {
 		case "idle":
-			// Последняя порция могла быть неполной — пробуем ещё раз.
-			if !complete {
-				if ev2, ok := b.fetchNewEvents(ctx, sessionID, wv.State.Cursor); ok {
-					events = ev2
-					delivered, _ := b.processTurnEvents(ctx, events, st.LastAnswerSeq)
-					collected = append(collected, delivered...)
-					complete = true
+			// Последняя порция истории могла быть неполной — пробуем ещё раз.
+			if !dComplete {
+				if ev2, ok := b.fetchEventsSince(ctx, sessionID, st.LastAnswerSeq, wv.State.Cursor); ok {
+					dEvents = ev2
+					collected = append(collected, b.parseDeliveryWindow(ctx, dEvents, st.LastAnswerSeq)...)
+					dComplete = true
 				}
 			}
 			res.Turns = collected
 			res.Text = joinTurnAnswers(collected)
 			if res.Text == "" {
-				pt := b.loadPendingTurn()
-				if !complete && (!pendingTurnZero(pt) || len(events) > 0) {
-					return res, fmt.Errorf("dsh: не удалось прочитать события сессии")
-				}
-				if len(events) == 0 && pendingTurnZero(pt) {
-					// События недоступны/пусты — доставляем записи wait.
+				if !dComplete || len(dEvents) == 0 {
+					// История недоступна/пуста — доставляем записи wait, не
+					// зависаем на перечитывании окна. Carry сбрасываем: ход,
+					// к которому он относился, уже пропущен.
+					log.Printf("maxbot: history incomplete, fallback на wait.records")
 					res.Text = assistantText(wv.Output.Records)
-					b.dshSet(ctx, func(s *dshState) { s.LastAnswerSeq = wv.State.Cursor })
-					b.savePendingTurn(ctx, pendingTurn{})
+					b.dshSet(ctx, func(s *dshState) {
+						s.LastAnswerSeq = wv.State.Cursor
+						s.PendingSchedNextUser = ""
+						s.PendingSchedNextExt = false
+					})
 				}
 			}
 			return res, nil
@@ -856,6 +915,72 @@ func (b *bot) fetchNewEvents(ctx context.Context, sessionID string, cursor int64
 	return out, complete
 }
 
+// parseDeliveryWindow разбирает окно событий и сохраняет next-user, который
+// придёт в следующем ходе (его событие может быть раньше turn/end).
+func (b *bot) parseDeliveryWindow(ctx context.Context, events []sessionEvent, since int64) []turnResult {
+	cur := b.dshSnapshot()
+	turns, lastEnd, nextUser, nextExt := parseCompletedTurns(
+		events, since, cur.PendingSchedNextUser, cur.PendingSchedNextExt, b.isOwnReqID)
+	b.dshSet(ctx, func(s *dshState) {
+		if lastEnd > s.LastAnswerSeq {
+			s.LastAnswerSeq = lastEnd
+		}
+		s.PendingSchedNextUser = nextUser
+		s.PendingSchedNextExt = nextExt
+		s.PendingSchedText = ""
+		s.PendingSchedUser = ""
+		s.PendingSchedExternal = false
+		s.PendingSchedActive = false
+		s.PendingSchedProgress = false
+	})
+	return turns
+}
+
+// fetchEventsSince читает окно (since, cursor] целиком для доставки.
+// complete=false при ошибке/неполной выборке — курсор доставки не двигаем.
+func (b *bot) fetchEventsSince(ctx context.Context, sessionID string, since, cursor int64) ([]sessionEvent, bool) {
+	if cursor <= since {
+		return nil, true
+	}
+	through := cursor
+	seen := make(map[int64]sessionEvent)
+	complete := false
+	for page := 0; page < 8; page++ {
+		p, err := b.dsh.events(ctx, sessionID, through, 300)
+		if err != nil {
+			log.Printf("maxbot: чтение истории dsh: %v", err)
+			return nil, false
+		}
+		var minSeq int64
+		for _, r := range p.Records {
+			if r.Event.Seq > since {
+				seen[r.Event.Seq] = r.Event
+			}
+			if minSeq == 0 || r.Event.Seq < minSeq {
+				minSeq = r.Event.Seq
+			}
+		}
+		if !p.HasMore {
+			complete = true
+			break
+		}
+		if minSeq == 0 {
+			break
+		}
+		if minSeq <= since+1 {
+			complete = true
+			break
+		}
+		through = minSeq - 1
+	}
+	out := make([]sessionEvent, 0, len(seen))
+	for _, ev := range seen {
+		out = append(out, ev)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
+	return out, complete
+}
+
 // addToolFingerprints добавляет вызовы в историю (сквозь ходы) и проверяет цикл.
 func (b *bot) addToolFingerprints(ctx context.Context, fps []string) (bool, int) {
 	if len(fps) == 0 {
@@ -872,16 +997,22 @@ func (b *bot) addToolFingerprints(ctx context.Context, fps []string) (bool, int)
 }
 
 // recordAnswer запоминает ответ и меняет сессию при трёх похожих ответах подряд.
-func (b *bot) recordAnswer(ctx context.Context, text string, epoch int64) {
+func (b *bot) recordAnswer(ctx context.Context, text, prompt string, epoch int64) {
 	if b.dshCancelEpoch.Load() != epoch {
 		return
 	}
-	var answers []string
+	var answers, prompts []string
 	b.dshSet(ctx, func(st *dshState) {
 		st.RecentAnswers = nextAnswerStreak(st.RecentAnswers, text)
+		if st.RecentAnswers == nil {
+			st.RecentPrompts = nil
+		} else {
+			st.RecentPrompts = nextPromptStreak(st.RecentPrompts, prompt)
+		}
 		answers = append([]string(nil), st.RecentAnswers...)
+		prompts = append([]string(nil), st.RecentPrompts...)
 	})
-	if shouldReplaceAnswers(answers) {
+	if shouldReplaceAnswers(answers) && samePrompts(prompts) {
 		if err := b.replaceDSHSessionLocked(ctx, "повторяющиеся ответы", epoch); err != nil {
 			log.Printf("maxbot: замена сессии после повторов: %v", err)
 		}
@@ -1010,54 +1141,36 @@ func (b *bot) pollScheduled(ctx context.Context, epoch int64, lastBeat *time.Tim
 		return ""
 	}
 	ti := analyzeEvents(events)
+
+	// Доставка: перечитываем окно от last_answer_seq до cursor, поэтому
+	// user/message всегда в окне вместе с ответом (pending не нужен).
+	dEvents, _ := b.fetchEventsSince(ctx, st.SessionID, st.LastAnswerSeq, state.Cursor)
+	if len(dEvents) > 0 {
+		turns := b.parseDeliveryWindow(ctx, dEvents, st.LastAnswerSeq)
+		if len(turns) > 0 {
+			hasUser := false
+			for _, t := range turns {
+				if t.User != "" {
+					hasUser = true
+				}
+			}
+			if b.dshCancelEpoch.Load() != epoch {
+				return ""
+			}
+			log.Printf("maxbot: watcher delivery turns=%d with_user=%v", len(turns), hasUser)
+			if err := b.sendTurnResults(ctx, turns); err != nil {
+				log.Printf("maxbot: отправка отложенного ответа: %v", err)
+			}
+			b.touchAPI(ctx)
+		}
+	}
+
 	if (ti.Question != "" || hasPendingQuestion(state.PendingInput)) &&
 		!ti.ContextOverflow && !ti.MaxTokens {
 		if q := b.handleInputRequired(ctx, st.SessionID, ti.Question, state.Cursor, epoch); q != "" {
 			b.notifyOperator(ctx, q)
 		}
 		return ""
-	}
-
-	pt := pendingTurn{
-		Answer:       st.PendingSchedText,
-		User:         st.PendingSchedUser,
-		External:     st.PendingSchedExternal,
-		NextUser:     st.PendingSchedNextUser,
-		NextExternal: st.PendingSchedNextExt,
-		Active:       st.PendingSchedActive,
-		Progress:     st.PendingSchedProgress,
-	}
-	delivered, pt, lastEnd := finalAssistantTextEvents(events, st.LastAnswerSeq, pt, b.isOwnReqID)
-	hasUser := false
-	for _, d := range delivered {
-		if d.User != "" {
-			hasUser = true
-		}
-	}
-	// Курсор двигаем до отправки (как воркер): при падении/рестарте уже
-	// доставленное не дублируется. Двигаем только до последнего turn/end, чтобы
-	// не потерять текст незавершённого хвоста.
-	b.dshSet(ctx, func(s *dshState) {
-		if lastEnd > 0 && lastEnd > s.LastAnswerSeq {
-			s.LastAnswerSeq = lastEnd
-		}
-		s.PendingSchedText = pt.Answer
-		s.PendingSchedUser = pt.User
-		s.PendingSchedExternal = pt.External
-		s.PendingSchedNextUser = pt.NextUser
-		s.PendingSchedNextExt = pt.NextExternal
-		s.PendingSchedActive = pt.Active
-		s.PendingSchedProgress = pt.Progress
-	})
-	if len(delivered) > 0 {
-		if b.dshCancelEpoch.Load() != epoch {
-			return ""
-		}
-		log.Printf("maxbot: watcher delivery turns=%d with_user=%v", len(delivered), hasUser)
-		if err := b.sendTurnResults(ctx, delivered); err != nil {
-			log.Printf("maxbot: отправка отложенного ответа: %v", err)
-		}
-		b.touchAPI(ctx)
 	}
 
 	// Сбой/цикл в отложенном ходе — действуем как для обычного хода.

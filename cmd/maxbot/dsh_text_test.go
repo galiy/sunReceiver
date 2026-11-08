@@ -99,6 +99,26 @@ func TestNextAnswerStreak(t *testing.T) {
 	}
 }
 
+func TestPromptStreak(t *testing.T) {
+	var s []string
+	s = nextPromptStreak(s, "Тест 1")
+	s = nextPromptStreak(s, "Тест 2")
+	s = nextPromptStreak(s, "Тест 3")
+	if samePrompts(s) {
+		t.Fatal("разные тестовые запросы не должны считаться повтором")
+	}
+	s = nil
+	for i := 0; i < 4; i++ {
+		s = nextPromptStreak(s, "одинаковый запрос")
+	}
+	if len(s) != 3 || !samePrompts(s) {
+		t.Fatalf("одинаковые запросы: %v", s)
+	}
+	if nextPromptStreak(s, "") != nil {
+		t.Fatal("пустой запрос должен рвать серию")
+	}
+}
+
 func TestModelExpired(t *testing.T) {
 	now := time.Now()
 	st := dshState{Provider: "wbllm", Model: "coder", ModelLastAPIAt: now.Add(-3 * time.Hour).UnixMilli()}
@@ -314,6 +334,99 @@ func TestFinalAssistantTextEvents(t *testing.T) {
 	check(got, [2]string{"Вопрос", "ответ 1"}, [2]string{"", "ответ 2"})
 	if lastEnd != 13 {
 		t.Fatalf("lastEnd = %d", lastEnd)
+	}
+}
+
+func TestParseCompletedTurnsNextUser(t *testing.T) {
+	user := func(seq int64, rpc, text string) sessionEvent {
+		data := fmt.Sprintf(`{"content":[{"type":"text","text":%q}],"source":{"kind":"user","rpcId":%q}}`, text, rpc)
+		return sessionEvent{Type: "user/message", Seq: seq, Data: json.RawMessage(data)}
+	}
+	msg := func(seq int64, text string) sessionEvent {
+		data := `{"message":{"content":[{"type":"text","text":"` + text + `"}]}}`
+		return sessionEvent{Type: "assistant/message", Seq: seq, Data: json.RawMessage(data)}
+	}
+	start := func(seq int64) sessionEvent { return sessionEvent{Type: "turn/start", Seq: seq} }
+	end := func(seq int64) sessionEvent { return sessionEvent{Type: "turn/end", Seq: seq} }
+
+	first := []sessionEvent{
+		user(1, "browser-a", "Вопрос A"), start(2), msg(3, "прогресс"),
+		user(4, "browser-b", "Вопрос B"), msg(5, "ответ A"), end(6),
+	}
+	turns, lastEnd, nextUser, nextExt := parseCompletedTurns(first, 0, "", false, func(string) bool { return false })
+	if len(turns) != 1 || turns[0].User != "Вопрос A" || turns[0].Text != "ответ A" || lastEnd != 6 {
+		t.Fatalf("первый ход: %+v lastEnd=%d", turns, lastEnd)
+	}
+	if nextUser != "Вопрос B" || !nextExt {
+		t.Fatalf("nextUser = %q ext=%v", nextUser, nextExt)
+	}
+	second := []sessionEvent{msg(7, "ответ B"), end(8)}
+	turns, _, _, _ = parseCompletedTurns(second, 6, nextUser, nextExt, func(string) bool { return false })
+	if len(turns) != 1 || turns[0].User != "Вопрос B" || turns[0].Text != "ответ B" {
+		t.Fatalf("второй ход: %+v", turns)
+	}
+}
+
+func TestParseCompletedTurnsRealOrder(t *testing.T) {
+	user := func(seq int64, text string) sessionEvent {
+		data := fmt.Sprintf(`{"content":[{"type":"text","text":%q}],"source":{"kind":"user","rpcId":"browser"}}`, text)
+		return sessionEvent{Type: "user/message", Seq: seq, Data: json.RawMessage(data)}
+	}
+	msg := func(seq int64, text string) sessionEvent {
+		data := `{"message":{"content":[{"type":"text","text":"` + text + `"}]}}`
+		return sessionEvent{Type: "assistant/message", Seq: seq, Data: json.RawMessage(data)}
+	}
+	// Реальный порядок: turn/start -> step/start -> user/message -> assistant -> turn/end.
+	events := []sessionEvent{
+		{Type: "turn/start", Seq: 1},
+		{Type: "step/start", Seq: 2},
+		user(3, "Вопрос из браузера?"),
+		msg(4, "ответ"),
+		{Type: "turn/end", Seq: 5},
+	}
+	turns, _, _, _ := parseCompletedTurns(events, 0, "", false, func(string) bool { return false })
+	if len(turns) != 1 || turns[0].User != "Вопрос из браузера?" || turns[0].Text != "ответ" {
+		t.Fatalf("turns = %+v", turns)
+	}
+}
+
+func TestTurnUserFromEvents(t *testing.T) {
+	user := func(seq int64, rpc, text string) sessionEvent {
+		data := fmt.Sprintf(`{"content":[{"type":"text","text":%q}],"source":{"kind":"user","rpcId":%q}}`, text, rpc)
+		return sessionEvent{Type: "user/message", Seq: seq, Data: json.RawMessage(data)}
+	}
+	msg := func(seq int64, text string) sessionEvent {
+		data := `{"message":{"content":[{"type":"text","text":"` + text + `"}]}}`
+		return sessionEvent{Type: "assistant/message", Seq: seq, Data: json.RawMessage(data)}
+	}
+	start := func(seq int64) sessionEvent { return sessionEvent{Type: "turn/start", Seq: seq} }
+	end := func(seq int64) sessionEvent { return sessionEvent{Type: "turn/end", Seq: seq} }
+	notOwn := func(string) bool { return false }
+	own := func(id string) bool { return id == "own" }
+
+	events := []sessionEvent{user(1, "browser", "Вопрос"), start(2), msg(3, "ответ"), end(4)}
+	if u, ext := turnUserFromEvents(events, 4, notOwn); !ext || u != "Вопрос" {
+		t.Fatalf("browser: (%q,%v)", u, ext)
+	}
+	events = []sessionEvent{user(1, "own", "свой"), start(2), msg(3, "ответ"), end(4)}
+	if u, ext := turnUserFromEvents(events, 4, own); ext || u != "" {
+		t.Fatalf("own: (%q,%v)", u, ext)
+	}
+	// start раньше user, работа ещё не начата.
+	events = []sessionEvent{start(1), user(2, "browser", "Вопрос"), msg(3, "ответ"), end(4)}
+	if u, ext := turnUserFromEvents(events, 4, notOwn); !ext || u != "Вопрос" {
+		t.Fatalf("start-before-user: (%q,%v)", u, ext)
+	}
+	// user во время уже начавшегося хода — для следующего.
+	events = []sessionEvent{
+		start(1), msg(2, "прогресс"), user(3, "browser", "Следующий"), msg(4, "ответ1"), end(5),
+		msg(6, "ответ2"), end(7),
+	}
+	if u, ext := turnUserFromEvents(events, 5, notOwn); ext || u != "" {
+		t.Fatalf("текущий ход: (%q,%v)", u, ext)
+	}
+	if u, ext := turnUserFromEvents(events, 7, notOwn); !ext || u != "Следующий" {
+		t.Fatalf("следующий ход: (%q,%v)", u, ext)
 	}
 }
 

@@ -107,6 +107,24 @@ func nextAnswerStreak(prev []string, text string) []string {
 	return out
 }
 
+// nextPromptStreak обновляет серию последних запросов (последние 3).
+func nextPromptStreak(prev []string, prompt string) []string {
+	p := normalizeText(prompt)
+	if p == "" {
+		return nil
+	}
+	out := append(append([]string(nil), prev...), p)
+	if len(out) > 3 {
+		out = out[len(out)-3:]
+	}
+	return out
+}
+
+// samePrompts — три последних запроса идентичны (нормализованно).
+func samePrompts(prompts []string) bool {
+	return len(prompts) == 3 && prompts[0] == prompts[1] && prompts[1] == prompts[2]
+}
+
 // shouldReplaceAnswers — три последних нормализованных ответа подряд похожи
 // (>= 90%). Проверяются ровно последние три элемента.
 func shouldReplaceAnswers(answers []string) bool {
@@ -288,8 +306,9 @@ func joinUsers(users []string) string { return strings.Join(users, "\n\n") }
 // turnResult — один завершённый ход: запрос оператора (если он внешний) и
 // финальный ответ. Доставляются двумя отдельными сообщениями MAX.
 type turnResult struct {
-	User string
-	Text string
+	User   string
+	Text   string
+	EndSeq int64
 }
 
 func joinTurnAnswers(trs []turnResult) string {
@@ -300,6 +319,127 @@ func joinTurnAnswers(trs []turnResult) string {
 		}
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// parseCompletedTurns разбирает окно событий от since: возвращает завершённые
+// ходы (внешний запрос + финальный ответ) и seq последнего turn/end. Окно
+// строится от last_answer_seq, поэтому user/message всегда попадает в него
+// вместе с ответом; незавершённый ход не двигает курсор.
+func parseCompletedTurns(events []sessionEvent, since int64, initUser string, initExternal bool, isOwn func(string) bool) ([]turnResult, int64, string, bool) {
+	var turns []turnResult
+	var turnUsers, nextUsers []string
+	if initUser != "" {
+		turnUsers = append(turnUsers, initUser)
+	}
+	turnExternal := initExternal
+	nextExternal := false
+	turnActive, progress := false, false
+	current := ""
+	var lastEnd int64
+	carryUser := initUser
+	carryExt := initExternal
+	for _, ev := range events {
+		if ev.Seq <= since {
+			continue
+		}
+		switch ev.Type {
+		case "user/message":
+			kind, rpcID, text := parseUserMessage(ev)
+			if kind != "user" || (rpcID != "" && isOwn(rpcID)) {
+				continue
+			}
+			if turnActive && progress {
+				if text != "" {
+					nextUsers = append(nextUsers, text)
+				}
+				nextExternal = true
+			} else {
+				if text != "" {
+					turnUsers = append(turnUsers, text)
+				}
+				turnExternal = true
+			}
+		case "turn/start":
+			turnActive = true
+			progress = false
+		case "tool/call", "assistant/message":
+			if turnActive {
+				progress = true
+			}
+			if ev.Type == "assistant/message" {
+				if t := assistantEventText(ev); t != "" {
+					current = t
+				}
+			}
+		case "turn/end":
+			if current != "" {
+				turns = append(turns, turnResult{User: joinUsers(turnUsers), Text: current, EndSeq: ev.Seq})
+			}
+			turnUsers = nextUsers
+			nextUsers = nil
+			turnExternal = nextExternal
+			nextExternal = false
+			turnActive = false
+			progress = false
+			current = ""
+			lastEnd = ev.Seq
+			// Переносим только запросы, промотированные на этом turn/end:
+			// их события уже не попадут в следующее окно.
+			carryUser = joinUsers(turnUsers)
+			carryExt = turnExternal
+		}
+	}
+	return turns, lastEnd, carryUser, carryExt
+}
+
+// turnUserFromEvents находит запрос, запустивший ход с endSeq, по событиям
+// истории. Учитывает только внешние (не maxbot) user-сообщения и ту же
+// атрибуцию turn/start/Progress, что и finalAssistantTextEvents.
+func turnUserFromEvents(events []sessionEvent, endSeq int64, isOwn func(string) bool) (string, bool) {
+	var turnUsers, nextUsers []string
+	turnExternal, nextExternal := false, false
+	turnActive, progress := false, false
+	for _, ev := range events {
+		if ev.Seq > endSeq {
+			break
+		}
+		switch ev.Type {
+		case "user/message":
+			kind, rpcID, text := parseUserMessage(ev)
+			if kind != "user" || (rpcID != "" && isOwn(rpcID)) {
+				continue
+			}
+			if turnActive && progress {
+				if text != "" {
+					nextUsers = append(nextUsers, text)
+				}
+				nextExternal = true
+			} else {
+				if text != "" {
+					turnUsers = append(turnUsers, text)
+				}
+				turnExternal = true
+			}
+		case "turn/start":
+			turnActive = true
+			progress = false
+		case "tool/call", "assistant/message":
+			if turnActive {
+				progress = true
+			}
+		case "turn/end":
+			if ev.Seq == endSeq {
+				return joinUsers(turnUsers), turnExternal
+			}
+			turnUsers = nextUsers
+			nextUsers = nil
+			turnExternal = nextExternal
+			nextExternal = false
+			turnActive = false
+			progress = false
+		}
+	}
+	return "", false
 }
 
 // finalAssistantTextEvents разбирает видимый текст завершённых ходов после
@@ -333,25 +473,26 @@ func finalAssistantTextEvents(events []sessionEvent, since int64, p pendingTurn,
 			if kind != "user" {
 				continue // schedule/time-context — префикс не нужен
 			}
+			ownReq := rpcID != "" && isOwn(rpcID)
 			if turnActive && progress {
-				if text != "" {
-					nextUsers = append(nextUsers, text)
-				}
-				if rpcID == "" || !isOwn(rpcID) {
+				if !ownReq {
+					if text != "" {
+						nextUsers = append(nextUsers, text)
+					}
 					nextExternal = true
 				}
 			} else {
-				if text != "" {
-					turnUsers = append(turnUsers, text)
-				}
-				if rpcID == "" || !isOwn(rpcID) {
+				if !ownReq {
+					if text != "" {
+						turnUsers = append(turnUsers, text)
+					}
 					turnExternal = true
 				}
 			}
 		case "turn/start":
 			turnActive = true
 			progress = false
-		case "step/start", "tool/call":
+		case "tool/call":
 			if turnActive {
 				progress = true
 			}
@@ -364,7 +505,7 @@ func finalAssistantTextEvents(events []sessionEvent, since int64, p pendingTurn,
 			}
 		case "turn/end":
 			if current != "" {
-				res := turnResult{Text: current}
+				res := turnResult{Text: current, EndSeq: ev.Seq}
 				if turnExternal && len(turnUsers) > 0 {
 					res.User = joinUsers(turnUsers)
 				}

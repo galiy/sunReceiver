@@ -47,6 +47,7 @@ type dshState struct {
 	LastError            string
 	ToolSeq              []string
 	RecentAnswers        []string
+	RecentPrompts        []string
 	AwaitingInput        bool
 	InputSeq             int64    // курсор обработанного input-required (дедуп вопросов)
 	PendingSchedText     string   // хвост assistant-текста без turn/end
@@ -103,12 +104,16 @@ func loadDSHState(ctx context.Context, rdb *redis.Client) (dshState, error) {
 	if v := m["recent_answers"]; v != "" {
 		_ = json.Unmarshal([]byte(v), &st.RecentAnswers)
 	}
+	if v := m["recent_prompts"]; v != "" {
+		_ = json.Unmarshal([]byte(v), &st.RecentPrompts)
+	}
 	return st, nil
 }
 
 func saveDSHState(ctx context.Context, rdb *redis.Client, st *dshState) error {
 	toolSeq, _ := json.Marshal(st.ToolSeq)
 	answers, _ := json.Marshal(st.RecentAnswers)
+	prompts, _ := json.Marshal(st.RecentPrompts)
 	ownIDs, _ := json.Marshal(st.OwnReqIDs)
 	awaiting := "0"
 	if st.AwaitingInput {
@@ -126,6 +131,7 @@ func saveDSHState(ctx context.Context, rdb *redis.Client, st *dshState) error {
 		"last_error":                  st.LastError,
 		"tool_seq":                    string(toolSeq),
 		"recent_answers":              string(answers),
+		"recent_prompts":              string(prompts),
 		"awaiting_input":              awaiting,
 		"input_seq":                   strconv.FormatInt(st.InputSeq, 10),
 		"pending_sched_text":          st.PendingSchedText,
