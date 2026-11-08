@@ -36,18 +36,20 @@ const (
 
 // dshState — сохраняемое в Redis состояние диалога с harness.
 type dshState struct {
-	SessionID       string
-	Provider        string
-	Model           string
-	Effort          string
-	ModelSelectedAt int64 // unix ms
-	ModelLastAPIAt  int64 // unix ms, обновляется на каждом запросе
-	LastEventSeq    int64
-	LastAnswerSeq   int64
-	LastError       string
-	ToolSeq         []string
-	RecentAnswers   []string
-	AwaitingInput   bool
+	SessionID        string
+	Provider         string
+	Model            string
+	Effort           string
+	ModelSelectedAt  int64 // unix ms
+	ModelLastAPIAt   int64 // unix ms, обновляется на каждом запросе
+	LastEventSeq     int64
+	LastAnswerSeq    int64
+	LastError        string
+	ToolSeq          []string
+	RecentAnswers    []string
+	AwaitingInput    bool
+	InputSeq         int64  // курсор обработанного input-required (дедуп вопросов)
+	PendingSchedText string // хвост assistant-текста без turn/end
 }
 
 // dshQueueItem — элемент очереди промптов.
@@ -77,6 +79,8 @@ func loadDSHState(ctx context.Context, rdb *redis.Client) (dshState, error) {
 	st.LastAnswerSeq = parseInt64(m["last_answer_seq"])
 	st.LastError = m["last_error"]
 	st.AwaitingInput = m["awaiting_input"] == "1"
+	st.InputSeq = parseInt64(m["input_seq"])
+	st.PendingSchedText = m["pending_sched_text"]
 	if v := m["tool_seq"]; v != "" {
 		_ = json.Unmarshal([]byte(v), &st.ToolSeq)
 	}
@@ -94,18 +98,20 @@ func saveDSHState(ctx context.Context, rdb *redis.Client, st *dshState) error {
 		awaiting = "1"
 	}
 	return rdb.HSet(ctx, dshStateKey, map[string]any{
-		"session_id":        st.SessionID,
-		"provider":          st.Provider,
-		"model":             st.Model,
-		"effort":            st.Effort,
-		"model_selected_at": strconv.FormatInt(st.ModelSelectedAt, 10),
-		"model_last_api_at": strconv.FormatInt(st.ModelLastAPIAt, 10),
-		"last_event_seq":    strconv.FormatInt(st.LastEventSeq, 10),
-		"last_answer_seq":   strconv.FormatInt(st.LastAnswerSeq, 10),
-		"last_error":        st.LastError,
-		"tool_seq":          string(toolSeq),
-		"recent_answers":    string(answers),
-		"awaiting_input":    awaiting,
+		"session_id":         st.SessionID,
+		"provider":           st.Provider,
+		"model":              st.Model,
+		"effort":             st.Effort,
+		"model_selected_at":  strconv.FormatInt(st.ModelSelectedAt, 10),
+		"model_last_api_at":  strconv.FormatInt(st.ModelLastAPIAt, 10),
+		"last_event_seq":     strconv.FormatInt(st.LastEventSeq, 10),
+		"last_answer_seq":    strconv.FormatInt(st.LastAnswerSeq, 10),
+		"last_error":         st.LastError,
+		"tool_seq":           string(toolSeq),
+		"recent_answers":     string(answers),
+		"awaiting_input":     awaiting,
+		"input_seq":          strconv.FormatInt(st.InputSeq, 10),
+		"pending_sched_text": st.PendingSchedText,
 	}).Err()
 }
 

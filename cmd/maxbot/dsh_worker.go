@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -145,6 +146,10 @@ func (b *bot) runDSH(ctx context.Context) {
 	if b.dshState.Effort == "" {
 		b.dshState.Effort = b.dshCfg.Effort
 	}
+	// После рестарта зависший вопрос мог остаться: даём watcher'у обработать его
+	// (переслать/остановить) один раз.
+	b.dshState.AwaitingInput = false
+	b.dshState.InputSeq = 0
 	b.dshMu.Unlock()
 	recoverDSHProcessing(ctx, b.rdb)
 	go b.runDSHModelTTL(ctx)
@@ -192,6 +197,7 @@ func (b *bot) runDSH(ctx context.Context) {
 // registerBotCommands регистрирует команды меню MAX (лучшая попытка).
 func (b *bot) registerBotCommands(ctx context.Context) {
 	cmds := []maxBotCommand{
+		{Name: "menu", Description: "Меню бота (кнопки)"},
 		{Name: "model", Description: "Выбрать модель агента"},
 		{Name: "cancel", Description: "Отменить текущую задачу и очистить очередь"},
 		{Name: "continue", Description: "Продолжить с места остановки"},
@@ -271,7 +277,7 @@ func (b *bot) processDSHItem(ctx context.Context, item dshQueueItem) error {
 		b.notifyOperator(ctx, "Не удалось открыть сессию агента: "+err.Error())
 		return err
 	}
-	b.dshSet(ctx, func(st *dshState) { st.AwaitingInput = false })
+	b.dshSet(ctx, func(st *dshState) { st.AwaitingInput = false; st.InputSeq = 0; st.PendingSchedText = "" })
 	if b.dshCancelEpoch.Load() != epoch {
 		return nil
 	}
@@ -425,6 +431,8 @@ func (b *bot) createDSHSessionLocked(ctx context.Context, provider, model, effor
 		st.ToolSeq = nil
 		st.RecentAnswers = nil
 		st.AwaitingInput = false
+		st.InputSeq = 0
+		st.PendingSchedText = ""
 	})
 	log.Printf("maxbot: dsh-сессия %s, модель %s/%s (effort %q)", sessionID, provider, model, applyEffort)
 	return sessionID, nil
@@ -563,8 +571,7 @@ func (b *bot) waitForAnswer(ctx context.Context, sessionID string, epoch int64) 
 			return res, nil
 		}
 		if ti.Question != "" && (wv.Reason == "input-required" || hasPendingQuestion(wv.State.PendingInput)) {
-			res.Question = ti.Question
-			b.dshSet(ctx, func(s *dshState) { s.LastAnswerSeq = wv.State.Cursor })
+			res.Question = b.handleInputRequired(ctx, sessionID, ti.Question, wv.State.Cursor, epoch)
 			return res, nil
 		}
 		switch wv.Reason {
@@ -573,8 +580,7 @@ func (b *bot) waitForAnswer(ctx context.Context, sessionID string, epoch int64) 
 			b.dshSet(ctx, func(s *dshState) { s.LastAnswerSeq = wv.State.Cursor })
 			return res, nil
 		case "input-required":
-			res.Question = "Агент ждёт ответа. Ответьте сообщением."
-			b.dshSet(ctx, func(s *dshState) { s.LastAnswerSeq = wv.State.Cursor })
+			res.Question = b.handleInputRequired(ctx, sessionID, "", wv.State.Cursor, epoch)
 			return res, nil
 		}
 
@@ -583,6 +589,64 @@ func (b *bot) waitForAnswer(ctx context.Context, sessionID string, epoch int64) 
 			lastBeat = time.Now()
 		}
 	}
+}
+
+// handleInputRequired пересылает вопрос оператору и останавливает зависший ход.
+// harness не таймаутит ask_user_question, а ответить на живой вопрос через
+// unary-API нельзя; поэтому ход отменяется, а следующее сообщение оператора —
+// обычный новый промпт. Повторные уведомления по тому же ожиданию подавляются
+// флагом AwaitingInput (сбрасывается при следующем промпте).
+func (b *bot) handleInputRequired(ctx context.Context, sessionID, question string, cursor, epoch int64) string {
+	if b.dshCancelEpoch.Load() != epoch {
+		return ""
+	}
+	st := b.dshSnapshot()
+	if st.AwaitingInput && st.InputSeq == cursor {
+		// Тот же самый вопрос уже обработан — повторно не шлём и не отменяем.
+		b.dshSet(ctx, func(s *dshState) { s.LastAnswerSeq = cursor })
+		return ""
+	}
+	if question == "" {
+		question = "Агент ждёт ответа."
+	}
+	cancelErr := b.dsh.cancel(ctx, sessionID)
+	if b.dshCancelEpoch.Load() != epoch {
+		return ""
+	}
+	note := "Ход остановлен: ответ на вопрос агента не поддерживается. Отправьте ответ новым сообщением."
+	if cancelErr != nil {
+		note = "Не удалось остановить ход агента: " + cancelErr.Error() + ". Попробуйте /cancel."
+	}
+	b.dshSet(ctx, func(s *dshState) {
+		s.AwaitingInput = true
+		s.InputSeq = cursor
+		s.LastAnswerSeq = cursor
+		// Хвост отменённого хода не должен «прилипнуть» к следующему результату.
+		s.PendingSchedText = ""
+	})
+	return question + "\n\n" + note
+}
+
+// unblockAwaitingInput гасит зависший вопрос перед новым промптом оператора:
+// иначе harness оставит новый промпт в очереди за неотвеченным вопросом, а мы
+// снова получим input-required и отменим уже новый ход.
+func (b *bot) unblockAwaitingInput(ctx context.Context) error {
+	st := b.dshSnapshot()
+	if !st.AwaitingInput {
+		return nil
+	}
+	if st.SessionID != "" {
+		if err := b.dsh.cancel(ctx, st.SessionID); err != nil {
+			return err
+		}
+		b.touchAPI(ctx)
+	}
+	b.dshSet(ctx, func(s *dshState) {
+		s.AwaitingInput = false
+		s.InputSeq = 0
+		s.PendingSchedText = ""
+	})
+	return nil
 }
 
 // hasPendingQuestion — есть ли среди ожидающих входов вопрос агента.
@@ -783,7 +847,10 @@ func (b *bot) pollScheduled(ctx context.Context, epoch int64, lastBeat *time.Tim
 		log.Printf("maxbot: состояние dsh-сессии: %v", err)
 		return ""
 	}
-	if state.Active || state.Running || len(state.Queue) > 0 {
+	// state.Active остаётся true у живой сессии постоянно (в т.ч. с
+	// зарегистрированными расписаниями) — это НЕ признак работающего хода.
+	// Ориентируемся только на running и очередь входов.
+	if state.Running || len(state.Queue) > 0 {
 		// Агент реально работает (в т.ч. отложенная задача) — это активность,
 		// окно модели продлевается; heartbeat не реже heartbeat_sec.
 		b.touchAPI(ctx)
@@ -804,20 +871,23 @@ func (b *bot) pollScheduled(ctx context.Context, epoch int64, lastBeat *time.Tim
 	ti := analyzeEvents(events)
 	if (ti.Question != "" || hasPendingQuestion(state.PendingInput)) &&
 		!ti.ContextOverflow && !ti.MaxTokens {
-		if ti.Question != "" {
-			b.notifyOperator(ctx, ti.Question)
+		if q := b.handleInputRequired(ctx, st.SessionID, ti.Question, state.Cursor, epoch); q != "" {
+			b.notifyOperator(ctx, q)
 		}
-		b.dshSet(ctx, func(s *dshState) {
-			s.AwaitingInput = true
-			s.LastAnswerSeq = state.Cursor
-		})
 		return ""
 	}
 
-	text := assistantTextEvents(events, st.LastAnswerSeq)
+	delivered, tail, lastEnd := finalAssistantTextEvents(events, st.LastAnswerSeq, st.PendingSchedText)
+	text := delivered
 	// Курсор двигаем до отправки (как воркер): при падении/рестарте уже
-	// доставленное не дублируется.
-	b.dshSet(ctx, func(s *dshState) { s.LastAnswerSeq = state.Cursor })
+	// доставленное не дублируется. Двигаем только до последнего turn/end, чтобы
+	// не потерять текст незавершённого хвоста.
+	b.dshSet(ctx, func(s *dshState) {
+		if lastEnd > 0 && lastEnd > s.LastAnswerSeq {
+			s.LastAnswerSeq = lastEnd
+		}
+		s.PendingSchedText = tail
+	})
 	if text != "" {
 		if b.dshCancelEpoch.Load() != epoch {
 			return ""
@@ -858,6 +928,10 @@ func (b *bot) handleDSHMessage(ctx context.Context, up maxUpdate) {
 	if text == "" && len(up.Message.Body.Attachments) == 0 {
 		return
 	}
+	if err := b.unblockAwaitingInput(ctx); err != nil {
+		b.notifyOperator(ctx, "Не удалось снять зависший вопрос агента: "+err.Error()+". Попробуйте /cancel.")
+		return
+	}
 	item := dshQueueItem{
 		Kind:        "prompt",
 		RequestID:   newUUID(),
@@ -871,7 +945,11 @@ func (b *bot) handleDSHMessage(ctx context.Context, up maxUpdate) {
 		return
 	}
 	if b.dshBusy.Load() {
-		b.notifyOperator(ctx, "Принято, "+fmtAck(dshQueueLen(ctx, b.rdb)))
+		if n := dshQueueLen(ctx, b.rdb); n > 0 {
+			b.notifyOperator(ctx, "Принято, "+fmtAck(n))
+		} else {
+			b.notifyOperator(ctx, "Принято")
+		}
 	}
 }
 
@@ -885,7 +963,7 @@ func dshCommand(text string) (string, bool) {
 		first = first[:i]
 	}
 	switch first {
-	case "/model", "/cancel", "/new", "/continue", "/status":
+	case "/menu", "/model", "/cancel", "/new", "/continue", "/status":
 		return first, true
 	}
 	return "", false
@@ -894,6 +972,8 @@ func dshCommand(text string) (string, bool) {
 func (b *bot) handleDSHCommand(ctx context.Context, cmd string, up maxUpdate) {
 	userID, chatID := b.requesterIDs(up)
 	switch cmd {
+	case "/menu":
+		b.sendDSHMenu(ctx, userID, chatID)
 	case "/model":
 		b.sendModelMenu(ctx, userID, chatID)
 	case "/cancel":
@@ -903,6 +983,11 @@ func (b *bot) handleDSHCommand(ctx context.Context, cmd string, up maxUpdate) {
 			b.touchAPI(ctx)
 		}
 		_ = clearDSHQueue(ctx, b.rdb)
+		b.dshSet(ctx, func(s *dshState) {
+			s.PendingSchedText = ""
+			s.AwaitingInput = false
+			s.InputSeq = 0
+		})
 		b.respond(userID, chatID, "Отменено. Очередь очищена.")
 	case "/new":
 		b.dshCancelEpoch.Add(1)
@@ -917,6 +1002,10 @@ func (b *bot) handleDSHCommand(ctx context.Context, cmd string, up maxUpdate) {
 		}
 		b.respond(userID, chatID, "Создана новая сессия.")
 	case "/continue":
+		if err := b.unblockAwaitingInput(ctx); err != nil {
+			b.respond(userID, chatID, "Не удалось снять зависший вопрос агента: "+err.Error()+". Попробуйте /cancel.")
+			return
+		}
 		item := dshQueueItem{Kind: "continue", RequestID: newUUID(), Epoch: b.dshCancelEpoch.Load(), TS: time.Now().UnixMilli()}
 		if err := pushDSHQueue(ctx, b.rdb, item); err != nil {
 			b.respond(userID, chatID, "Не удалось поставить продолжение в очередь: "+err.Error())
@@ -968,49 +1057,163 @@ func (b *bot) requesterIDs(up maxUpdate) (string, string) {
 	return userID, chatID
 }
 
+// sendDSHMenu отправляет основное меню бота кнопками.
+func (b *bot) sendDSHMenu(ctx context.Context, userID, chatID string) {
+	rows := [][]maxButton{
+		{
+			{Type: "callback", Text: "Модель", Payload: "cmd|model"},
+			{Type: "callback", Text: "Статус", Payload: "cmd|status"},
+		},
+		{
+			{Type: "callback", Text: "Отмена", Payload: "cmd|cancel"},
+			{Type: "callback", Text: "Продолжить", Payload: "cmd|continue"},
+		},
+		{
+			{Type: "callback", Text: "Новая сессия", Payload: "cmd|new"},
+		},
+	}
+	att := maxOutAttachment{Type: "inline_keyboard", Payload: map[string]any{"buttons": rows}}
+	if err := b.client.sendRich(ctx, userID, chatID, "Меню бота:", "", []maxOutAttachment{att}); err != nil {
+		log.Printf("maxbot: меню бота: %v", err)
+	}
+}
+
+// handleDSHMenuAction выполняет действие из кнопки основного меню.
+func (b *bot) handleDSHMenuAction(ctx context.Context, action string, cb *maxCallback, chatID string) {
+	switch action {
+	case "model", "cancel", "continue", "new", "status":
+	default:
+		b.answerCallback(ctx, cb, "Неизвестная команда")
+		return
+	}
+	var up maxUpdate
+	up.ChatID, _ = strconv.ParseInt(chatID, 10, 64)
+	up.User.UserID = cb.User.UserID
+	b.handleDSHCommand(ctx, "/"+action, up)
+	b.answerCallback(ctx, cb, "")
+}
+
 // sendModelMenu отправляет inline-клавиатуру со всеми доступными моделями.
+const modelPageSize = 25
+
+type modelEntry struct {
+	provider string
+	id       string
+	name     string
+}
+
+// sendModelMenu открывает первую страницу меню моделей.
 func (b *bot) sendModelMenu(ctx context.Context, userID, chatID string) {
+	b.sendModelMenuPage(ctx, userID, chatID, 0)
+}
+
+// sendModelMenuPage отправляет страницу меню моделей (не более 25 кнопок +
+// навигация), чтобы не превысить лимит строк inline-клавиатуры MAX.
+func (b *bot) sendModelMenuPage(ctx context.Context, userID, chatID string, offset int) {
 	cat, err := b.dsh.modelCatalog(ctx)
 	if err != nil {
 		b.respond(userID, chatID, "Не удалось получить каталог моделей: "+err.Error())
 		return
 	}
 	b.touchAPI(ctx)
-	var rows [][]maxButton
-	var row []maxButton
+	var entries []modelEntry
 	for _, g := range cat.Groups {
 		for _, m := range g.Models {
-			label := g.Name + " · " + m.Name
-			if len([]rune(label)) > 120 {
-				label = string([]rune(label)[:120])
-			}
-			row = append(row, maxButton{
-				Type:    "callback",
-				Text:    label,
-				Payload: "model|" + g.ID + "|" + m.ID,
-			})
-			if len(row) == 3 {
-				rows = append(rows, row)
-				row = nil
-			}
+			entries = append(entries, modelEntry{provider: g.ID, id: m.ID, name: m.Name})
 		}
 	}
-	if len(row) > 0 {
-		rows = append(rows, row)
+	if len(entries) == 0 {
+		if err := b.client.sendRich(ctx, userID, chatID, "Модели недоступны.", "", nil); err != nil {
+			log.Printf("maxbot: меню моделей: %v", err)
+		}
+		return
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(entries) {
+		offset = (len(entries) - 1) / modelPageSize * modelPageSize
+	}
+	end := offset + modelPageSize
+	if end > len(entries) {
+		end = len(entries)
+	}
+
+	counts := make(map[string]int)
+	for _, e := range entries {
+		counts[e.id]++
+	}
+	st := b.dshSnapshot()
+	var rows [][]maxButton
+	for _, e := range entries[offset:end] {
+		label := e.name
+		if label == "" {
+			label = e.id
+		}
+		if counts[e.id] > 1 {
+			label = shortProvider(e.provider) + " · " + label
+		}
+		if len([]rune(label)) > 118 {
+			label = string([]rune(label)[:118])
+		}
+		if e.provider == st.Provider && e.id == st.Model {
+			label += "  ✓"
+		}
+		rows = append(rows, []maxButton{{
+			Type:    "callback",
+			Text:    label,
+			Payload: "model|" + e.provider + "|" + e.id,
+		}})
+	}
+	var nav []maxButton
+	if offset > 0 {
+		prev := offset - modelPageSize
+		if prev < 0 {
+			prev = 0
+		}
+		nav = append(nav, maxButton{Type: "callback", Text: "◀ Назад", Payload: "models|" + strconv.Itoa(prev)})
+	}
+	if end < len(entries) {
+		nav = append(nav, maxButton{Type: "callback", Text: "▶ Ещё", Payload: "models|" + strconv.Itoa(end)})
+	}
+	if len(nav) > 0 {
+		rows = append(rows, nav)
 	}
 	att := maxOutAttachment{Type: "inline_keyboard", Payload: map[string]any{"buttons": rows}}
-	if err := b.client.sendRich(ctx, userID, chatID, "Выберите модель (действует 2 ч без простоя):", "", []maxOutAttachment{att}); err != nil {
+	text := fmt.Sprintf("Модели %d–%d из %d. Сейчас: %s/%s", offset+1, end, len(entries), st.Provider, st.Model)
+	if err := b.client.sendRich(ctx, userID, chatID, text, "", []maxOutAttachment{att}); err != nil {
 		log.Printf("maxbot: меню моделей: %v", err)
 	}
 }
 
+// shortProvider — короткий префикс провайдера для неоднозначных имён моделей.
+func shortProvider(id string) string {
+	switch id {
+	case "wbllm":
+		return "wb"
+	case "deepseek-official":
+		return "ds"
+	}
+	return id
+}
+
 // handleDSHCallback обрабатывает выбор модели из inline-меню.
-func (b *bot) handleDSHCallback(ctx context.Context, cb *maxCallback) {
+func (b *bot) handleDSHCallback(ctx context.Context, cb *maxCallback, chatID string) {
 	if !b.dshEnabled() {
 		b.answerCallback(ctx, cb, "Чат с агентом выключен")
 		return
 	}
 	parts := strings.Split(cb.Payload, "|")
+	if len(parts) == 2 && parts[0] == "cmd" {
+		b.handleDSHMenuAction(ctx, parts[1], cb, chatID)
+		return
+	}
+	if len(parts) == 2 && parts[0] == "models" {
+		off, _ := strconv.Atoi(parts[1])
+		b.sendModelMenuPage(ctx, strconv.FormatInt(cb.User.UserID, 10), chatID, off)
+		b.answerCallback(ctx, cb, "")
+		return
+	}
 	if len(parts) != 3 || parts[0] != "model" {
 		b.answerCallback(ctx, cb, "Неизвестная команда")
 		return
@@ -1056,8 +1259,11 @@ func (b *bot) handleDSHCallback(ctx context.Context, cb *maxCallback) {
 
 func (b *bot) answerCallback(ctx context.Context, cb *maxCallback, text string) {
 	if err := b.client.answerCallback(ctx, cb.CallbackID, text); err != nil {
-		// Если ответ на callback не прошёл — отправим обычным сообщением.
-		b.notifyOperator(ctx, text)
+		// Пустой ответ на callback MAX может отклонить; обычным сообщением его
+		// не дублируем (иначе уйдёт пустой текст и снова 400).
+		if text != "" {
+			b.notifyOperator(ctx, text)
+		}
 	}
 }
 

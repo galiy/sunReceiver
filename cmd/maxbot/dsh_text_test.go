@@ -146,6 +146,18 @@ func TestSafeFileName(t *testing.T) {
 	}
 }
 
+func TestAssistantTextOrdersBySeq(t *testing.T) {
+	mk := func(seq int64, text string) sessionRecord {
+		data := `{"message":{"content":[{"type":"text","text":"` + text + `"}]}}`
+		return sessionRecord{Type: "event", Event: sessionEvent{Type: "assistant/message", Seq: seq, Data: json.RawMessage(data)}}
+	}
+	// wait отдаёт новые записи первыми.
+	records := []sessionRecord{mk(3, "финал"), mk(1, "прогресс"), mk(2, "ещё прогресс")}
+	if got := assistantText(records); got != "прогресс\n\nещё прогресс\n\nфинал" {
+		t.Fatalf("assistantText = %q", got)
+	}
+}
+
 func TestAssistantTextSkipsReasoning(t *testing.T) {
 	data := `{"message":{"content":[
 		{"type":"reasoning","text":"думаю"},
@@ -160,6 +172,29 @@ func TestAssistantTextSkipsReasoning(t *testing.T) {
 	}
 }
 
+func TestDSHCommand(t *testing.T) {
+	cases := map[string]string{
+		"/menu":        "/menu",
+		"/model":       "/model",
+		"/cancel":      "/cancel",
+		"/new":         "/new",
+		"/continue":    "/continue",
+		"/status":      "/status",
+		"/model@mybot": "/model",
+	}
+	for in, want := range cases {
+		got, ok := dshCommand(in)
+		if !ok || got != want {
+			t.Fatalf("dshCommand(%q) = (%q,%v), want (%q,true)", in, got, ok, want)
+		}
+	}
+	for _, s := range []string{"/compact", "текст", "/unknown"} {
+		if _, ok := dshCommand(s); ok {
+			t.Fatalf("%q не должен перехватываться (это промпт)", s)
+		}
+	}
+}
+
 func TestAssistantTextEvents(t *testing.T) {
 	data := `{"message":{"content":[{"type":"reasoning","text":"думаю"},{"type":"text","text":"итог"}]}}`
 	events := []sessionEvent{
@@ -171,6 +206,35 @@ func TestAssistantTextEvents(t *testing.T) {
 	}
 	if got := assistantTextEvents(events, 8); got != "" {
 		t.Fatalf("после seq=8 не должно быть текста, got %q", got)
+	}
+}
+
+func TestFinalAssistantTextEvents(t *testing.T) {
+	msg := func(seq int64, text string) sessionEvent {
+		data := `{"message":{"content":[{"type":"text","text":"` + text + `"}]}}`
+		return sessionEvent{Type: "assistant/message", Seq: seq, Data: json.RawMessage(data)}
+	}
+	end := func(seq int64) sessionEvent { return sessionEvent{Type: "turn/end", Seq: seq} }
+	events := []sessionEvent{
+		msg(1, "промежуточно"), msg(2, "ответ 1"), end(3),
+		msg(4, "снова проверяю"), msg(5, "ответ 2"), end(6),
+	}
+	if got, tail, lastEnd := finalAssistantTextEvents(events, 0, ""); got != "ответ 1\n\nответ 2" || tail != "" || lastEnd != 6 {
+		t.Fatalf("finalAssistantTextEvents = (%q,%q,%d)", got, tail, lastEnd)
+	}
+	if got, tail, lastEnd := finalAssistantTextEvents(events, 5, ""); got != "" || tail != "" || lastEnd != 6 {
+		t.Fatalf("после seq=5: (%q,%q,%d)", got, tail, lastEnd)
+	}
+	// Незавершённый хвост не доставляется, но сохраняется как tail.
+	events2 := []sessionEvent{msg(10, "ещё проверяю")}
+	if got, tail, lastEnd := finalAssistantTextEvents(events2, 0, ""); got != "" || tail != "ещё проверяю" || lastEnd != 0 {
+		t.Fatalf("незавершённый ход: (%q,%q,%d)", got, tail, lastEnd)
+	}
+	// Сохранённый хвост склеивается с завершением, даже если в том же окне
+	// есть ещё один завершённый ход.
+	events3 := []sessionEvent{end(11), msg(12, "ответ 2"), end(13)}
+	if got, tail, lastEnd := finalAssistantTextEvents(events3, 0, "ответ 1"); got != "ответ 1\n\nответ 2" || tail != "" || lastEnd != 13 {
+		t.Fatalf("pending + два хода: (%q,%q,%d)", got, tail, lastEnd)
 	}
 }
 

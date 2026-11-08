@@ -238,7 +238,11 @@ func (m *maxClient) answerCallback(ctx context.Context, callbackID, text string)
 	if callbackID == "" {
 		return nil
 	}
-	body, err := json.Marshal(map[string]any{"message": map[string]any{"text": text}})
+	payload := map[string]any{}
+	if text != "" {
+		payload["message"] = map[string]any{"text": text}
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
@@ -583,7 +587,7 @@ func (b *bot) handleUpdate(ctx context.Context, up maxUpdate) {
 			b.respond(uid, chatID, b.rejectedMsg())
 			return
 		}
-		b.handleDSHCallback(ctx, up.Callback)
+		b.handleDSHCallback(ctx, up.Callback, chatID)
 	case "bot_started", "bot_added":
 		if !b.isAllowed(userID) {
 			// Аккаунт вне белого списка — отказ, адресат не трогаем.

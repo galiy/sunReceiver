@@ -274,6 +274,46 @@ func TestDSHState(t *testing.T) {
 	}
 }
 
+func TestInputRequiredDedupAndUnblock(t *testing.T) {
+	var cancels atomic.Int32
+	c, srv := newTestDSHClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var env struct {
+			RPCID string `json:"rpcId"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&env)
+		if strings.HasSuffix(r.URL.Path, "/session/cancel") {
+			cancels.Add(1)
+		}
+		writeRemoteResult(t, w, env.RPCID, map[string]any{})
+	}, nil)
+	defer srv.Close()
+
+	b := &bot{dsh: c, dshCfg: &dshConfig{}, dshState: dshState{SessionID: "s1", PendingSchedText: "старый хвост"}}
+	ctx := context.Background()
+	text := b.handleInputRequired(ctx, "s1", "Что делать?", 42, 0)
+	if !strings.Contains(text, "Что делать?") || cancels.Load() != 1 {
+		t.Fatalf("первый вопрос: text=%q cancels=%d", text, cancels.Load())
+	}
+	if st := b.dshSnapshot(); !st.AwaitingInput || st.InputSeq != 42 || st.PendingSchedText != "" {
+		t.Fatalf("состояние после вопроса: %+v", st)
+	}
+	if again := b.handleInputRequired(ctx, "s1", "Что делать?", 42, 0); again != "" || cancels.Load() != 1 {
+		t.Fatalf("повтор того же вопроса не должен слать/отменять: %q cancels=%d", again, cancels.Load())
+	}
+	if text2 := b.handleInputRequired(ctx, "s1", "Новый вопрос?", 43, 0); !strings.Contains(text2, "Новый вопрос?") || cancels.Load() != 2 {
+		t.Fatalf("новый вопрос должен обрабатываться: %q cancels=%d", text2, cancels.Load())
+	}
+	if err := b.unblockAwaitingInput(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := b.dshSnapshot(); st.AwaitingInput || st.InputSeq != 0 {
+		t.Fatalf("unblock не сбросил состояние: %+v", st)
+	}
+	if cancels.Load() != 3 {
+		t.Fatalf("unblock должен отменить ход: cancels=%d", cancels.Load())
+	}
+}
+
 func TestDSHConnectErrorHidesToken(t *testing.T) {
 	c := newDSHClient("http://127.0.0.1:1", "unit")
 	c.tokenFetcher = func(context.Context) (string, error) { return "secret-token-value", nil }

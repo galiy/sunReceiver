@@ -198,27 +198,39 @@ func safeFileName(name string) string {
 
 // assistantText собирает видимый текст из записей assistant/message
 // (reasoning-блоки отбрасываются).
-func assistantText(records []sessionRecord) string {
+func assistantEventText(ev sessionEvent) string {
+	if ev.Type != "assistant/message" {
+		return ""
+	}
+	var data struct {
+		Message struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(ev.Data, &data); err != nil {
+		return ""
+	}
 	var parts []string
-	for _, rec := range records {
-		if rec.Event.Type != "assistant/message" {
-			continue
+	for _, c := range data.Message.Content {
+		if c.Type == "text" && strings.TrimSpace(c.Text) != "" {
+			parts = append(parts, strings.TrimRight(c.Text, " \t\r\n"))
 		}
-		var data struct {
-			Message struct {
-				Content []struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
-				} `json:"content"`
-			} `json:"message"`
-		}
-		if err := json.Unmarshal(rec.Event.Data, &data); err != nil {
-			continue
-		}
-		for _, c := range data.Message.Content {
-			if c.Type == "text" && strings.TrimSpace(c.Text) != "" {
-				parts = append(parts, strings.TrimRight(c.Text, " \t\r\n"))
-			}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func assistantText(records []sessionRecord) string {
+	// session/wait отдаёт записи в обратном порядке (новые первыми) — для
+	// склейки ответа нужен хронологический порядок.
+	recs := append([]sessionRecord(nil), records...)
+	sort.SliceStable(recs, func(i, j int) bool { return recs[i].Event.Seq < recs[j].Event.Seq })
+	var parts []string
+	for _, rec := range recs {
+		if t := assistantEventText(rec.Event); t != "" {
+			parts = append(parts, t)
 		}
 	}
 	return strings.Join(parts, "\n\n")
@@ -233,6 +245,36 @@ func assistantTextEvents(events []sessionEvent, since int64) string {
 		}
 	}
 	return assistantText(records)
+}
+
+// finalAssistantTextEvents разбирает видимый текст ходов после since:
+// delivered — финальные ответы завершённых ходов (последний assistant/message
+// перед turn/end), tail — текст незавершённого хвоста, lastEnd — seq последнего
+// turn/end (0, если завершённых ходов нет).
+func finalAssistantTextEvents(events []sessionEvent, since int64, pending string) (delivered, tail string, lastEnd int64) {
+	var parts []string
+	// pending — текст незавершённого хвоста с прошлого опроса. Если до
+	// ближайшего turn/end не придёт новый assistant/message, именно он станет
+	// финальным текстом завершившегося хода.
+	current := pending
+	for _, ev := range events {
+		if ev.Seq <= since {
+			continue
+		}
+		switch ev.Type {
+		case "assistant/message":
+			if t := assistantEventText(ev); t != "" {
+				current = t
+			}
+		case "turn/end":
+			if current != "" {
+				parts = append(parts, current)
+				current = ""
+			}
+			lastEnd = ev.Seq
+		}
+	}
+	return strings.Join(parts, "\n\n"), current, lastEnd
 }
 
 // turnInfo описывает интересные для замены сессии факты из новых событий.
