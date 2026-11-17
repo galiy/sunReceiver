@@ -40,7 +40,10 @@
   **(устройство, тег)** — ключ `sunreceiver:ts:<kind>:<device>:<tag>`, метки
   `LABELS {kind, device, tag, name, ip, device_sn}`, `RETENTION 172800000` (2 суток). Выборка —
   `TS.MRANGE/TS.RANGE` с `FILTER` (устройство и/или теги; кросс-устройственные сводные —
-  `FILTER kind=... tag=...`). Гранулярность — сырьевая. Детали/план — см. ниже и
+  `FILTER kind=... tag=...`). Для графиков дашборда выборка идёт с **серверной
+  агрегацией** (`AGGREGATION avg`, бакет = окно / цель точек, `rtBucket`), сырьё
+  читается только для узких окон: сырой `TS.MRANGE` по per-tag сериям на длинном
+  окне блокирует Redis и валит остальные запросы. Детали/план — см. ниже и
   `docs/research/redis-storage-optimization.md`.
 - Общие **`sunreceiver:current`** / **`sunreceiver:series:*`** (старые ZSET) **выведены
   из эксплуатации**; ZSET-ряды `*:series:*` удаляются на этапе 9 плана RT.

@@ -55,3 +55,10 @@ func ce308EnsurePowered() error {
 
 // ce308AdapterIDReset — no-op вне Linux (нет смены номера контроллера BlueZ).
 func ce308AdapterIDReset() {}
+
+// ce308SetAdapterID — no-op вне Linux: явная настройка BLE-адаптера задаётся
+// только для BlueZ (ce308.hci); ОС выбирает адаптер сама.
+func ce308SetAdapterID(id string) {}
+
+// ce308AdapterForced — вне Linux явный адаптер не задаётся.
+func ce308AdapterForced() string { return "" }

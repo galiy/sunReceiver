@@ -1,0 +1,21 @@
+[Unit]
+Description=AGM usbip watchdog (remote CH340 / PZEM-017 RS485)
+Documentation=https://github.com/galiy/sunReceiver/blob/main/docs/modules/agm-monitor.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Плейсхолдер: на проде подставить реальный адрес usbip-сервера (Малина).
+Environment=AGM_USBIP_HOST=192.168.0.35
+Environment=AGM_USBIP_PORT=3240
+Environment=AGM_USBIP_VIDPID=1a86:7523
+Environment=AGM_USBIP_INTERVAL=30
+Environment=AGM_USBIP_UNHEALTHY=2
+Environment=AGM_USBIP_COOLDOWN=300
+ExecStart=/usr/local/sbin/agm-usbip-watchdog.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

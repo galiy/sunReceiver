@@ -169,6 +169,7 @@ type configFile struct {
 	Meter         *meterSection    `json:"meter"`
 	Ce308         *ce308Section    `json:"ce308"`
 	Dts017        *dts017Section   `json:"dts017m"`
+	AGM           *agmSection      `json:"agm"`     // мониторинг AGM-сборки (PZEM-017 + 4×BK300)
 	Mercury       []mercurySection `json:"mercury"` // ручные снятия показаний счётчика энергосбыта «Меркурий»
 	Notify        *notifySection   `json:"notify"`
 	Relay         *relaySection    `json:"relay"`          // сетевое реле SR-201 (лампы), управление по UDP
@@ -329,6 +330,15 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	if err := loadDts017Config(cf.Dts017); err != nil {
 		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
 	}
+	// Мониторинг AGM-сборки (раздел "agm") — PZEM-017 (usbip/CH340) + 4×BK300
+	// (BLE). Disabled обязателен; при активном разделе нужны pzem.usbip и ровно
+	// 4 устройства BK300.
+	if cf.AGM != nil && cf.AGM.Disabled == nil {
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе agm не задано обязательное поле disabled (false/true)", path)
+	}
+	if err := loadAGMConfig(cf.AGM); err != nil {
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
+	}
 	// Ручные снятия показаний счётчика энергосбыта «Меркурий» (раздел "mercury").
 	if err := loadMercuryConfig(cf.Mercury); err != nil {
 		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
@@ -372,7 +382,7 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 	meterActive := cf.Meter != nil && cf.Meter.Disabled != nil && !*cf.Meter.Disabled
 	relayActive := cf.Relay != nil && cf.Relay.Disabled != nil && !*cf.Relay.Disabled
 	mapActive := cf.Map != nil && (cf.Map.Disabled == nil || !*cf.Map.Disabled)
-	if !mapActive && ce308Cfg == nil && !meterActive && !relayActive && dts017Cfg == nil {
+	if !mapActive && ce308Cfg == nil && !meterActive && !relayActive && dts017Cfg == nil && agmCfg == nil {
 		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: нет ни одного активного устройства", path)
 	}
 	// Периоды опроса устройств (секунды) — обязательный раздел "poll".
@@ -986,6 +996,12 @@ func main() {
 	} else {
 		log.Printf("dts017m: не настроен (нет активного раздела dts017m) — опрос отключён")
 	}
+	// Мониторинг AGM-сборки — раздел "agm" (PZEM-017 по RS485/usbip + 4×BK300 BLE).
+	if desc := describeAGMConfig(agmCfg); desc != "" {
+		log.Printf("agm: %s", desc)
+	} else {
+		log.Printf("agm: не настроен (нет активного раздела agm) — мониторинг отключён")
+	}
 
 	// Флаги видимости блоков дашборда, вычисленные из конфигурации:
 	//   - ShowMap — МАП/MPPT включены (map.disabled != true);
@@ -1243,6 +1259,23 @@ func main() {
 		}()
 	}
 
+	// Мониторинг AGM-сборки (раздел "agm"): PZEM-017 по RS485 через удалённый
+	// CH340 (usbip) + 4×BK300 по BLE. Отдельный цикл: поиск/закрепление порта,
+	// затем синхронный опрос 5 источников; Redis current/series + PG
+	// agm_averages_r (5-мин усреднение), см. agm_poller.go / agm_accumulator.go.
+	if agmCfg != nil {
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			runAGMPoll(store, pg, agmCfg, stopCtx)
+		}()
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			runAGMAccumulator(store, pg, stopCtx)
+		}()
+	}
+
 	if relayCtl != nil {
 		bgWg.Add(1)
 		go func() {
@@ -1375,7 +1408,9 @@ func redisDts017DataPresent(store *redisStore) (bool, error) {
 //   - точки BMS (pg.Bms26AveragesAll) — SaveBms26Series в ряд
 //     sunreceiver:ts:bms26:*;
 //   - точки DTS017M (pg.Dts017AveragesAll) — SaveDts017Series/SaveDts017Current в
-//     обособленный ряд sunreceiver:ts:dts017m:*.
+//     обособленный ряд sunreceiver:ts:dts017m:*;
+//   - точки AGM (pg.AGMAveragesAll) — SaveAGMSeries/SaveAGMCurrent в
+//     sunreceiver:ts:agm:* и sunreceiver:agm:current.
 //
 // Восстановление каждого ряда независимо: сбой одного запроса не прерывает
 // остальные. Возвращает complete=false, если хотя бы один ряд восстановить не
@@ -1533,6 +1568,47 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, st
 			}
 		}
 		log.Printf("pg restore: DTS017M восстановлено точек: %d", dtsRestored)
+	}
+
+	// Ряд AGM-сборки — из pg.agm_averages_r (5-мин средние) в sunreceiver:ts:agm:*
+	// (то же окно удержания); current — последняя восстановленная точка.
+	agmPts, err := pg.AGMAveragesAll(start, end)
+	if err != nil {
+		log.Printf("pg restore: agm query: %v", err)
+		complete = false
+	} else {
+		var agmRestored int
+		var agmLast *agmSnapshot
+		for i := range agmPts {
+			select {
+			case <-stop.Done():
+				log.Printf("pg restore: остановлено по сигналу (AGM восстановлено точек: %d)", agmRestored)
+				return false
+			default:
+			}
+			snap := agmPts[i]
+			ts, perr := time.Parse(time.RFC3339, snap.Timestamp)
+			if perr != nil {
+				continue
+			}
+			// Ключ месяца/локальная зона — как у живой записи.
+			ts = ts.In(time.Local)
+			if serr := store.SaveAGMSeries(snap, ts); serr != nil {
+				log.Printf("pg restore: agm save %s: %v", snap.Name, serr)
+				complete = false
+				continue
+			}
+			cur := snap
+			agmLast = &cur
+			agmRestored++
+		}
+		if agmLast != nil {
+			if serr := store.SaveAGMCurrent(*agmLast); serr != nil {
+				log.Printf("pg restore: agm current: %v", serr)
+				complete = false
+			}
+		}
+		log.Printf("pg restore: AGM восстановлено точек: %d", agmRestored)
 	}
 
 	return complete

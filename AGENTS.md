@@ -27,6 +27,7 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 | Счётчик DDS238 | [`docs/dds238-meter.md`](docs/dds238-meter.md) |
 | Счётчик DTS017M | [`docs/dts017m-meter.md`](docs/dts017m-meter.md) |
 | Счётчик Энергомера CE308 (BLE) | [`docs/modules/ce308.md`](docs/modules/ce308.md) |
+| Мониторинг AGM-сборки (PZEM-017 + 4×BK300) | [`docs/modules/agm-monitor.md`](docs/modules/agm-monitor.md) |
 | Счётчик энергосбыта «Меркурий» (прогноз) | [`docs/meter_mercury.md`](docs/meter_mercury.md) |
 | BMS через malina26 (ANT+EnBMS, единый тип) | [`docs/modules/bms26.md`](docs/modules/bms26.md) |
 | Уведомления в MAX | [`docs/modules/notify.md`](docs/modules/notify.md) |
@@ -102,7 +103,16 @@ CE308 отключён). Единственный режим — «только 
 соединение и НЕ пишет телеметрию/агрегаты, а раз в 30 мин (или по кнопке «Обновить»
 с дашборда) однократно снимает накопленную энергию (панель «показания») и
 отключается; `mac` — BD_ADDR счётчика, `pin` — BLE-PIN радиоинтерфейса для
-спаривания), полностью описан в [`docs/modules/ce308.md`](docs/modules/ce308.md). Счётчик
+спаривания), полностью описан в [`docs/modules/ce308.md`](docs/modules/ce308.md).
+**AGM-сборка** (PZEM-017 + 4×BK300) — раздел **`agm`** `{"disabled", "name",
+"poll_interval", "pzem": {"usbip", "path_globs", "slave"}, "bk300": {"devices":
+[{"name", "position", "mac", "serial"} ×4]}}`: `disabled` — ОБЯЗАТЕЛЬНОЕ поле,
+`poll_interval` — секунды (умолч./мин. 1, «не чаще 1 раза в секунду»); PZEM-017
+опрашивается через удалённый CH340 по usbip (адрес `pzem.usbip`; порт поднимает
+внешний watchdog `deploy/agm-usbip-watchdog.sh`), четыре BK300 — по BLE на общем с
+CE308 адаптере; хранилище обособлено (`sunreceiver:agm:current`,
+`sunreceiver:ts:agm:*`, PG `agm_averages_r`); неполный цикл не пишется. Описан в
+[`docs/modules/agm-monitor.md`](docs/modules/agm-monitor.md). Счётчик
 энергосбыта **«Меркурий»** (без интерфейса мониторинга, установлен последовательно с
 DDS238) — раздел **`mercury`**: коллекция ручных снятий показаний `[{"taken_at"
 (RFC3339), "import_day", "import_night", "export_day", "export_night"}]` (kWh);
@@ -187,6 +197,15 @@ map 1, meter 1. Период сетевых инверторов фиксиро�
   без постоянного соединения, раз в 30 мин/по кнопке только итоговая энергия),
   `ce308_store.go` (Redis: energy), `ce308_agent_linux.go` (BlueZ-агент PIN).
   Полное описание — [`docs/modules/ce308.md`](docs/modules/ce308.md).
+- **Мониторинг AGM-сборки** — `agm_*.go`: `agm_config.go` (раздел `agm`),
+  `agm.go` (теги/снимок), `agm_pzem.go` (PZEM-017, Modbus RTU 9600 8N1 через
+  удалённый CH340/usbip), `agm_bk300.go` (кадры BK300), `agm_ble.go` (BLE-клиент и
+  менеджер 4 соединений, адаптер общий с CE308), `agm_poller.go` (состояния
+  поиск/мониторинг, синхронный цикл 5 источников), `agm_store.go` +
+  `agm_accumulator.go` (Redis `sunreceiver:agm:current`/`sunreceiver:ts:agm:*`,
+  PG `agm_averages_r`). Неполный цикл не пишется; ошибки связи — только в
+  `device_errors` (kind=`agm`). Внешний usbip-watchdog — `deploy/`. Полное
+  описание — [`docs/modules/agm-monitor.md`](docs/modules/agm-monitor.md).
 - **BMS через malina26** (единый тип ANT+EnBMS) — `bms26.go`, `bms26_store.go`:
   опрос через HTTP-API «Малина26» (`/api/bms/devices` + `/api/bms/raw`), бинарный
   контракт 107 Б — копия пакета `internal/bmscontract` (оригинал —

@@ -45,6 +45,44 @@
     "protocol": "rtu",
     "poll_interval": 1
   },
+  "agm": {
+    "disabled": false,
+    "name": "AGM сборка",
+    "poll_interval": 1,
+    "pzem": {
+      "usbip": "192.168.0.36:3240",
+      "path_globs": ["/dev/serial/by-id/*", "/dev/ttyUSB*"],
+      "slave": 1
+    },
+    "bk300": {
+      "devices": [
+        {
+          "name": "AGM-1",
+          "position": 1,
+          "mac": "AA:BB:CC:DD:EE:01",
+          "serial": "000000000000000001"
+        },
+        {
+          "name": "AGM-2",
+          "position": 2,
+          "mac": "AA:BB:CC:DD:EE:02",
+          "serial": "000000000000000002"
+        },
+        {
+          "name": "AGM-3",
+          "position": 3,
+          "mac": "AA:BB:CC:DD:EE:03",
+          "serial": "000000000000000003"
+        },
+        {
+          "name": "AGM-4",
+          "position": 4,
+          "mac": "AA:BB:CC:DD:EE:04",
+          "serial": "000000000000000004"
+        }
+      ]
+    }
+  },
   "notify": {
     "disabled": false,
     "stable_window_sec": 30,

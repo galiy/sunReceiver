@@ -167,6 +167,14 @@ func (s *redisStore) tsAdd(pipe redis.Pipeliner, kind, device, name, ip, deviceS
 		"ON_DUPLICATE", "LAST")
 }
 
+// tsBackoffActive — для серии активен негативный бэкофф TS.CREATE (запись будет
+// молча пропущена tsAdd). Нужен вызывающим, которые пишут снимок атомарно.
+func (s *redisStore) tsBackoffActive(kind, device, tag string) bool {
+	s.tsMu.Lock()
+	defer s.tsMu.Unlock()
+	return time.Now().Before(s.tsFailUntil[tsKey(kind, device, tag)])
+}
+
 // tsAddValueContract пишет все числовые теги контракта.
 func (s *redisStore) tsAddValueContract(pipe redis.Pipeliner, kind, device, name, ip, deviceSN, placement string, ts time.Time, vc valuesContract) {
 	for tag := range vc {

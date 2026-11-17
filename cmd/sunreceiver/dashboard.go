@@ -2953,7 +2953,10 @@ func (h *dashboardHandler) agmLoadBMS(from, to, cutoff time.Time) []agmDevValues
 			}
 		}
 		if rOK {
-			if pts, err := h.store.QueryBms26Series(sn.Serial, rStart, rEnd); err == nil {
+			// Серверная агрегация avg: сырой TS.MRANGE за сутки по per-tag
+			// сериям BMS блокирует Redis на секунды и валит остальные запросы.
+			bucket := rtBucket(rEnd.Sub(rStart))
+			if pts, err := h.store.QueryBms26SeriesAgg(sn.Serial, rStart, rEnd, bucket); err == nil {
 				for i := range pts {
 					add(&d, pts[i].Timestamp, fmt.Sprintf("%+v", pts[i]), pts[i].CurrentA, pts[i].PowerW)
 				}

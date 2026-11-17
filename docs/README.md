@@ -44,6 +44,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 | **Счётчик DTS017M** (`dts017_*.go`) | Трёхфазный счётчик (Modbus RTU через прозрачный шлюз): телеметрия/энергии → **собственные** ключи/ряд Redis и **собственные** таблицы PG; посуточные тарифы «День/Ночь» считаются сами (историю счётчика не читаем); рамка «Гараж» и графики на странице «Электроэнергия», `/api/dts017m/current|tariffs` | [dts017m-meter.md](dts017m-meter.md) |
 | **Счётчик «Меркурий»** (энергосбыт, без мониторинга; прогноз) | Последовательно с DDS238; показания снимаются **вручную** (раздел конфига `mercury`), прогноз на текущий момент по последней ручной точке + статистике DDS238 (`mercury.go` → `/api/current` → рамка «Меркурий — прогноз») | [meter_mercury.md](meter_mercury.md) |
 | **Счётчик Энергомера CE308** (`ce308_*.go`) | Опрос по BLE: единственный режим — только итоговые показания (накопленная энергия раз в 30 мин/по кнопке), без телеметрии и агрегатов | [modules/ce308.md](modules/ce308.md) |
+| **Мониторинг AGM-сборки** (`agm_*.go`) | PZEM-017 по RS485 через удалённый CH340 (usbip) + 4×BK300 по BLE (адаптер общий с CE308): синхронный снимок 5 источников раз в секунду; Redis `sunreceiver:agm:*` + PG `agm_averages_r`. Неполный цикл не пишется. Внешний watchdog usbip — `deploy/` | [modules/agm-monitor.md](modules/agm-monitor.md) |
 | **Проброс Bluetooth (usbip)** (вне кода, ОТКЛЮЧЕНО 2026-09-24) | Историческая схема: проброс BLE-контроллера MediaTek с `.9` на `.253` через usbip; на `.253` теперь физический USB-адаптер | [ce308-bluetooth/README.md](ce308-bluetooth/README.md) |
 | **BMS malina26** (`bms26*.go`) | Единый пулер BMS (ANT+EnBMS) через HTTP-API «Малина26»: `/api/bms/devices` + `/api/bms/raw` (бинарный контракт 107 Б, копия `internal/bmscontract`); Redis `sunreceiver:bms26:*` + PG `bms26_averages_r` | [modules/bms26.md](modules/bms26.md) |
 | **Уведомления в MAX** (`notify.go`) | Отправка событий мониторинга МАП (недоступен / нет напряжения сети) в мессенджер MAX через Bot API, с гистерезисом и дедупликацией | [modules/notify.md](modules/notify.md) |
@@ -62,6 +63,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 | Счётчик DDS238 | Modbus TCP или Modbus RTU через прозрачный шлюз (502) | 1 с | мгновенные значения + посуточные тарифы «День/Ночь» |
 | Счётчик DTS017M | Modbus RTU через прозрачный шлюз (502, unit 1, fn 03/04) | 1 с | напряжения/токи/мощности/энергии + посуточные тарифы «День/Ночь» |
 | Счётчик Энергомера CE308 | BLE (Энергомера/IEC 61107) | 30 мин / кнопка | итоговая накопленная энергия |
+| AGM-сборка: PZEM-017 + 4×BK300 | Modbus RTU (RS485 через usbip/CH340, 9600 8N1) + BLE | 1 с | U/I/P/энергия/аварии сборки + напряжения и флаги 4 батарей |
 
 - **Инверторы** — только API «Малина26»: настроек в конфиге нет; имя, размещение,
   тип и серийник приходят из API, нормализуются в контракт `values`.
@@ -82,6 +84,10 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
   собственные таблицы PG (`dts017m_averages_r`, `dts017m_daily_tariffs`) и отдельный
   аккумулятор; общие ключи/таблицы DDS238 не используются. Историю счётчика не читаем —
   посуточные тарифы считаем сами. См. [`dts017m-meter.md`](dts017m-meter.md).
+- **AGM-сборка** — раздел `agm`; `disabled` обязателен, `poll_interval` (сек,
+  по умолчанию и минимум 1). PZEM-017 — через удалённый CH340 (`pzem.usbip`,
+  поднимает внешний watchdog), 4×BK300 — MAC/серийник/позиция в конфиге; BLE-адаптер
+  общий с CE308. См. [`modules/agm-monitor.md`](modules/agm-monitor.md).
 - **BMS** — единый BMS26 через API «Малина26» (раздел `map`); отдельного раздела
   конфига нет. Устройства ANT+EnBMS показываются по данным `sunreceiver:bms26:*`.
 - **Уведомления** — раздел `notify` (бот MAX): события мониторинга МАП
@@ -93,14 +99,14 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 - **Redis** — live-хранилище последних 2 календарных суток, **каждое снятое
   показание** (полное разрешение пулера): обособленные HASH+ZSET по марке
   (`sunreceiver:deye:current`/`deye:series:*`, `sunreceiver:sofar:*`) и отдельные
-  ключи BMS/CE308/DDS238/МАП/КЭС/DTS017M. Общие `sunreceiver:current`/`series:*`
+  ключи BMS/CE308/DDS238/МАП/КЭС/DTS017M/AGM. Общие `sunreceiver:current`/`series:*`
   выведены из эксплуатации. Ключ инвертора — серийник (`inverter_sn`). Запускается
   с persistence (RDB+AOF). При полностью пустом Redis данные восстанавливаются из
   PostgreSQL. (Подробнее — [modules/storage.md](modules/storage.md).)
 - **PostgreSQL** — вся история, **единая гранулярность 1 запись / 5 минут** по марке
   (`sunreceiver.deye_averages_r`/`sofar_averages_r`, а также
-  `bms26_averages_r`, `dts017m_averages_r`, `dds238_averages_r`, `map_averages_r`,
-  `kes_averages_r`), плюс таблицы тарифов (`sunreceiver.dds238_daily_tariffs` и
+  `bms26_averages_r`, `dts017m_averages_r`, `agm_averages_r`, `dds238_averages_r`,
+  `map_averages_r`, `kes_averages_r`), плюс таблицы тарифов (`sunreceiver.dds238_daily_tariffs` и
   обособленная `sunreceiver.dts017m_daily_tariffs`). Фоновые аккумуляторы усредняют
   накопленные в Redis снимки.
 - **Тарифы счётчика** — `sunreceiver.dds238_daily_tariffs` (посуточно, «День/Ночь» ×
@@ -111,7 +117,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 Один файл **`sunReceiver.json`** рядом с бинарником (`os.Executable()`; при
 `go run ./cmd/sunreceiver` — fallback в CWD). Разделы: `dashboard_port` (обязательное) и
 необязательные `dashboard_user`/`dashboard_password`, `map`,
-`db`, `meter`, `dts017m`, `ce308`, `notify`, `relay`, `mercury`.
+`db`, `meter`, `dts017m`, `ce308`, `agm`, `notify`, `relay`, `mercury`.
 Файл приватный (пароли — в открытом виде, в `.gitignore`); публичный шаблон
 структуры — [`sunReceiver.sample.json`](../sunReceiver.sample.json) (обновлять при
 любом изменении структуры конфига: IP — случайные из `192.168.0.x`, серийные
@@ -126,6 +132,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 | `meter` | `disabled` (обязательное: `true` — пулеры отключены, плашки/кнопка «Электроэнергия» скрыты), `name`, `ip`, `port`, `unit`, `first_reg` (должен быть `0`), `register_count` (`0` → 27; иначе ≥ 18) |
 | `dts017m` | `disabled` (обязательное), `name`, `ip`, `port` (умолч. 502), `unit` (умолч. 1), `protocol` (`rtu`/`tcp`, умолч. `rtu`), `poll_interval` (сек, умолч. 1) — см. [dts017m-meter.md](dts017m-meter.md) |
 | `ce308` | `disabled` (обязательное: `true` — опрос CE308 отключён), `name`, `mac` (BD_ADDR счётчика), `pin` (BLE-PIN радиоинтерфейса) — только итоговые показания (30 мин/кнопка); см. [modules/ce308.md](modules/ce308.md) |
+| `agm` | `disabled` (обязательное), `name`, `poll_interval` (сек, умолч./мин. 1), `pzem` (`usbip`, `path_globs`, `slave`), `bk300.devices[]` (ровно 4: `name`, `position` 1..4, `mac`, `serial` 18 ASCII) — см. [modules/agm-monitor.md](modules/agm-monitor.md) |
 | `mercury` | Коллекция ручных снятий показаний счётчика энергосбыта «Меркурий»: `taken_at` (RFC3339), `import_day`, `import_night`, `export_day`, `export_night` (kWh) — см. [meter_mercury.md](meter_mercury.md) |
 | `notify` | `disabled` (необязательное: `true` — мониторинг МАП и запись в MAX-очередь выключены), `stable_window_sec`, `map_undeclared_sec`, `grid_voltage_low` (пороги детекции; токен/адресат MAX — в приложении **maxbot**, см. `maxbot.json`) — см. [modules/notify.md](modules/notify.md) |
 | `relay` | `disabled` (обязательное: `true` — модуля нет, лампы не управляются), `ip` (обязательное при `disabled=false`), `udp_port`, `blink_hz`, `keepalive`, `lamps[]` (`name`, `relay`), `meter_stale_sec`, `map_stale_sec`, `meter_power_tag`, `meter_voltage_tag`, `map_grid_tag`, `voltage_present_min` — см. [relay_sr-201(2light).md](relay_sr-201(2light).md) |

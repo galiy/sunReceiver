@@ -135,6 +135,58 @@ type ce308Meter struct {
 // не удался И устройства нет в BlueZ — как fallback запускаем короткий discovery и
 // повторяем Connect. Discovery больше не является обязательным предусловием.
 func openCE308(mac string, pin string, ctx context.Context) (*ce308Meter, error) {
+	// Общий процесс-глобальный гейт BlueZ (разделяется с AGM): подготовка
+	// адаптера/discovery и Connect не должны пересекаться с чужой попыткой.
+	// Гейт удерживается до фактического завершения внутренней последовательности.
+	gen, ok := bleConnectAcquire(ctx.Done())
+	if !ok {
+		return nil, ctx.Err()
+	}
+	type res struct {
+		m   *ce308Meter
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		m, err := openCE308Inner(mac, pin, ctx, gen)
+		ch <- res{m, err}
+	}()
+	// Гейт удерживается не только до возврата openCE308Inner, но и до
+	// ФАКТИЧЕСКОГО завершения зависших raw Connect (см. bleConnectOps): иначе
+	// следующий Connect получил бы org.bluez.Error.InProgress.
+	releaseLater := func() {
+		go func() {
+			r := <-ch
+			if r.m != nil {
+				_ = r.m.Close()
+			}
+			bleConnectWaitIdle(gen)
+			bleConnectRelease(gen)
+		}()
+	}
+	timer := time.NewTimer(ce308ConnectBudget + 5*time.Second)
+	defer timer.Stop()
+	select {
+	case r := <-ch:
+		go func() {
+			bleConnectWaitIdle(gen)
+			bleConnectRelease(gen)
+		}()
+		return r.m, r.err
+	case <-ctx.Done():
+		releaseLater()
+		return nil, ctx.Err()
+	case <-timer.C:
+		releaseLater()
+		return nil, fmt.Errorf("подключение к %s: превышено %s", mac, ce308ConnectBudget)
+	}
+}
+
+// openCE308Inner — подготовка адаптера и попытки Connect под уже взятым гейтом.
+func openCE308Inner(mac string, pin string, ctx context.Context, gen uint64) (*ce308Meter, error) {
+	// Единый бюджет на всю последовательность, включая подготовку/discovery;
+	// новая попытка после дедлайна не начинается.
+	deadline := time.Now().Add(ce308ConnectBudget)
 	if err := registerCE308Agent(pin); err != nil {
 		// Не фатально: если устройство уже спарено с хостом, агент не нужен.
 		// Логируем и продолжаем — лишний вывод раз в подключение приемлем.
@@ -157,9 +209,8 @@ func openCE308(mac string, pin string, ctx context.Context) (*ce308Meter, error)
 	if err := a.Enable(); err != nil {
 		return nil, fmt.Errorf("включение BLE-адаптера: %w", err)
 	}
-
 	// Попытка 1: прямой Connect (быстрый путь при известном/спаренном устройстве).
-	m, err := connectCE308Bounded(mac, ctx)
+	m, err := connectCE308Bounded(mac, ctx, deadline, gen)
 	if err == nil {
 		return m, nil
 	}
@@ -168,7 +219,7 @@ func openCE308(mac string, pin string, ctx context.Context) (*ce308Meter, error)
 	// Connect возвращает ту же ошибку. Сбрасываем состояние и пробуем ещё раз.
 	if isCE308ConnStuck(err) {
 		ce308ClearStuck(mac)
-		if m2, err2 := connectCE308Bounded(mac, ctx); err2 == nil {
+		if m2, err2 := connectCE308Bounded(mac, ctx, deadline, gen); err2 == nil {
 			return m2, nil
 		}
 	}
@@ -179,10 +230,14 @@ func openCE308(mac string, pin string, ctx context.Context) (*ce308Meter, error)
 	}
 	// Fallback: устройства нет в BlueZ (нет объекта) — прямой Connect не проходит.
 	// Запускаем короткий discovery, чтобы BlueZ узнал устройство, и пробуем снова.
+	// Discovery (до 8 с) не начинаем при исчерпанном бюджете.
+	if time.Now().After(deadline) {
+		return nil, fmt.Errorf("подключение к %s: истёк общий лимит %s", mac, ce308ConnectBudget)
+	}
 	if e := ensureCE308Known(mac); e != nil {
 		return nil, fmt.Errorf("подключение к %s: %v; устройство не обнаружено по BLE: %w", mac, err, e)
 	}
-	return connectCE308Bounded(mac, ctx)
+	return connectCE308Bounded(mac, ctx, deadline, gen)
 }
 
 // ce308ConnectTimeout — лимит на одну попытку подключения к счётчику.
@@ -193,6 +248,11 @@ func openCE308(mac string, pin string, ctx context.Context) (*ce308Meter, error)
 // сервиса.
 const ce308ConnectTimeout = 20 * time.Second
 
+// ce308ConnectBudget — общий лимит на всю последовательность Connect (прямая
+// попытка, повтор после сброса состояния, discovery + финальная попытка).
+// Новая попытка после этого дедлайна не начинается.
+const ce308ConnectBudget = 40 * time.Second
+
 // connectCE308Bounded выполняет connectCE308 с ограничением по времени (см.
 // ce308ConnectTimeout), чтобы зависший Connect не блокировал пулер навсегда.
 // connectCE308 вызывается без дедлайна (BlueZ), поэтому по таймауту/отмене мы его
@@ -200,13 +260,24 @@ const ce308ConnectTimeout = 20 * time.Second
 // буферизованный канал (cap=1), а фоновый «сторож» дожидается результата и
 // закрывает соединение, если оно уже не нужно (сам Connect при устойчиво
 // зависшем радио остаётся висеть — задокументированное поведение).
-func connectCE308Bounded(mac string, ctx context.Context) (*ce308Meter, error) {
+func connectCE308Bounded(mac string, ctx context.Context, deadline time.Time, gen uint64) (*ce308Meter, error) {
+	timeout := time.Until(deadline)
+	if timeout <= 0 {
+		return nil, fmt.Errorf("подключение к %s: истёк общий лимит %s", mac, ce308ConnectBudget)
+	}
+	if timeout > ce308ConnectTimeout {
+		timeout = ce308ConnectTimeout
+	}
 	type res struct {
 		m   *ce308Meter
 		err error
 	}
 	ch := make(chan res, 1)
+	// Регистрируем операцию ДО запуска горутины: иначе быстрый release увидит
+	// 0 и отпустит гейт, пока raw Connect ещё не стартовал.
+	bleConnectOpBegin(gen)
 	go func() {
+		defer bleConnectOpEnd(gen)
 		m, err := connectCE308(mac, ctx)
 		ch <- res{m, err} // cap=1 — отправка не блокируется
 	}()
@@ -224,9 +295,9 @@ func connectCE308Bounded(mac string, ctx context.Context) (*ce308Meter, error) {
 	case <-ctx.Done():
 		drain()
 		return nil, ctx.Err()
-	case <-time.After(ce308ConnectTimeout):
+	case <-time.After(timeout):
 		drain()
-		return nil, fmt.Errorf("подключение к %s: превышено %s", mac, ce308ConnectTimeout)
+		return nil, fmt.Errorf("подключение к %s: превышено %s", mac, timeout)
 	}
 }
 
