@@ -148,6 +148,24 @@ func agmRoundTag(tag string, v float64) float64 {
 // модулей; на проде — MSK).
 func agmTimestamp(t time.Time) string { return t.Format(time.RFC3339) }
 
+// agmApplySign приводит измерения PZEM (по модулю) к соглашению «заряд −,
+// разряд +» по напряжению АКБ МАП. Если UАКБ МАП > U сборки — заряд.
+func agmApplySign(p agmPZEMReading, mapV float64) agmPZEMReading {
+	p.CurrentA = math.Abs(p.CurrentA)
+	p.PowerW = math.Abs(p.PowerW)
+	if mapV > 0 && p.VoltageV > 0 && mapV > p.VoltageV {
+		p.CurrentA = -p.CurrentA
+		p.PowerW = -p.PowerW
+	}
+	if p.CurrentA == 0 {
+		p.CurrentA = 0
+	}
+	if p.PowerW == 0 {
+		p.PowerW = 0
+	}
+	return p
+}
+
 // agmBuildValues собирает плоскую карту тегов полного цикла.
 func agmBuildValues(p agmPZEMReading, bks []agmBKSample) map[string]float64 {
 	out := map[string]float64{

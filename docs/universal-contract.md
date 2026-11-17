@@ -246,7 +246,10 @@
 - **MAP (`kindMAP`, `decodeMalina26Map`, `/api/map/raw`)** — устройство батареи/сети (`slot` не задан):
   - `grid_voltage` = `_UNET` 0x422 (0 → нет сети, иначе +100 В);
   - `grid_power` = `_PNET` 0x59A/0x59B (знак по `_PNET_Sign_P` 0x587), Вт;
-  - `battery_voltage` = `_UAcc_med` 0x405/0x406 `(VH*256+VL)/10`, В;
+  - `battery_voltage` = `_UAcc_med` 0x405/0x406 `(VH*256+VL)/10`, В; в текущем
+    снимке переопределяется откалиброванным значением `maps[].batt.u.v` из
+    `/api/mainlist` (то, что показывает панель Малины), с fallback на сырое
+    `_UAcc_med`, если mainlist недоступен;
   - `battery_current` = `_IAcc_med` 0x432/0x433 `(L + H*256)/16`, А, со знаком
     (заряд — отрицательный, отдача — положительный; знак по `MODE` 0x400);
     на дашборде плашка «Ток батареи» (рамка «Данные МАП»);

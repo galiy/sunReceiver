@@ -14,7 +14,7 @@
 <div class="top-nav">
   <div>
     <h1 class="ttl" id="agmTitle">AGM 200 A/h</h1>
-    <p class="sub" id="agmSub">Свинцово-кислотный АКБ &middot; расчёт: МАП &minus; &Sigma; BMS (ANT&times;2 + EnBMS) &middot; разряд положительный</p>
+    <p class="sub" id="agmSub">Свинцово-кислотный АКБ &middot; PZEM-017 (напряжение, ток, мощность, энергия) + 4&times;BK300 &middot; заряд &minus;, разряд +</p>
   </div>
   {{template "mnav" .}}
   {{template "refreshToggle" .}}
@@ -22,7 +22,7 @@
 
 <div class="kpi-row" id="agmKpiRow"><div class="missing">Загрузка...</div></div>
 
-<h2 class="bms-charts-title">Графики (расчёт: МАП &minus; &Sigma; BMS)</h2>
+<h2 class="bms-charts-title">Графики (PZEM-017 и BK300: Redis — сырые показания, PG — 5-мин средние)</h2>
 <div class="period-panel">
   <button id="btn24h">24 часа</button>
   <button id="btnToday">Сегодня</button>
@@ -40,21 +40,33 @@
   <button id="btnPeriodNext" title="Следующий период">&rsaquo;</button>
   <button id="btnRefresh" title="Принудительно обновить графики">Обновить графики</button>
 </div>
-<div class="charts bms-charts agm-charts">
+<div class="lg-hint">ЛКМ по чипу — вкл/выкл линию · двойной ЛКМ — только эта линия · «Все» — показать все</div>
+<div class="charts bms-charts">
   <div class="card">
-    <h2>Напряжение батареи, V</h2>
-    <div class="chart-toolbar"><span id="agmVoltChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
-    <div class="chart-wrap"><canvas id="agmVoltChart"></canvas></div>
+    <h2>Напряжение сборки и сумма батарей, V</h2>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-left" type="button" title="Переместить влево">&larr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button><button class="ord-right" type="button" title="Переместить вправо">&rarr;</button></div>
+    <div class="chart-toolbar"><span id="agmVoltChartRange"></span><span>Зум: Ctrl+колесо / Ctrl+выделение / drag&ndash;панорама</span></div>
+    <div class="lg-chips" id="agmVoltChartLg"></div>
+    <div class="chart-wrap"><canvas id="agmVoltChart" role="img" aria-label="Напряжение сборки и сумма батарей, V"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Напряжения батарей, V</h2>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-left" type="button" title="Переместить влево">&larr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button><button class="ord-right" type="button" title="Переместить вправо">&rarr;</button></div>
+    <div class="chart-toolbar"><span id="agmBatChartRange"></span><span>Зум: Ctrl+колесо / Ctrl+выделение / drag&ndash;панорама</span></div>
+    <div class="lg-chips" id="agmBatChartLg"></div>
+    <div class="chart-wrap"><canvas id="agmBatChart" role="img" aria-label="Напряжения батарей, V"></canvas></div>
   </div>
   <div class="card">
     <h2>Ток, A</h2>
-    <div class="chart-toolbar"><span id="agmCurChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
-    <div class="chart-wrap"><canvas id="agmCurChart"></canvas></div>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-left" type="button" title="Переместить влево">&larr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button><button class="ord-right" type="button" title="Переместить вправо">&rarr;</button></div>
+    <div class="chart-toolbar"><span id="agmCurChartRange"></span><span>Зум: Ctrl+колесо / Ctrl+выделение / drag&ndash;панорама</span></div>
+    <div class="chart-wrap"><canvas id="agmCurChart" role="img" aria-label="Ток, A"></canvas></div>
   </div>
   <div class="card">
     <h2>Мощность, W</h2>
-    <div class="chart-toolbar"><span id="agmPwrChartRange"></span><span>Зум: Ctrl+колесо / drag&ndash;панорама</span></div>
-    <div class="chart-wrap"><canvas id="agmPwrChart"></canvas></div>
+    <div class="card-order"><button class="ord-up" type="button" title="Переместить вверх">&uarr;</button><button class="ord-left" type="button" title="Переместить влево">&larr;</button><button class="ord-down" type="button" title="Переместить вниз">&darr;</button><button class="ord-right" type="button" title="Переместить вправо">&rarr;</button></div>
+    <div class="chart-toolbar"><span id="agmPwrChartRange"></span><span>Зум: Ctrl+колесо / Ctrl+выделение / drag&ndash;панорама</span></div>
+    <div class="chart-wrap"><canvas id="agmPwrChart" role="img" aria-label="Мощность, W"></canvas></div>
   </div>
 </div>
 

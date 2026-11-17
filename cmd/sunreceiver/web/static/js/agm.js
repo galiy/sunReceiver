@@ -1,30 +1,59 @@
 'use strict';
-// Страница AGM (свинцово-кислотный АКБ). Отдельного датчика нет: ток и мощность —
-// это МАП (battery) минус сумма трёх BMS (ANT×2 + EnBMS), расчёт на бэкенде
-// (/api/agm/series). Управление, зум, связь графиков и хинты — как на странице BMS.
+// Страница AGM (свинцово-кислотный АКБ). Источник — собственный модуль AGM:
+// PZEM-017 (напряжение, ток, мощность, накопленная энергия) и 4×BK300
+// (напряжения батарей). PZEM отдаёт ток/мощность по модулю; знак выставляет
+// бэкенд по напряжению МАП в тот же момент: выше напряжения сборки → заряд (−),
+// иначе разряд (+). Управление, зум, связь графиков, хинты и легенда — как на
+// странице BMS.
 var SR_COARSE = ('ontouchstart' in window) || navigator.maxTouchPoints > 0 || (window.matchMedia && matchMedia('(pointer: coarse)').matches);
 function fmtDate(t){ var d=new Date(t); function p(x){return (x<10?'0':'')+x;} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes()); }
 function fmtNum(n,digits){ return isFinite(n)? n.toLocaleString('ru-RU',{maximumFractionDigits:digits}) : '—'; }
 function agmSocColor(soc){ return soc<20?'#d9534f':(soc<50?'#f08c00':(soc<80?'#f0ad4e':'#37b24d')); }
 
-// Плашки текущих значений (как на странице BMS): заряд, напряжение батареи (с
-// шины МАП), ток, мощность, ёмкость. Ток/мощность — с бэкенда (/api/agm) по той
-// же формуле, что и графики; SOC — по таблице AGM от напряжения.
+// Плашки текущих значений: объективные данные PZEM-017 + напряжения 4×BK300.
+// SOC — по таблице AGM от напряжения сборки PZEM (оценка остаётся грубой, т.к.
+// таблица для напряжения покоя).
 function renderAgmKPIs(d){
   var soc=Math.max(0,Math.min(100,Number(d.soc)||0));
   var iCls= d.current_a>=0? 'pos':'neg';
   var pCls= d.power_w>=0? 'pos':'neg';
+  var objective=(d.source==='agm');
   var h='';
   h+='<div class="kpi"><div class="lbl">Заряд (SOC)</div><div class="val socval">'
     +'<span class="mini-batt"><span class="mini-batt-fill" style="width:'+soc+'%;background:'+agmSocColor(soc)+';display:block"></span></span>'
     +'<span>'+soc+'<span class="unit">%</span></span></div>'
     +'<div class="sub">остаток '+fmtNum(d.remaining_ah,1)+' А·ч / '+fmtNum(d.capacity_ah,0)+' А·ч</div></div>';
-  h+='<div class="kpi"><div class="lbl">Напряжение батареи</div><div class="val">'+fmtNum(d.voltage,2)+'<span class="unit">V</span></div>'
-    +'<div class="sub">с шины МАП</div></div>';
-  h+='<div class="kpi"><div class="lbl">Ток</div><div class="val '+iCls+'">'+fmtNum(d.current_a,1)+'<span class="unit">A</span></div></div>';
-  h+='<div class="kpi"><div class="lbl">Мощность</div><div class="val '+pCls+'">'+fmtNum(d.power_w,1)+'<span class="unit">W</span></div></div>';
-  h+='<div class="kpi"><div class="lbl">Ёмкость</div><div class="val">'+fmtNum(d.capacity_ah,0)+'<span class="unit">А·ч</span></div></div>';
+  h+='<div class="kpi"><div class="lbl">Напряжение сборки</div><div class="val">'+fmtNum(d.voltage,2)+'<span class="unit">V</span></div>'
+    +'<div class="sub">'+(objective?'PZEM-017':'с шины МАП')+'</div></div>';
+  if(d.map_voltage_v!==null && d.map_voltage_v!==undefined){
+    h+='<div class="kpi"><div class="lbl">Напряжение МАП</div><div class="val">'+fmtNum(d.map_voltage_v,2)+'<span class="unit">V</span></div>'
+      +'<div class="sub">справочно</div></div>';
+  }
+  h+='<div class="kpi"><div class="lbl">Ток</div><div class="val '+iCls+'">'+fmtNum(d.current_a,1)+'<span class="unit">A</span></div>'
+    +'<div class="sub">заряд &minus; / разряд +</div></div>';
+  h+='<div class="kpi"><div class="lbl">Мощность</div><div class="val '+pCls+'">'+fmtNum(d.power_w,1)+'<span class="unit">W</span></div>'
+    +'<div class="sub">заряд &minus; / разряд +</div></div>';
+  h+='<div class="kpi"><div class="lbl">Энергия</div><div class="val">'+(objective?fmtNum(d.energy_wh,0)+'<span class="unit">Вт·ч</span>':'—')+'</div>'
+    +'<div class="sub">'+(objective?'накопленная (PZEM-017)':'—')+'</div></div>';
+  if(d.batteries_sum_v!==null && d.batteries_sum_v!==undefined){
+    h+='<div class="kpi"><div class="lbl">Сумма отдельных батарей</div><div class="val">'+fmtNum(d.batteries_sum_v,2)+'<span class="unit">V</span></div>'
+      +'<div class="sub">4×BK300</div></div>';
+  }
+  var bv=d.batteries_v||[];
+  if(bv.length===4){
+    var mn=Math.min.apply(null,bv), mx=Math.max.apply(null,bv);
+    var parts=[];
+    for(var i=0;i<4;i++) parts.push((i+1)+': '+fmtNum(bv[i],2));
+    h+='<div class="kpi"><div class="lbl">Батареи</div><div class="val">'+fmtNum(mn,2)+'–'+fmtNum(mx,2)+'<span class="unit">V</span></div>'
+      +'<div class="sub">'+parts.join(' · ')+'</div></div>';
+  }else if(objective){
+    h+='<div class="kpi"><div class="lbl">Батареи</div><div class="val">—</div><div class="sub">нет данных BK300</div></div>';
+  }else{
+    h+='<div class="kpi"><div class="lbl">Ёмкость</div><div class="val">'+fmtNum(d.capacity_ah,0)+'<span class="unit">А·ч</span></div></div>';
+  }
   document.getElementById('agmKpiRow').innerHTML=h;
+  var foot=document.getElementById('agmFoot');
+  if(foot) foot.textContent=(objective?'PZEM-017 + 4×BK300':'расчёт МАП − Σ BMS')+' · обновляется каждую секунду';
 }
 async function loadAgmCurrent(){
   if(window.srRefresh && !window.srRefresh.isEnabled()) return;
@@ -37,7 +66,7 @@ async function loadAgmCurrent(){
 }
 
 Chart.register(ChartZoom);
-// Позиционер хинта (боковой) — как на странице BMS, регистрируем под именем 'agmSide'.
+// Позиционер хинта (боковой) — как на странице BMS/«Графики».
 function agmTooltipPos(elements, eventPosition){
   var x=(eventPosition&&isFinite(eventPosition.x))?eventPosition.x:0;
   var y=(eventPosition&&isFinite(eventPosition.y))?eventPosition.y:0;
@@ -54,18 +83,17 @@ function agmTooltipPos(elements, eventPosition){
   }catch(e){}
 })();
 
-var AGM_CHART_IDS=['agmVoltChart','agmCurChart','agmPwrChart'];
-function mkDs(label,color,data){ return { label:label, data:data, borderColor:color, backgroundColor:color, pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false, spanGaps:false }; }
+var CHART_COLORS=['#428bca','#5cb85c','#f0ad4e','#d9534f','#5bc0de','#9463b8','#7f8fa6','#17a2b8'];
+var AGM_CHART_IDS=['agmVoltChart','agmBatChart','agmCurChart','agmPwrChart'];
+function mkAgmDs(label,color,data){ return { label:label, data:data, borderColor:color, backgroundColor:color, pointRadius:0, pointHoverRadius:0, borderWidth:1.5, tension:0.35, cubicInterpolationMode:'monotone', fill:false, spanGaps:false }; }
 function setAgmRangeLabels(){
   var txt='Диапазон: '+fmtDate(selRange.from)+' — '+fmtDate(selRange.to);
   AGM_CHART_IDS.forEach(function(id){ var el=document.getElementById(id+'Range'); if(el) el.textContent=txt; });
 }
 
-// ---------- Выбор периода (общий для обоих графиков) ----------
+// ---------- Выбор периода (общий для всех графиков) ----------
 var preserveZoom=false;
 var userZoomed=false;
-// Диапазон по умолчанию при входе на страницу — «24 часа»: скользящее окно
-// (текущий момент минус 24 часа … текущий момент), а не «Сегодня».
 var selRange=(function(){ var to=new Date(); return {from:new Date(to.getTime()-24*60*60*1000), to:to}; })();
 var periodMode='24h';
 function startOfToday(){ var d=new Date(); d.setHours(0,0,0,0); return d; }
@@ -103,7 +131,7 @@ function shiftPeriod(delta){
   setPeriod(newFrom,newTo,periodMode,null);
 }
 
-// ---------- Синхронизация зума и курсора (как на странице BMS) ----------
+// ---------- Синхронизация зума, курсор и хинты (как на странице BMS) ----------
 var lastXWindow={};
 var zoomSyncing=false;
 var agmRebuilding=false;
@@ -130,6 +158,22 @@ function syncAgmZoomToOthers(fromChart){
   }finally{ zoomSyncing=false; }
 }
 var agmCursor={ active:false, value:null };
+var AGM_HOVER_HINT_DELAY=300;
+var agmHoverTimer=null, agmHoverPx=null;
+function agmHideHintsNow(){
+  if(agmCursor.active){ agmCursor.active=false; agmSyncTooltips(null); agmUpdateAllCharts(); }
+}
+function agmClearHover(){
+  if(agmHoverTimer){ clearTimeout(agmHoverTimer); agmHoverTimer=null; }
+  agmHoverPx=null;
+  agmHideHintsNow();
+}
+function agmShowHint(v){
+  agmHoverTimer=null;
+  agmCursor.active=true; agmCursor.value=v;
+  agmSyncTooltips(v);
+  agmUpdateAllCharts();
+}
 function drawAgmCursor(chart){
   try{
     if(SR_COARSE || window.__srTouched) return;
@@ -216,10 +260,75 @@ function agmWindowChanged(chartId, isResetFromGesture){
   },300);
 }
 
+// lgKit — HTML-легенда-чипы (как на странице BMS): ЛКМ — вкл/выкл линию,
+// двойной ЛКМ — только эта линия, «Все» — показать все.
+function agmLgKit(canvasId, chipsId){
+  var canvas=document.getElementById(canvasId), row=document.getElementById(chipsId);
+  function swatch(ds){ return ds.borderColor || ds.backgroundColor || '#888'; }
+  function sync(chart){
+    var chips=row.querySelectorAll('.lg-chip:not(.lg-all)');
+    chart.data.datasets.forEach(function(ds,i){ if(chips[i]) chips[i].classList.toggle('off', !chart.isDatasetVisible(i)); });
+  }
+  function isolate(chart,i){ chart.data.datasets.forEach(function(ds,j){ chart.setDatasetVisibility(j, j===i); }); chart.update(); sync(chart); }
+  function toggle(chart,i){ chart.setDatasetVisibility(i, !chart.isDatasetVisible(i)); chart.update(); sync(chart); }
+  function showAll(chart){ chart.data.datasets.forEach(function(ds,j){ chart.setDatasetVisibility(j, true); }); chart.update(); sync(chart); }
+  function build(chart){
+    row.innerHTML='';
+    if(!chart.data.datasets || !chart.data.datasets.length) return;
+    chart.data.datasets.forEach(function(ds,i){
+      var b=document.createElement('button'); b.type='button'; b.className='lg-chip';
+      b.title='ЛКМ — вкл/выкл · двойной ЛКМ — только эта линия';
+      var sw=document.createElement('i'); sw.style.background=swatch(ds);
+      b.appendChild(sw); b.appendChild(document.createTextNode(ds.label));
+      if(window.srBindChip){
+        srBindChip(b, function(){ toggle(chart,i); }, function(){ isolate(chart,i); });
+      }else{
+        var clickTimer=null;
+        b.addEventListener('click', function(){
+          if(clickTimer){ clearTimeout(clickTimer); clickTimer=null; isolate(chart,i); }
+          else { clickTimer=setTimeout(function(){ clickTimer=null; toggle(chart,i); }, 250); }
+        });
+      }
+      row.appendChild(b);
+    });
+    var all=document.createElement('button'); all.type='button'; all.className='lg-chip lg-all';
+    all.textContent='Все'; all.title='Показать все линии';
+    all.addEventListener('click', function(){ showAll(chart); });
+    row.appendChild(all);
+    sync(chart);
+  }
+  return { build: build };
+}
+
 var AGM_CHARTS={};
-// agmRender — линейный график. zero=true — симметричная ось Y относительно нуля
-// (ток, мощность); zero=false — авто-масштаб по данным (напряжение).
-function agmRender(id, datasets, yTitle, zero){
+var agmHiddenSets={};
+var agmSavedZoom={};
+function agmCaptureState(){
+  Object.keys(AGM_CHARTS).forEach(function(id){
+    var c=AGM_CHARTS[id];
+    if(!c) return;
+    if(c.data && c.data.datasets){
+      var hidden=[];
+      // Индексы, а не подписи: i18n переводит ds.label, и после обновления
+      // русская подпись не совпала бы с переведённой.
+      c.data.datasets.forEach(function(ds,i){ if(!c.isDatasetVisible(i)) hidden.push(i); });
+      agmHiddenSets[id]=hidden;
+    }
+    if(c.scales && c.scales.x && isFinite(c.scales.x.min) && isFinite(c.scales.x.max)){
+      agmSavedZoom[id]={min:c.scales.x.min, max:c.scales.x.max};
+    }
+  });
+}
+function agmApplyHidden(id, chart){
+  var hidden=agmHiddenSets[id]||[];
+  if(!hidden.length || !chart || !chart.data || !chart.data.datasets) return false;
+  hidden.forEach(function(i){ if(chart.data.datasets[i]) chart.setDatasetVisibility(i,false); });
+  return true;
+}
+// agmRender — линейный график; zero=true — симметричная ось Y относительно нуля
+// (ток/мощность); legend=true — HTML-легенда с чипами (для 4 батарей).
+function agmRender(id, datasets, yTitle, legend, zero){
+  var saved=agmSavedZoom[id]||{min:null,max:null};
   var y={ beginAtZero:false, title:{ display:!!yTitle, text:yTitle||'' } };
   if(zero){
     var m=0;
@@ -231,15 +340,24 @@ function agmRender(id, datasets, yTitle, zero){
     interaction:{ mode:'index', intersect:false },
     onHover:function(event,elements,chart){
       if(SR_COARSE || window.__srTouched) return;
-      if(chart && chart.canvas && chart.scales && chart.scales.x){
-        var v=chart.scales.x.getValueForPixel(event.x);
+      if(chart && chart.canvas && chart.scales && chart.scales.x && event && isFinite(event.x)){
+        var xScale=chart.scales.x;
+        if(event.x<xScale.left || event.x>xScale.right){ agmClearHover(); return; }
+        var v=xScale.getValueForPixel(event.x);
         if(isFinite(v)){
-          agmCursor.active=true; agmCursor.value=v;
-          agmSyncTooltips(v);
-          agmUpdateAllCharts(); return;
+          var moved=(agmHoverPx===null || Math.abs(event.x-agmHoverPx)>0.5);
+          agmHoverPx=event.x;
+          if(moved){
+            if(agmCursor.active){ agmCursor.active=false; agmSyncTooltips(null); agmUpdateAllCharts(); }
+            if(agmHoverTimer) clearTimeout(agmHoverTimer);
+            agmHoverTimer=setTimeout(function(){ agmShowHint(v); }, AGM_HOVER_HINT_DELAY);
+          }else if(!agmCursor.active && !agmHoverTimer){
+            agmHoverTimer=setTimeout(function(){ agmShowHint(v); }, AGM_HOVER_HINT_DELAY);
+          }
+          return;
         }
       }
-      if(agmCursor.active){ agmCursor.active=false; agmSyncTooltips(null); agmUpdateAllCharts(); }
+      agmClearHover();
     },
     animation:{ duration:200 },
     plugins:{
@@ -256,25 +374,45 @@ function agmRender(id, datasets, yTitle, zero){
       y:y
     }
   };
-  AGM_CHARTS[id]=new Chart(document.getElementById(id),{ type:'line', data:{datasets:datasets}, plugins:[agmZoomSyncPlugin], options:opts });
+  if(preserveZoom && saved.min!==null && saved.max!==null){
+    opts.scales.x.min=saved.min; opts.scales.x.max=saved.max;
+  }
+  AGM_CHARTS[id]=new Chart(document.getElementById(id),{
+    type:'line', data:{datasets:datasets},
+    plugins:[agmZoomSyncPlugin],
+    options:opts
+  });
+  srCtrlDragZoom(AGM_CHARTS[id], function(f,t){ setPeriod(f,t,'custom',null); });
   var el=document.getElementById(id);
-  if(!el.__srMLBound){ el.__srMLBound=true; el.addEventListener('mouseleave',function(){ if(agmCursor.active){ agmCursor.active=false; agmSyncTooltips(null); agmUpdateAllCharts(); } }); }
+  if(!el.__srMLBound){ el.__srMLBound=true; el.addEventListener('mouseleave',function(){ agmClearHover(); }); }
   if(SR_COARSE || window.__srTouched){ AGM_CHARTS[id].options.plugins.tooltip.enabled=false; }
+  if(agmApplyHidden(id, AGM_CHARTS[id])) AGM_CHARTS[id].update('none');
+  if(legend){ agmLgKit(id, id+'Lg').build(AGM_CHARTS[id]); }
 }
-function buildAgmCharts(points, voltage){
-  // Точки с break=true — разрыв линии: y=null, spanGaps:false.
-  function ds(src,label,color,field){ return mkDs(label,color,src.map(function(p){ return {x:new Date(p.ts), y:(p['break']? null : p[field])}; })); }
-  // Напряжение — только по данным МАП (разрывы BMS на него не влияют).
-  agmRender('agmVoltChart',[ds(voltage||[],'Напряжение','#f0ad4e','voltage_v')],'V',false);
-  agmRender('agmCurChart',[ds(points,'Ток','#5bc0de','current_a')],'A',true);
-  agmRender('agmPwrChart',[ds(points,'Мощность','#d9534f','power_w')],'W',true);
+function buildAgmCharts(points){
+  points=points||[];
+  function yVal(p, field){ return p['break']? null : p[field]; }
+  agmRender('agmVoltChart',[
+    mkAgmDs('Напряжение сборки','#f0ad4e',points.map(function(p){ return {x:new Date(p.ts), y:yVal(p,'voltage_v')}; })),
+    mkAgmDs('Напряжение МАП','#5cb85c',points.map(function(p){ return {x:new Date(p.ts), y:(p['break']||p.map_voltage_v===null||p.map_voltage_v===undefined)? null : p.map_voltage_v}; })),
+    mkAgmDs('Сумма отдельных батарей','#428bca',points.map(function(p){ return {x:new Date(p.ts), y:(p['break']||p.batteries_sum_v===null||p.batteries_sum_v===undefined)? null : p.batteries_sum_v}; }))
+  ],'V',true,false);
+  var bds=[];
+  for(var i=0;i<4;i++){
+    (function(i){
+      bds.push(mkAgmDs('Батарея '+(i+1),CHART_COLORS[i%CHART_COLORS.length],points.map(function(p){
+        var y=(p['break']||!p.batteries_v||i>=p.batteries_v.length)? null : p.batteries_v[i];
+        return {x:new Date(p.ts), y:y};
+      })));
+    })(i);
+  }
+  agmRender('agmBatChart',bds,'V',true,false);
+  agmRender('agmCurChart',[mkAgmDs('Ток','#5bc0de',points.map(function(p){ return {x:new Date(p.ts), y:yVal(p,'current_a')}; }))],'A',false,true);
+  agmRender('agmPwrChart',[mkAgmDs('Мощность','#d9534f',points.map(function(p){ return {x:new Date(p.ts), y:yVal(p,'power_w')}; }))],'W',false,true);
 }
 function destroyAgmCharts(){
   Object.keys(AGM_CHARTS).forEach(function(id){ AGM_CHARTS[id].destroy(); delete AGM_CHARTS[id]; });
 }
-// catchUp24hRange — скользящее окно режима «24 часа»: при стандартном виде (без
-// пользовательского зума) на каждом обновлении (таймер, кнопка «Обновить графики»)
-// правый край переставляется на текущий момент, начало — ровно на 24 часа раньше.
 function catchUp24hRange(){
   if(periodMode!=='24h' || userZoomed) return;
   var to=new Date();
@@ -293,15 +431,14 @@ async function loadAgmCharts(){
     var r=await fetch(url);
     if(!r.ok) return;
     var data=await r.json();
+    agmCaptureState();
     destroyAgmCharts();
     agmRebuilding=true;
     try{
       lastXWindow={};
-      buildAgmCharts(data.points||[], data.voltage||[]);
+      buildAgmCharts(data.points||[]);
     }finally{ agmRebuilding=false; }
     setAgmRangeLabels();
-    var foot=document.getElementById('agmFoot');
-    if(foot) foot.textContent='AGM = батарея МАП − Σ (ANT×2 + EnBMS) · обновляется раз в минуту';
   }catch(e){}
 }
 
@@ -338,13 +475,12 @@ document.getElementById('btnRefresh').addEventListener('click',function(){ prese
 document.getElementById('fromPick').value=toInputDateTime(selRange.from);
 document.getElementById('toPick').value=toInputDateTime(selRange.to);
 document.getElementById('datePick').value=toInputDate(selRange.from);
-setActiveBtn('btn24h'); // по умолчанию активен диапазон «24 часа»
+setActiveBtn('btn24h');
 
-// Периодическое обновление графиков (раз в минуту) через глобальный выключатель.
+// Периодическое обновление графиков (раз в минуту) и плашек (раз в секунду).
 var agmChartsTimer=null;
 function agmChartsStart(){ if(agmChartsTimer) return; loadAgmCharts(); agmChartsTimer=setInterval(function(){ preserveZoom=userZoomed; loadAgmCharts(); },60000); }
 function agmChartsStop(){ if(agmChartsTimer){ clearInterval(agmChartsTimer); agmChartsTimer=null; } }
-// Плашки текущих значений — раз в секунду (как параметры на странице BMS).
 var agmParamTimer=null;
 function agmParamStart(){ if(agmParamTimer) return; loadAgmCurrent(); agmParamTimer=setInterval(loadAgmCurrent,1000); }
 function agmParamStop(){ if(agmParamTimer){ clearInterval(agmParamTimer); agmParamTimer=null; } }
@@ -361,3 +497,62 @@ if(SR_COARSE){
     srTouchChart(function(){ return AGM_CHARTS[id]; }, id, 5*60*1000, null, function(isReset){ agmWindowChanged(id, isReset); });
   });
 }
+
+// ---------- Порядок графиков (сетка 2 колонки), как на странице BMS ----------
+var AGM_ORDER_COLS=2;
+function agmRefreshOrderBtns(){
+  var cards=document.querySelectorAll('.bms-charts > .card');
+  for(var i=0;i<cards.length;i++){
+    var up=cards[i].querySelector('.ord-up'), down=cards[i].querySelector('.ord-down');
+    var left=cards[i].querySelector('.ord-left'), right=cards[i].querySelector('.ord-right');
+    if(up) up.disabled=(i-AGM_ORDER_COLS<0);
+    if(down) down.disabled=(i+AGM_ORDER_COLS>=cards.length);
+    if(left) left.disabled=(i%AGM_ORDER_COLS!==1);
+    if(right) right.disabled=(i%AGM_ORDER_COLS!==0 || i+1>=cards.length);
+  }
+}
+function agmSaveOrder(){
+  var ids=[];
+  document.querySelectorAll('.bms-charts > .card').forEach(function(c){
+    var cv=c.querySelector('.chart-wrap canvas');
+    if(cv) ids.push(cv.id);
+  });
+  try{ localStorage.setItem('agmChartOrder', JSON.stringify(ids)); }catch(e){}
+}
+function agmLoadOrder(){
+  var ids=null;
+  try{ ids=JSON.parse(localStorage.getItem('agmChartOrder')||'null'); }catch(e){}
+  if(!Array.isArray(ids) || !ids.length) return;
+  var container=document.querySelector('.bms-charts');
+  if(!container) return;
+  var byId={};
+  container.querySelectorAll('.card').forEach(function(c){
+    var cv=c.querySelector('.chart-wrap canvas');
+    if(cv) byId[cv.id]=c;
+  });
+  ids.forEach(function(id){ var c=byId[id]; if(c) container.appendChild(c); });
+  container.querySelectorAll('.card').forEach(function(c){ container.appendChild(c); });
+}
+function agmMoveCard(btn,dir){
+  var card=btn.closest('.card');
+  if(!card) return;
+  var cards=card.parentNode.querySelectorAll('.card');
+  var idx=Array.prototype.indexOf.call(cards,card);
+  var target=-1;
+  if(dir==='up') target=(idx-AGM_ORDER_COLS>=0)? idx-AGM_ORDER_COLS : -1;
+  else if(dir==='down') target=(idx+AGM_ORDER_COLS<cards.length)? idx+AGM_ORDER_COLS : -1;
+  else if(dir==='left') target=(idx%AGM_ORDER_COLS===1)? idx-1 : -1;
+  else if(dir==='right') target=(idx%AGM_ORDER_COLS===0 && idx+1<cards.length)? idx+1 : -1;
+  if(target<0) return;
+  var ref=cards[target];
+  if(target>idx) card.parentNode.insertBefore(card, ref.nextSibling);
+  else card.parentNode.insertBefore(card, ref);
+  agmSaveOrder();
+  agmRefreshOrderBtns();
+}
+document.querySelectorAll('.bms-charts .ord-up').forEach(function(b){ b.addEventListener('click',function(){ agmMoveCard(this,'up'); }); });
+document.querySelectorAll('.bms-charts .ord-down').forEach(function(b){ b.addEventListener('click',function(){ agmMoveCard(this,'down'); }); });
+document.querySelectorAll('.bms-charts .ord-left').forEach(function(b){ b.addEventListener('click',function(){ agmMoveCard(this,'left'); }); });
+document.querySelectorAll('.bms-charts .ord-right').forEach(function(b){ b.addEventListener('click',function(){ agmMoveCard(this,'right'); }); });
+agmLoadOrder();
+agmRefreshOrderBtns();

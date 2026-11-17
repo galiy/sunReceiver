@@ -567,6 +567,37 @@
   Object.assign(DICT.zh,{
     'F35: сеть восстановлена':'F35：电网已恢复'
   });
+  // AGM: объективные данные PZEM-017/4×BK300, знак тока и графики.
+  Object.assign(DICT.en,{
+    'Свинцово-кислотный АКБ · PZEM-017 (напряжение, ток, мощность, энергия) + 4×BK300 · заряд −, разряд +':'Lead-acid battery · PZEM-017 (voltage, current, power, energy) + 4×BK300 · charge −, discharge +',
+    'Графики (PZEM-017 и BK300: Redis — сырые показания, PG — 5-мин средние)':'Charts (PZEM-017 and BK300: Redis raw readings, PG 5-min averages)',
+    'Напряжение сборки, V':'Pack voltage, V',
+    'Напряжения батарей, V':'Battery voltages, V',
+    'Напряжение сборки':'Pack voltage','Энергия':'Energy','Батареи':'Batteries',
+    'накопленная (PZEM-017)':'accumulated (PZEM-017)','заряд − / разряд +':'charge − / discharge +',
+    'расчёт МАП − Σ BMS':'calc MAP − Σ BMS','PZEM-017 + 4×BK300':'PZEM-017 + 4×BK300',
+    'Батарея 1':'Battery 1','Батарея 2':'Battery 2','Батарея 3':'Battery 3','Батарея 4':'Battery 4',
+    'ЛКМ — вкл/выкл · двойной ЛКМ — только эта линия':'Click — toggle · double-click — this line only',
+    'Показать все линии':'Show all lines','нет данных BK300':'no BK300 data',
+    'Сумма отдельных батарей':'Sum of individual batteries',
+    'Напряжение сборки и сумма батарей, V':'Pack voltage and sum of batteries, V',
+    '4×BK300':'4×BK300','Напряжение МАП':'MAP voltage','справочно':'for reference'
+  });
+  Object.assign(DICT.zh,{
+    'Свинцово-кислотный АКБ · PZEM-017 (напряжение, ток, мощность, энергия) + 4×BK300 · заряд −, разряд +':'铅酸电池 · PZEM-017（电压、电流、功率、能量）+ 4×BK300 · 充电 −，放电 +',
+    'Графики (PZEM-017 и BK300: Redis — сырые показания, PG — 5-мин средние)':'图表（PZEM-017 与 BK300：Redis 原始读数，PG 5 分钟平均）',
+    'Напряжение сборки, V':'电池组电压, V',
+    'Напряжения батарей, V':'各电池电压, V',
+    'Напряжение сборки':'电池组电压','Энергия':'能量','Батареи':'电池',
+    'накопленная (PZEM-017)':'累计（PZEM-017）','заряд − / разряд +':'充电 − / 放电 +',
+    'расчёт МАП − Σ BMS':'计算 MAP − Σ BMS','PZEM-017 + 4×BK300':'PZEM-017 + 4×BK300',
+    'Батарея 1':'电池 1','Батарея 2':'电池 2','Батарея 3':'电池 3','Батарея 4':'电池 4',
+    'ЛКМ — вкл/выкл · двойной ЛКМ — только эта линия':'单击切换 · 双击仅显示该线',
+    'Показать все линии':'显示全部线条','нет данных BK300':'无 BK300 数据',
+    'Сумма отдельных батарей':'各电池电压之和',
+    'Напряжение сборки и сумма батарей, V':'电池组电压与各电池电压之和, V',
+    '4×BK300':'4×BK300','Напряжение МАП':'MAP 电压','справочно':'仅供参考'
+  });
   function init(){ buildSwitcher(); apply(); startObserver(); setInterval(translateCharts,3000); }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',init); else init();
 })();

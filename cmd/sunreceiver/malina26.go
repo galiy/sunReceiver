@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -283,6 +284,10 @@ func pollMAPMalina26(ctx context.Context) DeviceResult {
 		res.OK = false
 		return res
 	}
+	if v, err := malina26.displayBatteryVoltage(ctx); err == nil && v > 0 {
+		vals["battery_voltage"] = v
+		vals["l1_voltage"] = v
+	}
 	res.HasData = true
 	res.Values = vals
 	// device_sn МАП — его реальный серийник (число строкой), а не логический ключ:
@@ -492,6 +497,49 @@ func (s *malina26Source) fetchMAP(ctx context.Context) (valuesContract, int64, e
 		return nil, lastSeen, nil
 	}
 	return vals, lastSeen, nil
+}
+
+// displayBatteryVoltage берёт напряжение АКБ из web-API Малины
+// (/api/mainlist, поле maps[].batt.u) — это откалиброванное значение, которое
+// показывает панель МАП. Сырое _UAcc_med из MapData отличается на падение/
+// фильтр (при заряде ~1 В), поэтому для плашек и знака тока берём значение UI.
+func (s *malina26Source) displayBatteryVoltage(ctx context.Context) (float64, error) {
+	s.mu.Lock()
+	gen := s.mapGen
+	serial := s.serial
+	if s.activeFallback && s.fallbackSerial != "" {
+		serial = s.fallbackSerial
+	}
+	s.mu.Unlock()
+	code, b, err := s.get(ctx, "/api/mainlist")
+	if err != nil {
+		return 0, err
+	}
+	if code != http.StatusOK {
+		return 0, fmt.Errorf("mainlist: status %d", code)
+	}
+	var resp struct {
+		Maps []struct {
+			Gen   uint64 `json:"gen"`
+			Title string `json:"title"`
+			Batt  struct {
+				U struct {
+					V float64 `json:"v"`
+				} `json:"u"`
+			} `json:"batt"`
+		} `json:"maps"`
+	}
+	if err := json.Unmarshal(b, &resp); err != nil {
+		return 0, fmt.Errorf("mainlist json: %w", err)
+	}
+	for _, m := range resp.Maps {
+		if (gen != 0 && m.Gen == gen) || (serial != "" && strings.Contains(m.Title, serial)) {
+			if m.Batt.U.V > 0 {
+				return m.Batt.U.V, nil
+			}
+		}
+	}
+	return 0, errors.New("mainlist: активный МАП не найден")
 }
 
 // mapErrCells возвращает сырые байт-ячейки ошибок МАП из бинарного MapData.

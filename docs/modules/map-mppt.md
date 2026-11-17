@@ -29,7 +29,9 @@
 ## `values` МАП/КЭС (теги в `commonContractTags`)
 
 - **МАП** (`decodeMalina26Map`): `battery_voltage`/`l1_voltage` =
-  `UAcc_med_VH/VL` (0x405/0x406), `battery_current` = `(L+H*256)/16` со знаком
+  `UAcc_med_VH/VL` (0x405/0x406), в текущем снимке — откалиброванное
+  `maps[].batt.u.v` из `/api/mainlist` (fallback — сырое `UAcc_med`);
+  `battery_current` = `(L+H*256)/16` со знаком
   заряд− (`MODE_RAM` 0x400 == 4), `battery_power` = `U×I`, `grid_voltage` =
   `UNET`+100, `grid_power` = `PNET_8/8×100` (знак `PNET_Sign_P`), `grid_frequency`
   = `6250/TFNET`, `map_temp_*` = `Grad0/1/2 − 50` (`Temp_off`-биты).

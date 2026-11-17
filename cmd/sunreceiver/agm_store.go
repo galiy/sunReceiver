@@ -67,8 +67,7 @@ func (s *redisStore) SaveAGMSeries(snap agmSnapshot, ts time.Time) error {
 	}
 	if _, err := pipe.Exec(s.ctx); err != nil {
 		// TxPipeline не откатывает успешные команды при ошибке отдельного
-		// TS.ADD — best-effort удаляем точки снимка одним пайплайном (без
-		// 18 последовательных ожиданий при недоступном Redis).
+		// TS.ADD — best-effort удаляем точки снимка одним пайплайном.
 		del := s.rdb.Pipeline()
 		for tag := range snap.Values {
 			del.Do(s.ctx, "TS.DEL", tsKey("agm", agmDeviceKey, tag), ts.UnixMilli(), ts.UnixMilli())
@@ -107,6 +106,25 @@ func (s *redisStore) QueryAGMSeries(start, end time.Time) ([]agmSnapshot, error)
 	if err != nil {
 		return nil, err
 	}
+	return assembleAGMSeries(series), nil
+}
+
+// QueryAGMSeriesAgg читает ряд AGM с серверной агрегацией avg и бакетом
+// bucketMs (0 — сырьё). Нужен дашборду: сырой TS.MRANGE за сутки по 18 тегам
+// на 1-секундном ряде слишком велик и блокирует Redis.
+func (s *redisStore) QueryAGMSeriesAgg(start, end time.Time, bucketMs int64) ([]agmSnapshot, error) {
+	if start.After(end) {
+		return nil, errors.New("agm series: start after end")
+	}
+	series, err := s.tsMRangeAgg(start, end, "avg", bucketMs, "kind=agm")
+	if err != nil {
+		return nil, err
+	}
+	return assembleAGMSeries(series), nil
+}
+
+// assembleAGMSeries собирает снимки AGM из per-tag серий по (device, ms).
+func assembleAGMSeries(series []tsSeries) []agmSnapshot {
 	// Группировка — по стабильному device + ms (name — изменяемая метка:
 	// переименование сборки не должно расщеплять снимок).
 	type snapKey struct {
@@ -145,5 +163,5 @@ func (s *redisStore) QueryAGMSeries(start, end time.Time) ([]agmSnapshot, error)
 	for _, t := range timed {
 		out = append(out, t.sn)
 	}
-	return out, nil
+	return out
 }

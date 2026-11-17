@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -26,9 +27,10 @@ import (
 
 // Поток AGM: состояния «поиск PZEM-017» → «мониторинг 5 источников». Цикл —
 // синхронный старт пяти опросчиков по общему барьеру (снимок «на один момент»),
-// следующий цикл не чаще poll_interval от старта предыдущего. Неполный цикл НЕ
-// пишется никуда (current не обновляется). Документация —
-// docs/modules/agm-monitor.md.
+// следующий цикл не чаще poll_interval от старта предыдущего. Знак тока/мощности
+// выставляется до записи по current МАП; без свежего МАП (±5 с) снимок
+// отбрасывается. Снимок пишется только при данных от всех 5 источников.
+// Документация — docs/modules/agm-monitor.md.
 
 // agmCycleTimeout — верхняя граница ожидания всех ответов одного цикла.
 // Опросчики ограничены своими таймаутами; это страховка от зависания D-Bus.
@@ -240,6 +242,26 @@ func (d *agmAGM) runCycles(ctx context.Context, pz *agmPZEMClient, m *agmBLEMana
 			d.errs.report(agmPZEMErrKey, pzRes.err.Error())
 			return pzRes.err
 		}
+		// Знак тока/мощности определяется ДО сохранения: PZEM отдаёт модуль,
+		// сравниваем UАКБ МАП с напряжением сборки. Нет свежего МАП (±5 с) —
+		// снимок не сохраняем вообще: достоверный знак неизвестен.
+		signFailed := false
+		if pzRes.err == nil && !timedOut {
+			signed, serr := agmSignReading(d.store, pzRes.r, start)
+			if serr != nil {
+				signFailed = true
+				if time.Since(lastWarn) >= 10*time.Second {
+					lastWarn = time.Now()
+					log.Printf("agm: знак тока/мощности не определён (%v) — снимок отброшен", serr)
+				}
+			} else {
+				pzRes.r = signed
+			}
+		}
+		if signFailed {
+			agmWaitUntil(start.Add(d.cfg.PollInterval), ctx.Done())
+			continue
+		}
 		if pzRes.err != nil {
 			d.errs.report(agmPZEMErrKey, pzRes.err.Error())
 		} else {
@@ -259,18 +281,20 @@ func (d *agmAGM) runCycles(ctx context.Context, pz *agmPZEMClient, m *agmBLEMana
 			d.errs.report(dev.cfg.Name, dev.cfg.Name+" "+msg)
 		}
 
-		ok := !timedOut && pzRes.err == nil
+		// Снимок сохраняется ТОЛЬКО если ответили все 5 источников и знак
+		// определён. Нет данных хотя бы по одному устройству — снимок не пишем
+		// ни в current, ни в series (дырка в графике честнее частичного снимка).
+		pzOK := !timedOut && pzRes.err == nil
+		allOK := pzOK
+		samples := make([]agmBKSample, 0, len(bks))
 		for _, b := range bks {
 			if b.err != nil {
-				ok = false
+				allOK = false
+				continue
 			}
+			samples = append(samples, agmBKSample{Position: m.devices[b.idx].cfg.Position, Reading: b.r})
 		}
-
-		if ok {
-			samples := make([]agmBKSample, 0, len(bks))
-			for _, b := range bks {
-				samples = append(samples, agmBKSample{Position: m.devices[b.idx].cfg.Position, Reading: b.r})
-			}
+		if allOK {
 			snap := agmSnapshot{
 				Name:      d.cfg.Name,
 				Timestamp: agmTimestamp(start),
@@ -308,6 +332,37 @@ func (d *agmAGM) runCycles(ctx context.Context, pz *agmPZEMClient, m *agmBLEMana
 
 		agmWaitUntil(start.Add(d.cfg.PollInterval), ctx.Done())
 	}
+}
+
+// agmSignReading получает current МАП, проверяет свежесть (±5 с) и
+// возвращает PZEM-показания со знаком. Ошибка — знак определить нельзя.
+func agmSignReading(store *redisStore, p agmPZEMReading, ts time.Time) (agmPZEMReading, error) {
+	ms, err := store.CurrentOne(mapDevKey)
+	if err != nil {
+		return p, fmt.Errorf("current МАП: %w", err)
+	}
+	if ms.Timestamp == "" {
+		return p, errors.New("current МАП без метки времени")
+	}
+	mt, err := time.Parse(time.RFC3339Nano, ms.Timestamp)
+	if err != nil {
+		return p, fmt.Errorf("время current МАП: %w", err)
+	}
+	skew := ts.Sub(mt)
+	if skew < 0 {
+		skew = -skew
+	}
+	if skew > 5*time.Second {
+		return p, fmt.Errorf("current МАП отстаёт на %s (>5 с)", skew.Round(time.Millisecond))
+	}
+	mapV, ok := snapFloat(ms.Values, "battery_voltage")
+	if !ok || mapV <= 0 {
+		return p, errors.New("в current МАП нет battery_voltage")
+	}
+	if p.VoltageV <= 0 {
+		return p, errors.New("PZEM без напряжения")
+	}
+	return agmApplySign(p, mapV), nil
 }
 
 // agmWaitUntil ждёт момент t или остановку.

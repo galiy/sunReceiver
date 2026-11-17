@@ -53,7 +53,7 @@ func averageAGM(snaps []agmSnapshot) map[string]float64 {
 	alarmHit := map[string]bool{}
 
 	for _, sn := range snaps {
-		ts, perr := time.Parse(time.RFC3339, sn.Timestamp)
+		ts, perr := time.Parse(time.RFC3339Nano, sn.Timestamp)
 		if perr != nil {
 			continue
 		}
@@ -179,7 +179,7 @@ func backfillAGMAccumulator(store *redisStore, pg *pgStore, now time.Time) {
 	}
 	groups := map[time.Time][]agmSnapshot{}
 	for _, sn := range snaps {
-		ts, perr := time.Parse(time.RFC3339, sn.Timestamp)
+		ts, perr := time.Parse(time.RFC3339Nano, sn.Timestamp)
 		if perr != nil {
 			continue
 		}
