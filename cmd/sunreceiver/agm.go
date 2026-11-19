@@ -50,13 +50,17 @@ const (
 	agmSuffixFlagsB  = "flags_b"
 )
 
-// agmAvgMetrics — полный список метрик таблицы sunreceiver.agm_averages_r
-// (единственный источник истины для DDL и писателя, см. avg_r.go).
-func agmAvgMetrics() []string {
-	out := []string{
+// agmPZEMAvgMetrics — метрики таблицы sunreceiver.agm_pzem_averages_r.
+func agmPZEMAvgMetrics() []string {
+	return []string{
 		agmTagPZEMVoltage, agmTagPZEMCurrent, agmTagPZEMPower, agmTagPZEMEnergy,
 		agmTagPZEMAlarmHigh, agmTagPZEMAlarmLow,
 	}
+}
+
+// agmBKAvgMetrics — метрики таблицы sunreceiver.agm_bk300_averages_r.
+func agmBKAvgMetrics() []string {
+	out := make([]string, 0, 12)
 	for pos := 1; pos <= 4; pos++ {
 		out = append(out,
 			agmBKTag(pos, agmSuffixVoltage),
@@ -88,10 +92,16 @@ var agmAlarmTags = map[string]bool{
 	agmTagPZEMAlarmLow:  true,
 }
 
-// agmDeviceKey — единый стабильный идентификатор сборки во всех хранилищах
-// (поле HASH current, device в сериях RT, key в PG). Не зависит от имени в
-// конфиге: переименование не расщепляет историю.
-const agmDeviceKey = "agm"
+// agmPZEMDeviceKey / agmBKDeviceKey — стабильные идентификаторы источников AGM
+// во всех новых хранилищах (current, series, PG). Разделены, чтобы PZEM и BLE
+// жили независимо.
+const (
+	agmPZEMDeviceKey = "agm-pzem"
+	agmBKDeviceKey   = "agm-bk300"
+
+	agmPZEMAvgTable = "sunreceiver.agm_pzem_averages_r"
+	agmBKAvgTable   = "sunreceiver.agm_bk300_averages_r"
+)
 
 // agmSnapshot — один полный снимок сборки. Values — плоская карта тегов.
 type agmSnapshot struct {
@@ -157,6 +167,7 @@ func agmApplySign(p agmPZEMReading, mapV float64) agmPZEMReading {
 		p.CurrentA = -p.CurrentA
 		p.PowerW = -p.PowerW
 	}
+	// Не отдавать отрицательный ноль («-0» в плашках и JSON).
 	if p.CurrentA == 0 {
 		p.CurrentA = 0
 	}
@@ -166,8 +177,8 @@ func agmApplySign(p agmPZEMReading, mapV float64) agmPZEMReading {
 	return p
 }
 
-// agmBuildValues собирает плоскую карту тегов полного цикла.
-func agmBuildValues(p agmPZEMReading, bks []agmBKSample) map[string]float64 {
+// agmBuildPZEMValues собирает карту тегов PZEM.
+func agmBuildPZEMValues(p agmPZEMReading) map[string]float64 {
 	out := map[string]float64{
 		agmTagPZEMVoltage:   roundAGM(p.VoltageV, 2),
 		agmTagPZEMCurrent:   roundAGM(p.CurrentA, 2),
@@ -182,10 +193,25 @@ func agmBuildValues(p agmPZEMReading, bks []agmBKSample) map[string]float64 {
 	if p.AlarmLow {
 		out[agmTagPZEMAlarmLow] = 1
 	}
+	return out
+}
+
+// agmBuildBKValues собирает карту тегов доступных BK300.
+func agmBuildBKValues(bks []agmBKSample) map[string]float64 {
+	out := make(map[string]float64, len(bks)*3)
 	for _, s := range bks {
 		out[agmBKTag(s.Position, agmSuffixVoltage)] = roundAGM(s.Reading.VoltageV, 2)
 		out[agmBKTag(s.Position, agmSuffixFlagsA)] = float64(s.Reading.FlagsA)
 		out[agmBKTag(s.Position, agmSuffixFlagsB)] = float64(s.Reading.FlagsB)
+	}
+	return out
+}
+
+// agmBuildValues собирает полный снимок (для тестов/совместимости).
+func agmBuildValues(p agmPZEMReading, bks []agmBKSample) map[string]float64 {
+	out := agmBuildPZEMValues(p)
+	for k, v := range agmBuildBKValues(bks) {
+		out[k] = v
 	}
 	return out
 }

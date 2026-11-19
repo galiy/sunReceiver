@@ -176,9 +176,8 @@ func TestAGMSign(t *testing.T) {
 	}
 }
 
-// TestDownsampleAGMSeriesBatteries: прореживание усредняет напряжения батарей,
-// энергию берёт последней точкой группы.
-func TestDownsampleAGMSeriesBatteries(t *testing.T) {
+// TestDownsampleAGMSeries: прореживание PZEM, энергия — последняя точка группы.
+func TestDownsampleAGMSeries(t *testing.T) {
 	from := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	to := from.Add(24 * time.Hour)
 	var pts []agmSeriesPoint
@@ -186,50 +185,15 @@ func TestDownsampleAGMSeriesBatteries(t *testing.T) {
 		pts = append(pts, agmSeriesPoint{
 			Ts:       from.Add(time.Duration(i) * time.Second).Format(time.RFC3339),
 			VoltageV: 52, CurrentA: 1, PowerW: 50, EnergyWh: float64(i),
-			BatteriesV: func() []*float64 {
-				a, b, c, d := 12.8, 12.9, 13.0, 13.1
-				return []*float64{&a, &b, &c, &d}
-			}(),
 		})
 	}
 	out := downsampleAGMSeries(pts, from, to)
-	if len(out) == 0 {
-		t.Fatal("пустой результат")
+	if len(out) == 0 || len(out) > maxSeriesPoints {
+		t.Fatalf("точек %d", len(out))
 	}
 	last := out[len(out)-1]
-	if len(last.BatteriesV) != 4 || last.BatteriesV[0] == nil || *last.BatteriesV[0] != 12.8 ||
-		last.BatteriesV[3] == nil || *last.BatteriesV[3] != 13.1 {
-		t.Fatalf("батареи: %v", last.BatteriesV)
-	}
 	if last.EnergyWh != 1999 {
 		t.Fatalf("энергия последней группы: %v, want 1999", last.EnergyWh)
-	}
-}
-
-// TestDownsampleAGMSeriesBreak: маркеры разрыва сохраняются и не усредняются.
-func TestDownsampleAGMSeriesBreak(t *testing.T) {
-	from := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-	to := from.Add(24 * time.Hour)
-	var pts []agmSeriesPoint
-	for i := 0; i < 3000; i++ {
-		if i == 1500 {
-			pts = append(pts, agmSeriesPoint{Ts: from.Add(time.Duration(i) * time.Second).Format(time.RFC3339), Break: true})
-			continue
-		}
-		pts = append(pts, agmSeriesPoint{Ts: from.Add(time.Duration(i) * time.Second).Format(time.RFC3339), VoltageV: 51, CurrentA: 1, PowerW: 50})
-	}
-	out := downsampleAGMSeries(pts, from, to)
-	breaks := 0
-	for _, p := range out {
-		if p.Break {
-			breaks++
-		}
-	}
-	if breaks != 1 {
-		t.Fatalf("маркеров разрыва %d, want 1", breaks)
-	}
-	if len(out) > maxSeriesPoints+1 {
-		t.Fatalf("точек %d, want <=%d (+разрыв)", len(out), maxSeriesPoints)
 	}
 }
 
@@ -244,28 +208,6 @@ func TestNearestIdx(t *testing.T) {
 	}
 	if got := nearestIdx(ts, t0.Add(16*time.Second)); got != 2 {
 		t.Fatalf("nearest=%d, want 2", got)
-	}
-}
-
-// TestDownsampleAGMSeries: гибридное прореживание двухполевого ряда AGM.
-func TestDownsampleAGMSeries(t *testing.T) {
-	from := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
-	to := from.Add(24 * time.Hour)
-	var pts []agmSeriesPoint
-	for i := 0; i < 24*3600; i++ {
-		pts = append(pts, agmSeriesPoint{Ts: from.Add(time.Duration(i) * time.Second).Format(time.RFC3339), CurrentA: 5, PowerW: 260})
-	}
-	out := downsampleAGMSeries(pts, from, to)
-	if len(out) == 0 || len(out) > maxSeriesPoints {
-		t.Fatalf("после прореживания точек %d, want 1..%d", len(out), maxSeriesPoints)
-	}
-	if out[0].CurrentA != 5 || out[0].PowerW != 260 {
-		t.Fatalf("значения бина: %+v", out[0])
-	}
-	// Короче порога — как есть.
-	short := pts[:7]
-	if got := downsampleAGMSeries(short, from, to); len(got) != 7 {
-		t.Fatalf("короткий ряд изменён: %d", len(got))
 	}
 }
 

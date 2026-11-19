@@ -26,61 +26,67 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Ключи Redis модуля AGM. Обособлены от инверторов/МАП/счётчиков: собственный
-// HASH current и собственный ряд RedisTimeSeries.
+// Ключи Redis модуля AGM: PZEM и BK300 разделены.
 const (
-	// redisAGMCurrentKey — HASH текущего снимка сборки: поле = agmDeviceKey,
-	// значение = JSON agmSnapshot. Перезаписывается только ПОЛНЫМ циклом.
-	redisAGMCurrentKey = "sunreceiver:agm:current"
-	// Серии — sunreceiver:ts:agm:agm:<tag> (kind=agm, device=agm).
+	redisAGMPZEMCurrentKey = "sunreceiver:agm:pzem:current"
+	redisAGMBKCurrentKey   = "sunreceiver:agm:bk300:current"
 )
 
-// SaveAGMCurrent пишет текущий снимок в собственный HASH current.
-func (s *redisStore) SaveAGMCurrent(snap agmSnapshot) error {
+// SaveAGMPZEMCurrent пишет current PZEM.
+func (s *redisStore) SaveAGMPZEMCurrent(snap agmSnapshot) error {
 	b, err := json.Marshal(snap)
 	if err != nil {
-		return fmt.Errorf("marshal agm current: %w", err)
+		return fmt.Errorf("marshal agm pzem current: %w", err)
 	}
-	return s.rdb.HSet(s.ctx, redisAGMCurrentKey, agmDeviceKey, b).Err()
+	return s.rdb.HSet(s.ctx, redisAGMPZEMCurrentKey, agmPZEMDeviceKey, b).Err()
 }
 
-// SaveAGMSeries кладёт мгновенную точку каждого тега в ряд RedisTimeSeries
-// (score = момент барьера цикла). Инвариант «только полный снимок»: если хотя бы
-// для одного тега серия в негативном бэкоффе (TS недоступен), не пишем НИЧЕГО,
-// чтобы в ряду не появился частичный снимок.
-func (s *redisStore) SaveAGMSeries(snap agmSnapshot, ts time.Time) error {
+// SaveAGMBKCurrent пишет current BK300.
+func (s *redisStore) SaveAGMBKCurrent(snap agmSnapshot) error {
+	b, err := json.Marshal(snap)
+	if err != nil {
+		return fmt.Errorf("marshal agm bk current: %w", err)
+	}
+	return s.rdb.HSet(s.ctx, redisAGMBKCurrentKey, agmBKDeviceKey, b).Err()
+}
+
+// saveAGMSeries кладёт полный снимок одного источника. Если хотя бы одна серия
+// в бэкоффе — не пишем ничего (частичный снимок запрещён).
+func (s *redisStore) saveAGMSeries(device string, snap agmSnapshot, ts time.Time) error {
 	for tag := range snap.Values {
-		if s.tsBackoffActive("agm", agmDeviceKey, tag) {
-			return fmt.Errorf("save agm series: серия %q в бэкоффе — снимок не записан", tag)
+		if s.tsBackoffActive("agm", device, tag) {
+			return fmt.Errorf("save agm series %s: серия %q в бэкоффе — снимок не записан", device, tag)
 		}
 	}
 	pipe := s.rdb.TxPipeline()
 	for tag, v := range snap.Values {
-		s.tsAdd(pipe, "agm", agmDeviceKey, snap.Name, "", "", "", tag, ts, v)
+		s.tsAdd(pipe, "agm", device, snap.Name, "", "", "", tag, ts, v)
 	}
-	// Повторная проверка: tsAdd мог не создать серию (TS.CREATE упал) и уйти в
-	// бэкофф уже во время сборки пайплайна — тогда не выполняем TS.ADD вовсе.
 	for tag := range snap.Values {
-		if s.tsBackoffActive("agm", agmDeviceKey, tag) {
-			return fmt.Errorf("save agm series: серия %q в бэкоффе — снимок не записан", tag)
+		if s.tsBackoffActive("agm", device, tag) {
+			return fmt.Errorf("save agm series %s: серия %q в бэкоффе — снимок не записан", device, tag)
 		}
 	}
 	if _, err := pipe.Exec(s.ctx); err != nil {
-		// TxPipeline не откатывает успешные команды при ошибке отдельного
-		// TS.ADD — best-effort удаляем точки снимка одним пайплайном.
 		del := s.rdb.Pipeline()
 		for tag := range snap.Values {
-			del.Do(s.ctx, "TS.DEL", tsKey("agm", agmDeviceKey, tag), ts.UnixMilli(), ts.UnixMilli())
+			del.Do(s.ctx, "TS.DEL", tsKey("agm", device, tag), ts.UnixMilli(), ts.UnixMilli())
 		}
 		_, _ = del.Exec(s.ctx)
-		return fmt.Errorf("save agm series: %w", err)
+		return fmt.Errorf("save agm series %s: %w", device, err)
 	}
 	return nil
 }
 
-// AGMCurrent возвращает текущий снимок сборки; nil, если ещё не было.
-func (s *redisStore) AGMCurrent() (*agmSnapshot, error) {
-	b, err := s.rdb.HGet(s.ctx, redisAGMCurrentKey, agmDeviceKey).Bytes()
+func (s *redisStore) SaveAGMPZEMSeries(snap agmSnapshot, ts time.Time) error {
+	return s.saveAGMSeries(agmPZEMDeviceKey, snap, ts)
+}
+func (s *redisStore) SaveAGMBKSeries(snap agmSnapshot, ts time.Time) error {
+	return s.saveAGMSeries(agmBKDeviceKey, snap, ts)
+}
+
+func agmCurrent(s *redisStore, key, device string) (*agmSnapshot, error) {
+	b, err := s.rdb.HGet(s.ctx, key, device).Bytes()
 	if errors.Is(err, redis.Nil) {
 		return nil, nil
 	}
@@ -94,39 +100,48 @@ func (s *redisStore) AGMCurrent() (*agmSnapshot, error) {
 	return &snap, nil
 }
 
-// QueryAGMSeries возвращает мгновенные снимки за период [start, end] из серий
-// RedisTimeSeries. Группировка — по паре (device, метка времени в миллисекундах):
-// миллисекунды важны для правил «последнее значение окна» (несколько снимков в
-// одну секунду должны различаться). Снимки упорядочены по возрастанию времени.
-func (s *redisStore) QueryAGMSeries(start, end time.Time) ([]agmSnapshot, error) {
+func (s *redisStore) AGMPZEMCurrent() (*agmSnapshot, error) {
+	return agmCurrent(s, redisAGMPZEMCurrentKey, agmPZEMDeviceKey)
+}
+func (s *redisStore) AGMBKCurrent() (*agmSnapshot, error) {
+	return agmCurrent(s, redisAGMBKCurrentKey, agmBKDeviceKey)
+}
+
+func (s *redisStore) queryAGMSeries(device string, start, end time.Time, agg string, bucketMs int64) ([]agmSnapshot, error) {
 	if start.After(end) {
 		return nil, errors.New("agm series: start after end")
 	}
-	series, err := s.tsMRange(start, end, "kind=agm")
+	filters := []string{"kind=agm", "device=" + device}
+	var (
+		series []tsSeries
+		err    error
+	)
+	if agg == "" {
+		series, err = s.tsMRange(start, end, filters...)
+	} else {
+		series, err = s.tsMRangeAgg(start, end, agg, bucketMs, filters...)
+	}
 	if err != nil {
 		return nil, err
 	}
 	return assembleAGMSeries(series), nil
 }
 
-// QueryAGMSeriesAgg читает ряд AGM с серверной агрегацией avg и бакетом
-// bucketMs (0 — сырьё). Нужен дашборду: сырой TS.MRANGE за сутки по 18 тегам
-// на 1-секундном ряде слишком велик и блокирует Redis.
-func (s *redisStore) QueryAGMSeriesAgg(start, end time.Time, bucketMs int64) ([]agmSnapshot, error) {
-	if start.After(end) {
-		return nil, errors.New("agm series: start after end")
-	}
-	series, err := s.tsMRangeAgg(start, end, "avg", bucketMs, "kind=agm")
-	if err != nil {
-		return nil, err
-	}
-	return assembleAGMSeries(series), nil
+func (s *redisStore) QueryAGMPZEMSeries(start, end time.Time) ([]agmSnapshot, error) {
+	return s.queryAGMSeries(agmPZEMDeviceKey, start, end, "", 0)
+}
+func (s *redisStore) QueryAGMPZEMSeriesAgg(start, end time.Time, bucketMs int64) ([]agmSnapshot, error) {
+	return s.queryAGMSeries(agmPZEMDeviceKey, start, end, "avg", bucketMs)
+}
+func (s *redisStore) QueryAGMBKSeries(start, end time.Time) ([]agmSnapshot, error) {
+	return s.queryAGMSeries(agmBKDeviceKey, start, end, "", 0)
+}
+func (s *redisStore) QueryAGMBKSeriesAgg(start, end time.Time, bucketMs int64) ([]agmSnapshot, error) {
+	return s.queryAGMSeries(agmBKDeviceKey, start, end, "avg", bucketMs)
 }
 
 // assembleAGMSeries собирает снимки AGM из per-tag серий по (device, ms).
 func assembleAGMSeries(series []tsSeries) []agmSnapshot {
-	// Группировка — по стабильному device + ms (name — изменяемая метка:
-	// переименование сборки не должно расщеплять снимок).
 	type snapKey struct {
 		device string
 		ms     int64

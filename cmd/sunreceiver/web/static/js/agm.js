@@ -191,24 +191,19 @@ function drawAgmCursor(chart){
 function agmUpdateAllCharts(){
   AGM_CHART_IDS.forEach(function(id){ try{ AGM_CHARTS[id]&&AGM_CHARTS[id].update('none'); }catch(e){} });
 }
-function agmNearestIndex(chart, t){
-  try{
-    var ds=(chart.data&&chart.data.datasets)||[];
-    if(!ds.length) return -1;
-    var arr=ds[0].data||[];
-    if(!arr.length) return -1;
-    var hi=arr.length-1;
-    if(t<=new Date(arr[0].x).getTime()) return 0;
-    if(t>=new Date(arr[hi].x).getTime()) return hi;
-    var lo=0;
-    while(lo<=hi){
-      var mid=(lo+hi)>>1, xm=new Date(arr[mid].x).getTime();
-      if(xm===t) return mid;
-      if(xm<t) lo=mid+1; else hi=mid-1;
-    }
-    var a=new Date(arr[hi].x).getTime(), b=new Date(arr[lo].x).getTime();
-    return (t-a)<=(b-t)? hi : lo;
-  }catch(e){ return -1; }
+function agmNearestInData(data,t){
+  if(!data||!data.length) return -1;
+  var hi=data.length-1, first=new Date(data[0].x).getTime(), last=new Date(data[hi].x).getTime();
+  if(t<=first) return 0;
+  if(t>=last) return hi;
+  var lo=0;
+  while(lo<=hi){
+    var mid=(lo+hi)>>1, xm=new Date(data[mid].x).getTime();
+    if(xm===t) return mid;
+    if(xm<t) lo=mid+1; else hi=mid-1;
+  }
+  var a=new Date(data[hi].x).getTime(), b=new Date(data[lo].x).getTime();
+  return (t-a)<=(b-t)? hi : lo;
 }
 function agmSyncTooltips(t){
   AGM_CHART_IDS.forEach(function(id){
@@ -216,11 +211,11 @@ function agmSyncTooltips(t){
     if(!c||!c.scales||!c.scales.x||!c.tooltip) return;
     try{
       if(t===null||!isFinite(t)){ c.tooltip.setActiveElements([],{x:0,y:0}); return; }
-      var idx=agmNearestIndex(c,t);
-      if(idx<0){ c.tooltip.setActiveElements([],{x:0,y:0}); return; }
       var els=[], py=null;
       c.data.datasets.forEach(function(ds,i){
         if(!c.isDatasetVisible(i)) return;
+        var idx=agmNearestInData(ds.data,t);
+        if(idx<0) return;
         var p=ds.data[idx];
         if(p && p.y!==null && p.y!==undefined){
           els.push({datasetIndex:i, index:idx});
@@ -389,26 +384,29 @@ function agmRender(id, datasets, yTitle, legend, zero){
   if(agmApplyHidden(id, AGM_CHARTS[id])) AGM_CHARTS[id].update('none');
   if(legend){ agmLgKit(id, id+'Lg').build(AGM_CHARTS[id]); }
 }
-function buildAgmCharts(points){
-  points=points||[];
-  function yVal(p, field){ return p['break']? null : p[field]; }
+function buildAgmCharts(data){
+  var points=(data&&data.points)||[];
+  var bk=(data&&data.batteries)||[];
   agmRender('agmVoltChart',[
-    mkAgmDs('Напряжение сборки','#f0ad4e',points.map(function(p){ return {x:new Date(p.ts), y:yVal(p,'voltage_v')}; })),
-    mkAgmDs('Напряжение МАП','#5cb85c',points.map(function(p){ return {x:new Date(p.ts), y:(p['break']||p.map_voltage_v===null||p.map_voltage_v===undefined)? null : p.map_voltage_v}; })),
-    mkAgmDs('Сумма отдельных батарей','#428bca',points.map(function(p){ return {x:new Date(p.ts), y:(p['break']||p.batteries_sum_v===null||p.batteries_sum_v===undefined)? null : p.batteries_sum_v}; }))
+    mkAgmDs('Напряжение сборки','#f0ad4e',points.map(function(p){ return {x:new Date(p.ts), y:p.voltage_v}; })),
+    mkAgmDs('Напряжение МАП','#5cb85c',points.map(function(p){ return {x:new Date(p.ts), y:(p.map_voltage_v===null||p.map_voltage_v===undefined)? null : p.map_voltage_v}; })),
+    mkAgmDs('Сумма отдельных батарей','#428bca',bk.map(function(p){
+      var v=p.voltages||[]; if(v.length!==4) return {x:new Date(p.ts), y:null};
+      return {x:new Date(p.ts), y:Math.round((v[0]+v[1]+v[2]+v[3])*100)/100};
+    }))
   ],'V',true,false);
   var bds=[];
   for(var i=0;i<4;i++){
     (function(i){
-      bds.push(mkAgmDs('Батарея '+(i+1),CHART_COLORS[i%CHART_COLORS.length],points.map(function(p){
-        var y=(p['break']||!p.batteries_v||i>=p.batteries_v.length)? null : p.batteries_v[i];
-        return {x:new Date(p.ts), y:y};
+      bds.push(mkAgmDs('Батарея '+(i+1),CHART_COLORS[i%CHART_COLORS.length],bk.map(function(p){
+        var v=p.voltages||[];
+        return {x:new Date(p.ts), y:(i<v.length? v[i] : null)};
       })));
     })(i);
   }
   agmRender('agmBatChart',bds,'V',true,false);
-  agmRender('agmCurChart',[mkAgmDs('Ток','#5bc0de',points.map(function(p){ return {x:new Date(p.ts), y:yVal(p,'current_a')}; }))],'A',false,true);
-  agmRender('agmPwrChart',[mkAgmDs('Мощность','#d9534f',points.map(function(p){ return {x:new Date(p.ts), y:yVal(p,'power_w')}; }))],'W',false,true);
+  agmRender('agmCurChart',[mkAgmDs('Ток','#5bc0de',points.map(function(p){ return {x:new Date(p.ts), y:p.current_a}; }))],'A',false,true);
+  agmRender('agmPwrChart',[mkAgmDs('Мощность','#d9534f',points.map(function(p){ return {x:new Date(p.ts), y:p.power_w}; }))],'W',false,true);
 }
 function destroyAgmCharts(){
   Object.keys(AGM_CHARTS).forEach(function(id){ AGM_CHARTS[id].destroy(); delete AGM_CHARTS[id]; });
@@ -436,7 +434,7 @@ async function loadAgmCharts(){
     agmRebuilding=true;
     try{
       lastXWindow={};
-      buildAgmCharts(data.points||[]);
+      buildAgmCharts(data);
     }finally{ agmRebuilding=false; }
     setAgmRangeLabels();
   }catch(e){}

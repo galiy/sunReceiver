@@ -23,23 +23,27 @@ import (
 	"time"
 )
 
-// Аккумулятор AGM: усредняет мгновенные снимки собственного ряда Redis до одной
-// записи за 5 минут в СОБСТВЕННУЮ таблицу sunreceiver.agm_averages_r.
+// Аккумуляторы AGM: два независимых 5-минутных ряда — PZEM и BK300 — в свои
+// таблицы sunreceiver.agm_pzem_averages_r / agm_bk300_averages_r.
 // Правила (решение оператора):
 //   - обычные теги — среднее по окну;
 //   - накопительная энергия PZEM и сырые флаги BK300 — последнее значение окна;
 //   - pzem_alarm_high/low — 1, если в окне была хотя бы одна 1, иначе 0.
 
-const agmAvgTable = "sunreceiver.agm_averages_r"
-
-// InsertAGMAverage сохраняет одну 5-минутную точку AGM в партиционированную
-// таблицу. Идемпотентна по (name, ts).
-func (s *pgStore) InsertAGMAverage(ts time.Time, vc map[string]float64) error {
+// insertAGMAverage сохраняет одну 5-минутную точку источника AGM.
+func (s *pgStore) insertAGMAverage(table, device string, ts time.Time, vc map[string]float64) error {
 	conv := make(valuesContract, len(vc))
 	for k, v := range vc {
 		conv[k] = v
 	}
-	return insertAvgRow(s.pool, s.ctx, avgSpecByTable(agmAvgTable), agmDeviceKey, ts, nil, conv)
+	return insertAvgRow(s.pool, s.ctx, avgSpecByTable(table), device, ts, nil, conv)
+}
+
+func (s *pgStore) InsertAGMPZEMAverage(ts time.Time, vc map[string]float64) error {
+	return s.insertAGMAverage(agmPZEMAvgTable, agmPZEMDeviceKey, ts, vc)
+}
+func (s *pgStore) InsertAGMBKAverage(ts time.Time, vc map[string]float64) error {
+	return s.insertAGMAverage(agmBKAvgTable, agmBKDeviceKey, ts, vc)
 }
 
 // averageAGM усредняет снимки одного 5-минутного окна.
@@ -102,15 +106,37 @@ func averageAGM(snaps []agmSnapshot) map[string]float64 {
 	return out
 }
 
-// runAGMAccumulator — фоновый цикл усреднения истории AGM в PG. По завершении
-// каждого 5-минутного промежутка (спустя avgDelay) пишет одну точку в
-// sunreceiver.agm_averages_r. При старте — catch-up по окну Redis.
+// runAGMAccumulator запускает два независимых аккумулятора: PZEM и BK300.
 func runAGMAccumulator(store *redisStore, pg *pgStore, ctx context.Context) {
 	if pg == nil {
 		return
 	}
-	log.Printf("agm: avg старт; период=%s, отсрочка=%s, 5-минутные промежутки", avgStep, avgDelay)
-	backfillAGMAccumulator(store, pg, time.Now())
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); runAGMSourceAccumulator("pzem", store, pg, ctx) }()
+	go func() { defer wg.Done(); runAGMSourceAccumulator("bk300", store, pg, ctx) }()
+	wg.Wait()
+}
+
+func agmSourceQuery(store *redisStore, source string) func(time.Time, time.Time) ([]agmSnapshot, error) {
+	if source == "pzem" {
+		return func(a, b time.Time) ([]agmSnapshot, error) { return store.QueryAGMPZEMSeries(a, b) }
+	}
+	return func(a, b time.Time) ([]agmSnapshot, error) { return store.QueryAGMBKSeries(a, b) }
+}
+
+func agmSourceInsert(pg *pgStore, source string, ts time.Time, vc map[string]float64) error {
+	if source == "pzem" {
+		return pg.InsertAGMPZEMAverage(ts, vc)
+	}
+	return pg.InsertAGMBKAverage(ts, vc)
+}
+
+// runAGMSourceAccumulator — цикл усреднения одного источника AGM в его таблицу.
+func runAGMSourceAccumulator(source string, store *redisStore, pg *pgStore, ctx context.Context) {
+	query := agmSourceQuery(store, source)
+	log.Printf("agm %s: avg старт; период=%s, отсрочка=%s", source, avgStep, avgDelay)
+	backfillAGMSourceAccumulator(source, store, pg, query, time.Now())
 
 	var wg sync.WaitGroup
 	defer wg.Wait()
@@ -119,9 +145,9 @@ func runAGMAccumulator(store *redisStore, pg *pgStore, ctx context.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			snaps, err := store.QueryAGMSeries(start, end.Add(-time.Millisecond))
+			snaps, err := query(start, end.Add(-time.Millisecond))
 			if err != nil {
-				log.Printf("agm: avg %s: %v", start.Format(time.RFC3339), err)
+				log.Printf("agm %s: avg %s: %v", source, start.Format(time.RFC3339), err)
 				return
 			}
 			if len(snaps) == 0 {
@@ -131,10 +157,8 @@ func runAGMAccumulator(store *redisStore, pg *pgStore, ctx context.Context) {
 			if len(vc) == 0 {
 				return
 			}
-			if err := retryPg(func() error {
-				return pg.InsertAGMAverage(start, vc)
-			}, 3); err != nil {
-				log.Printf("agm: avg pg %s: %v", start.Format(time.RFC3339), err)
+			if err := retryPg(func() error { return agmSourceInsert(pg, source, start, vc) }, 3); err != nil {
+				log.Printf("agm %s: avg pg %s: %v", source, start.Format(time.RFC3339), err)
 			}
 		}()
 	}
@@ -158,9 +182,8 @@ func runAGMAccumulator(store *redisStore, pg *pgStore, ctx context.Context) {
 	}
 }
 
-// backfillAGMAccumulator конвертирует уже накопленные в Redis снимки (окно
-// удержания) в 5-минутные точки PG, чтобы промежутки до старта не потерялись.
-func backfillAGMAccumulator(store *redisStore, pg *pgStore, now time.Time) {
+// backfillAGMSourceAccumulator конвертирует накопленное окно Redis в PG.
+func backfillAGMSourceAccumulator(source string, store *redisStore, pg *pgStore, query func(time.Time, time.Time) ([]agmSnapshot, error), now time.Time) {
 	if pg == nil {
 		return
 	}
@@ -169,21 +192,15 @@ func backfillAGMAccumulator(store *redisStore, pg *pgStore, now time.Time) {
 	if !start.Before(end) {
 		return
 	}
-	snaps, err := store.QueryAGMSeries(start, end)
+	snaps, err := query(start, end)
 	if err != nil {
-		log.Printf("agm acc backfill: %v", err)
-		return
-	}
-	if len(snaps) == 0 {
+		log.Printf("agm %s acc backfill: %v", source, err)
 		return
 	}
 	groups := map[time.Time][]agmSnapshot{}
 	for _, sn := range snaps {
 		ts, perr := time.Parse(time.RFC3339Nano, sn.Timestamp)
-		if perr != nil {
-			continue
-		}
-		if ts.Before(start) || !ts.Before(end) {
+		if perr != nil || ts.Before(start) || !ts.Before(end) {
 			continue
 		}
 		bts := floorToStep(ts)
@@ -195,11 +212,11 @@ func backfillAGMAccumulator(store *redisStore, pg *pgStore, now time.Time) {
 		if len(vc) == 0 {
 			continue
 		}
-		if err := pg.InsertAGMAverage(bts, vc); err != nil {
-			log.Printf("agm acc backfill %s: %v", bts.Format(time.RFC3339), err)
+		if err := agmSourceInsert(pg, source, bts, vc); err != nil {
+			log.Printf("agm %s acc backfill %s: %v", source, bts.Format(time.RFC3339), err)
 			continue
 		}
 		n++
 	}
-	log.Printf("agm acc backfill: обработано %d 5-минутных бакетов", n)
+	log.Printf("agm %s acc backfill: обработано %d 5-минутных бакетов", source, n)
 }

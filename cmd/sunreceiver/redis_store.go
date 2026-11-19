@@ -188,7 +188,7 @@ func (s *redisStore) IsEmpty() (bool, error) {
 	for _, key := range []string{
 		deyeBrand.curKey, sofarBrand.curKey,
 		redisDds238CurrentKey, redisMapCurrentKey, redisKesCurrentKey,
-		redisBms26CurrentKey, redisDts017CurrentKey, redisAGMCurrentKey,
+		redisBms26CurrentKey, redisDts017CurrentKey, redisAGMPZEMCurrentKey, redisAGMBKCurrentKey,
 	} {
 		n, err := s.rdb.HLen(s.ctx, key).Result()
 		if err != nil {

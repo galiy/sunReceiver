@@ -110,10 +110,11 @@ CE308 отключён). Единственный режим — «только 
 `poll_interval` — секунды (умолч./мин. 1, «не чаще 1 раза в секунду»); PZEM-017
 опрашивается через удалённый CH340 по usbip (адрес `pzem.usbip`; порт поднимает
 внешний watchdog `deploy/agm-usbip-watchdog.sh`), четыре BK300 — по BLE на общем с
-CE308 адаптере; хранилище обособлено (`sunreceiver:agm:current`,
-`sunreceiver:ts:agm:*`, PG `agm_averages_r`); снимок пишется только при данных
-от всех 5 источников и определённом знаке тока/мощности (current МАП ±5 с),
-иначе отбрасывается целиком. Описан в
+CE308 адаптере; хранилище раздельное: `sunreceiver:agm:pzem:current` +
+`sunreceiver:ts:agm:agm-pzem:*` + PG `agm_pzem_averages_r`, и
+`sunreceiver:agm:bk300:current` + `sunreceiver:ts:agm:agm-bk300:*` + PG
+`agm_bk300_averages_r`. PZEM пишется при определённом знаке (current МАП ±5 с),
+BK300 — только при 4/4 ответах. Описан в
 [`docs/modules/agm-monitor.md`](docs/modules/agm-monitor.md). Счётчик
 энергосбыта **«Меркурий»** (без интерфейса мониторинга, установлен последовательно с
 DDS238) — раздел **`mercury`**: коллекция ручных снятий показаний `[{"taken_at"
@@ -204,8 +205,8 @@ map 1, meter 1. Период сетевых инверторов фиксиро�
   удалённый CH340/usbip), `agm_bk300.go` (кадры BK300), `agm_ble.go` (BLE-клиент и
   менеджер 4 соединений, адаптер общий с CE308), `agm_poller.go` (состояния
   поиск/мониторинг, синхронный цикл 5 источников), `agm_store.go` +
-  `agm_accumulator.go` (Redis `sunreceiver:agm:current`/`sunreceiver:ts:agm:*`,
-  PG `agm_averages_r`). Неполный цикл не пишется; ошибки связи — только в
+  `agm_accumulator.go` (раздельные Redis current/TS и PG-таблицы PZEM/BK300).
+  Неполный снимок BK300 не пишется; ошибки связи — только в
   `device_errors` (kind=`agm`). Внешний usbip-watchdog — `deploy/`. Полное
   описание — [`docs/modules/agm-monitor.md`](docs/modules/agm-monitor.md).
 - **BMS через malina26** (единый тип ANT+EnBMS) — `bms26.go`, `bms26_store.go`:

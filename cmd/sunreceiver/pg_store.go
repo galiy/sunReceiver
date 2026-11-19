@@ -332,12 +332,9 @@ func (s *pgStore) Dts017AveragesAll(start, end time.Time) ([]dts017Snapshot, err
 	return out, nil
 }
 
-// AGMAveragesAll возвращает 5-минутные усреднённые точки AGM-сборки за период
-// [start, end] включительно, по возрастанию ts. Используется для реставрации
-// Redis-ряда sunreceiver:ts:agm:* и current при пустом Redis
-// (см. restoreRedisFromPG).
-func (s *pgStore) AGMAveragesAll(start, end time.Time) ([]agmSnapshot, error) {
-	snaps, err := s.selectAvgRows(avgSpecByTable(agmAvgTable), "", start, end)
+// AGMPZEMAveragesAll/AGMBK300AveragesAll возвращают 5-минутные точки источника.
+func (s *pgStore) agmAveragesAll(table string, start, end time.Time) ([]agmSnapshot, error) {
+	snaps, err := s.selectAvgRows(avgSpecByTable(table), "", start, end)
 	if err != nil {
 		return nil, err
 	}
@@ -346,6 +343,13 @@ func (s *pgStore) AGMAveragesAll(start, end time.Time) ([]agmSnapshot, error) {
 		out = append(out, agmSnapshot{Name: sn.Name, Timestamp: sn.Timestamp, Values: vcToFloatMap(sn.Values)})
 	}
 	return out, nil
+}
+
+func (s *pgStore) AGMPZEMAveragesAll(start, end time.Time) ([]agmSnapshot, error) {
+	return s.agmAveragesAll(agmPZEMAvgTable, start, end)
+}
+func (s *pgStore) AGMBK300AveragesAll(start, end time.Time) ([]agmSnapshot, error) {
+	return s.agmAveragesAll(agmBKAvgTable, start, end)
 }
 
 // DailyTariffsRange возвращает финализированные посуточные тарифы счётчика

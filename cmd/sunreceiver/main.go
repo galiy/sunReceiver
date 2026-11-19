@@ -1262,7 +1262,8 @@ func main() {
 	// Мониторинг AGM-сборки (раздел "agm"): PZEM-017 по RS485 через удалённый
 	// CH340 (usbip) + 4×BK300 по BLE. Отдельный цикл: поиск/закрепление порта,
 	// затем синхронный опрос 5 источников; Redis current/series + PG
-	// agm_averages_r (5-мин усреднение), см. agm_poller.go / agm_accumulator.go.
+	// agm_pzem_averages_r/agm_bk300_averages_r (5-мин усреднение),
+	// см. agm_poller.go / agm_accumulator.go.
 	if agmCfg != nil {
 		bgWg.Add(1)
 		go func() {
@@ -1410,7 +1411,8 @@ func redisDts017DataPresent(store *redisStore) (bool, error) {
 //   - точки DTS017M (pg.Dts017AveragesAll) — SaveDts017Series/SaveDts017Current в
 //     обособленный ряд sunreceiver:ts:dts017m:*;
 //   - точки AGM (pg.AGMAveragesAll) — SaveAGMSeries/SaveAGMCurrent в
-//     sunreceiver:ts:agm:* и sunreceiver:agm:current.
+//     sunreceiver:ts:agm:agm-pzem:*|agm-bk300:* и соответствующие current
+//     (pg.AGMPZEMAveragesAll/AGMBK300AveragesAll, SaveAGMPZEM*/SaveAGMBK*).
 //
 // Восстановление каждого ряда независимо: сбой одного запроса не прерывает
 // остальные. Возвращает complete=false, если хотя бы один ряд восстановить не
@@ -1570,46 +1572,56 @@ func restoreRedisFromPG(store *redisStore, pg *pgStore, window time.Duration, st
 		log.Printf("pg restore: DTS017M восстановлено точек: %d", dtsRestored)
 	}
 
-	// Ряд AGM-сборки — из pg.agm_averages_r (5-мин средние) в sunreceiver:ts:agm:*
-	// (то же окно удержания); current — последняя восстановленная точка.
-	agmPts, err := pg.AGMAveragesAll(start, end)
-	if err != nil {
-		log.Printf("pg restore: agm query: %v", err)
-		complete = false
-	} else {
-		var agmRestored int
-		var agmLast *agmSnapshot
-		for i := range agmPts {
+	// Ряды AGM — два независимых источника: PZEM и BK300.
+	restoreAGM := func(label string, pts []agmSnapshot,
+		saveSeries func(agmSnapshot, time.Time) error,
+		saveCurrent func(agmSnapshot) error) {
+		var n int
+		var last *agmSnapshot
+		for i := range pts {
 			select {
 			case <-stop.Done():
-				log.Printf("pg restore: остановлено по сигналу (AGM восстановлено точек: %d)", agmRestored)
-				return false
+				log.Printf("pg restore: остановлено по сигналу (%s восстановлено: %d)", label, n)
+				complete = false
+				return
 			default:
 			}
-			snap := agmPts[i]
+			snap := pts[i]
 			ts, perr := time.Parse(time.RFC3339, snap.Timestamp)
 			if perr != nil {
 				continue
 			}
-			// Ключ месяца/локальная зона — как у живой записи.
 			ts = ts.In(time.Local)
-			if serr := store.SaveAGMSeries(snap, ts); serr != nil {
-				log.Printf("pg restore: agm save %s: %v", snap.Name, serr)
+			if serr := saveSeries(snap, ts); serr != nil {
+				log.Printf("pg restore: %s save %s: %v", label, snap.Name, serr)
 				complete = false
 				continue
 			}
 			cur := snap
-			agmLast = &cur
-			agmRestored++
+			last = &cur
+			n++
 		}
-		if agmLast != nil {
-			if serr := store.SaveAGMCurrent(*agmLast); serr != nil {
-				log.Printf("pg restore: agm current: %v", serr)
+		if last != nil {
+			if serr := saveCurrent(*last); serr != nil {
+				log.Printf("pg restore: %s current: %v", label, serr)
 				complete = false
 			}
 		}
-		log.Printf("pg restore: AGM восстановлено точек: %d", agmRestored)
+		log.Printf("pg restore: %s восстановлено точек: %d", label, n)
 	}
-
+	pzPts, err := pg.AGMPZEMAveragesAll(start, end)
+	if err != nil {
+		log.Printf("pg restore: agm pzem query: %v", err)
+		complete = false
+	} else {
+		restoreAGM("AGM PZEM", pzPts, store.SaveAGMPZEMSeries, store.SaveAGMPZEMCurrent)
+	}
+	bkPts, err := pg.AGMBK300AveragesAll(start, end)
+	if err != nil {
+		log.Printf("pg restore: agm bk query: %v", err)
+		complete = false
+	} else {
+		restoreAGM("AGM BK300", bkPts, store.SaveAGMBKSeries, store.SaveAGMBKCurrent)
+	}
 	return complete
 }

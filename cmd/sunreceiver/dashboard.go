@@ -2473,10 +2473,11 @@ func (h *dashboardHandler) apiAGMCurrent(w http.ResponseWriter, r *http.Request)
 	var batteries []float64
 	var batteriesSum any
 	var mapVoltage any
-	var ts, source, sign = "", "map_minus_bms", ""
+	var ts, bkTs, source, sign = "", "", "map_minus_bms", ""
+	bkComplete := false
 	respErr := ""
 
-	if snap, err := h.store.AGMCurrent(); err != nil {
+	if snap, err := h.store.AGMPZEMCurrent(); err != nil {
 		respErr = err.Error()
 	} else if snap != nil {
 		v, okV := agmVal(snap.Values, agmTagPZEMVoltage)
@@ -2485,28 +2486,35 @@ func (h *dashboardHandler) apiAGMCurrent(w http.ResponseWriter, r *http.Request)
 		if okV && okI && okP && v > 0 {
 			voltage, current, power = v, cur, pw
 			energy, _ = agmVal(snap.Values, agmTagPZEMEnergy)
-			all := true
-			for pos := 1; pos <= 4; pos++ {
-				bv, ok := agmVal(snap.Values, agmBKTag(pos, agmSuffixVoltage))
-				if !ok {
-					all = false
-					break
-				}
-				batteries = append(batteries, bv)
-			}
-			if !all {
-				batteries = nil
-			} else {
-				var bsum float64
-				for _, bv := range batteries {
-					bsum += bv
-				}
-				batteriesSum = roundN(bsum, 2)
-			}
 			ts = snap.Timestamp
 			source = "agm"
 			sign = "stored" // знак выставлен при пулинге
 		}
+	}
+	if bsnap, err := h.store.AGMBKCurrent(); err == nil && bsnap != nil {
+		bkTs = bsnap.Timestamp
+		all := true
+		for pos := 1; pos <= 4; pos++ {
+			bv, ok := agmVal(bsnap.Values, agmBKTag(pos, agmSuffixVoltage))
+			if !ok {
+				all = false
+				break
+			}
+			batteries = append(batteries, bv)
+		}
+		if !all {
+			batteries = nil
+		} else {
+			bkComplete = true
+			var bsum float64
+			for _, bv := range batteries {
+				bsum += bv
+			}
+			batteriesSum = roundN(bsum, 2)
+		}
+	}
+	if !bkComplete {
+		bkTs = ""
 	}
 	if source != "agm" {
 		// Нет данных PZEM (модуль ещё не собрал полный цикл / отключён) —
@@ -2548,19 +2556,21 @@ func (h *dashboardHandler) apiAGMCurrent(w http.ResponseWriter, r *http.Request)
 		sign = "none"
 	}
 	resp := map[string]any{
-		"source":          source,
-		"timestamp":       ts,
-		"voltage":         roundN(voltage, 2),
-		"current_a":       roundN(current, 2),
-		"power_w":         roundN(power, 1),
-		"energy_wh":       roundN(energy, 0),
-		"soc":             soc,
-		"capacity_ah":     capacity,
-		"remaining_ah":    roundN(capacity*float64(soc)/100, 1),
-		"batteries_v":     batteries,
-		"batteries_sum_v": batteriesSum,
-		"map_voltage_v":   mapVoltage,
-		"sign_source":     sign,
+		"source":              source,
+		"timestamp":           ts,
+		"pzem_timestamp":      ts,
+		"batteries_timestamp": bkTs,
+		"voltage":             roundN(voltage, 2),
+		"current_a":           roundN(current, 2),
+		"power_w":             roundN(power, 1),
+		"energy_wh":           roundN(energy, 0),
+		"soc":                 soc,
+		"capacity_ah":         capacity,
+		"remaining_ah":        roundN(capacity*float64(soc)/100, 1),
+		"batteries_v":         batteries,
+		"batteries_sum_v":     batteriesSum,
+		"map_voltage_v":       mapVoltage,
+		"sign_source":         sign,
 	}
 	if respErr != "" {
 		resp["error"] = respErr
@@ -2617,27 +2627,25 @@ func agmSOC(v float64) int {
 	return 0
 }
 
-// agmSeriesPoint — точка объективного ряда AGM-сборки: напряжение PZEM-017,
-// ток/мощность со знаком («заряд −, разряд +»), накопленная энергия и напряжения
-// 4×BK300. Break=true — маркер разрыва линии; значения в нём не определены.
+// agmSeriesPoint — точка ряда PZEM: напряжение, знаковый ток/мощность, энергия
+// и справочное напряжение АКБ МАП.
 type agmSeriesPoint struct {
-	Ts            string     `json:"ts"`
-	VoltageV      float64    `json:"voltage_v"`
-	CurrentA      float64    `json:"current_a"`
-	PowerW        float64    `json:"power_w"`
-	EnergyWh      float64    `json:"energy_wh,omitempty"`
-	BatteriesV    []*float64 `json:"batteries_v,omitempty"`
-	BatteriesSumV *float64   `json:"batteries_sum_v,omitempty"`
-	MapVoltageV   *float64   `json:"map_voltage_v,omitempty"`
-	Break         bool       `json:"break,omitempty"`
+	Ts          string   `json:"ts"`
+	VoltageV    float64  `json:"voltage_v"`
+	CurrentA    float64  `json:"current_a"`
+	PowerW      float64  `json:"power_w"`
+	EnergyWh    float64  `json:"energy_wh"`
+	MapVoltageV *float64 `json:"map_voltage_v,omitempty"`
 }
 
-const ()
+// agmBKPoint — точка ряда BK300: 4 напряжения, снятые одним полным снимком.
+type agmBKPoint struct {
+	Ts       string    `json:"ts"`
+	Voltages []float64 `json:"voltages"`
+}
 
-// apiAGMSeries — GET /api/agm/series?from&to: объективный ряд AGM-сборки.
-// Источник — собственные серии PZEM-017/BK300: напряжение сборки, ток и мощность
-// (со знаком «заряд −, разряд +», знак — по напряжению МАП в тот же момент),
-// накопленная энергия и напряжения 4 батарей. Прореживание — гибридное.
+// apiAGMSeries — один запрос отдаёт оба ряда: PZEM (points) и BK300
+// (batteries). Клиент сам считает сумму батарей.
 func (h *dashboardHandler) apiAGMSeries(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	to := now
@@ -2662,17 +2670,21 @@ func (h *dashboardHandler) apiAGMSeries(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "from >= to", http.StatusBadRequest)
 		return
 	}
-	pts := h.agmSeries(from, to, now)
-	pts = downsampleAGMSeries(pts, from, to)
+	pts := downsampleAGMSeries(h.agmSeries(from, to, now), from, to)
 	if pts == nil {
 		pts = []agmSeriesPoint{}
+	}
+	bats := downsampleAGMBK(h.agmBKSeries(from, to, now), from, to)
+	if bats == nil {
+		bats = []agmBKPoint{}
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"from":   from.Format(time.RFC3339),
-		"to":     to.Format(time.RFC3339),
-		"points": pts,
+		"from":      from.Format(time.RFC3339),
+		"to":        to.Format(time.RFC3339),
+		"points":    pts,
+		"batteries": bats,
 	})
 }
 
@@ -2735,7 +2747,7 @@ func (h *dashboardHandler) mapBatteryVoltages(from, to, now time.Time) ([]time.T
 // в тот же момент: UАКБ МАП > U сборки → заряд (−), иначе разряд (+).
 // Точки отдаются как есть; пропуски BK300 дают null только в BatteriesV.
 func (h *dashboardHandler) agmSeries(from, to, now time.Time) []agmSeriesPoint {
-	snaps := h.agmSnapshotsRange(from, to, now)
+	snaps := h.agmPZEMRange(from, to, now)
 	if len(snaps) == 0 {
 		return nil
 	}
@@ -2772,16 +2784,6 @@ func (h *dashboardHandler) agmSeries(from, to, now time.Time) []agmSeriesPoint {
 		if !okV || !okI || !okP || v <= 0 {
 			continue
 		}
-		// PZEM-точка валидна сама по себе. По каждой батарее — свой null:
-		// отвал B4 не должен рвать линии B1–B3 (иначе все 4 линии исчезают
-		// синхронно и график рассыпается на куски).
-		batteries := make([]*float64, 4)
-		for pos := 1; pos <= 4; pos++ {
-			if bv, ok := agmVal(sn.Values, agmBKTag(pos, agmSuffixVoltage)); ok {
-				v := roundN(bv, 2)
-				batteries[pos-1] = &v
-			}
-		}
 		var mapVoltage *float64
 		if j := nearestIdx(mts, t); j >= 0 {
 			d := mts[j].Sub(t)
@@ -2793,55 +2795,81 @@ func (h *dashboardHandler) agmSeries(from, to, now time.Time) []agmSeriesPoint {
 				mapVoltage = &v
 			}
 		}
-		var batteriesSum *float64
-		if batteries[0] != nil && batteries[1] != nil && batteries[2] != nil && batteries[3] != nil {
-			bsum := roundN(*batteries[0]+*batteries[1]+*batteries[2]+*batteries[3], 2)
-			batteriesSum = &bsum
-		}
 		energy, _ := agmVal(sn.Values, agmTagPZEMEnergy)
 		out = append(out, agmSeriesPoint{
-			Ts:            t.Format(time.RFC3339Nano),
-			VoltageV:      roundN(v, 2),
-			CurrentA:      roundN(cur, 2),
-			PowerW:        roundN(pw, 1),
-			EnergyWh:      roundN(energy, 0),
-			BatteriesV:    batteries,
-			BatteriesSumV: batteriesSum,
-			MapVoltageV:   mapVoltage,
+			Ts:          t.Format(time.RFC3339Nano),
+			VoltageV:    roundN(v, 2),
+			CurrentA:    roundN(cur, 2),
+			PowerW:      roundN(pw, 1),
+			EnergyWh:    roundN(energy, 0),
+			MapVoltageV: mapVoltage,
 		})
 	}
 	return out
 }
 
-// agmSnapshotsRange читает снимки AGM за [from, to]: свежая часть — из
-// RedisTimeSeries (серверная агрегация avg, бакет rtBucket), старая — из PG
-// (5-мин средние). Границы окон — общий seamWindows, как у остальных рядов.
-func (h *dashboardHandler) agmSnapshotsRange(from, to, now time.Time) []agmSnapshot {
+// agmRange читает один источник AGM: свежая часть — Redis (серверная
+// агрегация), старая — PG (5-мин средние).
+func (h *dashboardHandler) agmRange(from, to, now time.Time,
+	queryRedis func(time.Time, time.Time, int64) ([]agmSnapshot, error),
+	queryPG func(time.Time, time.Time) ([]agmSnapshot, error)) []agmSnapshot {
 	cutoff := seriesReadCutoff(from, now)
 	pgStart, pgEnd, pgOK, rStart, rEnd, rOK := seamWindows(from, to, cutoff)
 	var out []agmSnapshot
 	if h.pg != nil && pgOK {
-		if ps, err := h.pg.AGMAveragesAll(pgStart, pgEnd); err != nil {
-			log.Printf("dashboard: agmSnapshotsRange pg: %v", err)
+		if ps, err := queryPG(pgStart, pgEnd); err != nil {
+			log.Printf("dashboard: agmRange pg: %v", err)
 		} else {
 			out = append(out, ps...)
 		}
 	}
 	if rOK {
-		// Как на остальных страницах: агрегация только когда точек больше цели.
 		bucket := rtBucket(rEnd.Sub(rStart))
-		if rs, err := h.store.QueryAGMSeriesAgg(rStart, rEnd, bucket); err != nil {
-			log.Printf("dashboard: agmSnapshotsRange redis: %v", err)
+		if rs, err := queryRedis(rStart, rEnd, bucket); err != nil {
+			log.Printf("dashboard: agmRange redis: %v", err)
 		} else if len(rs) == 0 && h.pg != nil {
-			// Redis пуст (сбой/долгий простой) — дополняем из PG, как loadRange.
-			if ps, err := h.pg.AGMAveragesAll(rStart, rEnd); err != nil {
-				log.Printf("dashboard: agmSnapshotsRange fallback: %v", err)
+			if ps, err := queryPG(rStart, rEnd); err != nil {
+				log.Printf("dashboard: agmRange fallback: %v", err)
 			} else {
 				out = append(out, ps...)
 			}
 		} else {
 			out = append(out, rs...)
 		}
+	}
+	return out
+}
+
+func (h *dashboardHandler) agmPZEMRange(from, to, now time.Time) []agmSnapshot {
+	return h.agmRange(from, to, now, h.store.QueryAGMPZEMSeriesAgg, h.pg.AGMPZEMAveragesAll)
+}
+func (h *dashboardHandler) agmBKRange(from, to, now time.Time) []agmSnapshot {
+	return h.agmRange(from, to, now, h.store.QueryAGMBKSeriesAgg, h.pg.AGMBK300AveragesAll)
+}
+
+// agmBKSeries собирает ряд BK300: только полные снимки (4 напряжения).
+func (h *dashboardHandler) agmBKSeries(from, to, now time.Time) []agmBKPoint {
+	snaps := h.agmBKRange(from, to, now)
+	out := make([]agmBKPoint, 0, len(snaps))
+	for _, sn := range snaps {
+		t, err := time.Parse(time.RFC3339Nano, sn.Timestamp)
+		if err != nil {
+			continue
+		}
+		vs := make([]float64, 0, 4)
+		complete := true
+		for pos := 1; pos <= 4; pos++ {
+			v, ok := agmVal(sn.Values, agmBKTag(pos, agmSuffixVoltage))
+			if !ok {
+				complete = false
+				break
+			}
+			vs = append(vs, roundN(v, 2))
+		}
+		if !complete {
+			continue
+		}
+		out = append(out, agmBKPoint{Ts: t.Format(time.RFC3339Nano), Voltages: vs})
 	}
 	return out
 }
@@ -2869,103 +2897,90 @@ func nearestIdx(ts []time.Time, t time.Time) int {
 	return best
 }
 
-// downsampleAGMSeries — гибридное прореживание ряда AGM (по фактическому числу
-// точек, без сшивания больших разрывов), как у остальных графиков. Маркеры
-// разрыва (Break) сохраняются и не усредняются; прореживается каждый непрерывный
-// участок отдельно.
+// downsampleAGMSeries — прореживание ряда PZEM (по числу точек), как у
+// остальных графиков. Батареи сюда не входят — у них отдельный ряд.
 func downsampleAGMSeries(pts []agmSeriesPoint, from, to time.Time) []agmSeriesPoint {
 	if len(pts) <= maxSeriesPoints {
 		return pts
 	}
-	valid := 0
-	for _, p := range pts {
-		if !p.Break {
-			valid++
+	k := (len(pts) + maxSeriesPoints - 1) / maxSeriesPoints
+	gap := downsampleGapSeconds(from, to)
+	times := make([]time.Time, len(pts))
+	for i := range pts {
+		if t, err := time.Parse(time.RFC3339Nano, pts[i].Ts); err == nil {
+			times[i] = t
 		}
 	}
-	if valid <= maxSeriesPoints {
+	out := make([]agmSeriesPoint, 0, maxSeriesPoints)
+	for _, g := range downsampleGroups(times, k, gap) {
+		s := pts[g[0]:g[1]]
+		var sv, si, sp, se float64
+		var msum float64
+		var mcnt int
+		for _, p := range s {
+			sv += p.VoltageV
+			si += p.CurrentA
+			sp += p.PowerW
+			se = p.EnergyWh
+			if p.MapVoltageV != nil {
+				msum += *p.MapVoltageV
+				mcnt++
+			}
+		}
+		n := float64(len(s))
+		var mapVoltage *float64
+		if mcnt > 0 {
+			v := roundN(msum/float64(mcnt), 2)
+			mapVoltage = &v
+		}
+		out = append(out, agmSeriesPoint{
+			Ts:          s[0].Ts,
+			VoltageV:    roundN(sv/n, 2),
+			CurrentA:    roundN(si/n, 2),
+			PowerW:      roundN(sp/n, 1),
+			EnergyWh:    roundN(se, 0),
+			MapVoltageV: mapVoltage,
+		})
+	}
+	return out
+}
+
+// downsampleAGMBK прореживает ряд BK300 до цели точек (усреднение 4 напряжений).
+func downsampleAGMBK(pts []agmBKPoint, from, to time.Time) []agmBKPoint {
+	if len(pts) <= maxSeriesPoints {
 		return pts
 	}
-	k := (valid + maxSeriesPoints - 1) / maxSeriesPoints
+	k := (len(pts) + maxSeriesPoints - 1) / maxSeriesPoints
 	gap := downsampleGapSeconds(from, to)
-	out := make([]agmSeriesPoint, 0, maxSeriesPoints)
-	var seg []agmSeriesPoint
-	flush := func() {
-		if len(seg) == 0 {
-			return
+	times := make([]time.Time, len(pts))
+	for i := range pts {
+		if t, err := time.Parse(time.RFC3339Nano, pts[i].Ts); err == nil {
+			times[i] = t
 		}
-		times := make([]time.Time, len(seg))
-		for i := range seg {
-			if t, err := time.Parse(time.RFC3339Nano, seg[i].Ts); err == nil {
-				times[i] = t
-			}
-		}
-		for _, g := range downsampleGroups(times, k, gap) {
-			s := seg[g[0]:g[1]]
-			var sv, si, sp, se float64
-			var bsum [4]float64
-			var bcnt [4]int
-			var msum float64
-			var mcnt int
-			for _, p := range s {
-				sv += p.VoltageV
-				si += p.CurrentA
-				sp += p.PowerW
-				se = p.EnergyWh // накопительная — последнее значение группы
-				if p.MapVoltageV != nil {
-					msum += *p.MapVoltageV
-					mcnt++
-				}
-				for bi := 0; bi < 4 && bi < len(p.BatteriesV); bi++ {
-					if p.BatteriesV[bi] != nil {
-						bsum[bi] += *p.BatteriesV[bi]
-						bcnt[bi]++
-					}
-				}
-			}
-			n := float64(len(s))
-			batteries := make([]*float64, 4)
-			var batteriesSum *float64
-			allFour := true
-			for bi := 0; bi < 4; bi++ {
-				if bcnt[bi] > 0 {
-					v := roundN(bsum[bi]/float64(bcnt[bi]), 2)
-					batteries[bi] = &v
-				} else {
-					allFour = false
-				}
-			}
-			if allFour {
-				v := roundN(*batteries[0]+*batteries[1]+*batteries[2]+*batteries[3], 2)
-				batteriesSum = &v
-			}
-			var mapVoltage *float64
-			if mcnt > 0 {
-				v := roundN(msum/float64(mcnt), 2)
-				mapVoltage = &v
-			}
-			out = append(out, agmSeriesPoint{
-				Ts:            s[0].Ts,
-				VoltageV:      roundN(sv/n, 2),
-				CurrentA:      roundN(si/n, 2),
-				PowerW:        roundN(sp/n, 1),
-				EnergyWh:      roundN(se, 0),
-				BatteriesV:    batteries,
-				BatteriesSumV: batteriesSum,
-				MapVoltageV:   mapVoltage,
-			})
-		}
-		seg = seg[:0]
 	}
-	for _, p := range pts {
-		if p.Break {
-			flush()
-			out = append(out, p)
+	out := make([]agmBKPoint, 0, maxSeriesPoints)
+	for _, g := range downsampleGroups(times, k, gap) {
+		seg := pts[g[0]:g[1]]
+		var sums [4]float64
+		n := 0
+		for _, p := range seg {
+			if len(p.Voltages) != 4 {
+				continue
+			}
+			for i := 0; i < 4; i++ {
+				sums[i] += p.Voltages[i]
+			}
+			n++
+		}
+		if n == 0 {
 			continue
 		}
-		seg = append(seg, p)
+		vs := make([]float64, 4)
+		for i := 0; i < 4; i++ {
+			vs[i] = roundN(sums[i]/float64(n), 2)
+		}
+		out = append(out, agmBKPoint{Ts: seg[0].Ts, Voltages: vs})
 	}
-	flush()
 	return out
 }
 

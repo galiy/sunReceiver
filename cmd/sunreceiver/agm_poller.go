@@ -25,12 +25,10 @@ import (
 	"time"
 )
 
-// Поток AGM: состояния «поиск PZEM-017» → «мониторинг 5 источников». Цикл —
-// синхронный старт пяти опросчиков по общему барьеру (снимок «на один момент»),
-// следующий цикл не чаще poll_interval от старта предыдущего. Знак тока/мощности
-// выставляется до записи по current МАП; без свежего МАП (±5 с) снимок
-// отбрасывается. Снимок пишется только при данных от всех 5 источников.
-// Документация — docs/modules/agm-monitor.md.
+// Поток AGM: независимые циклы PZEM-017 и 4×BK300. PZEM пишет свой current/ряд
+// при определённом знаке по current МАП (±5 с); BK300 — только полный снимок
+// 4/4. Потеря PZEM не останавливает BLE. Документация —
+// docs/modules/agm-monitor.md.
 
 // agmCycleTimeout — верхняя граница ожидания всех ответов одного цикла.
 // Опросчики ограничены своими таймаутами; это страховка от зависания D-Bus.
@@ -50,6 +48,15 @@ func runAGMPoll(store *redisStore, pg *pgStore, cfg *agmConfig, ctx context.Cont
 		return
 	}
 	d := &agmAGM{cfg: cfg, store: store, pg: pg, errs: newAGMErrTracker(pg, cfg.Name)}
+	// BLE-ветка живёт независимо от PZEM: потеря/поиск порта PZEM не должен
+	// останавливать опрос и рвать соединения BK300.
+	var bleWG sync.WaitGroup
+	bleWG.Add(1)
+	go func() {
+		defer bleWG.Done()
+		d.runBLESupervisor(ctx)
+	}()
+	defer bleWG.Wait()
 	for {
 		if ctx.Err() != nil {
 			return
@@ -58,12 +65,26 @@ func runAGMPoll(store *redisStore, pg *pgStore, cfg *agmConfig, ctx context.Cont
 		if !ok {
 			return
 		}
-		d.monitor(ctx, pz)
+		d.monitorPZEM(ctx, pz)
 		if ctx.Err() != nil {
 			return
 		}
 		if !agmSleepCtx(ctx, agmBeforeSearchDelay) {
 			return
+		}
+	}
+}
+
+// runBLESupervisor — независимый супервизор BLE-менеджера и цикла BK300.
+func (d *agmAGM) runBLESupervisor(ctx context.Context) {
+	for ctx.Err() == nil {
+		m := newAGMBLEManager(d.cfg.Devices, ctx.Done())
+		go m.run()
+		d.runBKCycles(ctx, m)
+		m.CloseAll()
+		m.waitDone(5 * time.Second)
+		if ctx.Err() == nil {
+			agmSleepCtx(ctx, agmBeforeSearchDelay)
 		}
 	}
 }
@@ -76,58 +97,86 @@ type agmAGM struct {
 	errs  *agmErrTracker
 }
 
-// monitor поднимает BLE-менеджер и крутит циклы до потери PZEM/остановки.
-func (d *agmAGM) monitor(ctx context.Context, pz *agmPZEMClient) {
-	m := newAGMBLEManager(d.cfg.Devices, ctx.Done())
-	go m.run()
-	defer func() {
-		m.CloseAll()
-		m.waitDone(5 * time.Second)
-		pz.Close()
-	}()
-
-	log.Printf("agm: состояние: мониторинг 5 источников, период %s", d.cfg.PollInterval)
-	if err := d.runCycles(ctx, pz, m); err != nil && ctx.Err() == nil {
-		log.Printf("agm: мониторинг остановлен — возврат к поиску порта: %v", err)
+// monitorPZEM крутит цикл PZEM до потери порта/остановки.
+func (d *agmAGM) monitorPZEM(ctx context.Context, pz *agmPZEMClient) {
+	defer pz.Close()
+	log.Printf("agm: состояние: опрос PZEM (BLE-ветка независима), период %s", d.cfg.PollInterval)
+	if err := d.runPZEMLoop(ctx, pz); err != nil && ctx.Err() == nil {
+		log.Printf("agm: PZEM остановлен — возврат к поиску порта: %v", err)
 	}
 }
 
-// agmPZEMResult — результат PZEM-опросчика цикла.
-type agmPZEMResult struct {
-	r   agmPZEMReading
-	err error
-}
-
-// agmBKResult — результат опросчика одного BK300.
-type agmBKResult struct {
-	idx int
-	r   agmBKReading
-	err error
-}
-
-// runCycles крутит полные циклы опроса. Возвращает ошибку только при потере
-// PZEM (нужен переход в режим поиска); при остановке — nil.
-func (d *agmAGM) runCycles(ctx context.Context, pz *agmPZEMClient, m *agmBLEManager) error {
-	var lastWarn time.Time
-	var lastPGWarn time.Time
+// runPZEMLoop — независимый цикл PZEM-017: чтение, знак по МАП, запись своего
+// current и ряда. Ошибка errAGMPZEMLost завершает фазу мониторинга.
+func (d *agmAGM) runPZEMLoop(ctx context.Context, pz *agmPZEMClient) error {
+	var lastWarn, lastPGWarn time.Time
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
 		start := time.Now()
+		r, err := pz.Read()
+		if errors.Is(err, errAGMPZEMLost) {
+			d.errs.report(agmPZEMErrKey, err.Error())
+			return err
+		}
+		if err != nil {
+			d.errs.report(agmPZEMErrKey, err.Error())
+			if time.Since(lastWarn) >= 10*time.Second {
+				lastWarn = time.Now()
+				log.Printf("agm: PZEM-017: %v", err)
+			}
+			agmWaitUntil(start.Add(d.cfg.PollInterval), ctx.Done())
+			if ctx.Err() != nil {
+				return nil
+			}
+			continue
+		}
+		d.errs.clear(agmPZEMErrKey)
+		signed, serr := agmSignReading(d.store, r, start)
+		if serr != nil {
+			if time.Since(lastWarn) >= 10*time.Second {
+				lastWarn = time.Now()
+				log.Printf("agm: знак тока/мощности не определён (%v) — снимок PZEM отброшен", serr)
+			}
+			agmWaitUntil(start.Add(d.cfg.PollInterval), ctx.Done())
+			if ctx.Err() != nil {
+				return nil
+			}
+			continue
+		}
+		snap := agmSnapshot{
+			Name:      d.cfg.Name,
+			Timestamp: agmTimestamp(start),
+			Values:    agmBuildPZEMValues(signed),
+		}
+		if err := d.store.SaveAGMPZEMCurrent(snap); err != nil && time.Since(lastPGWarn) >= time.Minute {
+			lastPGWarn = time.Now()
+			log.Printf("agm pzem: current: %v", err)
+		}
+		if err := d.store.SaveAGMPZEMSeries(snap, start); err != nil && time.Since(lastPGWarn) >= time.Minute {
+			lastPGWarn = time.Now()
+			log.Printf("agm pzem: series: %v", err)
+		}
+		agmWaitUntil(start.Add(d.cfg.PollInterval), ctx.Done())
+		if ctx.Err() != nil {
+			return nil
+		}
+	}
+}
 
+// runBKCycles — независимый цикл 4×BK300. Снимок пишется только когда ответили
+// все четыре; ошибки источника ведутся по каждому устройству.
+func (d *agmAGM) runBKCycles(ctx context.Context, m *agmBLEManager) {
+	var lastWarn, lastPGWarn time.Time
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		start := time.Now()
 		gate := make(chan struct{})
 		var wg sync.WaitGroup
-		pzCh := make(chan agmPZEMResult, 1)
 		bkCh := make(chan agmBKResult, len(m.devices))
-
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-gate
-			r, err := pz.Read()
-			pzCh <- agmPZEMResult{r: r, err: err}
-		}()
 		for i, dev := range m.devices {
 			i, dev := i, dev
 			wg.Add(1)
@@ -138,9 +187,7 @@ func (d *agmAGM) runCycles(ctx context.Context, pz *agmPZEMClient, m *agmBLEMana
 				bkCh <- agmBKResult{idx: i, r: r, err: err}
 			}()
 		}
-
 		close(gate)
-
 		done := make(chan struct{})
 		go func() { wg.Wait(); close(done) }()
 		timedOut := false
@@ -150,77 +197,23 @@ func (d *agmAGM) runCycles(ctx context.Context, pz *agmPZEMClient, m *agmBLEMana
 			stopTimer(timer)
 		case <-timer.C:
 			timedOut = true
-			// Не начинаем следующий цикл, пока опросчики не завершились: иначе
-			// запросы к тем же соединениям накладываются.
-			if time.Since(lastWarn) >= 10*time.Second {
-				lastWarn = time.Now()
-				log.Printf("agm: цикл: ответы не собраны за %s — жду завершения опросчиков", agmCycleTimeout)
-			}
-			// Ограниченное ожидание: зависший serial/D-Bus сверх своих таймаутов не
-			// должен вешать модуль навсегда. Не дождались — выходим из фазы
-			// (соединения пересоздаст следующий цикл мониторинга).
 			wait := time.NewTimer(5 * time.Second)
 			select {
 			case <-done:
 				stopTimer(wait)
 			case <-ctx.Done():
 				stopTimer(wait)
-				return nil
+				return
 			case <-wait.C:
-				log.Printf("agm: опросчики не завершились и за 5 с после таймаута — перезапуск фазы")
-				// Фиксируем ошибку связи только по тем опросчикам, чьих
-				// результатов нет (недренирующее чтение каналов): PZEM с ошибкой
-				// или без результата, BK300 — по отсутствующему idx. Повторы не
-				// пишутся (только «не было → есть»), очистка — при успехе.
-				pzFailed := true
-				select {
-				case r := <-pzCh:
-					pzFailed = r.err != nil
-				default:
-				}
-				if pzFailed {
-					d.errs.report(agmPZEMErrKey, "PZEM-017: обмен не завершился за таймаут цикла")
-				}
-				got := make(map[int]bool, len(bkCh))
-				for {
-					drained := false
-					select {
-					case r := <-bkCh:
-						drained = true
-						if r.err != nil {
-							d.errs.report(m.devices[r.idx].cfg.Name,
-								m.devices[r.idx].cfg.Name+" "+r.err.Error())
-						} else {
-							got[r.idx] = true
-						}
-					default:
-					}
-					if !drained {
-						break
-					}
-				}
-				for i, dev := range m.devices {
-					if !got[i] {
-						d.errs.report(dev.cfg.Name, dev.cfg.Name+" не ответил за таймаут цикла")
-					}
-				}
-				return errors.New("опросчики зависли")
+				log.Printf("agm bk: опросчики не завершились за таймаут — перезапуск фазы")
+				return
 			}
 		case <-ctx.Done():
 			stopTimer(timer)
-			select {
-			case <-done:
-			case <-time.After(5 * time.Second):
-			}
-			return nil
+			<-done
+			return
 		}
 
-		var pzRes agmPZEMResult
-		select {
-		case pzRes = <-pzCh:
-		default:
-			pzRes.err = errors.New("нет результата PZEM-017")
-		}
 		bks := make([]agmBKResult, len(m.devices))
 		for i := range bks {
 			bks[i] = agmBKResult{idx: i, err: errors.New("нет результата BK300")}
@@ -238,100 +231,52 @@ func (d *agmAGM) runCycles(ctx context.Context, pz *agmPZEMClient, m *agmBLEMana
 			}
 		}
 
-		if errors.Is(pzRes.err, errAGMPZEMLost) {
-			d.errs.report(agmPZEMErrKey, pzRes.err.Error())
-			return pzRes.err
-		}
-		// Знак тока/мощности определяется ДО сохранения: PZEM отдаёт модуль,
-		// сравниваем UАКБ МАП с напряжением сборки. Нет свежего МАП (±5 с) —
-		// снимок не сохраняем вообще: достоверный знак неизвестен.
-		signFailed := false
-		if pzRes.err == nil && !timedOut {
-			signed, serr := agmSignReading(d.store, pzRes.r, start)
-			if serr != nil {
-				signFailed = true
-				if time.Since(lastWarn) >= 10*time.Second {
-					lastWarn = time.Now()
-					log.Printf("agm: знак тока/мощности не определён (%v) — снимок отброшен", serr)
-				}
-			} else {
-				pzRes.r = signed
-			}
-		}
-		if signFailed {
-			agmWaitUntil(start.Add(d.cfg.PollInterval), ctx.Done())
-			continue
-		}
-		if pzRes.err != nil {
-			d.errs.report(agmPZEMErrKey, pzRes.err.Error())
-		} else {
-			d.errs.clear(agmPZEMErrKey)
-		}
-		for _, dev := range m.devices {
-			up, msg := dev.health()
-			if up {
-				d.errs.clear(dev.cfg.Name)
-				continue
-			}
-			// Пока не было ни одной неудачной попытки (lastErr пуст — идёт
-			// первичное подключение), ложную ошибку не пишем.
-			if msg == "" {
-				continue
-			}
-			d.errs.report(dev.cfg.Name, dev.cfg.Name+" "+msg)
-		}
-
-		// Снимок сохраняется ТОЛЬКО если ответили все 5 источников и знак
-		// определён. Нет данных хотя бы по одному устройству — снимок не пишем
-		// ни в current, ни в series (дырка в графике честнее частичного снимка).
-		pzOK := !timedOut && pzRes.err == nil
-		allOK := pzOK
 		samples := make([]agmBKSample, 0, len(bks))
+		allOK := !timedOut
 		for _, b := range bks {
+			dev := m.devices[b.idx]
 			if b.err != nil {
 				allOK = false
+				d.errs.report(dev.cfg.Name, dev.cfg.Name+" "+b.err.Error())
 				continue
 			}
-			samples = append(samples, agmBKSample{Position: m.devices[b.idx].cfg.Position, Reading: b.r})
+			d.errs.clear(dev.cfg.Name)
+			samples = append(samples, agmBKSample{Position: dev.cfg.Position, Reading: b.r})
 		}
-		if allOK {
+		if allOK && len(samples) == len(m.devices) {
 			snap := agmSnapshot{
 				Name:      d.cfg.Name,
 				Timestamp: agmTimestamp(start),
-				Values:    agmBuildValues(pzRes.r, samples),
+				Values:    agmBuildBKValues(samples),
 			}
-			if err := d.store.SaveAGMCurrent(snap); err != nil {
-				if time.Since(lastPGWarn) >= time.Minute {
-					lastPGWarn = time.Now()
-					log.Printf("agm: current: %v", err)
-				}
+			if err := d.store.SaveAGMBKCurrent(snap); err != nil && time.Since(lastPGWarn) >= time.Minute {
+				lastPGWarn = time.Now()
+				log.Printf("agm bk: current: %v", err)
 			}
-			if err := d.store.SaveAGMSeries(snap, start); err != nil {
-				if time.Since(lastPGWarn) >= time.Minute {
-					lastPGWarn = time.Now()
-					log.Printf("agm: series: %v", err)
-				}
+			if err := d.store.SaveAGMBKSeries(snap, start); err != nil && time.Since(lastPGWarn) >= time.Minute {
+				lastPGWarn = time.Now()
+				log.Printf("agm bk: series: %v", err)
 			}
 		} else if time.Since(lastWarn) >= 10*time.Second {
 			lastWarn = time.Now()
-			missing := 0
-			if pzRes.err != nil {
-				missing++
-			}
-			for _, b := range bks {
-				if b.err != nil {
-					missing++
-				}
-			}
-			if timedOut && missing == 0 {
-				log.Printf("agm: цикл просрочен (>%s) — снимок не записан", agmCycleTimeout)
+			if timedOut {
+				log.Printf("agm bk: цикл просрочен (>%s) — снимок не записан", agmCycleTimeout)
 			} else {
-				log.Printf("agm: неполный цикл: нет данных от %d из 5 источников — снимок не записан", missing)
+				log.Printf("agm bk: неполный снимок: %d/4 ответов — не записан", len(samples))
 			}
 		}
-
 		agmWaitUntil(start.Add(d.cfg.PollInterval), ctx.Done())
+		if ctx.Err() != nil {
+			return
+		}
 	}
+}
+
+// agmBKResult — результат чтения одного BK300.
+type agmBKResult struct {
+	idx int
+	r   agmBKReading
+	err error
 }
 
 // agmSignReading получает current МАП, проверяет свежесть (±5 с) и

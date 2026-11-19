@@ -44,7 +44,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 | **Счётчик DTS017M** (`dts017_*.go`) | Трёхфазный счётчик (Modbus RTU через прозрачный шлюз): телеметрия/энергии → **собственные** ключи/ряд Redis и **собственные** таблицы PG; посуточные тарифы «День/Ночь» считаются сами (историю счётчика не читаем); рамка «Гараж» и графики на странице «Электроэнергия», `/api/dts017m/current|tariffs` | [dts017m-meter.md](dts017m-meter.md) |
 | **Счётчик «Меркурий»** (энергосбыт, без мониторинга; прогноз) | Последовательно с DDS238; показания снимаются **вручную** (раздел конфига `mercury`), прогноз на текущий момент по последней ручной точке + статистике DDS238 (`mercury.go` → `/api/current` → рамка «Меркурий — прогноз») | [meter_mercury.md](meter_mercury.md) |
 | **Счётчик Энергомера CE308** (`ce308_*.go`) | Опрос по BLE: единственный режим — только итоговые показания (накопленная энергия раз в 30 мин/по кнопке), без телеметрии и агрегатов | [modules/ce308.md](modules/ce308.md) |
-| **Мониторинг AGM-сборки** (`agm_*.go`) | PZEM-017 по RS485 через удалённый CH340 (usbip) + 4×BK300 по BLE (адаптер общий с CE308): синхронный снимок 5 источников раз в секунду; Redis `sunreceiver:agm:*` + PG `agm_averages_r`. Неполный цикл не пишется. Внешний watchdog usbip — `deploy/` | [modules/agm-monitor.md](modules/agm-monitor.md) |
+| **Мониторинг AGM-сборки** (`agm_*.go`) | PZEM-017 по RS485 через удалённый CH340 (usbip) + 4×BK300 по BLE (адаптер общий с CE308): раздельный опрос PZEM и 4×BK300; Redis `sunreceiver:agm:*` + PG `agm_pzem_averages_r`/`agm_bk300_averages_r`. BK300 пишется только при 4/4 ответах. Внешний watchdog usbip — `deploy/` | [modules/agm-monitor.md](modules/agm-monitor.md) |
 | **Проброс Bluetooth (usbip)** (вне кода, ОТКЛЮЧЕНО 2026-09-24) | Историческая схема: проброс BLE-контроллера MediaTek с `.9` на `.253` через usbip; на `.253` теперь физический USB-адаптер | [ce308-bluetooth/README.md](ce308-bluetooth/README.md) |
 | **BMS malina26** (`bms26*.go`) | Единый пулер BMS (ANT+EnBMS) через HTTP-API «Малина26»: `/api/bms/devices` + `/api/bms/raw` (бинарный контракт 107 Б, копия `internal/bmscontract`); Redis `sunreceiver:bms26:*` + PG `bms26_averages_r` | [modules/bms26.md](modules/bms26.md) |
 | **Уведомления в MAX** (`notify.go`) | Отправка событий мониторинга МАП (недоступен / нет напряжения сети) в мессенджер MAX через Bot API, с гистерезисом и дедупликацией | [modules/notify.md](modules/notify.md) |
@@ -105,7 +105,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
   PostgreSQL. (Подробнее — [modules/storage.md](modules/storage.md).)
 - **PostgreSQL** — вся история, **единая гранулярность 1 запись / 5 минут** по марке
   (`sunreceiver.deye_averages_r`/`sofar_averages_r`, а также
-  `bms26_averages_r`, `dts017m_averages_r`, `agm_averages_r`, `dds238_averages_r`,
+  `bms26_averages_r`, `dts017m_averages_r`, `agm_pzem_averages_r`, `agm_bk300_averages_r`, `dds238_averages_r`,
   `map_averages_r`, `kes_averages_r`), плюс таблицы тарифов (`sunreceiver.dds238_daily_tariffs` и
   обособленная `sunreceiver.dts017m_daily_tariffs`). Фоновые аккумуляторы усредняют
   накопленные в Redis снимки.

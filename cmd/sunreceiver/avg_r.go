@@ -75,7 +75,8 @@ var avgSpecs = []avgSpec{
 		"dts017_reactive_power_a", "dts017_reactive_power_b", "dts017_reactive_power_c",
 		"dts017_reactive_total", "dts017_total", "dts017_voltage_a", "dts017_voltage_ab",
 		"dts017_voltage_b", "dts017_voltage_bc", "dts017_voltage_c", "dts017_voltage_ca"}, nil},
-	{"sunreceiver.agm_averages_r", "name", nil, agmAvgMetrics(), nil},
+	{"sunreceiver.agm_pzem_averages_r", "name", nil, agmPZEMAvgMetrics(), nil},
+	{"sunreceiver.agm_bk300_averages_r", "name", nil, agmBKAvgMetrics(), nil},
 	{"sunreceiver.bms26_averages_r", "name",
 		[]string{"base", "serial", "bms_type", "device_name"}, []string{
 			"soc", "soh", "mode", "flags", "cycles", "power_w", "rated_ah", "current_a",
