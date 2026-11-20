@@ -324,24 +324,32 @@ func agmWaitUntil(t time.Time, stop <-chan struct{}) {
 	}
 }
 
+// agmErrorAfterFailures — сколько НЕПРЕРЫВНЫХ неудачных опросов устройства
+// нужно, чтобы зафиксировать ошибку связи в журнале PG. Кратковременные
+// пропуски (BLE/USB) не должны засорять журнал.
+const agmErrorAfterFailures = 3
+
 // agmErrTracker пишет в журнал ошибок PG только ПЕРВОЕ появление ошибки связи
-// по устройству; повтор не пишется, пока ошибка не снята. Ошибки в телеметрию
-// не попадают (правило проекта).
+// по устройству ПОСЛЕ agmErrorAfterFailures неудач подряд; повтор не пишется,
+// пока ошибка не снята. Ошибки в телеметрию не попадают (правило проекта).
 type agmErrTracker struct {
-	mu   sync.Mutex
-	pg   *pgStore
-	name string
-	seen map[string]bool
+	mu    sync.Mutex
+	pg    *pgStore
+	name  string
+	fails map[string]int
+	seen  map[string]bool
 }
 
 func newAGMErrTracker(pg *pgStore, name string) *agmErrTracker {
-	return &agmErrTracker{pg: pg, name: name, seen: map[string]bool{}}
+	return &agmErrTracker{pg: pg, name: name, fails: map[string]int{}, seen: map[string]bool{}}
 }
 
-// report — записать ошибку связи устройства, если она ещё не залогирована.
+// report — учесть неудачу и записать ошибку связи, когда неудач подряд стало
+// не меньше agmErrorAfterFailures (и ещё не записано текущее появление).
 func (t *agmErrTracker) report(device, msg string) {
 	t.mu.Lock()
-	if t.seen[device] {
+	t.fails[device]++
+	if t.seen[device] || t.fails[device] < agmErrorAfterFailures {
 		t.mu.Unlock()
 		return
 	}
@@ -356,9 +364,10 @@ func (t *agmErrTracker) report(device, msg string) {
 	}
 }
 
-// clear — ошибка связи снята: следующее появление снова попадёт в журнал.
+// clear — ошибка связи снята: счётчик и признак «записано» сбрасываются.
 func (t *agmErrTracker) clear(device string) {
 	t.mu.Lock()
+	delete(t.fails, device)
 	delete(t.seen, device)
 	t.mu.Unlock()
 }
