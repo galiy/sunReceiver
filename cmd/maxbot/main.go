@@ -190,6 +190,33 @@ func (b *bot) dispatchMany(ctx context.Context, events []notifyEvent) {
 }
 
 func (b *bot) dispatchOne(ctx context.Context, ev notifyEvent) {
+	// Событие с файлом: file_name + (file_b64 | file_path внутри files_dir).
+	// Постоянные ошибки (битый base64, путь вне каталога, слишком большой
+	// файл) подтверждаем и удаляем, иначе «отравленное» событие зациклится.
+	if ev.FileName != "" {
+		name, data, err := resolveStreamFile(ev, b.cfg.FilesDir, maxStreamFileBytes)
+		if err != nil {
+			log.Printf("maxbot: событие %s с файлом отклонено: %v", ev.ID, err)
+			b.ackDel(ctx, ev.ID)
+			return
+		}
+		if !b.client.hasRecipient() {
+			// Адресат не задан — файл ждёт (как и текстовые события).
+			return
+		}
+		sctx, cancel := context.WithTimeout(ctx, maxRequestTimeout)
+		defer cancel()
+		if err := b.client.sendFile(sctx, name, data, ev.Text); err != nil {
+			if time.Since(b.lastSendErrAt) >= 30*time.Second {
+				log.Printf("maxbot: отправка файла %q в MAX не удалась: %v (останется в очереди)", name, err)
+				b.lastSendErrAt = time.Now()
+			}
+			return
+		}
+		b.ackDel(ctx, ev.ID)
+		log.Printf("maxbot: отправлен файл в MAX: %s (%d байт)", name, len(data))
+		return
+	}
 	// Пустое событие (нет текста) — нечего отправлять, подтверждаем и удаляем,
 	// чтобы не копить мусор (даже если адресата ещё нет).
 	if ev.Text == "" {

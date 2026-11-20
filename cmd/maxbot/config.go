@@ -36,6 +36,10 @@ type config struct {
 	// Redis — адрес Redis sunreceiver (host:port или путь к unix-сокету),
 	// откуда читается Stream уведомлений.
 	Redis string `json:"redis"`
+	// FilesDir — каталог, из которого разрешено отправлять файлы по полю
+	// file_path (абсолютный путь; файл должен лежать внутри). Пусто —
+	// file_path запрещён, доступен только file_b64.
+	FilesDir string `json:"files_dir"`
 	// Consumer — имя консьюмера в consumer group Stream (по умолчанию "maxbot").
 	Consumer string `json:"consumer"`
 	// AllowedUserIDs — белый список user_id (строки), которым разрешено стать

@@ -63,12 +63,17 @@ func ensureGroup(ctx context.Context, rdb *redis.Client, group string) error {
 	return err
 }
 
-// notifyEvent — содержимое одной записи Stream (поля type/text/ts).
+// notifyEvent — содержимое одной записи Stream.
+// Обязательно только text (уведомление); для файла — file_name и одно из
+// file_b64 / file_path (см. docs/modules/notify.md).
 type notifyEvent struct {
-	ID   string
-	Type string
-	Text string
-	Ts   string
+	ID       string
+	Type     string
+	Text     string
+	Ts       string
+	FileName string
+	FileB64  string
+	FilePath string
 }
 
 // readNew читает новые (ещё не прочитанные) записи Stream XREADGROUP.
@@ -142,6 +147,15 @@ func flattenStreams(res []redis.XStream) []notifyEvent {
 			}
 			if v, ok := m.Values["ts"].(string); ok {
 				ev.Ts = v
+			}
+			if v, ok := m.Values["file_name"].(string); ok {
+				ev.FileName = v
+			}
+			if v, ok := m.Values["file_b64"].(string); ok {
+				ev.FileB64 = v
+			}
+			if v, ok := m.Values["file_path"].(string); ok {
+				ev.FilePath = v
 			}
 			out = append(out, ev)
 		}

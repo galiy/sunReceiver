@@ -5,7 +5,10 @@
   "disabled": false,
   "redis": "127.0.0.1:6379",
   "consumer": "maxbot",
-  "allowed_user_ids": ["CHANGE_ME_USER_ID"],
+  "files_dir": "/opt/maxbot/files",
+  "allowed_user_ids": [
+    "CHANGE_ME_USER_ID"
+  ],
   "dsh": {
     "disabled": false,
     "base_url": "http://127.0.0.1:3080",

@@ -153,6 +153,7 @@ maxbot независим от опроса МАП: он всегда читае
 | `disabled` | опц. | `true` — бот не запускается (раздел есть, но без отправки) |
 | `redis` | обязателен | адрес Redis sunreceiver (host:port или unix-сокет), откуда читать Stream |
 | `consumer` | опц. | имя консьюмера в consumer group (дефолт `maxbot`); фиксированное имя позволяет дочитать незавершённые после рестарта |
+| `files_dir` | опц. | каталог, из которого разрешено отправлять файлы по `file_path` (абсолютный); пусто — `file_path` запрещён, доступен только `file_b64` |
 | `allowed_user_ids` | опц. | **белый список** `user_id` (строки), которым разрешено стать адресатом; события подписки/сообщения от аккаунтов вне списка отклоняются, адресат не меняется. Пустой список — регистрация запрещена для всех (адресат задаётся только явно) |
 
 > **`user_id`/`chat_id` заполнять не нужно, если задан `allowed_user_ids`.** Бот
@@ -231,3 +232,140 @@ Cert-цепочка `platform-api2.max.ru` подписана **Russian Trusted 
 **Russian Trusted Root CA** (Минцифры). На сервере должен быть установлен корневой
 сертификат Минцифры в системный пул (`/usr/local/share/ca-certificates/` +
 `update-ca-certificates`), иначе `Verify return code: 20` / `curl` без `-k` не пройдёт.
+## Интеграция других сервисов (уведомления и файлы в MAX)
+
+Этот раздел — для **сторонних сервисов**, которым нужно отправлять сообщения в
+MAX через инфраструктуру maxbot, не будучи частью sunReceiver.
+
+### 1. Текстовые уведомления: очередь Redis Stream (готовый путь)
+
+Любой сервис с доступом к Redis может положить текст в Stream, который читает
+maxbot; доставку в MAX (токен, получатель, ретраи, XACK) делает maxbot.
+
+- Stream: **`sunreceiver:notify:events`** (приблизительный `MAXLEN` 1000).
+- Поля записи:
+  - `type` — произвольная метка источника (`sunReceiver` пишет `map`; maxbot
+    значение **не фильтрует**);
+  - `text` — текст сообщения (обычный текст, без markdown);
+  - `ts` — RFC3339 (для диагностики, обязательным не является).
+- Получатель — тот, что настроен в `maxbot.json` (`user_id`/`chat_id`); в самой
+  записи Stream адресата нет.
+
+Пример (redis-cli):
+
+```sh
+redis-cli XADD sunreceiver:notify:events MAXLEN '~' 1000 '*' \
+  type my-service text 'Мой сервис: что-то случилось' ts "$(date -Iseconds)"
+```
+
+Пример (Python, redis-py):
+
+```python
+import datetime, redis
+r = redis.Redis(host="127.0.0.1", port=6379, socket_timeout=3)
+r.xadd("sunreceiver:notify:events",
+       {"type": "my-service", "text": "Мой сервис: что-то случилось",
+        "ts": datetime.datetime.now().astimezone().isoformat()},
+       maxlen=1000, approximate=True)
+```
+
+Семантика доставки:
+
+- maxbot читает Stream consumer group (имя группы = `maxbot.consumer`, по
+  умолчанию `maxbot`), отправляет в MAX и подтверждает запись (`XACK`) только
+  после успешной отправки; затем удаляет её (`XDEL`).
+- Если MAX недоступен, запись остаётся неподтверждённой и будет переотправлена
+  (at-least-once) — сообщение может прийти повторно. Текст стоит делать
+  идемпотентным (без «одноразовых» действий на стороне получателя).
+- Пока в `maxbot.json` не задан адресат, события не отправляются и не
+  подтверждаются (накапливаются в Stream; лимит ~1000). Не заливайте очередь
+  без настроенного бота.
+
+Ограничения: только **текст**, один общий получатель, без вложений и без
+разметки. Для адресных/богатых сообщений используйте Bot API напрямую (ниже).
+
+### 2. Файлы через очередь maxbot (реализовано)
+
+Событие Stream может нести файл: поля `file_name` (обязательно) и **ровно
+одно** из `file_b64` / `file_path`. Текст (`text`) становится подписью к файлу
+(может быть пустым). maxbot загружает файл в MAX (`uploads?type=file` →
+multipart `data` → `/messages` с вложением) и подтверждает событие (XACK) только
+после успешной отправки.
+
+Пределы и правила:
+
+- размер файла — до **10 MiB**; больше — отправлять напрямую через Bot API
+  (см. вариант A ниже);
+- `file_name` санитизируется до базового имени (каталоги отбрасываются);
+- `file_b64` — base64 (Std или Raw без padding);
+- `file_path` — абсолютный путь **внутри `files_dir`** из `maxbot.json`
+  (симлинки раскрываются, выход за каталог запрещён). Если `files_dir` не
+  задан — `file_path` отклоняется;
+- «отравленные» события (битый base64, путь вне каталога, превышение размера)
+  логируются, подтверждаются и удаляются, чтобы не зацикливать очередь.
+
+#### Инструкция для сервисов на этом же хосте (`.2`)
+
+На проде: `maxbot.json` → `"files_dir": "/opt/maxbot/files"`; каталог
+`/opt/maxbot/files` (владелец `maxbot:maxbot`, режим `0770`). Сервис-отправитель
+либо кладёт файл туда (его пользователь должен входить в группу `maxbot`),
+либо не использует `file_path` и передаёт содержимое через `file_b64`
+(проще и без прав на каталог).
+
+```sh
+# 1) файл на диске (если есть право писать в files_dir)
+install -m 0640 -g maxbot /path/to/report.pdf /opt/maxbot/files/report.pdf
+redis-cli XADD sunreceiver:notify:events MAXLEN '~' 1000 '*'   type my-service text 'Отчёт за сутки'   file_name report.pdf file_path /opt/maxbot/files/report.pdf   ts "$(date -Iseconds)"
+
+# 2) маленький файл через base64
+B64=$(base64 -w0 /path/to/small.txt)
+redis-cli XADD sunreceiver:notify:events MAXLEN '~' 1000 '*'   type my-service text 'Лог (txt)'   file_name small.txt file_b64 "$B64" ts "$(date -Iseconds)"
+```
+
+Python (redis-py):
+
+```python
+import base64, datetime, redis
+r = redis.Redis(host="127.0.0.1", port=6379, socket_timeout=3)
+data = open("/opt/maxbot/files/report.pdf", "rb").read()
+r.xadd("sunreceiver:notify:events", {
+    "type": "my-service",
+    "text": "Отчёт за сутки",
+    "file_name": "report.pdf",
+    "file_b64": base64.b64encode(data).decode(),
+    "ts": datetime.datetime.now().astimezone().isoformat(),
+}, maxlen=1000, approximate=True)
+```
+
+Доставка — at-least-once (как и для текста): при сбое MAX событие остаётся и
+будет переотправлено.
+
+#### Вариант для больших файлов: напрямую в MAX Bot API
+
+Взять `cmd/maxbot/botclient.go` как референс. Токен бота — заголовок
+`Authorization: <token>` (без `Bearer`), base URL `https://platform-api2.max.ru`.
+Порядок:
+
+1. `POST /uploads?type=file` → JSON `{"url": "...", "token": "..."}`;
+2. `POST <url>` multipart, поле **`data`** (имя файла в `Content-Disposition`) →
+   JSON `{"token": "..."}`;
+3. `POST /messages?chat_id=<id>` (или `?user_id=<id>`) с телом:
+   ```json
+   {"text":"подпись","attachments":[{"type":"file","payload":{"token":"<токен>"}}]}
+   ```
+
+Заголовок `Authorization` при загрузке — только если `url` загрузки на том же
+origin, что API (CDN-хосты токен не получают). Токен бота хранить в
+секрете/переменной окружения, не в git.
+
+### 3. Требования и безопасность
+
+- Доступ к Redis Stream = право слать уведомления боту. Redis не выставлять
+  наружу; стороннему сервису — отдельный Redis-пользователь/ACL с правом
+  `XADD` только на `sunreceiver:notify:events`.
+- Не класть в Stream секреты и персональные данные: сообщение уходит в MAX и
+  остаётся в истории чата.
+- Токен MAX боту нужен только для пути A (прямой Bot API); для пути через
+  maxbot токен стороннему сервису не нужен.
+- При массовой отправке учитывать лимиты MAX (maxbot выдерживает паузу ~550 мс
+  между сообщениями).
