@@ -50,6 +50,7 @@ DDS238 (Modbus TCP или Modbus RTU через прозрачный шлюз), 
 | **Уведомления в MAX** (`notify.go`) | Отправка событий мониторинга МАП (недоступен / нет напряжения сети) в мессенджер MAX через Bot API, с гистерезисом и дедупликацией | [modules/notify.md](modules/notify.md) |
 | **Чат с DeepSeek Harness** (`cmd/maxbot`, раздел `dsh`) | Прокси-чат оператора с агентом harness (`127.0.0.1:3080`): очередь, постоянная сессия, выбор модели (TTL 2 ч), heartbeat, замена сессии, отмена/продолжение, вложения | [modules/dsh-bot.md](modules/dsh-bot.md) |
 | **Сетевое реле SR-201** (`relay_control.go`) | Управление двойным реле по UDP (белая/красная лампы): поддержка состояния (вкл/выкл/мигание 2 Гц) + автоиндикаторы (отдача в сеть, наличие напряжения сети) | [relay_sr-201(2light).md](relay_sr-201(2light).md) |
+| **Управление гаражом** (`garage_*.go`) | 4-канальное TCP-реле relay4: инверторы «Гараж», подача напряжения, стабилизатор/прямая подача; журнал переключений и график состояний | [modules/garagemgr.md](modules/garagemgr.md) |
 | **Windows-трей и логирование** (`tray_*.go`, `logfile_*.go`) | Сворачивание в системный трей (`fyne.io/systray`) и запись лога в `sunReceiver.log` рядом с exe; на POSIX `runTray`/`setupLogging` — no-op | [modules/tray-logging.md](modules/tray-logging.md) |
 | **Универсальный контракт `values`** | Набор общих тегов с одинаковыми именами/единицами для всех марок (PV, AC, фазы, энергия, МАП) | [universal-contract.md](universal-contract.md) |
 

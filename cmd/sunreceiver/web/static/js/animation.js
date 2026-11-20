@@ -818,6 +818,27 @@ async function tick(){
   var tsG=document.getElementById('animGarageTs'); if(tsG) tsG.textContent=ts;
 }
 
+// Краткая индикация модуля «Управление гаражом» в рамке «Гараж» на главной:
+// состояние модуля и текущий режим (прямая подача / через стабилизатор).
+var GARAGE_STATE_LABELS={1:'Выключен',2:'Ожидание восстановления',3:'Управляет'};
+async function tickGarageMgr(){
+  var el=document.getElementById('garageMgrState');
+  if(!el) return;
+  try{
+    var r=await fetch('/api/garage',{cache:'no-store'});
+    if(!r.ok) return;
+    var s=await r.json();
+    var label=GARAGE_STATE_LABELS[s.module_state]||'—';
+    var extra='';
+    if(s.enabled!==false && s.module_state===3){
+      if(s.phase_fault) extra=' — авария фаз';
+      else if(s.relays && s.relays[2]) extra=' — прямая подача';
+      else extra=' — через стабилизатор';
+    }
+    el.textContent='Гараж: '+label+extra;
+  }catch(e){}
+}
+
 // ---------- Опрос /api/animation по видимости спойлеров Дом/Гараж ----------
 // Один запрос /api/animation отдаёт обе схемы (и Дом, и Гараж), и единый tick()
 // пересобирает обе. Поэтому поллер включаем, когда открыт хотя бы один из двух
@@ -847,6 +868,17 @@ if(window.srSpoilers){
 // (немедленный опрос), при выключении — остановка опроса /api/animation.
 if(window.srRefresh){ window.srRefresh.register(animSync, animStop); }
 animSync(); // старт/стоп по текущему состоянию спойлеров при загрузке
+
+// Краткий статус модуля гаража в заголовке спойлера «Гараж» виден всегда,
+// поэтому опрашивается своим таймером (5 с), не завися от раскрытия спойлера.
+(function(){
+  if(!document.getElementById('garageMgrState')) return;
+  var timer=null;
+  function start(){ if(timer) return; tickGarageMgr(); timer=setInterval(tickGarageMgr,5000); }
+  function stop(){ if(timer){ clearInterval(timer); timer=null; } }
+  if(window.srRefresh) window.srRefresh.register(start,stop);
+  start();
+})();
 
 var lastNow=performance.now();
 function loop(now){

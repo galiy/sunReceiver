@@ -92,6 +92,48 @@ func (s *redisStore) QueryDts017Series(start, end time.Time) ([]dts017Snapshot, 
 	return out, nil
 }
 
+// QueryDts017SeriesBackfill читает окно удержания Redis для стартового добора
+// 5-минутных средних БЕЗ выгрузки сырья: два серверных TS.MRANGE с агрегацией
+// по 5-минутным бакетам — avg для обычных тегов и last для накопительных
+// (энергии). Сырьё за 1.5–2 суток блокировало Redis на 5–6 с.
+func (s *redisStore) QueryDts017SeriesBackfill(start, end time.Time) ([]dts017Snapshot, error) {
+	bucket := int64(avgStep / time.Millisecond)
+	avgSeries, err := s.tsMRangeAgg(start, end, "avg", bucket, "kind=dts017m")
+	if err != nil {
+		return nil, err
+	}
+	lastSeries, err := s.tsMRangeAgg(start, end, "last", bucket, "kind=dts017m")
+	if err != nil {
+		return nil, err
+	}
+	snaps := tsGroupSnapshots(mergeDts017Backfill(avgSeries, lastSeries))
+	out := make([]dts017Snapshot, 0, len(snaps))
+	for _, sn := range snaps {
+		out = append(out, dts017Snapshot{Name: sn.Name, Timestamp: sn.Timestamp, Values: vcToFloatMap(sn.Values)})
+	}
+	return out, nil
+}
+
+// mergeDts017Backfill заменяет значения накопительных тегов на серии last
+// (по ключу серии), оставляя avg для остальных.
+func mergeDts017Backfill(avgSeries, lastSeries []tsSeries) []tsSeries {
+	lastByKey := make(map[string]tsSeries, len(lastSeries))
+	for _, ser := range lastSeries {
+		lastByKey[ser.Key] = ser
+	}
+	out := make([]tsSeries, 0, len(avgSeries))
+	for _, ser := range avgSeries {
+		if dts017CumulativeTags[tsLabelUnescape(ser.Labels["tag"])] {
+			if ls, ok := lastByKey[ser.Key]; ok {
+				out = append(out, ls)
+				continue
+			}
+		}
+		out = append(out, ser)
+	}
+	return out
+}
+
 // QueryDts017SeriesAgg — как QueryDts017Series, но с серверной агрегацией avg
 // (bucketMs; 0 — сырьё) для графиков. Единая с остальными рядами агрегация.
 func (s *redisStore) QueryDts017SeriesAgg(start, end time.Time, bucketMs int64) ([]dts017Snapshot, error) {

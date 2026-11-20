@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+{{template "head" .}}
+<title>Гараж — SunReceiver</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" integrity="sha384-9nhczxUqK87bcKHh20fSQcTGD4qq5GhayNYSYWqwBkINBhOfQLg/P5HG5lF1urn4" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js" integrity="sha384-cVMg8E3QFwTvGCDuK+ET4PD341jF3W8nO1auiXfuZNQkzbUUiBGLsIQUE+b1mxws" crossorigin="anonymous"></script>
+<link rel="stylesheet" href="/static/css/site.css?v={{.CacheBust}}">
+<link rel="stylesheet" href="/static/css/dashboard.css?v={{.CacheBust}}">
+</head>
+<body>
+<div class="top-nav">
+  <div>
+    <h1 class="ttl">Управление гаражом</h1>
+    <p class="sub">Реле relay4 (4 канала): инверторы «Гараж», подача напряжения, стабилизатор / прямая подача</p>
+  </div>
+  {{template "mnav" .}}
+  {{template "refreshToggle" .}}
+</div>
+
+<div class="garage-cols">
+  <div class="garage-col">
+    <div class="group">
+      <div class="group-title">Состояние модуля</div>
+      <div class="group-body" id="garageState"><span class="missing">Загрузка...</span></div>
+    </div>
+    <div class="group">
+      <div class="group-title">Реле</div>
+      <div class="group-body" id="garageRelays"><span class="missing">Загрузка...</span></div>
+    </div>
+  </div>
+  <div class="group garage-col">
+    <div class="group-head">
+      <span class="group-title">Входные данные мониторинга</span>
+      <span class="meter-ts" id="garageUpdated">&mdash;</span>
+    </div>
+    <div class="group-body" id="garageInputs"><span class="missing">Загрузка...</span></div>
+  </div>
+</div>
+
+<div class="period-panel" id="garagePeriod">
+  <button id="gBtn24h" class="active">24 часа</button>
+  <button id="gBtnToday">Сегодня</button>
+  <button id="gBtnYesterday">Вчера</button>
+  <button id="gBtn7d">7 дней</button>
+  <button id="gBtn30d">30 дней</button>
+  <button id="gBtnAll">Всё</button>
+</div>
+
+<h2 class="bms-charts-title">Состояния реле</h2>
+<div class="garage-charts">
+  <div class="garage-chart-row">
+    <div class="garage-chart-lbl">Реле 1 — инверторы Deye Right/Left</div>
+    <div class="chart-box garage-chart-box"><canvas id="garageChart1"></canvas></div>
+  </div>
+  <div class="garage-chart-row">
+    <div class="garage-chart-lbl">Реле 2 — подача напряжения</div>
+    <div class="chart-box garage-chart-box"><canvas id="garageChart2"></canvas></div>
+  </div>
+  <div class="garage-chart-row">
+    <div class="garage-chart-lbl">Реле 3 — стабилизатор / прямая</div>
+    <div class="chart-box garage-chart-box"><canvas id="garageChart3"></canvas></div>
+  </div>
+  <div class="garage-chart-row">
+    <div class="garage-chart-lbl">Реле 4 — управление</div>
+    <div class="chart-box garage-chart-box"><canvas id="garageChart4"></canvas></div>
+  </div>
+</div>
+
+<script>window.CACHE_BUST='{{.CacheBust}}';</script>
+<script src="/static/js/common.js?v={{.CacheBust}}"></script>
+<script src="/static/js/garage.js?v={{.CacheBust}}"></script>
+</body>
+</html>

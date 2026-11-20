@@ -95,6 +95,10 @@ func (s *pgStore) ensureSchema() error {
 	if err := ensureDts017TariffSchema(s); err != nil {
 		return fmt.Errorf("pg dts017m tariff schema: %w", err)
 	}
+	// Журнал переключений реле гаража (бессрочно, график /garage).
+	if err := ensureGarageSchema(s); err != nil {
+		return fmt.Errorf("pg garage schema: %w", err)
+	}
 	// История ошибок ВСЕХ устройств (инверторы/МАП/счётчик/BMS26/CE308): запись —
 	// только при ПОЯВЛЕНИИ ошибки (переход «не было → есть»), без дублей.
 	if _, err := s.pool.Exec(s.ctx, `

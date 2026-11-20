@@ -170,6 +170,7 @@ type configFile struct {
 	Ce308         *ce308Section    `json:"ce308"`
 	Dts017        *dts017Section   `json:"dts017m"`
 	AGM           *agmSection      `json:"agm"`     // мониторинг AGM-сборки (PZEM-017 + 4×BK300)
+	Garage        *garageSection   `json:"garage"`  // управление гаражом (4-канальное TCP-реле relay4)
 	Mercury       []mercurySection `json:"mercury"` // ручные снятия показаний счётчика энергосбыта «Меркурий»
 	Notify        *notifySection   `json:"notify"`
 	Relay         *relaySection    `json:"relay"`          // сетевое реле SR-201 (лампы), управление по UDP
@@ -337,6 +338,14 @@ func loadConfig(path string) ([]invTarget, *dbConfig, *meterSection, *mapSection
 		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе agm не задано обязательное поле disabled (false/true)", path)
 	}
 	if err := loadAGMConfig(cf.AGM); err != nil {
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
+	}
+	// Управление гаражом (раздел "garage") — 4-канальное TCP-реле relay4.
+	// Disabled обязателен; при активном разделе обязательны ip/port и все пороги.
+	if cf.Garage != nil && cf.Garage.Disabled == nil {
+		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: в разделе garage не задано обязательное поле disabled (false/true)", path)
+	}
+	if err := loadGarageConfig(cf.Garage); err != nil {
 		return nil, nil, nil, nil, nil, nil, 0, fmt.Errorf("config %s: %w", path, err)
 	}
 	// Ручные снятия показаний счётчика энергосбыта «Меркурий» (раздел "mercury").
@@ -996,6 +1005,12 @@ func main() {
 	} else {
 		log.Printf("dts017m: не настроен (нет активного раздела dts017m) — опрос отключён")
 	}
+	// Управление гаражом — раздел "garage" (реле relay4 по TCP).
+	if desc := describeGarageConfig(garageCfg); desc != "" {
+		log.Printf("garage: %s", desc)
+	} else {
+		log.Printf("garage: не настроен (нет активного раздела garage) — управление отключено")
+	}
 	// Мониторинг AGM-сборки — раздел "agm" (PZEM-017 по RS485/usbip + 4×BK300 BLE).
 	if desc := describeAGMConfig(agmCfg); desc != "" {
 		log.Printf("agm: %s", desc)
@@ -1015,6 +1030,7 @@ func main() {
 		ShowRelay:  relaySec != nil && (relaySec.Disabled == nil || !*relaySec.Disabled),
 		ShowCE308:  ce308Cfg != nil,
 		ShowDTS017: dts017Cfg != nil,
+		ShowGarage: garageCfg != nil,
 	}
 
 	// Сетевое реле SR-201 (лампы): управление по UDP, состояние поддерживает
@@ -1274,6 +1290,19 @@ func main() {
 		go func() {
 			defer bgWg.Done()
 			runAGMAccumulator(store, pg, stopCtx)
+		}()
+	}
+
+	// Управление гаражом — отдельный поток (реле relay4 по TCP). Состояние и
+	// журнал переключений: Redis sunreceiver:garage:state + PG garage_relay_events.
+	if garageCfg != nil {
+		// Модуль создаётся синхронно (публикация garageMod до serveDashboard —
+		// без гонки), цикл крутится в отдельной горутине.
+		garageMod = newGarageModule(store, pg, garageCfg)
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			runGarageControl(garageMod, stopCtx)
 		}()
 	}
 

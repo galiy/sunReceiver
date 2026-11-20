@@ -146,7 +146,9 @@ func backfillDts017Accumulator(store *redisStore, pg *pgStore, name string, now 
 	if !start.Before(end) {
 		return
 	}
-	snaps, err := store.QueryDts017Series(start, end)
+	// Добор — серверной агрегацией по 5-минутным бакетам (avg/last), а не
+	// сырьём: сырьё за окно удержания блокировало Redis на секунды.
+	snaps, err := store.QueryDts017SeriesBackfill(start, end)
 	if err != nil {
 		log.Printf("dts017m acc backfill: %v", err)
 		return

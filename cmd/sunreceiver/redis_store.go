@@ -58,7 +58,7 @@ type mapWinMember struct {
 // go-redis сам переподнимает зависшее соединение.
 func openRedis(addr string) (*redis.Client, error) {
 	opts := &redis.Options{
-		ReadTimeout:  3 * time.Second,
+		ReadTimeout:  6 * time.Second,
 		WriteTimeout: 2 * time.Second,
 		// RESP2: TS.MRANGE/TS.RANGE возвращают массивные ответы (в RESP3 — map), а
 		// парсер ответов ожидает RESP2. Явно фиксируем протокол.

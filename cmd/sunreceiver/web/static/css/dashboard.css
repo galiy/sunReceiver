@@ -113,3 +113,41 @@ h1 { font-size:22px; margin:0 0 4px; }
 .spoiler.open > .spoiler-body { display:block; }
 .spoiler-body .anim-scheme { margin-bottom:0; }
 .bms-warn { font-size:11px; font-weight:600; color:#a86500; background:#fff3cd; border:1px solid #ffe08a; border-radius:8px; padding:2px 8px; margin-top:-4px; }
+
+/* --- Модуль «Управление гаражом» (/garage) --- */
+.garage-state{font-size:18px;margin-bottom:6px;display:flex;align-items:center;gap:8px}
+.garage-dot{display:inline-block;width:12px;height:12px;border-radius:50%;background:#adb5bd}
+.garage-dot.green{background:#37b24d}
+.garage-dot.red{background:#f03e3e}
+.garage-dot.grey{background:#adb5bd}
+.garage-warn{color:#e03131;font-weight:600;margin:4px 0}
+.garage-note{color:#868e96;font-size:13px;margin-top:4px}
+.garage-table{width:100%;border-collapse:collapse;font-size:14px}
+.garage-table td,.garage-table th{padding:6px 8px;border-bottom:1px solid #e9ecef;text-align:left}
+.garage-table th{color:#868e96;font-weight:600}
+.garage-badge{padding:2px 8px;border-radius:10px;font-weight:600;font-size:13px;white-space:nowrap}
+.garage-badge.on{background:#d3f9d8;color:#2b8a3e}
+.garage-badge.off{background:#ffe3e3;color:#c92a2a}
+.garage-sub{color:#868e96;font-size:13px}
+.garage-section-title{font-weight:600;margin:14px 0 6px}
+.garage-mgr-line{display:flex;align-items:center;gap:12px;padding:6px 4px 8px;font-size:14px}
+.garage-mgr-state{font-weight:600;margin-left:10px;color:#2b8a3e}
+.garage-mgr-link{color:#1c7ed6;text-decoration:none}
+.garage-mgr-link:hover{text-decoration:underline}
+.chart-box{position:relative;width:100%;margin-bottom:16px}
+.bms-charts-title{margin:28px 0 12px;font-size:16px}
+
+/* --- Страница /garage: две колонки, вертикальные фазы, 4 графика --- */
+.garage-cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start;margin-bottom:8px}
+.garage-col{min-width:0}
+.garage-phases td:first-child{width:55%}
+.garage-charts{display:flex;flex-direction:column;gap:10px;margin-bottom:16px}
+.garage-chart-row{min-width:0}
+.garage-chart-lbl{font-size:13px;font-weight:600;color:#495057;margin-bottom:2px}
+.garage-chart-box{height:110px}
+@media (max-width:900px){.garage-cols{grid-template-columns:minmax(0,1fr)}}
+.garage-charts{position:relative}
+.garage-hint{position:absolute;z-index:5;background:#fff;border:1px solid #d0d6de;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.12);padding:6px 9px;font-size:12px;pointer-events:none;min-width:130px}
+.garage-hint-ts{font-weight:600;margin-bottom:4px;white-space:nowrap}
+.garage-hint-row{display:flex;align-items:center;gap:6px;line-height:1.45;white-space:nowrap}
+.garage-hint-dot{width:8px;height:8px;border-radius:50%;display:inline-block}

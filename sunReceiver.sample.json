@@ -51,7 +51,10 @@
     "poll_interval": 1,
     "pzem": {
       "usbip": "192.168.0.36:3240",
-      "path_globs": ["/dev/serial/by-id/*", "/dev/ttyUSB*"],
+      "path_globs": [
+        "/dev/serial/by-id/*",
+        "/dev/ttyUSB*"
+      ],
       "slave": 1
     },
     "bk300": {
@@ -111,6 +114,36 @@
     "meter_voltage_tag": "meter_voltage",
     "map_grid_tag": "grid_voltage",
     "voltage_present_min": 0
+  },
+  "garage": {
+    "disabled": false,
+    "ip": "192.168.0.59",
+    "port": 5000,
+    "poll_interval_sec": 1,
+    "reconcile_interval_sec": 60,
+    "tcp_keepalive_sec": 30,
+    "monitor_interval_sec": 60,
+    "inverter_stale_sec": 30,
+    "pv_on_voltage": 100,
+    "relay1_hold_sec": 300,
+    "relay1_off_hold_sec": 300,
+    "meter_stale_sec": 5,
+    "meter_stale_grace_sec": 10,
+    "phase_fault_voltage": 100,
+    "phase_recover_sec": 30,
+    "state_grace_sec": 60,
+    "host_ready_timeout_sec": 60,
+    "direct_voltage_min": 215,
+    "direct_voltage_max": 235,
+    "direct_return_min": 215,
+    "direct_return_max": 235,
+    "direct_return_hold_sec": 600,
+    "overvoltage_235_hold_sec": 300,
+    "overvoltage_240_hold_sec": 30,
+    "overvoltage_instant_voltage": 245,
+    "undervoltage_215_hold_sec": 60,
+    "undervoltage_210_hold_sec": 30,
+    "undervoltage_instant_voltage": 205
   },
   "mercury": [
     {

@@ -88,6 +88,9 @@ type dashFlags struct {
 	// ShowDTS017 — опрос DTS017M включён (раздел dts017m активен): на графики
 	// добавляются фазные напряжения и активные мощности DTS017M.
 	ShowDTS017 bool
+	// ShowGarage — модуль управления гаражом включён (раздел garage активен):
+	// на главной показывается индикация состояния модуля.
+	ShowGarage bool
 }
 
 // dashboardHandler — веб-дашборд: отдаёт три HTML-страницы и JSON API.
@@ -3439,6 +3442,7 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayCon
 		"/energy": h.energy,
 		"/bms/":   h.bmsDetail,
 		"/agm":    h.agmPage,
+		"/garage": h.garagePage,
 		"/errors": h.errorsPage,
 	}
 	api := map[string]http.HandlerFunc{
@@ -3455,6 +3459,8 @@ func serveDashboard(addr string, store *redisStore, pg *pgStore, relay *relayCon
 		"/errors":          h.apiErrors,
 		"/ce308/energy":    h.apiCE308Energy,
 		"/dts017m/current": h.apiDts017Current,
+		"/garage":          h.apiGarage,
+		"/garage/events":   h.apiGarageEvents,
 	}
 	if relay != nil {
 		api["/relay"] = h.apiRelay

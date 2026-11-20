@@ -53,9 +53,15 @@
   <button class="spoiler-head" type="button">
     <span class="spoiler-caret">&#9656;</span>
     <span class="spoiler-title">Гараж</span>
+    <span class="garage-mgr-state" id="garageMgrState">&mdash;</span>
     <span class="anim-ts" id="animGarageTs">&mdash;</span>
   </button>
   <div class="spoiler-body">
+    {{if .flags.ShowGarage}}
+    <div class="garage-mgr-line" id="garageMgrLine">
+      <a class="garage-mgr-link" href="/garage">Управление гаражом</a>
+    </div>
+    {{end}}
     <div class="anim-scheme">
       <svg id="svgGarage" class="anim-svg" xmlns="http://www.w3.org/2000/svg"></svg>
     </div>

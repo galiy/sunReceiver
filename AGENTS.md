@@ -33,6 +33,7 @@ PostgreSQL. Включает веб-дашборд текущих парамет
 | Уведомления в MAX | [`docs/modules/notify.md`](docs/modules/notify.md) |
 | Чат с DeepSeek Harness (maxbot, раздел `dsh`) | [`docs/modules/dsh-bot.md`](docs/modules/dsh-bot.md) |
 | Сетевое реле SR-201 (лампы-индикаторы) | [`docs/relay_sr-201(2light).md`](docs/relay_sr-201(2light).md) |
+| Управление гаражом (4-канальное TCP-реле relay4) | [`docs/modules/garagemgr.md`](docs/modules/garagemgr.md) |
 | Windows-трей и логирование (`tray_*.go`, `logfile_*.go`) | [`docs/modules/tray-logging.md`](docs/modules/tray-logging.md) |
 | Протокол Solarman V5 (реверс) | [`docs/research/solarman-v5.md`](docs/research/solarman-v5.md) |
 | Регистры Sofar K-TLX | [`docs/research/sofar-registers.md`](docs/research/sofar-registers.md) |
@@ -141,7 +142,16 @@ maxbot. Полное описание —
 "map_stale_sec", "meter_power_tag", "meter_voltage_tag", "map_grid_tag", "voltage_present_min"}`
 (**`disabled` — ОБЯЗАТЕЛЬНОЕ** поле: `false` — модуль включён, `true` — модуля нет, лампы не
 управляются; `ip` обязателен при `disabled=false`), полностью описан в
-[`docs/relay_sr-201(2light).md`](docs/relay_sr-201(2light).md). **Периоды опроса
+[`docs/relay_sr-201(2light).md`](docs/relay_sr-201(2light).md). Управление гаражом — раздел
+**`garage`** `{"disabled", "ip", "port", "poll_interval_sec", "reconcile_interval_sec",
+"tcp_keepalive_sec", "monitor_interval_sec", "inverter_stale_sec", "pv_on_voltage", "relay1_hold_sec", "relay1_off_hold_sec",
+"meter_stale_sec", "meter_stale_grace_sec", "phase_fault_voltage", "phase_recover_sec", "state_grace_sec", "host_ready_timeout_sec", "direct_voltage_min",
+"direct_voltage_max", "direct_return_min", "direct_return_max", "direct_return_hold_sec",
+"overvoltage_235_hold_sec", "overvoltage_240_hold_sec",
+"overvoltage_instant_voltage", "undervoltage_215_hold_sec", "undervoltage_210_hold_sec",
+"undervoltage_instant_voltage"}` (все поля обязательны;
+`disabled` обязательное: `true` — модуль не работает и реле не трогает), см.
+[`docs/modules/garagemgr.md`](docs/modules/garagemgr.md). **Периоды опроса
 устройств задаются обязательным разделом `poll` (в СЕКУНДАХ)**: `{"map",
 "meter"}` — все поля обязательны и > 0
 (отсутствие/ноль = ошибка загрузки конфига); значения по умолчанию в sample:
@@ -241,6 +251,18 @@ map 1, meter 1. Период сетевых инверторов фиксиро�
   системный трей на Windows, на POSIX — no-op) и `logfile_windows.go`/
   `logfile_posix.go` (файловый журнал `sunReceiver.log` с ротацией на Windows, на
   POSIX — no-op). Полное описание — [`docs/modules/tray-logging.md`](docs/modules/tray-logging.md).
+
+- **Управление гаражом** — `garage_*.go`: `garage_config.go` (раздел `garage`),
+  `garage_client.go` (TCP-клиент relay4, постоянное соединение, keepalive,
+  переподключение), `garage_rules.go` (правила реле 1–4 с гистерезисами),
+  `garage_poller.go` (отдельный поток: цикл 1 с, сверка, установка реле,
+  аренда устройства `MONITOR 1` раз в минуту и `MONITOR 0` при остановке,
+  уведомления), `garage_store.go` (Redis `sunreceiver:garage:state` + PG
+  `garage_relay_events`). 4 реле: 1 — подключение инверторов Deye Right/Left к
+  сети, 2 — полное отключение подачи в гараж, 3 — стабилизатор/прямая подача,
+  4 — авто/ручное. Входные данные — DTS017M (`current`) и инверторы группы
+  «Гараж» (`current`); страница `/garage` с графиком состояний реле, короткая
+  индикация на главной. Полное описание — [`docs/modules/garagemgr.md`](docs/modules/garagemgr.md).
 
 ### Универсальный контракт `values`
 
