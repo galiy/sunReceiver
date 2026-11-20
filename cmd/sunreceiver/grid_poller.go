@@ -320,6 +320,32 @@ type gridFetchResult struct {
 // runGridPoll — цикл опроса всех сетевых инверторов через API malina26.
 // Список читается каждый цикл, снимки — параллельно с ограничением и общим
 // дедлайном; не успевшие устройства пропускают цикл.
+// garageGridNoiseSuppressed сообщает, нужно ли подавлять F35/F35_clear у
+// инверторов группы «Гараж»:
+//  1. в гараже нет электричества — данные DTS017M недоступны/устарели;
+//  2. мы сами отключили инверторы — реле 1 модуля гаража включено (on).
+func garageGridNoiseSuppressed(store *redisStore) bool {
+	if garageMod != nil {
+		snap := garageMod.GarageSnapshot()
+		if !snap.Disabled && len(snap.Relays) > 0 && snap.Relays[0] {
+			return true
+		}
+	}
+	if dts017Cfg == nil || store == nil {
+		return false
+	}
+	snap, err := store.Dts017Current()
+	if err != nil || snap == nil {
+		return true // счётчик недоступен — считаем, что питания нет
+	}
+	ts, ok := parseSnapshotTime(snap.Timestamp)
+	if !ok {
+		return true
+	}
+	// Счётчик опрашивается раз в секунду; устаревание >60 с = нет напряжения.
+	return time.Since(ts) > 60*time.Second
+}
+
 func runGridPoll(store *redisStore, pg *pgStore, src *malina26Source, stop context.Context) {
 	if src == nil {
 		return
@@ -419,6 +445,9 @@ func runGridPoll(store *redisStore, pg *pgStore, src *malina26Source, stop conte
 			// ts берём момент обнаружения перехода, а не last_seen API (он может
 			// «замерзнуть» и схлопнуть разные события по PK).
 			evtTS := time.Now()
+			// F35/F35_clear для «Гаража» не пишем, когда нет питания в гараже
+			// (DTS017M недоступен) или инверторы отключены нами (реле 1 on).
+			supF35 := snap.Placement == gridPlacementGar && garageGridNoiseSuppressed(store)
 			codes := gridAlarmCodes(r.doc)
 			cur := make(map[string]bool, len(codes))
 			for _, c := range codes {
@@ -430,6 +459,9 @@ func runGridPoll(store *redisStore, pg *pgStore, src *malina26Source, stop conte
 				next = cur
 			} else {
 				for _, code := range codes {
+					if supF35 && code == "F35" {
+						continue // переходы сети гаража не журналируем
+					}
 					if prev != nil && prev[code] {
 						next[code] = true
 						continue
@@ -446,7 +478,7 @@ func runGridPoll(store *redisStore, pg *pgStore, src *malina26Source, stop conte
 					next[code] = true
 				}
 				// «Сеть восстановлена» — отдельная запись ровно один раз на переход.
-				if prev["F35"] && !cur["F35"] {
+				if !supF35 && prev["F35"] && !cur["F35"] {
 					if e := pg.InsertDeviceErrorNamed(snap.InverterSN, snap.Name, "inverter", "F35_clear", "F35: сеть восстановлена", evtTS); e != nil {
 						log.Printf("error pg grid %s: %v", snap.InverterSN, e)
 						next["F35"] = true // повторим восстановление на следующем цикле
