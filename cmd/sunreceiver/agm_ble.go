@@ -190,7 +190,16 @@ func connectAGMBKInner(mac string) (*agmBKClient, error) {
 		return nil, fmt.Errorf("характеристики FFF1/FFF2 не сопоставлены у %s", mac)
 	}
 	c := &agmBKClient{dev: dev, ntf: *ntf, wr: *wr, mac: mac, closedC: make(chan struct{})}
+	// StartNotify заранее и с таймаутом: иначе tinygo может зависнуть внутри
+	// библиотеки с уже зарегистрированным (и нечитаемым) signal-каналом.
+	if err := bluezPreStartNotify(mac, agmBKNotifyUUID, 5*time.Second); err != nil {
+		return nil, fmt.Errorf("подготовка нотификаций %s: %w", mac, err)
+	}
 	if err := (&c.ntf).EnableNotifications(c.onNotify); err != nil {
+		// StartNotify мог успеть зарегистрировать D-Bus signal-канал до ошибки.
+		// Без явного EnableNotifications(nil) канал остаётся в общем bus и копит
+		// deferredDeliver-горутины (утечка памяти до OOM).
+		_ = (&c.ntf).EnableNotifications(nil)
 		return nil, fmt.Errorf("EnableNotifications %s: %w", mac, err)
 	}
 	// Даём устройству завершить стартовую последовательность: сразу после
@@ -327,6 +336,11 @@ func (c *agmBKClient) Close() error {
 	c.reply = nil
 	close(c.closedC)
 	c.mu.Unlock()
+	// Снимаем подписку на нотификации: tinygo bluetooth на Linux держит для
+	// каждой EnableNotifications отдельный D-Bus signal-канал и без явного
+	// EnableNotifications(nil) не освобождает его. Иначе каждый реконнект BK300
+	// оставляет канал и растущие deferredDeliver-горутины (OOM за ~9-11 ч).
+	_ = (&c.ntf).EnableNotifications(nil)
 	return disconnectAGMBKBounded(c.dev)
 }
 

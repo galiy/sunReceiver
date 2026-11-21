@@ -1169,6 +1169,17 @@ func main() {
 		defer bgWg.Done()
 		runAvgPartitionMaintenance(pg, stopCtx)
 	}()
+	// Диагностика процесса: снимок heap/goroutine в журнал и pprof на loopback.
+	bgWg.Add(1)
+	go func() {
+		defer bgWg.Done()
+		runMemStatsLogger(stopCtx)
+	}()
+	bgWg.Add(1)
+	go func() {
+		defer bgWg.Done()
+		runPprofServer(stopCtx)
+	}()
 	// МАП и КЭС опрашиваются отдельно, 1 раз в секунду, и пишутся в Redis каждым
 	// снятым показанием (см. saveMapSnapshot). Быстрый 1-сек цикл запускается
 	// только если есть источник (malina26); при map.disabled=true — не стартует.

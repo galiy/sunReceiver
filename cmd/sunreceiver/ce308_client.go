@@ -355,7 +355,14 @@ func connectCE308(mac string, ctx context.Context) (m *ce308Meter, err error) {
 	if mtu, err2 := m.tx.GetMTU(); err2 == nil && mtu > 23 {
 		m.mtu = int(mtu)
 	}
+	// См. agm_ble.go: предварительный StartNotify с таймаутом защищает от
+	// зависания tinygo внутри EnableNotifications с утечкой signal-канала.
+	if err := bluezPreStartNotify(mac, ce308TxUUID, 5*time.Second); err != nil {
+		return nil, fmt.Errorf("подготовка нотификаций: %w", err)
+	}
 	if err := (&m.tx).EnableNotifications(m.onNotify); err != nil {
+		// Снять возможную частичную регистрацию signal-канала (см. agm_ble.go).
+		_ = (&m.tx).EnableNotifications(nil)
 		return nil, fmt.Errorf("включение нотификаций: %w", err)
 	}
 	return m, nil
@@ -380,6 +387,9 @@ func (m *ce308Meter) Close() error {
 	if m == nil {
 		return nil
 	}
+	// tinygo bluetooth на Linux не освобождает signal-канал нотификаций без
+	// явного EnableNotifications(nil); иначе он висит в общем D-Bus до OOM.
+	_ = (&m.tx).EnableNotifications(nil)
 	return m.dev.Disconnect()
 }
 
