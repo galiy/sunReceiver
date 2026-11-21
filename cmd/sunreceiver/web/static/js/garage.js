@@ -217,7 +217,7 @@
         data:pts,
         borderColor:COLORS[r],
         backgroundColor:COLORS[r],
-        stepped:'after',
+        stepped:'before',
         borderWidth:2,
         pointRadius:0,
         fill:false,
