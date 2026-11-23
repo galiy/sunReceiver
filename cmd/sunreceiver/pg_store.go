@@ -20,6 +20,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -99,8 +101,9 @@ func (s *pgStore) ensureSchema() error {
 	if err := ensureGarageSchema(s); err != nil {
 		return fmt.Errorf("pg garage schema: %w", err)
 	}
-	// История ошибок ВСЕХ устройств (инверторы/МАП/счётчик/BMS26/CE308): запись —
-	// только при ПОЯВЛЕНИИ ошибки (переход «не было → есть»), без дублей.
+	// История ошибок ВСЕХ устройств (инверторы/МАП/счётчик/BMS26/CE308/AGM):
+	// запись — только при ПОЯВЛЕНИИ ошибки (переход «не было → есть»); в пределах
+	// суток (MSK) одна строка на device/kind/code/текст, с числом повторов в msg.
 	if _, err := s.pool.Exec(s.ctx, `
 CREATE TABLE IF NOT EXISTS sunreceiver.device_errors (
 	device text        NOT NULL,
@@ -211,21 +214,89 @@ type DeviceErrorRow struct {
 	TS     time.Time `json:"ts"`
 }
 
-// InsertDeviceError записывает появление ошибки устройства (history of appearance):
+// InsertDeviceError записывает ошибку устройства (журнал device_errors):
 // device — ключ устройства, kind — тип ("inverter"/"map"/"mppt"/"meter"/"ce308"/
-// "bms"), code — код/категория, msg — текст. Вызывается только на переходе
-// «ошибки не было → появилась»; PK (device,kind,code,ts) страхует от повторов.
+// "bms"/"agm"/"garage"), code — код/категория, msg — текст. Вызывается только
+// на переходе «ошибки не было → появилась».
 func (s *pgStore) InsertDeviceError(device, kind, code, msg string, ts time.Time) error {
 	return s.InsertDeviceErrorNamed(device, "", kind, code, msg, ts)
 }
 
+// deviceErrMSK — сутки журнала ошибок считаются по Москве.
+var deviceErrMSK = time.FixedZone("MSK", 3*60*60)
+
+const deviceErrCountPrefix = " (повторов за сутки: "
+
+// splitDeviceErrMsg отделяет базовый текст ошибки от накопленного счётчика.
+func splitDeviceErrMsg(msg string) (base string, count int) {
+	base, count = msg, 1
+	if !strings.HasSuffix(msg, ")") {
+		return
+	}
+	i := strings.LastIndex(msg, deviceErrCountPrefix)
+	if i < 0 {
+		return
+	}
+	n, err := strconv.Atoi(msg[i+len(deviceErrCountPrefix) : len(msg)-1])
+	if err != nil || n < 1 {
+		return
+	}
+	return msg[:i], n
+}
+
+// deviceErrDayStart — начало текущих суток (MSK) для ts.
+func deviceErrDayStart(ts time.Time) time.Time {
+	y, m, d := ts.In(deviceErrMSK).Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, deviceErrMSK).UTC()
+}
+
 // InsertDeviceErrorNamed — как InsertDeviceError, но с именем устройства
 // (для сетевых инверторов: device=серийник, name=имя из API).
+//
+// В пределах одних суток (MSK) для одинаковых device/kind/code и одинакового
+// текста ошибки держится ОДНА строка: вместо новой вставки обновляется найденная
+// (ts = время последнего логирования, в msg — число повторов за сутки). Вызовы
+// остаются прежними — только на переходе «ошибки не было → появилась»; на каждом
+// опросе строка не обновляется.
 func (s *pgStore) InsertDeviceErrorNamed(device, name, kind, code, msg string, ts time.Time) error {
-	_, err := s.pool.Exec(s.ctx, `
+	ts = ts.UTC()
+	base := msg
+	dayStart := deviceErrDayStart(ts)
+
+	var oldTS time.Time
+	var oldMsg string
+	err := s.pool.QueryRow(s.ctx, `
+SELECT ts, msg FROM sunreceiver.device_errors
+WHERE device = $1 AND kind = $2 AND code = $3 AND ts >= $4
+ORDER BY ts DESC LIMIT 1`, device, kind, code, dayStart).Scan(&oldTS, &oldMsg)
+	switch {
+	case err == nil:
+		if oldBase, oldCount := splitDeviceErrMsg(oldMsg); oldBase == base {
+			n := oldCount + 1
+			newMsg := base + deviceErrCountPrefix + strconv.Itoa(n) + ")"
+			tag, uerr := s.pool.Exec(s.ctx, `
+UPDATE sunreceiver.device_errors
+SET ts = $5, msg = $6, name = $2
+WHERE device = $1 AND kind = $3 AND code = $4 AND ts = $7`,
+				device, name, kind, code, ts, newMsg, oldTS)
+			if uerr != nil {
+				return fmt.Errorf("pg update device error %s: %w", device, uerr)
+			}
+			if tag.RowsAffected() > 0 {
+				return nil
+			}
+		}
+	case errors.Is(err, pgx.ErrNoRows):
+		// за текущие сутки такой ошибки ещё не было — вставляем
+	default:
+		return fmt.Errorf("pg find device error %s: %w", device, err)
+	}
+
+	_, err = s.pool.Exec(s.ctx, `
 INSERT INTO sunreceiver.device_errors (device, name, kind, code, msg, ts)
 VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (device, kind, code, ts) DO NOTHING`, device, name, kind, code, msg, ts.UTC())
+ON CONFLICT (device, kind, code, ts) DO NOTHING`,
+		device, name, kind, code, base+deviceErrCountPrefix+"1)", ts)
 	if err != nil {
 		return fmt.Errorf("pg insert device error %s: %w", device, err)
 	}
