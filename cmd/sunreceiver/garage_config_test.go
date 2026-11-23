@@ -47,18 +47,22 @@ func validGarageSection() garageSection {
 		HostReadyTimeoutSec: 60,
 
 		DirectVoltageMin:    215,
-		DirectVoltageMax:    235,
-		DirectReturnMin:     218,
-		DirectReturnMax:     230,
-		DirectReturnHoldSec: 600,
+		DirectVoltageMax:    242,
+		DirectReturnMin:     215,
+		DirectReturnMax:     242,
+		DirectReturnHoldSec: 300,
 
-		Overvoltage235HoldSec:  300,
-		Overvoltage240HoldSec:  30,
-		OvervoltageInstantVolt: 245,
+		OvervoltagePrimaryHoldSec:   300,
+		OvervoltageSecondaryVolt:    245,
+		OvervoltageSecondaryHoldSec: 30,
+		OvervoltageInstantVolt:      248,
 
-		Undervoltage215HoldSec:  60,
-		Undervoltage210HoldSec:  30,
-		UndervoltageInstantVolt: 205,
+		UndervoltagePrimaryHoldSec:   60,
+		UndervoltageSecondaryVolt:    210,
+		UndervoltageSecondaryHoldSec: 30,
+		UndervoltageInstantVolt:      205,
+
+		StabilizerPowerW: 115,
 	}
 }
 
@@ -90,8 +94,8 @@ func TestGarageConfigValid(t *testing.T) {
 	if cfg == nil {
 		t.Fatal("ожидали конфигурацию")
 	}
-	if cfg.Overvoltage235Hold != 5*time.Minute {
-		t.Fatalf("Overvoltage235Hold=%v", cfg.Overvoltage235Hold)
+	if cfg.OvervoltagePrimaryHold != 5*time.Minute {
+		t.Fatalf("OvervoltagePrimaryHold=%v", cfg.OvervoltagePrimaryHold)
 	}
 	if cfg.UndervoltageInstant != 205 {
 		t.Fatalf("UndervoltageInstant=%v", cfg.UndervoltageInstant)
@@ -102,8 +106,14 @@ func TestGarageConfigValid(t *testing.T) {
 	if cfg.Relay1OffHold != 5*time.Minute {
 		t.Fatalf("Relay1OffHold=%v, want 5m", cfg.Relay1OffHold)
 	}
-	if cfg.Overvoltage240Hold != 30*time.Second || cfg.Undervoltage210Hold != 30*time.Second {
-		t.Fatalf("hold wiring: ov240=%v uv210=%v", cfg.Overvoltage240Hold, cfg.Undervoltage210Hold)
+	if cfg.OvervoltageSecondaryHold != 30*time.Second || cfg.UndervoltageSecondaryHold != 30*time.Second {
+		t.Fatalf("hold wiring: ov2=%v uv2=%v", cfg.OvervoltageSecondaryHold, cfg.UndervoltageSecondaryHold)
+	}
+	if cfg.OvervoltageSecondaryVolt != 245 || cfg.UndervoltageSecondaryVolt != 210 {
+		t.Fatalf("secondary voltages: ov=%v uv=%v", cfg.OvervoltageSecondaryVolt, cfg.UndervoltageSecondaryVolt)
+	}
+	if cfg.StabilizerPowerW != 115 {
+		t.Fatalf("StabilizerPowerW=%v", cfg.StabilizerPowerW)
 	}
 	if cfg.HostReadyTimeout != 60*time.Second {
 		t.Fatalf("HostReadyTimeout=%v", cfg.HostReadyTimeout)
@@ -137,27 +147,64 @@ func TestGarageConfigRejectsZeroInstant(t *testing.T) {
 
 func TestGarageConfigRejectsNonMonotonicHolds(t *testing.T) {
 	s := validGarageSection()
-	s.Overvoltage235HoldSec = 30
+	s.OvervoltagePrimaryHoldSec = 30
 	if _, err := garageFromSection(&s); err == nil {
 		t.Fatal("ожидали ошибку для неубывающих выдержек перенапряжения")
 	}
 	s = validGarageSection()
-	s.Undervoltage215HoldSec = 5
+	s.UndervoltagePrimaryHoldSec = 5
 	if _, err := garageFromSection(&s); err == nil {
 		t.Fatal("ожидали ошибку для неубывающих выдержек понижения")
 	}
 }
 
-func TestGarageConfigRejectsDirectWindowMismatch(t *testing.T) {
+func TestGarageConfigRejectsNonMonotonicTiers(t *testing.T) {
 	s := validGarageSection()
-	s.DirectVoltageMax = 240
+	s.OvervoltageSecondaryVolt = s.DirectVoltageMax
 	if _, err := garageFromSection(&s); err == nil {
-		t.Fatal("ожидали ошибку: direct_voltage_max должен быть 235")
+		t.Fatal("ожидали ошибку: вторая ступень перенапряжения должна быть выше direct_voltage_max")
 	}
 	s = validGarageSection()
-	s.OvervoltageInstantVolt = 240
+	s.OvervoltageInstantVolt = s.OvervoltageSecondaryVolt
 	if _, err := garageFromSection(&s); err == nil {
-		t.Fatal("ожидали ошибку: мгновенный порог должен быть > 240")
+		t.Fatal("ожидали ошибку: мгновенный порог должен быть выше второй ступени")
+	}
+	s = validGarageSection()
+	s.UndervoltageSecondaryVolt = s.DirectVoltageMin
+	if _, err := garageFromSection(&s); err == nil {
+		t.Fatal("ожидали ошибку: вторая ступень понижения должна быть ниже direct_voltage_min")
+	}
+	s = validGarageSection()
+	s.UndervoltageInstantVolt = s.UndervoltageSecondaryVolt
+	if _, err := garageFromSection(&s); err == nil {
+		t.Fatal("ожидали ошибку: мгновенный порог понижения должен быть ниже второй ступени")
+	}
+}
+
+func TestGarageConfigAcceptsArbitraryDirectWindow(t *testing.T) {
+	s := validGarageSection()
+	s.DirectVoltageMin = 205
+	s.DirectVoltageMax = 250
+	s.DirectReturnMin = 205
+	s.DirectReturnMax = 250
+	s.OvervoltageSecondaryVolt = 253
+	s.OvervoltageInstantVolt = 256
+	s.UndervoltageSecondaryVolt = 200
+	s.UndervoltageInstantVolt = 195
+	cfg, err := garageFromSection(&s)
+	if err != nil {
+		t.Fatalf("пороги должны задаваться конфигом: %v", err)
+	}
+	if cfg.DirectVoltageMax != 250 || cfg.OvervoltageSecondaryVolt != 253 {
+		t.Fatalf("пороги не перенеслись в конфиг: %+v", cfg)
+	}
+}
+
+func TestGarageConfigRejectsZeroStabilizerPower(t *testing.T) {
+	s := validGarageSection()
+	s.StabilizerPowerW = 0
+	if _, err := garageFromSection(&s); err == nil {
+		t.Fatal("ожидали ошибку для stabilizer_power_w=0")
 	}
 }
 

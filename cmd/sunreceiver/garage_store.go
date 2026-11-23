@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -172,6 +173,72 @@ func (s *pgStore) garageJournalStart() (*time.Time, error) {
 	}
 	t := nt.Time
 	return &t, nil
+}
+
+// garageRelayStateDuration считает суммарное время, когда реле relay было в
+// состоянии want, внутри [from, to]. Журнал разреженный: состояние на from
+// берётся из последнего события до from; если событий до from не было, отсчёт
+// начинается с первого события внутри интервала (состояние до него неизвестно).
+func (s *pgStore) garageRelayStateDuration(relay int, want bool, from, to time.Time) (time.Duration, error) {
+	if relay < 1 || relay > 4 || !from.Before(to) {
+		return 0, nil
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
+
+	var (
+		cur   bool
+		known bool
+	)
+	err := s.pool.QueryRow(ctx, `
+SELECT new_state
+FROM sunreceiver.garage_relay_events
+WHERE relay = $1 AND ts < $2
+ORDER BY ts DESC
+LIMIT 1`, relay, from).Scan(&cur)
+	switch {
+	case err == nil:
+		known = true
+	case errors.Is(err, pgx.ErrNoRows):
+	default:
+		return 0, err
+	}
+
+	rows, err := s.pool.Query(ctx, `
+SELECT ts, new_state
+FROM sunreceiver.garage_relay_events
+WHERE relay = $1 AND ts >= $2 AND ts < $3
+ORDER BY ts ASC`, relay, from, to)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	curT := from
+	var dur time.Duration
+	for rows.Next() {
+		var (
+			ts time.Time
+			st bool
+		)
+		if err := rows.Scan(&ts, &st); err != nil {
+			return 0, err
+		}
+		if known && cur == want {
+			dur += ts.Sub(curT)
+		}
+		cur, curT, known = st, ts, true
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if known && cur == want {
+		dur += to.Sub(curT)
+	}
+	if dur < 0 {
+		dur = 0
+	}
+	return dur, nil
 }
 
 // garageRelayEvents читает журнал за [from, to] по возрастанию времени.

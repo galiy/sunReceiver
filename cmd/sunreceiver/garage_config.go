@@ -54,17 +54,23 @@ type garageSection struct {
 	DirectReturnMax     float64 `json:"direct_return_max"`
 	DirectReturnHoldSec int     `json:"direct_return_hold_sec"`
 
-	// Гистерезис перехода на стабилизатор при превышении (максимальная фаза):
-	// выдержки для порогов 235/240 В и порог мгновенного перехода (245 В).
-	Overvoltage235HoldSec  int     `json:"overvoltage_235_hold_sec"`
-	Overvoltage240HoldSec  int     `json:"overvoltage_240_hold_sec"`
-	OvervoltageInstantVolt float64 `json:"overvoltage_instant_voltage"`
+	// Гистерезис перехода на стабилизатор при превышении (максимальная фаза).
+	// Первый порог — это direct_voltage_max; второй и мгновенный задаются явно.
+	OvervoltagePrimaryHoldSec   int     `json:"overvoltage_primary_hold_sec"`
+	OvervoltageSecondaryVolt    float64 `json:"overvoltage_secondary_voltage"`
+	OvervoltageSecondaryHoldSec int     `json:"overvoltage_secondary_hold_sec"`
+	OvervoltageInstantVolt      float64 `json:"overvoltage_instant_voltage"`
 
-	// Гистерезис перехода на стабилизатор при понижении (минимальная фаза):
-	// выдержки для порогов 215/210 В и порог мгновенного перехода (205 В).
-	Undervoltage215HoldSec  int     `json:"undervoltage_215_hold_sec"`
-	Undervoltage210HoldSec  int     `json:"undervoltage_210_hold_sec"`
-	UndervoltageInstantVolt float64 `json:"undervoltage_instant_voltage"`
+	// Гистерезис перехода на стабилизатор при понижении (минимальная фаза).
+	// Первый порог — это direct_voltage_min; второй и мгновенный задаются явно.
+	UndervoltagePrimaryHoldSec   int     `json:"undervoltage_primary_hold_sec"`
+	UndervoltageSecondaryVolt    float64 `json:"undervoltage_secondary_voltage"`
+	UndervoltageSecondaryHoldSec int     `json:"undervoltage_secondary_hold_sec"`
+	UndervoltageInstantVolt      float64 `json:"undervoltage_instant_voltage"`
+
+	// StabilizerPowerW — собственное потребление стабилизатора (Вт) для оценки
+	// расхода на дашборде (время в режиме стабилизатора × мощность).
+	StabilizerPowerW float64 `json:"stabilizer_power_w"`
 }
 
 // garageConfig — проверенная конфигурация модуля гаража.
@@ -95,25 +101,19 @@ type garageConfig struct {
 	DirectReturnMax  float64
 	DirectReturnHold time.Duration
 
-	// Переход на стабилизатор при превышении: выдержки и порог мгновенного.
-	Overvoltage235Hold time.Duration
-	Overvoltage240Hold time.Duration
-	OvervoltageInstant float64
+	// Переход на стабилизатор при превышении: выдержки и пороги.
+	OvervoltagePrimaryHold   time.Duration
+	OvervoltageSecondaryVolt float64
+	OvervoltageSecondaryHold time.Duration
+	OvervoltageInstant       float64
 
-	Undervoltage215Hold time.Duration
-	Undervoltage210Hold time.Duration
-	UndervoltageInstant float64
+	UndervoltagePrimaryHold   time.Duration
+	UndervoltageSecondaryVolt float64
+	UndervoltageSecondaryHold time.Duration
+	UndervoltageInstant       float64
+
+	StabilizerPowerW float64
 }
-
-// Фиксированные пороги выдержек перехода на стабилизатор (решение оператора):
-// превышение 235/240 В, мгновенно >245 В; понижение 215/210 В, мгновенно
-// <205 В. Имена полей конфига отражают эти пороги.
-const (
-	garageDirectMinVoltage       = 215
-	garageUndervoltage210Voltage = 210
-	garageDirectMaxVoltage       = 235
-	garageOvervoltage240Voltage  = 240
-)
 
 // garageCfg — активная конфигурация модуля гаража (nil — модуль выключен).
 // Пакетная переменная по образцу dts017Cfg, чтобы не менять сигнатуру loadConfig.
@@ -162,10 +162,10 @@ func garageFromSection(s *garageSection) (*garageConfig, error) {
 		{"state_grace_sec", s.StateGraceSec},
 		{"host_ready_timeout_sec", s.HostReadyTimeoutSec},
 		{"direct_return_hold_sec", s.DirectReturnHoldSec},
-		{"overvoltage_235_hold_sec", s.Overvoltage235HoldSec},
-		{"overvoltage_240_hold_sec", s.Overvoltage240HoldSec},
-		{"undervoltage_215_hold_sec", s.Undervoltage215HoldSec},
-		{"undervoltage_210_hold_sec", s.Undervoltage210HoldSec},
+		{"overvoltage_primary_hold_sec", s.OvervoltagePrimaryHoldSec},
+		{"overvoltage_secondary_hold_sec", s.OvervoltageSecondaryHoldSec},
+		{"undervoltage_primary_hold_sec", s.UndervoltagePrimaryHoldSec},
+		{"undervoltage_secondary_hold_sec", s.UndervoltageSecondaryHoldSec},
 	} {
 		if err := posInt(f.name, f.v); err != nil {
 			return nil, err
@@ -199,53 +199,60 @@ func garageFromSection(s *garageSection) (*garageConfig, error) {
 	if s.DirectReturnMin < s.DirectVoltageMin || s.DirectReturnMax > s.DirectVoltageMax {
 		return nil, fmt.Errorf("рамки garage.direct_return_* должны лежать внутри direct_voltage_*")
 	}
-	// Пороги выдержек фиксированы решением оператора и зашиты в имена полей
-	// (235/240 и 215/210 В); рабочая зона прямой подачи должна совпадать
-	// с крайними порогами, иначе конфиг противоречит логике.
-	if s.DirectVoltageMin != garageDirectMinVoltage || s.DirectVoltageMax != garageDirectMaxVoltage {
-		return nil, fmt.Errorf("garage.direct_voltage_min/max должны быть %v/%v В (фиксированные пороги выдержек)",
-			garageDirectMinVoltage, garageDirectMaxVoltage)
+	// Пороги полностью задаются конфигом. Ступени должны возрастать, выдержки —
+	// убывать (чем сильнее отклонение, тем быстрее переход на стабилизатор).
+	if s.OvervoltageSecondaryVolt <= s.DirectVoltageMax {
+		return nil, fmt.Errorf("garage.overvoltage_secondary_voltage должно быть больше direct_voltage_max")
 	}
-	if s.OvervoltageInstantVolt <= garageOvervoltage240Voltage {
-		return nil, fmt.Errorf("garage.overvoltage_instant_voltage должно быть больше %v В", garageOvervoltage240Voltage)
+	if s.OvervoltageInstantVolt <= s.OvervoltageSecondaryVolt {
+		return nil, fmt.Errorf("garage.overvoltage_instant_voltage должно быть больше overvoltage_secondary_voltage")
 	}
-	if s.Overvoltage235HoldSec <= s.Overvoltage240HoldSec {
-		return nil, fmt.Errorf("выдержки garage.overvoltage_*_hold_sec должны убывать: 235 В > 240 В")
+	if s.OvervoltagePrimaryHoldSec <= s.OvervoltageSecondaryHoldSec {
+		return nil, fmt.Errorf("выдержки перенапряжения должны убывать: overvoltage_primary_hold_sec > overvoltage_secondary_hold_sec")
 	}
-	if s.UndervoltageInstantVolt >= garageUndervoltage210Voltage {
-		return nil, fmt.Errorf("garage.undervoltage_instant_voltage должно быть меньше %v В (ниже выдержки <210)", garageUndervoltage210Voltage)
+	if s.UndervoltageSecondaryVolt >= s.DirectVoltageMin {
+		return nil, fmt.Errorf("garage.undervoltage_secondary_voltage должно быть меньше direct_voltage_min")
 	}
-	if s.Undervoltage215HoldSec <= s.Undervoltage210HoldSec {
-		return nil, fmt.Errorf("выдержки garage.undervoltage_*_hold_sec должны убывать: 215 В > 210 В")
+	if s.UndervoltageInstantVolt >= s.UndervoltageSecondaryVolt {
+		return nil, fmt.Errorf("garage.undervoltage_instant_voltage должно быть меньше undervoltage_secondary_voltage")
+	}
+	if s.UndervoltagePrimaryHoldSec <= s.UndervoltageSecondaryHoldSec {
+		return nil, fmt.Errorf("выдержки понижения должны убывать: undervoltage_primary_hold_sec > undervoltage_secondary_hold_sec")
+	}
+	if s.StabilizerPowerW <= 0 {
+		return nil, fmt.Errorf("garage.stabilizer_power_w: должно быть > 0")
 	}
 	return &garageConfig{
-		IP:                  ip,
-		Port:                s.Port,
-		PollInterval:        time.Duration(s.PollIntervalSec) * time.Second,
-		ReconcileInterval:   time.Duration(s.ReconcileIntervalSec) * time.Second,
-		TCPKeepalive:        time.Duration(s.TCPKeepaliveSec) * time.Second,
-		MonitorInterval:     time.Duration(s.MonitorIntervalSec) * time.Second,
-		InverterStale:       time.Duration(s.InverterStaleSec) * time.Second,
-		PVOnVoltage:         s.PVOnVoltage,
-		Relay1Hold:          time.Duration(s.Relay1HoldSec) * time.Second,
-		Relay1OffHold:       time.Duration(s.Relay1OffHoldSec) * time.Second,
-		MeterStale:          time.Duration(s.MeterStaleSec) * time.Second,
-		MeterStaleGrace:     time.Duration(s.MeterStaleGraceSec) * time.Second,
-		PhaseFaultVoltage:   s.PhaseFaultVoltage,
-		PhaseRecover:        time.Duration(s.PhaseRecoverSec) * time.Second,
-		StateGrace:          time.Duration(s.StateGraceSec) * time.Second,
-		HostReadyTimeout:    time.Duration(s.HostReadyTimeoutSec) * time.Second,
-		DirectVoltageMin:    s.DirectVoltageMin,
-		DirectVoltageMax:    s.DirectVoltageMax,
-		DirectReturnMin:     s.DirectReturnMin,
-		DirectReturnMax:     s.DirectReturnMax,
-		DirectReturnHold:    time.Duration(s.DirectReturnHoldSec) * time.Second,
-		Overvoltage235Hold:  time.Duration(s.Overvoltage235HoldSec) * time.Second,
-		Overvoltage240Hold:  time.Duration(s.Overvoltage240HoldSec) * time.Second,
-		OvervoltageInstant:  s.OvervoltageInstantVolt,
-		Undervoltage215Hold: time.Duration(s.Undervoltage215HoldSec) * time.Second,
-		Undervoltage210Hold: time.Duration(s.Undervoltage210HoldSec) * time.Second,
-		UndervoltageInstant: s.UndervoltageInstantVolt,
+		IP:                        ip,
+		Port:                      s.Port,
+		PollInterval:              time.Duration(s.PollIntervalSec) * time.Second,
+		ReconcileInterval:         time.Duration(s.ReconcileIntervalSec) * time.Second,
+		TCPKeepalive:              time.Duration(s.TCPKeepaliveSec) * time.Second,
+		MonitorInterval:           time.Duration(s.MonitorIntervalSec) * time.Second,
+		InverterStale:             time.Duration(s.InverterStaleSec) * time.Second,
+		PVOnVoltage:               s.PVOnVoltage,
+		Relay1Hold:                time.Duration(s.Relay1HoldSec) * time.Second,
+		Relay1OffHold:             time.Duration(s.Relay1OffHoldSec) * time.Second,
+		MeterStale:                time.Duration(s.MeterStaleSec) * time.Second,
+		MeterStaleGrace:           time.Duration(s.MeterStaleGraceSec) * time.Second,
+		PhaseFaultVoltage:         s.PhaseFaultVoltage,
+		PhaseRecover:              time.Duration(s.PhaseRecoverSec) * time.Second,
+		StateGrace:                time.Duration(s.StateGraceSec) * time.Second,
+		HostReadyTimeout:          time.Duration(s.HostReadyTimeoutSec) * time.Second,
+		DirectVoltageMin:          s.DirectVoltageMin,
+		DirectVoltageMax:          s.DirectVoltageMax,
+		DirectReturnMin:           s.DirectReturnMin,
+		DirectReturnMax:           s.DirectReturnMax,
+		DirectReturnHold:          time.Duration(s.DirectReturnHoldSec) * time.Second,
+		OvervoltagePrimaryHold:    time.Duration(s.OvervoltagePrimaryHoldSec) * time.Second,
+		OvervoltageSecondaryVolt:  s.OvervoltageSecondaryVolt,
+		OvervoltageSecondaryHold:  time.Duration(s.OvervoltageSecondaryHoldSec) * time.Second,
+		OvervoltageInstant:        s.OvervoltageInstantVolt,
+		UndervoltagePrimaryHold:   time.Duration(s.UndervoltagePrimaryHoldSec) * time.Second,
+		UndervoltageSecondaryVolt: s.UndervoltageSecondaryVolt,
+		UndervoltageSecondaryHold: time.Duration(s.UndervoltageSecondaryHoldSec) * time.Second,
+		UndervoltageInstant:       s.UndervoltageInstantVolt,
+		StabilizerPowerW:          s.StabilizerPowerW,
 	}, nil
 }
 

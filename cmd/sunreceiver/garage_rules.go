@@ -71,9 +71,12 @@ type garageRelayChange struct {
 // needStabilizer решает, пора ли уйти с прямой подачи на стабилизатор.
 // Переход мгновенный при maxV > overvoltage_instant_voltage или
 // minV < undervoltage_instant_voltage; иначе — по минимальной выполненной
-// выдержке: >235 В — 5 мин, >240 В — 30 с; <215 В — 1 мин, <210 В — 30 с.
-// Ниже порога мгновенного перехода (<205 В) — сразу. Таймеры сбрасываются, когда условие перестало
-// выполняться. Вызывается только в состоянии прямой подачи.
+// выдержке: >direct_voltage_max — overvoltage_primary_hold,
+// >overvoltage_secondary_voltage — overvoltage_secondary_hold;
+// <direct_voltage_min — undervoltage_primary_hold,
+// <undervoltage_secondary_voltage — undervoltage_secondary_hold.
+// Таймеры сбрасываются, когда условие перестало выполняться. Вызывается только
+// в состоянии прямой подачи.
 func (d *garageDecider) needStabilizer(now time.Time, minV, maxV float64) bool {
 	instant := maxV > d.cfg.OvervoltageInstant || minV < d.cfg.UndervoltageInstant
 	if instant {
@@ -87,10 +90,10 @@ func (d *garageDecider) needStabilizer(now time.Time, minV, maxV float64) bool {
 		since *time.Time
 	}
 	tiers := []tier{
-		{true, d.cfg.DirectVoltageMax, d.cfg.Overvoltage235Hold, &d.ovSince[0]},
-		{true, garageOvervoltage240Voltage, d.cfg.Overvoltage240Hold, &d.ovSince[1]},
-		{false, d.cfg.DirectVoltageMin, d.cfg.Undervoltage215Hold, &d.uvSince[0]},
-		{false, garageUndervoltage210Voltage, d.cfg.Undervoltage210Hold, &d.uvSince[1]},
+		{true, d.cfg.DirectVoltageMax, d.cfg.OvervoltagePrimaryHold, &d.ovSince[0]},
+		{true, d.cfg.OvervoltageSecondaryVolt, d.cfg.OvervoltageSecondaryHold, &d.ovSince[1]},
+		{false, d.cfg.DirectVoltageMin, d.cfg.UndervoltagePrimaryHold, &d.uvSince[0]},
+		{false, d.cfg.UndervoltageSecondaryVolt, d.cfg.UndervoltageSecondaryHold, &d.uvSince[1]},
 	}
 	fire := false
 	for _, t := range tiers {
@@ -148,13 +151,20 @@ type garageDecider struct {
 	directReturnSince time.Time
 
 	// Таймеры выдержек перехода на стабилизатор по превышению/понижению
-	// (пороги 235/240 и 215/210 В). Индексы — по возрастанию порога.
+	// (первый/второй порог из конфига). Индексы — по возрастанию порога.
 	ovSince [2]time.Time
 	uvSince [2]time.Time
+
+	// startedAt — момент создания решателя (старт модуля); meterSeenFresh —
+	// были ли уже свежие данные счётчика за этот запуск. Нужны, чтобы на старте
+	// не уводить реле 4 в ручной режим из-за ещё не подгрузившихся данных
+	// счётчика (см. decide, ветка !meter.Fresh).
+	startedAt      time.Time
+	meterSeenFresh bool
 }
 
 func newGarageDecider(cfg *garageConfig) *garageDecider {
-	return &garageDecider{cfg: cfg}
+	return &garageDecider{cfg: cfg, startedAt: time.Now()}
 }
 
 // noteSwitch фиксирует фактическое переключение реле (после успешной установки
@@ -237,9 +247,18 @@ func (d *garageDecider) decide(now time.Time, mem [4]bool, meter garageMeterInpu
 		d.recoverSince = time.Time{}
 		d.directReturnSince = time.Time{}
 		d.resetVoltageTiers()
-		add(4, false, "meter_stale")
+		// На старте модуля реле 4 не трогаем, пока счётчик ни разу не был свежим
+		// или пока не истекла state_grace_sec: иначе после рестарта сервиса
+		// данные ещё не успевают прийти и реле 4 на 1–2 секунды уходит в ручной
+		// режим (а с ним — режим подачи). Это не штатное «нет данных», а прогрев.
+		warmup := !d.meterSeenFresh && !d.startedAt.IsZero() &&
+			d.cfg != nil && now.Sub(d.startedAt) < d.cfg.StateGrace
+		if !warmup {
+			add(4, false, "meter_stale")
+		}
 		return target, changes
 	}
+	d.meterSeenFresh = true
 
 	minV, maxV := phaseBounds(meter.Voltage)
 	fault := minV < d.cfg.PhaseFaultVoltage

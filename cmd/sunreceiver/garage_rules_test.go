@@ -31,18 +31,22 @@ func testGarageCfg() *garageConfig {
 		PhaseFaultVoltage: 100,
 		PhaseRecover:      30 * time.Second,
 		DirectVoltageMin:  215,
-		DirectVoltageMax:  235,
+		DirectVoltageMax:  242,
 		DirectReturnMin:   215,
-		DirectReturnMax:   235,
-		DirectReturnHold:  10 * time.Minute,
+		DirectReturnMax:   242,
+		DirectReturnHold:  5 * time.Minute,
 
-		Overvoltage235Hold: 5 * time.Minute,
-		Overvoltage240Hold: 30 * time.Second,
-		OvervoltageInstant: 245,
+		OvervoltagePrimaryHold:   5 * time.Minute,
+		OvervoltageSecondaryVolt: 245,
+		OvervoltageSecondaryHold: 30 * time.Second,
+		OvervoltageInstant:       248,
 
-		Undervoltage215Hold: 60 * time.Second,
-		Undervoltage210Hold: 30 * time.Second,
-		UndervoltageInstant: 205,
+		UndervoltagePrimaryHold:   60 * time.Second,
+		UndervoltageSecondaryVolt: 210,
+		UndervoltageSecondaryHold: 30 * time.Second,
+		UndervoltageInstant:       205,
+
+		StateGrace: 60 * time.Second,
 	}
 }
 
@@ -111,6 +115,7 @@ func TestGarageRelay1Hysteresis(t *testing.T) {
 func TestGarageNoMeter(t *testing.T) {
 	d := newGarageDecider(testGarageCfg())
 	now := time.Now()
+	d.startedAt = now.Add(-2 * time.Minute) // прогрев давно прошёл
 	mem := relaysOn(2, 3, 4)
 	inv := []garageInverterInput{{Name: "D1", Fresh: true, PV1: 150}}
 	target, ch := d.decide(now, mem, garageMeterInput{Fresh: false}, inv)
@@ -123,6 +128,41 @@ func TestGarageNoMeter(t *testing.T) {
 	m := changeMap(ch)
 	if on, changed := m[4]; !changed || on {
 		t.Fatalf("ожидали переключение реле 4 на off: %v", ch)
+	}
+}
+
+// На старте модуля реле 4 не уводится в ручной режим, пока счётчик ни разу не
+// был свежим: иначе рестарт сервиса на 1–2 секунды меняет режим подачи.
+func TestGarageStartupMeterStaleGrace(t *testing.T) {
+	now := time.Now()
+	d := newGarageDecider(testGarageCfg())
+	d.startedAt = now
+	target, ch := d.decide(now, relaysOn(4), garageMeterInput{Fresh: false}, nil)
+	if !target[3] {
+		t.Fatalf("в первые state_grace_sec реле 4 должно оставаться on: %v", target)
+	}
+	if _, changed := changeMap(ch)[4]; changed {
+		t.Fatalf("в первые state_grace_sec реле 4 не трогаем: %v", ch)
+	}
+	// Выдержка истекла, счётчик так и не появился — ручной режим.
+	target, ch = d.decide(now.Add(61*time.Second), relaysOn(4), garageMeterInput{Fresh: false}, nil)
+	if target[3] {
+		t.Fatalf("после state_grace_sec без данных реле 4 должно быть off: %v", target)
+	}
+	if on, changed := changeMap(ch)[4]; !changed || on {
+		t.Fatalf("ожидали переключение реле 4 на off: %v", ch)
+	}
+
+	// Если свежие данные уже были, пропадание счётчика уводит реле 4 в ручной
+	// режим сразу — стартовая пауза не применяется.
+	d2 := newGarageDecider(testGarageCfg())
+	target, _ = d2.decide(now, relaysOn(4), freshMeter(230, 230, 230), nil)
+	if !target[3] {
+		t.Fatalf("при свежем счётчике реле 4 on: %v", target)
+	}
+	target, _ = d2.decide(now.Add(time.Second), relaysOn(4), garageMeterInput{Fresh: false}, nil)
+	if target[3] {
+		t.Fatalf("после свежих данных пропадание счётчика — сразу ручной режим: %v", target)
 	}
 }
 
@@ -167,39 +207,39 @@ func TestGarageRelay3Voltage(t *testing.T) {
 	// Уже в прямой подаче при 230 В — держим.
 	target, _ := d.decide(now, relaysOn(3, 4), freshMeter(230, 229, 231), nil)
 	if !target[2] {
-		t.Fatalf("при 215–235 В ожидали прямую подачу: %v", target)
+		t.Fatalf("при 215–242 В ожидали прямую подачу: %v", target)
 	}
-	// Превышение 235 В, но менее 5 минут — остаёмся на прямой подаче.
-	target, _ = d.decide(now.Add(time.Second), relaysOn(3, 4), freshMeter(230, 236, 225), nil)
+	// Превышение 242 В, но менее 5 минут — остаёмся на прямой подаче.
+	target, _ = d.decide(now.Add(time.Second), relaysOn(3, 4), freshMeter(230, 243, 225), nil)
 	if !target[2] {
-		t.Fatalf("при 236 В раньше 5 минут стабилизатор не нужен: %v", target)
+		t.Fatalf("при 243 В раньше 5 минут стабилизатор не нужен: %v", target)
 	}
-	// Более 5 минут превышения 235 В — стабилизатор.
+	// Более 5 минут превышения 242 В — стабилизатор.
 	t2 := now.Add(time.Second + 5*time.Minute + time.Second)
-	target, _ = d.decide(t2, relaysOn(3, 4), freshMeter(230, 236, 225), nil)
+	target, _ = d.decide(t2, relaysOn(3, 4), freshMeter(230, 243, 225), nil)
 	if target[2] {
-		t.Fatalf("после 5 минут превышения 235 В ожидали стабилизатор: %v", target)
+		t.Fatalf("после 5 минут превышения 242 В ожидали стабилизатор: %v", target)
 	}
-	// 218–230 В, но менее 10 минут — ещё стабилизатор.
-	t3 := t2.Add(5 * time.Minute)
+	// 218–230 В, но менее 5 минут — ещё стабилизатор.
+	t3 := t2.Add(2 * time.Minute)
 	target, _ = d.decide(t3, relaysOn(4), freshMeter(230, 229, 225), nil)
 	if target[2] {
-		t.Fatalf("возврат раньше 10 минут недопустим: %v", target)
+		t.Fatalf("возврат раньше 5 минут недопустим: %v", target)
 	}
-	// Более 10 минут удержания — прямая подача.
-	target, _ = d.decide(t3.Add(10*time.Minute+time.Second), relaysOn(4), freshMeter(230, 229, 225), nil)
+	// Более 5 минут удержания — прямая подача.
+	target, _ = d.decide(t3.Add(5*time.Minute+time.Second), relaysOn(4), freshMeter(230, 229, 225), nil)
 	if !target[2] {
-		t.Fatalf("после 10 минут удержания ожидали прямую подачу: %v", target)
+		t.Fatalf("после 5 минут удержания ожидали прямую подачу: %v", target)
 	}
 }
 
-// Мгновенный переход на стабилизатор при перенапряжении > 245 В.
+// Мгновенный переход на стабилизатор при перенапряжении > 248 В.
 func TestGarageInstantOvervoltage(t *testing.T) {
 	d := newGarageDecider(testGarageCfg())
 	now := time.Now()
-	target, _ := d.decide(now, relaysOn(3, 4), freshMeter(230, 246, 225), nil)
+	target, _ := d.decide(now, relaysOn(3, 4), freshMeter(230, 249, 225), nil)
 	if target[2] {
-		t.Fatalf(">245 В — стабилизатор мгновенно: %v", target)
+		t.Fatalf(">248 В — стабилизатор мгновенно: %v", target)
 	}
 }
 
@@ -249,31 +289,31 @@ func TestGarageNoSwitchAt232(t *testing.T) {
 	if !target[2] {
 		t.Fatal("232 В даже через час не должны переключать на стабилизатор")
 	}
-	target, _ = d.decide(now.Add(61*time.Minute), relaysOn(3, 4), freshMeter(225, 236, 225), nil)
+	target, _ = d.decide(now.Add(61*time.Minute), relaysOn(3, 4), freshMeter(225, 243, 225), nil)
 	if !target[2] {
-		t.Fatal("236 В раньше 5 минут — ещё прямая подача")
+		t.Fatal("243 В раньше 5 минут — ещё прямая подача")
 	}
-	target, _ = d.decide(now.Add(67*time.Minute), relaysOn(3, 4), freshMeter(225, 236, 225), nil)
+	target, _ = d.decide(now.Add(67*time.Minute), relaysOn(3, 4), freshMeter(225, 243, 225), nil)
 	if target[2] {
-		t.Fatal("236 В дольше 5 минут — стабилизатор")
+		t.Fatal("243 В дольше 5 минут — стабилизатор")
 	}
 }
 
-// Выдержка 30 с при превышении 240 В.
-func TestGarageOvervoltage240Hold(t *testing.T) {
+// Выдержка 30 с при превышении второй ступени (245 В).
+func TestGarageOvervoltageSecondaryHold(t *testing.T) {
 	d := newGarageDecider(testGarageCfg())
 	now := time.Now()
-	target, _ := d.decide(now, relaysOn(3, 4), freshMeter(225, 241, 225), nil)
+	target, _ := d.decide(now, relaysOn(3, 4), freshMeter(225, 246, 225), nil)
 	if !target[2] {
-		t.Fatal("при 241 В раньше 30 с прямая подача сохраняется")
+		t.Fatal("при 246 В раньше 30 с прямая подача сохраняется")
 	}
-	target, _ = d.decide(now.Add(29*time.Second), relaysOn(3, 4), freshMeter(225, 241, 225), nil)
+	target, _ = d.decide(now.Add(29*time.Second), relaysOn(3, 4), freshMeter(225, 246, 225), nil)
 	if !target[2] {
-		t.Fatal("при 241 В через 29 с прямая подача ещё сохраняется")
+		t.Fatal("при 246 В через 29 с прямая подача ещё сохраняется")
 	}
-	target, _ = d.decide(now.Add(31*time.Second), relaysOn(3, 4), freshMeter(225, 241, 225), nil)
+	target, _ = d.decide(now.Add(31*time.Second), relaysOn(3, 4), freshMeter(225, 246, 225), nil)
 	if target[2] {
-		t.Fatal("при 241 В дольше 30 с — стабилизатор")
+		t.Fatal("при 246 В дольше 30 с — стабилизатор")
 	}
 }
 

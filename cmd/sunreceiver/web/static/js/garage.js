@@ -124,6 +124,31 @@
     el('garageUpdated').textContent='Обновлено: '+fmtTs(s.updated_at);
   }
 
+  // ---------------- Стабилизатор: накопленное время и оценка расхода --------
+  function fmtDur(sec){
+    if(sec==null||!isFinite(sec)||sec<0) sec=0;
+    var m=Math.round(sec/60), h=Math.floor(m/60); m=m%60;
+    if(!h) return m+' '+tr('мин');
+    return h+' '+tr('ч')+' '+m+' '+tr('мин');
+  }
+  function fmtKWh(v){
+    return (v==null||!isFinite(v))?'—':Number(v).toFixed(2)+' '+tr('кВт·ч');
+  }
+  function renderStabilizer(u){
+    var box=el('garageStabilizer');
+    if(!box) return;
+    if(!u || !u.stabilizer_power_w){
+      box.innerHTML='<span class="missing">'+esc(tr('Нет данных'))+'</span>';
+      return;
+    }
+    var html='<table class="garage-table"><tbody>'+
+      '<tr><td>'+esc(tr('За сегодня'))+'</td><td>'+fmtDur(u.day_stabilizer_sec)+' ('+fmtKWh(u.day_stabilizer_kwh)+')</td></tr>'+
+      '<tr><td>'+esc(tr('За месяц'))+'</td><td>'+fmtDur(u.month_stabilizer_sec)+' ('+fmtKWh(u.month_stabilizer_kwh)+')</td></tr>'+
+      '<tr><td>'+esc(tr('Мощность стабилизатора'))+'</td><td>'+esc(Number(u.stabilizer_power_w).toFixed(0))+' '+esc(tr('Вт'))+'</td></tr>'+
+      '</tbody></table>';
+    box.innerHTML=html;
+  }
+
   async function loadState(){
     if(window.srRefresh && !window.srRefresh.isEnabled()) return;
     try{
@@ -396,7 +421,9 @@
       var url='/api/garage/events?from='+encodeURIComponent(selRange.from.toISOString())+'&to='+encodeURIComponent(selRange.to.toISOString());
       var r=await fetch(url,{cache:'no-store'});
       if(!r.ok){ setRangeLabel(true); return; }
-      buildChart(await r.json());
+      var data=await r.json();
+      buildChart(data);
+      renderStabilizer(data.usage);
     }catch(e){ setRangeLabel(true); }
   }
 

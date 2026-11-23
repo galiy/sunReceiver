@@ -147,9 +147,9 @@ maxbot. Полное описание —
 "tcp_keepalive_sec", "monitor_interval_sec", "inverter_stale_sec", "pv_on_voltage", "relay1_hold_sec", "relay1_off_hold_sec",
 "meter_stale_sec", "meter_stale_grace_sec", "phase_fault_voltage", "phase_recover_sec", "state_grace_sec", "host_ready_timeout_sec", "direct_voltage_min",
 "direct_voltage_max", "direct_return_min", "direct_return_max", "direct_return_hold_sec",
-"overvoltage_235_hold_sec", "overvoltage_240_hold_sec",
-"overvoltage_instant_voltage", "undervoltage_215_hold_sec", "undervoltage_210_hold_sec",
-"undervoltage_instant_voltage"}` (все поля обязательны;
+"overvoltage_primary_hold_sec", "overvoltage_secondary_voltage", "overvoltage_secondary_hold_sec",
+"overvoltage_instant_voltage", "undervoltage_primary_hold_sec", "undervoltage_secondary_voltage",
+"undervoltage_secondary_hold_sec", "undervoltage_instant_voltage", "stabilizer_power_w"}` (все поля обязательны;
 `disabled` обязательное: `true` — модуль не работает и реле не трогает), см.
 [`docs/modules/garagemgr.md`](docs/modules/garagemgr.md). **Периоды опроса
 устройств задаются обязательным разделом `poll` (в СЕКУНДАХ)**: `{"map",

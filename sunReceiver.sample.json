@@ -134,16 +134,19 @@
     "state_grace_sec": 60,
     "host_ready_timeout_sec": 60,
     "direct_voltage_min": 215,
-    "direct_voltage_max": 235,
+    "direct_voltage_max": 242,
     "direct_return_min": 215,
-    "direct_return_max": 235,
-    "direct_return_hold_sec": 600,
-    "overvoltage_235_hold_sec": 300,
-    "overvoltage_240_hold_sec": 30,
-    "overvoltage_instant_voltage": 245,
-    "undervoltage_215_hold_sec": 60,
-    "undervoltage_210_hold_sec": 30,
-    "undervoltage_instant_voltage": 205
+    "direct_return_max": 242,
+    "direct_return_hold_sec": 300,
+    "overvoltage_primary_hold_sec": 300,
+    "overvoltage_secondary_voltage": 245,
+    "overvoltage_secondary_hold_sec": 30,
+    "overvoltage_instant_voltage": 248,
+    "undervoltage_primary_hold_sec": 60,
+    "undervoltage_secondary_voltage": 210,
+    "undervoltage_secondary_hold_sec": 30,
+    "undervoltage_instant_voltage": 205,
+    "stabilizer_power_w": 115
   },
   "mercury": [
     {

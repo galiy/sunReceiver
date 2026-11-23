@@ -90,6 +90,7 @@ func (h *dashboardHandler) apiGarageEvents(w http.ResponseWriter, r *http.Reques
 		InitialKnown [4]bool            `json:"initial_known"`
 		JournalStart *time.Time         `json:"journal_start"`
 		Current      [4]bool            `json:"current"`
+		Usage        garageUsageStats   `json:"usage"`
 	}{Events: []garageRelayEvent{}}
 	if h.pg != nil {
 		events, err := h.pg.garageRelayEvents(from, to)
@@ -113,9 +114,48 @@ func (h *dashboardHandler) apiGarageEvents(w http.ResponseWriter, r *http.Reques
 			out.JournalStart = js
 		}
 		out.Current = garageMod.GarageSnapshot().Relays
+		out.Usage = h.garageStabilizerUsage(now)
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if err := json.NewEncoder(w).Encode(out); err != nil {
 		log.Printf("dashboard: /api/garage/events encode: %v", err)
 	}
+}
+
+// garageUsageStats — накопленное время в режиме «через стабилизатор» (реле 3
+// в off) за текущие сутки/месяц MSK и оценка расхода по stabilizer_power_w.
+type garageUsageStats struct {
+	StabilizerPowerW float64 `json:"stabilizer_power_w"`
+	DaySeconds       float64 `json:"day_stabilizer_sec"`
+	DayKWh           float64 `json:"day_stabilizer_kwh"`
+	MonthSeconds     float64 `json:"month_stabilizer_sec"`
+	MonthKWh         float64 `json:"month_stabilizer_kwh"`
+}
+
+// garageStabilizerUsage считает время работы стабилизатора из журнала реле.
+// Реле 3 выключено = подача через стабилизатор.
+func (h *dashboardHandler) garageStabilizerUsage(now time.Time) garageUsageStats {
+	var st garageUsageStats
+	if garageCfg != nil {
+		st.StabilizerPowerW = garageCfg.StabilizerPowerW
+	}
+	if h.pg == nil {
+		return st
+	}
+	dayStart := deviceErrDayStart(now)
+	y, m, _ := now.In(deviceErrMSK).Date()
+	monthStart := time.Date(y, m, 1, 0, 0, 0, 0, deviceErrMSK).UTC()
+	if d, err := h.pg.garageRelayStateDuration(3, false, dayStart, now); err != nil {
+		log.Printf("dashboard: /api/garage/events: стабилизатор за сутки: %v", err)
+	} else {
+		st.DaySeconds = d.Seconds()
+		st.DayKWh = round2(d.Hours() * st.StabilizerPowerW / 1000)
+	}
+	if d, err := h.pg.garageRelayStateDuration(3, false, monthStart, now); err != nil {
+		log.Printf("dashboard: /api/garage/events: стабилизатор за месяц: %v", err)
+	} else {
+		st.MonthSeconds = d.Seconds()
+		st.MonthKWh = round2(d.Hours() * st.StabilizerPowerW / 1000)
+	}
+	return st
 }

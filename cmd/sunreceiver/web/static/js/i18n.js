@@ -630,7 +630,10 @@
     'авария фаз':'phase failure','Гараж: ':'Garage: ',
     'Реле':'Relays',
     'Состояние реле не читается (модуль выключен в конфиге)':'Relay state is unavailable (module disabled in config)',
-    'Счётчик DTS017M выключен — правила фаз и реле 3 не применяются':'Meter DTS017M is disabled — phase and relay 3 rules do not apply'
+    'Счётчик DTS017M выключен — правила фаз и реле 3 не применяются':'Meter DTS017M is disabled — phase and relay 3 rules do not apply',
+    'Расход на стабилизатор':'Stabilizer consumption',
+    'За сегодня':'Today','За месяц':'This month',
+    'Мощность стабилизатора':'Stabilizer power','Вт':'W'
   });
   Object.assign(DICT.zh,{
     'Управление гаражом':'车库控制',
@@ -663,7 +666,10 @@
     'авария фаз':'相位故障','Гараж: ':'车库：',
     'Реле':'继电器',
     'Состояние реле не читается (модуль выключен в конфиге)':'无法读取继电器状态（模块在配置中已禁用）',
-    'Счётчик DTS017M выключен — правила фаз и реле 3 не применяются':'电表 DTS017M 已禁用——相位与继电器 3 规则不适用'
+    'Счётчик DTS017M выключен — правила фаз и реле 3 не применяются':'电表 DTS017M 已禁用——相位与继电器 3 规则不适用',
+    'Расход на стабилизатор':'稳压器耗电',
+    'За сегодня':'今日','За месяц':'本月',
+    'Мощность стабилизатора':'稳压器功率','Вт':'W'
   });
   function init(){ buildSwitcher(); apply(); startObserver(); setInterval(translateCharts,3000); }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',init); else init();
