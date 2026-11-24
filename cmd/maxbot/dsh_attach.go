@@ -87,6 +87,7 @@ func downloadBytes(ctx context.Context, url string, limit int64) ([]byte, string
 	}
 	resp, err := attachmentHTTP.Do(req)
 	if err != nil {
+		attachmentHTTP.CloseIdleConnections()
 		return nil, "", err
 	}
 	defer resp.Body.Close()
@@ -128,6 +129,7 @@ func (b *bot) saveIncomingFile(ctx context.Context, url, name string) (string, e
 	}
 	resp, err := attachmentHTTP.Do(req)
 	if err != nil {
+		attachmentHTTP.CloseIdleConnections()
 		return "", err
 	}
 	defer resp.Body.Close()

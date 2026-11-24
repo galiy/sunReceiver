@@ -32,6 +32,7 @@ sunReceiver.json.bak*
 /sunReceiver
 cmd/sunreceiver/sunreceiver
 /sunReceiver-linux
+/maxbot
 /solarman-probe
 *.log
 *.exe

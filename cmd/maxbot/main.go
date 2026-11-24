@@ -62,6 +62,16 @@ type bot struct {
 	dshState       dshState
 	dshCancelEpoch atomic.Int64
 	dshBusy        atomic.Bool
+
+	// Отложенная замена сессии: watcher заметил непригодную сессию, но создать
+	// новую сразу не удалось (harness недоступен). Повторяем позже.
+	dshRepairMu      sync.Mutex
+	dshRepairReason  string
+	dshRepairSession string // исходная (непригодная) сессия на момент обнаружения
+	dshRepairAfter   time.Time
+
+	// dshEpochMu сериализует сохранение эпохи отмены в Redis.
+	dshEpochMu sync.Mutex
 }
 
 // main — точка входа: конфиг (флаг -config, по умолчанию maxbot.json рядом с
@@ -123,6 +133,9 @@ func main() {
 		log.Printf("maxbot: dsh-чат выключен (раздел dsh отсутствует или disabled=true)")
 	}
 	go b.runSubscriber(ctx)
+	// Самолечение канала MAX: периодически закрываем простаивающие keep-alive
+	// соединения, чтобы после обрыва WAN не переиспользовать мёртвый сокет.
+	go b.client.runConnReset(ctx)
 
 	log.Printf("maxbot: запущен, consumer group %q, очередь %s", group, streamKey)
 	b.run(ctx)

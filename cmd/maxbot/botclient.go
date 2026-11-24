@@ -26,6 +26,7 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
+	"net/http/httptrace"
 	"net/textproto"
 	"net/url"
 	"os"
@@ -74,6 +75,37 @@ func newMaxClient(token, userID, chatID string) *maxClient {
 		hc:     &http.Client{Timeout: maxRequestTimeout},
 		hcLong: &http.Client{Timeout: maxUpdatesHTTPTimeout},
 		hcFile: &http.Client{Timeout: 120 * time.Second},
+	}
+}
+
+// maxIdleResetInterval — как часто закрывать простаивающие keep-alive сокеты.
+// После обрыва WAN старый сокет остаётся привязан к мёртвой NAT-трансляции и
+// каждый запрос по нему падает по таймауту; свежее соединение работает сразу.
+const maxIdleResetInterval = 5 * time.Minute
+
+// resetConnections закрывает простаивающие соединения всех клиентов MAX.
+// Активные запросы не затрагиваются.
+func (m *maxClient) resetConnections() {
+	for _, c := range []*http.Client{m.hc, m.hcLong, m.hcFile, attachmentHTTP} {
+		if c != nil {
+			c.CloseIdleConnections()
+		}
+	}
+}
+
+// runConnReset периодически сбрасывает keep-alive соединения, чтобы после
+// сетевого обрыва не переиспользовать мёртвый сокет. Работает внутри maxbot,
+// без внешнего watchdog и без перезапуска службы.
+func (m *maxClient) runConnReset(ctx context.Context) {
+	t := time.NewTicker(maxIdleResetInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			m.resetConnections()
+		}
 	}
 }
 
@@ -160,15 +192,35 @@ func (m *maxClient) sendRich(ctx context.Context, userID, chatID, text, format s
 	}
 	m.lastSend = time.Now()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u+"?"+q.Encode(), bytes.NewReader(body))
-	if err != nil {
-		return err
+	target := u + "?" + q.Encode()
+	// reusedConn — был ли повторно использован keep-alive сокет. После обрыва
+	// WAN именно такой сокет привязан к мёртвой NAT-трансляции; повтор с новым
+	// соединением лечит этот случай. Свежее соединение не повторяем, чтобы не
+	// дублировать сообщение при неоднозначной ошибке (таймаут уже после отправки).
+	reusedConn := false
+	do := func() (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", m.token)
+		req.Header.Set("Content-Type", "application/json")
+		req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+			GotConn: func(ci httptrace.GotConnInfo) { reusedConn = ci.Reused },
+		}))
+		return m.hc.Do(req)
 	}
-	req.Header.Set("Authorization", m.token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := m.hc.Do(req)
+	resp, err := do()
 	if err != nil {
-		return fmt.Errorf("max send: %w", err)
+		m.resetConnections()
+		if ctx.Err() != nil || !reusedConn {
+			return fmt.Errorf("max send: %w", err)
+		}
+		// Повторяем только сорвавшийся переиспользованный сокет.
+		resp, err = do()
+		if err != nil {
+			return fmt.Errorf("max send: %w", err)
+		}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -223,6 +275,7 @@ func (m *maxClient) setCommands(ctx context.Context, cmds []maxBotCommand) error
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := m.hc.Do(req)
 	if err != nil {
+		m.resetConnections()
 		return fmt.Errorf("max commands: %w", err)
 	}
 	defer resp.Body.Close()
@@ -255,6 +308,7 @@ func (m *maxClient) answerCallback(ctx context.Context, callbackID, text string)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := m.hc.Do(req)
 	if err != nil {
+		m.resetConnections()
 		return fmt.Errorf("max answers: %w", err)
 	}
 	defer resp.Body.Close()
@@ -275,6 +329,7 @@ func (m *maxClient) uploadFile(ctx context.Context, filename string, data []byte
 	req.Header.Set("Authorization", m.token)
 	resp, err := m.hcFile.Do(req)
 	if err != nil {
+		m.resetConnections()
 		return "", fmt.Errorf("max uploads: %w", err)
 	}
 	rawUp, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -321,6 +376,7 @@ func (m *maxClient) uploadFile(ctx context.Context, filename string, data []byte
 	upReq.Header.Set("Content-Type", mw.FormDataContentType())
 	upResp, err := m.hcFile.Do(upReq)
 	if err != nil {
+		m.resetConnections()
 		return "", fmt.Errorf("max upload: %w", err)
 	}
 	raw, _ := io.ReadAll(io.LimitReader(upResp.Body, 1<<20))
@@ -447,6 +503,7 @@ func (m *maxClient) fetchUpdates(ctx context.Context, marker int64, types string
 	req.Header.Set("Authorization", m.token)
 	resp, err := m.hcLong.Do(req)
 	if err != nil {
+		m.resetConnections()
 		return nil, 0, err
 	}
 	defer resp.Body.Close()

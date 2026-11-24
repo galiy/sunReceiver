@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -73,6 +75,97 @@ func TestMaxClientSendError(t *testing.T) {
 	c := newMaxClient("bad", "", "7")
 	if err := c.send(context.Background(), "x"); err == nil {
 		t.Fatal("send: хотим ошибку при 401, получили nil")
+	}
+}
+
+// TestMaxClientSendRetriesStaleConnection: первый запрос создаёт keep-alive
+// соединение; второй идёт по нему же, сервер обрывает сокет до ответа
+// (имитация мёртвого NAT после обрыва WAN); третий запрос с новым соединением
+// должен пройти.
+func TestMaxClientSendRetriesStaleConnection(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		n := requests.Add(1)
+		if n == 2 {
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Error("httptest: нет Hijacker")
+				return
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Errorf("hijack: %v", err)
+				return
+			}
+			conn.Close()
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+	orig := maxAPIBase
+	maxAPIBase = srv.URL
+	defer func() { maxAPIBase = orig }()
+
+	c := newMaxClient("tok", "42", "")
+	if err := c.send(context.Background(), "first"); err != nil {
+		t.Fatalf("первая отправка: %v", err)
+	}
+	// Вторая отправка переиспользует keep-alive сокет и должна пережить его обрыв.
+	if err := c.send(context.Background(), "second"); err != nil {
+		t.Fatalf("send после обрыва соединения: %v", err)
+	}
+	if got := requests.Load(); got != 3 {
+		t.Fatalf("запросов = %d, want 3 (первый, сорванный, повтор)", got)
+	}
+}
+
+func TestIsTransientDSHError(t *testing.T) {
+	if isTransientDSHError(nil) {
+		t.Fatal("nil не временная ошибка")
+	}
+	if isTransientDSHError(context.Canceled) {
+		t.Fatal("отмена — не временная ошибка")
+	}
+	if isTransientDSHError(&dshAPIError{Code: "BAD", Message: "bad"}) {
+		t.Fatal("бизнес-ошибка API не должна повторяться")
+	}
+	if isTransientDSHError(errModelUnavailable) {
+		t.Fatal("недоступность модели — не временная ошибка")
+	}
+	if !isTransientDSHError(errors.New("launch token harness не найден")) {
+		t.Fatal("отсутствие launch token — временная ошибка")
+	}
+	if !isTransientDSHError(&dshHTTPStatus{Status: http.StatusBadGateway}) {
+		t.Fatal("5xx должна повторяться")
+	}
+	if !isTransientDSHError(&dshHTTPStatus{Status: http.StatusUnauthorized}) {
+		t.Fatal("401 после перечитывания токена — временная")
+	}
+	if isTransientDSHError(&dshHTTPStatus{Status: http.StatusBadRequest}) {
+		t.Fatal("400 не должна повторяться")
+	}
+}
+
+func TestDSHTransientDelay(t *testing.T) {
+	cases := []struct {
+		attempt int
+		want    time.Duration
+	}{
+		{1, 5 * time.Second},
+		{2, 10 * time.Second},
+		{3, 20 * time.Second},
+		{4, 40 * time.Second},
+		{5, 60 * time.Second},
+		{50, 60 * time.Second},
+	}
+	for _, c := range cases {
+		if got := dshTransientDelay(c.attempt); got != c.want {
+			t.Fatalf("attempt=%d: %v, want %v", c.attempt, got, c.want)
+		}
 	}
 }
 

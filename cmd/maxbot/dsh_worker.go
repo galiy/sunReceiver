@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -157,6 +158,21 @@ func (b *bot) runDSH(ctx context.Context) {
 	if !b.dshEnabled() {
 		return
 	}
+	// Эпоху читаем до состояния и разбора очереди: при временной ошибке Redis
+	// нельзя начинать с эпохи 0, иначе элементы прошлого запуска будут отброшены.
+	for {
+		epoch, err := readDSHEpoch(ctx, b.rdb)
+		if err == nil {
+			b.dshCancelEpoch.Store(epoch)
+			break
+		}
+		log.Printf("maxbot: чтение dsh-эпохи: %v — повтор", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
 	st, err := loadDSHState(ctx, b.rdb)
 	if err != nil {
 		log.Printf("maxbot: загрузка dsh-состояния: %v", err)
@@ -178,6 +194,7 @@ func (b *bot) runDSH(ctx context.Context) {
 	b.dshState.InputSeq = 0
 	b.dshMu.Unlock()
 	recoverDSHProcessing(ctx, b.rdb)
+	go b.runDSHRetry(ctx)
 	go b.runDSHModelTTL(ctx)
 	log.Printf("maxbot: dsh-чат запущен (harness %s, workspace %s)", b.dshCfg.BaseURL, b.dshCfg.Workspace)
 
@@ -242,12 +259,105 @@ func (b *bot) requeueDSHItem(ctx context.Context, item dshQueueItem, epoch int64
 		return nil
 	}
 	item.Retried = true
+	return b.pushDSHItemFront(ctx, item, epoch)
+}
+
+// pushDSHItemFront кладёт элемент в голову очереди (RPush: BRPop забирает с
+// хвоста, поэтому он будет следующим).
+func (b *bot) pushDSHItemFront(ctx context.Context, item dshQueueItem, epoch int64) error {
+	if b.dshCancelEpoch.Load() != epoch {
+		return nil
+	}
 	item.Epoch = epoch
 	raw, err := json.Marshal(item)
 	if err != nil {
 		return err
 	}
 	return b.rdb.RPush(ctx, dshQueueKey, string(raw)).Err()
+}
+
+// Пределы автоматических повторов, когда harness временно недоступен
+// (нет launch token, служба ещё не поднялась, обрыв). Запрос оператора при
+// этом не теряется: он возвращается в очередь с нарастающей паузой.
+const (
+	dshTransientMaxAttempts = 60
+	dshTransientBaseDelay   = 5 * time.Second
+	dshTransientMaxDelay    = 60 * time.Second
+)
+
+// dshTransientDelay — пауза перед повтором: 5, 10, 20, 40, 60... секунд.
+func dshTransientDelay(attempt int) time.Duration {
+	d := dshTransientBaseDelay
+	for i := 1; i < attempt && d < dshTransientMaxDelay; i++ {
+		d *= 2
+	}
+	if d > dshTransientMaxDelay {
+		d = dshTransientMaxDelay
+	}
+	return d
+}
+
+// isTransientDSHError отделяет временные отказы harness (сеть, запуск,
+// протухший launch token) от бизнес-ошибок API, которые повторять бессмысленно.
+func isTransientDSHError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, errDSHCancelled) || errors.Is(err, errModelUnavailable) {
+		return false
+	}
+	var apiErr *dshAPIError
+	if errors.As(err, &apiErr) {
+		return false // result.ok=false: повтор не поможет
+	}
+	var hs *dshHTTPStatus
+	if errors.As(err, &hs) {
+		// 401 после перечитывания токена, 429 и 5xx — временные; прочие 4xx — нет.
+		return hs.Status == http.StatusUnauthorized || hs.Status == http.StatusTooManyRequests || hs.Status >= 500
+	}
+	return true
+}
+
+// requeueTransientDSH ставит запрос в отложенную очередь после временной
+// ошибки harness и возвращает true. Пауза 5→10→20→40→60 с не блокирует
+// воркер: элемент лежит в ZSET и переносится в очередь фоновым runDSHRetry.
+// После исчерпания попыток или для невременной ошибки возвращает false —
+// вызывающий уведомляет оператора и роняет запрос.
+func (b *bot) requeueTransientDSH(ctx context.Context, item dshQueueItem, epoch int64, cause error) bool {
+	if b.dshCancelEpoch.Load() != epoch || !isTransientDSHError(cause) {
+		return false
+	}
+	if item.Attempts >= dshTransientMaxAttempts {
+		return false
+	}
+	item.Attempts++
+	if item.Attempts == 1 {
+		b.notifyOperator(ctx, "Агент временно недоступен: "+cause.Error()+". Повторяю автоматически.")
+	}
+	log.Printf("maxbot: dsh недоступен (попытка %d/%d): %v", item.Attempts, dshTransientMaxAttempts, cause)
+	item.Epoch = epoch
+	if err := scheduleDSHRetry(ctx, b.rdb, item, dshTransientDelay(item.Attempts)); err != nil {
+		log.Printf("maxbot: отложенный повтор запроса: %v", err)
+		return false
+	}
+	return true
+}
+
+// runDSHRetry возвращает в очередь запросы, у которых истекла пауза после
+// временного сбоя harness.
+func (b *bot) runDSHRetry(ctx context.Context) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if _, err := moveDueDSHRetry(ctx, b.rdb); err != nil && ctx.Err() == nil {
+			log.Printf("maxbot: перенос отложенных повторов: %v", err)
+		}
+	}
 }
 
 // processDSHItem выполняет один запрос оператора. Эпоха отмены берётся из
@@ -300,6 +410,14 @@ func (b *bot) processDSHItem(ctx context.Context, item dshQueueItem) error {
 		if errors.Is(err, errModelUnavailable) {
 			return nil // оператор уже уведомлён, ждём выбора модели
 		}
+		// Временная недоступность harness (нет launch token после его
+		// перезапуска, служба ещё поднимается) — не теряем запрос оператора.
+		if b.requeueTransientDSH(ctx, item, epoch, err) {
+			return nil
+		}
+		if b.dshCancelEpoch.Load() != epoch {
+			return nil
+		}
 		b.notifyOperator(ctx, "Не удалось открыть сессию агента: "+err.Error())
 		return err
 	}
@@ -325,6 +443,14 @@ func (b *bot) processDSHItem(ctx context.Context, item dshQueueItem) error {
 			return nil
 		}
 		b.dshSet(ctx, func(st *dshState) { st.LastError = err.Error() })
+		// Harness мог перезапуститься (протух launch token/cookie) — повторяем
+		// позже, а не выбрасываем запрос оператора.
+		if b.requeueTransientDSH(ctx, item, epoch, err) {
+			return nil
+		}
+		if b.dshCancelEpoch.Load() != epoch {
+			return nil
+		}
 		b.notifyOperator(ctx, "Не удалось отправить запрос агенту: "+err.Error())
 		return err
 	}
@@ -361,6 +487,18 @@ func (b *bot) processDSHItem(ctx context.Context, item dshQueueItem) error {
 	}
 	if res.ReplaceReason != "" {
 		if err := b.replaceDSHSessionLocked(ctx, res.ReplaceReason, epoch); err != nil {
+			// Сессию не удалось создать (harness недоступен). Не теряем запрос
+			// оператора: забываем непригодную сессию и пробуем позже.
+			b.dshSet(ctx, func(st *dshState) { st.SessionID = "" })
+			if errors.Is(err, errModelUnavailable) {
+				return nil // оператору уже предложено выбрать модель
+			}
+			if b.requeueTransientDSH(ctx, item, epoch, err) {
+				return nil
+			}
+			if b.dshCancelEpoch.Load() != epoch {
+				return nil
+			}
 			b.notifyOperator(ctx, "Не удалось создать новую сессию: "+err.Error())
 			return err
 		}
@@ -474,6 +612,7 @@ func (b *bot) createDSHSessionLocked(ctx context.Context, provider, model, effor
 		st.PendingSchedActive = false
 		st.PendingSchedProgress = false
 	})
+	b.clearRepairPending()
 	log.Printf("maxbot: dsh-сессия %s, модель %s/%s (effort %q)", sessionID, provider, model, applyEffort)
 	return sessionID, nil
 }
@@ -518,6 +657,7 @@ func (b *bot) replaceDSHSessionLocked(ctx context.Context, reason string, epoch 
 	if err != nil {
 		return err
 	}
+	log.Printf("maxbot: замена dsh-сессии %s → %s: %s", old, newID, reason)
 	if b.dshCancelEpoch.Load() != epoch {
 		_ = b.dsh.cancel(ctx, newID)
 		return nil
@@ -689,13 +829,15 @@ func (b *bot) waitForAnswer(ctx context.Context, sessionID string, epoch int64) 
 		}
 		ti := analyzeEvents(events)
 		cycle, cycleLen := b.addToolFingerprints(ctx, ti.ToolCalls)
-		if ti.ContextOverflow || ti.MaxTokens || cycle {
+		if ti.Blocked || ti.ContextOverflow || ti.MaxTokens || cycle {
 			res.Turns = collected
 			res.Text = joinTurnAnswers(collected)
 			if res.Text == "" {
 				res.Text = assistantText(wv.Output.Records)
 			}
 			switch {
+			case ti.Blocked:
+				res.ReplaceReason = "сессия агента закрыта (blocked)"
 			case ti.ContextOverflow:
 				res.ReplaceReason = "переполнение контекста"
 			case ti.MaxTokens:
@@ -1068,6 +1210,44 @@ func (b *bot) runDSHModelTTL(ctx context.Context) {
 
 // ---- отложенные задачи агента (schedule_create) ----
 
+// setRepairPending запоминает необходимость заменить сессию, исходный id
+// непригодной сессии и время следующей попытки (harness может быть временно
+// недоступен).
+func (b *bot) setRepairPending(reason, session string, after time.Time) {
+	b.dshRepairMu.Lock()
+	b.dshRepairReason = reason
+	b.dshRepairSession = session
+	b.dshRepairAfter = after
+	b.dshRepairMu.Unlock()
+}
+
+// repairDue возвращает причину и исходную сессию, если отложенная замена уже
+// назрела. Исходный id нужен как expectedSession: если оператор успел сделать
+// /new, заменять уже здоровую сессию нельзя.
+func (b *bot) repairDue(now time.Time) (reason, session string, ok bool) {
+	b.dshRepairMu.Lock()
+	defer b.dshRepairMu.Unlock()
+	if b.dshRepairReason != "" && !now.Before(b.dshRepairAfter) {
+		return b.dshRepairReason, b.dshRepairSession, true
+	}
+	return "", "", false
+}
+
+// hasRepairPending — есть ли уже отложенная замена (для однократного уведомления).
+func (b *bot) hasRepairPending() bool {
+	b.dshRepairMu.Lock()
+	defer b.dshRepairMu.Unlock()
+	return b.dshRepairReason != ""
+}
+
+func (b *bot) clearRepairPending() {
+	b.dshRepairMu.Lock()
+	b.dshRepairReason = ""
+	b.dshRepairSession = ""
+	b.dshRepairAfter = time.Time{}
+	b.dshRepairMu.Unlock()
+}
+
 // runDSHScheduled периодически проверяет сессию, когда воркер свободен: если
 // агент выполнил отложенную задачу (schedule_create), результат уже лежит в
 // истории сессии, но нового промпта от оператора не было. Доставляем только
@@ -1086,6 +1266,23 @@ func (b *bot) runDSHScheduled(ctx context.Context) {
 			continue
 		}
 		epoch := b.dshCancelEpoch.Load()
+		// Отложенная замена сессии (watcher ранее не смог создать новую).
+		if reason, session, ok := b.repairDue(time.Now()); ok {
+			if err := b.replaceDSHSession(ctx, reason, epoch, session); err != nil {
+				log.Printf("maxbot: отложенная замена сессии: %v", err)
+				if isTransientDSHError(err) {
+					b.setRepairPending(reason, session, time.Now().Add(30*time.Second))
+				} else {
+					b.clearRepairPending()
+					if !errors.Is(err, errModelUnavailable) {
+						b.notifyOperator(ctx, "Замена сессии не удалась: "+err.Error())
+					}
+				}
+			} else {
+				b.clearRepairPending()
+			}
+			continue
+		}
 		// Если воркер занят ходом/восстановлением — не мешаем.
 		if !b.dshPumpMu.TryLock() {
 			continue
@@ -1097,7 +1294,20 @@ func (b *bot) runDSHScheduled(ctx context.Context) {
 			// Замену делаем без pumpMu: replace сам его возьмёт и проверит, что
 			// сессия всё ещё та же.
 			if err := b.replaceDSHSession(ctx, reason, epoch, sessionBefore); err != nil {
-				b.notifyOperator(ctx, "Не удалось создать новую сессию: "+err.Error())
+				log.Printf("maxbot: замена сессии из watcher: %v", err)
+				if !isTransientDSHError(err) {
+					b.clearRepairPending()
+					if !errors.Is(err, errModelUnavailable) {
+						b.notifyOperator(ctx, "Замена сессии не удалась: "+err.Error())
+					}
+				} else {
+					if !b.hasRepairPending() {
+						b.notifyOperator(ctx, "Не удалось создать новую сессию: "+err.Error())
+					}
+					b.setRepairPending(reason, sessionBefore, time.Now().Add(30*time.Second))
+				}
+			} else {
+				b.clearRepairPending()
 			}
 		}
 	}
@@ -1166,7 +1376,7 @@ func (b *bot) pollScheduled(ctx context.Context, epoch int64, lastBeat *time.Tim
 	}
 
 	if (ti.Question != "" || hasPendingQuestion(state.PendingInput)) &&
-		!ti.ContextOverflow && !ti.MaxTokens {
+		!ti.Blocked && !ti.ContextOverflow && !ti.MaxTokens {
 		if q := b.handleInputRequired(ctx, st.SessionID, ti.Question, state.Cursor, epoch); q != "" {
 			b.notifyOperator(ctx, q)
 		}
@@ -1175,8 +1385,10 @@ func (b *bot) pollScheduled(ctx context.Context, epoch int64, lastBeat *time.Tim
 
 	// Сбой/цикл в отложенном ходе — действуем как для обычного хода.
 	cycle, cycleLen := b.addToolFingerprints(ctx, ti.ToolCalls)
-	if ti.ContextOverflow || ti.MaxTokens || cycle {
+	if ti.Blocked || ti.ContextOverflow || ti.MaxTokens || cycle {
 		switch {
+		case ti.Blocked:
+			return "сессия агента закрыта (blocked)"
 		case ti.MaxTokens:
 			return "достигнут лимит вывода (max-tokens)"
 		case cycle:
@@ -1245,6 +1457,43 @@ func dshCommand(text string) (string, bool) {
 	return "", false
 }
 
+// bumpCancelEpoch увеличивает эпоху отмены и сохраняет её в Redis, чтобы
+// очередь/отложенные повторы не терялись после рестарта maxbot.
+func (b *bot) bumpCancelEpoch(ctx context.Context) {
+	b.dshCancelEpoch.Add(1)
+	if err := b.saveCancelEpoch(ctx); err != nil {
+		log.Printf("maxbot: сохранение dsh-эпохи: %v — догоняю в фоне", err)
+		go b.persistCancelEpoch(ctx)
+	}
+}
+
+// saveCancelEpoch сохраняет текущую локальную эпоху (абсолютным SET под
+// мьютексом, чтобы догоняющие горутины не записали устаревшее значение).
+func (b *bot) saveCancelEpoch(ctx context.Context) error {
+	b.dshEpochMu.Lock()
+	defer b.dshEpochMu.Unlock()
+	return saveDSHEpoch(ctx, b.rdb, b.dshCancelEpoch.Load())
+}
+
+// persistCancelEpoch догоняет сохранённую эпоху до локальной после сбоя Redis.
+func (b *bot) persistCancelEpoch(ctx context.Context) {
+	for {
+		v := b.dshCancelEpoch.Load()
+		if err := b.saveCancelEpoch(ctx); err == nil {
+			if b.dshCancelEpoch.Load() == v {
+				return
+			}
+			continue
+		}
+		log.Printf("maxbot: сохранение dsh-эпохи: повтор")
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
 func (b *bot) handleDSHCommand(ctx context.Context, cmd string, up maxUpdate) {
 	userID, chatID := b.requesterIDs(up)
 	switch cmd {
@@ -1253,7 +1502,8 @@ func (b *bot) handleDSHCommand(ctx context.Context, cmd string, up maxUpdate) {
 	case "/model":
 		b.sendModelMenu(ctx, userID, chatID)
 	case "/cancel":
-		b.dshCancelEpoch.Add(1)
+		b.bumpCancelEpoch(ctx)
+		b.clearRepairPending()
 		if st := b.dshSnapshot(); st.SessionID != "" {
 			_ = b.dsh.cancel(ctx, st.SessionID)
 			b.touchAPI(ctx)
@@ -1273,7 +1523,8 @@ func (b *bot) handleDSHCommand(ctx context.Context, cmd string, up maxUpdate) {
 		})
 		b.respond(userID, chatID, "Отменено. Очередь очищена.")
 	case "/new":
-		b.dshCancelEpoch.Add(1)
+		b.bumpCancelEpoch(ctx)
+		b.clearRepairPending()
 		if st := b.dshSnapshot(); st.SessionID != "" {
 			_ = b.dsh.cancel(ctx, st.SessionID)
 			b.touchAPI(ctx)

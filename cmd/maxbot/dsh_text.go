@@ -539,6 +539,7 @@ func finalAssistantTextEvents(events []sessionEvent, since int64, p pendingTurn,
 type turnInfo struct {
 	ContextOverflow bool
 	MaxTokens       bool
+	Blocked         bool // сессия закрыта (session/end-seed): ходы не принимаются
 	ToolCalls       []string
 	Question        string // текст вопроса ask_user_question, если был
 }
@@ -561,6 +562,11 @@ func analyzeEvents(events []sessionEvent) turnInfo {
 				continue
 			}
 			switch d.Reason.Kind {
+			case "blocked":
+				// Закрытая (сидовая) сессия: каждый ход завершается blocked за
+				// доли секунды, модель не вызывается, сообщение оператора
+				// теряется. Такую сессию надо заменить.
+				ti.Blocked = true
 			case "max-tokens":
 				ti.MaxTokens = true
 			case "error":

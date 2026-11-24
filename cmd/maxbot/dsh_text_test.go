@@ -449,6 +449,9 @@ func TestAnalyzeEvents(t *testing.T) {
 	if !analyzeEvents([]sessionEvent{mk("turn/end", `{"reason":{"kind":"max-tokens"}}`)}).MaxTokens {
 		t.Fatal("ожидали max-tokens")
 	}
+	if !analyzeEvents([]sessionEvent{mk("turn/end", `{"reason":{"kind":"blocked"}}`)}).Blocked {
+		t.Fatal("ожидали blocked")
+	}
 }
 
 func TestFormatAskQuestion(t *testing.T) {

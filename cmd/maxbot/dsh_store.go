@@ -31,6 +31,8 @@ const (
 	dshStateKey      = "sunreceiver:maxbot:dsh:state"
 	dshQueueKey      = "sunreceiver:maxbot:dsh:queue"
 	dshProcessingKey = "sunreceiver:maxbot:dsh:processing"
+	dshRetryKey      = "sunreceiver:maxbot:dsh:retry"
+	dshEpochKey      = "sunreceiver:maxbot:dsh:epoch"
 	maxMarkerKey     = "sunreceiver:maxbot:max_marker"
 )
 
@@ -67,7 +69,8 @@ type dshQueueItem struct {
 	Text        string          `json:"text"`
 	Attachments []maxAttachment `json:"attachments,omitempty"`
 	Retried     bool            `json:"retried,omitempty"`
-	Epoch       int64           `json:"epoch,omitempty"` // эпоха отмены на момент постановки
+	Attempts    int             `json:"attempts,omitempty"` // повторы из-за недоступности harness
+	Epoch       int64           `json:"epoch,omitempty"`    // эпоха отмены на момент постановки
 	TS          int64           `json:"ts"`
 }
 
@@ -200,9 +203,43 @@ func recoverDSHProcessing(ctx context.Context, rdb *redis.Client) {
 	}
 }
 
-// clearDSHQueue очищает очередь и processing (отмена/новая сессия).
+// clearDSHQueue очищает очередь, processing и отложенные повторы
+// (отмена/новая сессия).
 func clearDSHQueue(ctx context.Context, rdb *redis.Client) error {
-	return rdb.Del(ctx, dshQueueKey, dshProcessingKey).Err()
+	return rdb.Del(ctx, dshQueueKey, dshProcessingKey, dshRetryKey).Err()
+}
+
+// scheduleDSHRetry кладёт элемент в ZSET отложенных повторов: член — JSON
+// элемента, score — unix ms, когда его пора вернуть в очередь.
+func scheduleDSHRetry(ctx context.Context, rdb *redis.Client, item dshQueueItem, delay time.Duration) error {
+	raw, err := json.Marshal(item)
+	if err != nil {
+		return err
+	}
+	return rdb.ZAdd(ctx, dshRetryKey, redis.Z{
+		Score:  float64(time.Now().Add(delay).UnixMilli()),
+		Member: string(raw),
+	}).Err()
+}
+
+// moveDueDSHRetry атомарно переносит созревшие отложенные элементы в голову
+// очереди. Возвращает число перенесённых.
+var moveDueDSHRetryScript = redis.NewScript(`
+local due = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1], 'LIMIT', 0, 50)
+-- due отсортирован по возрастанию score (старые раньше). RPUSH кладёт в хвост,
+-- а BRPOP забирает с хвоста; чтобы старый элемент обработался первым, пушим
+-- пачку в обратном порядке.
+for i = #due, 1, -1 do
+  local m = due[i]
+  redis.call('ZREM', KEYS[1], m)
+  redis.call('RPUSH', KEYS[2], m)
+end
+return #due
+`)
+
+func moveDueDSHRetry(ctx context.Context, rdb *redis.Client) (int, error) {
+	return moveDueDSHRetryScript.Run(ctx, rdb, []string{dshRetryKey, dshQueueKey},
+		strconv.FormatInt(time.Now().UnixMilli(), 10)).Int()
 }
 
 // dshQueueLen возвращает длину очереди (без processing).
@@ -212,6 +249,42 @@ func dshQueueLen(ctx context.Context, rdb *redis.Client) int64 {
 		return 0
 	}
 	return n
+}
+
+// readDSHEpoch читает сохранённую эпоху отмены. Эпоха должна переживать
+// рестарт maxbot: иначе элементы очереди/processing/retry с Epoch>0 после
+// старта (текущая эпоха 0) молча отбрасывались бы как отменённые.
+func readDSHEpoch(ctx context.Context, rdb *redis.Client) (int64, error) {
+	n, err := rdb.Get(ctx, dshEpochKey).Int64()
+	if err == redis.Nil {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// saveDSHEpoch сохраняет текущую эпоху отмены (абсолютным SET). INCR не
+// используем: несколько догоняющих горутин могли бы «перегнать» локальную
+// эпоху, и сообщения с меньшей эпохой потерялись бы после рестарта.
+func saveDSHEpoch(ctx context.Context, rdb *redis.Client, v int64) error {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(300 * time.Millisecond):
+			}
+		}
+		if err := rdb.Set(ctx, dshEpochKey, v, 0).Err(); err != nil {
+			lastErr = err
+			continue
+		}
+		return nil
+	}
+	return lastErr
 }
 
 // saveMaxMarker сохраняет marker long polling, чтобы не переобрабатывать
